@@ -7,8 +7,6 @@ from typing import Optional, Any
 
 import requests
 
-from .nonce import NonceGenerator
-
 class KrakenAPIError(Exception):
     """Custom exception for Kraken API errors."""
     def __init__(self, message: str, response: Optional[requests.Response] = None):
@@ -34,7 +32,6 @@ class KrakenClient:
         self.api_key = api_key
         self.api_secret = api_secret
         self.session = session or requests.Session()
-        self.nonce_generator = NonceGenerator()
 
     def _handle_response(self, response: requests.Response) -> dict[str, Any]:
         """Processes the HTTP response from the Kraken API."""
@@ -58,13 +55,13 @@ class KrakenClient:
         if data is None:
             data = {}
 
-        data['nonce'] = self.nonce_generator.generate_nonce()
+        data['nonce'] = str(int(time.time() * 1000))
 
         postdata = urllib.parse.urlencode(data)
 
         headers = {
             'API-Key': self.api_key,
-            'API-Sign': self._get_kraken_signature(path, postdata, data['nonce'])
+            'API-Sign': self._get_kraken_signature(path, postdata, str(data['nonce']))
         }
 
         url = self.BASE_URL + path
