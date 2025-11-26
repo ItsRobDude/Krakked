@@ -1,0 +1,145 @@
+# tests/test_universe.py
+
+import pytest
+from unittest.mock import MagicMock
+from kraken_bot.config import RegionProfile, RegionCapabilities, UniverseConfig
+from kraken_bot.market_data.universe import build_universe
+
+@pytest.fixture
+def mock_region_profile() -> RegionProfile:
+    """Provides a standard US/CA region profile for testing."""
+    return RegionProfile(
+        code="US_CA",
+        capabilities=RegionCapabilities(
+            supports_margin=False,
+            supports_futures=False,
+            supports_staking=False
+        ),
+        default_quote="USD"
+    )
+
+@pytest.fixture
+def mock_kraken_asset_pairs_response() -> dict:
+    """Provides a sample response from the Kraken GetTradableAssetPairs endpoint."""
+    return {
+        "XXBTZUSD": {
+            "altname": "XBTUSD", "wsname": "XBT/USD", "aclass_base": "currency",
+            "base": "XXBT", "aclass_quote": "currency", "quote": "ZUSD",
+            "lot": "unit", "pair_decimals": 1, "lot_decimals": 8, "lot_multiplier": 1,
+            "leverage_buy": [], "leverage_sell": [], "fees": [], "fees_maker": [],
+            "fee_volume_currency": "ZUSD", "margin_call": 80, "margin_stop": 40,
+            "ordermin": "0.0001", "status": "online"
+        },
+        "XETHZUSD": {
+            "altname": "ETHUSD", "wsname": "ETH/USD", "aclass_base": "currency",
+            "base": "XETH", "aclass_quote": "currency", "quote": "ZUSD",
+            "lot": "unit", "pair_decimals": 2, "lot_decimals": 8, "lot_multiplier": 1,
+            "leverage_buy": [], "leverage_sell": [], "fees": [], "fees_maker": [],
+            "fee_volume_currency": "ZUSD", "margin_call": 80, "margin_stop": 40,
+            "ordermin": "0.002", "status": "online"
+        },
+        "DOGEUSD": { # Excluded by default due to quote=USD not ZUSD, but good for include test
+            "altname": "DOGEUSD", "wsname": "DOGE/USD", "aclass_base": "currency",
+            "base": "XDG", "aclass_quote": "currency", "quote": "USD",
+            "lot": "unit", "pair_decimals": 7, "lot_decimals": 8, "lot_multiplier": 1,
+            "leverage_buy": [], "leverage_sell": [], "fees": [], "fees_maker": [],
+            "fee_volume_currency": "ZUSD", "margin_call": 80, "margin_stop": 40,
+            "ordermin": "30", "status": "online"
+        },
+        "XXBTZEUR": { # Not a USD pair
+            "altname": "XBTEUR", "wsname": "XBT/EUR", "aclass_base": "currency",
+            "quote": "ZEUR", "status": "online", "leverage_buy": [], "leverage_sell": [],
+        },
+        "XBTUSDT": { # Not a USD pair
+            "altname": "XBTUSDT", "wsname": "XBT/USDT", "aclass_base": "currency",
+            "quote": "USDT", "status": "online", "leverage_buy": [], "leverage_sell": [],
+        },
+        "ETHUSD.M": { # Margin pair
+            "altname": "ETHUSDM", "wsname": "ETH/USD.M", "aclass_base": "currency",
+            "quote": "ZUSD", "status": "online",
+            "leverage_buy": [2, 5], "leverage_sell": [2, 5] # Has leverage
+        },
+        "ADAUSD": { # Cancel-only pair
+            "altname": "ADAUSD", "wsname": "ADA/USD", "aclass_base": "currency",
+            "quote": "ZUSD", "status": "cancel_only", "leverage_buy": [], "leverage_sell": []
+        }
+    }
+
+def test_universe_filtering(mock_region_profile, mock_kraken_asset_pairs_response):
+    """Tests the core filtering logic for USD spot pairs without leverage."""
+    mock_client = MagicMock()
+    mock_client.get_public.return_value = mock_kraken_asset_pairs_response
+
+    universe_config = UniverseConfig(include_pairs=[], exclude_pairs=[], min_24h_volume_usd=0)
+
+    universe = build_universe(mock_client, mock_region_profile, universe_config)
+
+    assert len(universe) == 3
+    pair_names = {p.canonical for p in universe}
+    assert "XBTUSD" in pair_names
+    assert "ETHUSD" in pair_names
+    assert "DOGEUSD" in pair_names # quote is "USD"
+
+    assert "XBTEUR" not in pair_names
+    assert "ETHUSDM" not in pair_names
+    assert "ADAUSD" not in pair_names
+
+def test_universe_overrides(mock_region_profile, mock_kraken_asset_pairs_response):
+    """Tests the include_pairs and exclude_pairs configuration overrides."""
+    mock_client = MagicMock()
+    mock_client.get_public.return_value = mock_kraken_asset_pairs_response
+
+    # Test exclude override
+    exclude_config = UniverseConfig(include_pairs=[], exclude_pairs=["XBTUSD"], min_24h_volume_usd=0)
+    universe_excluded = build_universe(mock_client, mock_region_profile, exclude_config)
+    assert len(universe_excluded) == 2
+    assert "XBTUSD" not in {p.canonical for p in universe_excluded}
+
+    # Test include override (to include a pair that would otherwise be filtered)
+    # Note: our DOGEUSD example passes the filter, let's pretend it doesn't for a moment
+    # by adding a fake leverage value to it in the mock response for this specific test
+    mock_kraken_asset_pairs_response["DOGEUSD"]["leverage_buy"] = [2]
+    mock_client.get_public.return_value = mock_kraken_asset_pairs_response
+
+    include_config = UniverseConfig(include_pairs=["DOGEUSD"], exclude_pairs=["XBTUSD", "ETHUSD"], min_24h_volume_usd=0)
+    universe_included = build_universe(mock_client, mock_region_profile, include_config)
+
+    # It should not be included, because it is not in the candidate pairs after filtering.
+    assert len(universe_included) == 0
+
+def test_universe_volume_filtering(mock_region_profile, mock_kraken_asset_pairs_response):
+    """Tests that the volume filter correctly removes low-liquidity pairs."""
+    mock_client = MagicMock()
+    mock_client.get_public.side_effect = [
+        # First call for AssetPairs
+        {k: v for k, v in mock_kraken_asset_pairs_response.items() if v["quote"] in ["ZUSD", "USD"] and not v["leverage_buy"]},
+        # Second call for Ticker
+        {
+            "XXBTZUSD": {"v": ["1000", "2500.5"], "c": ["50000.0", "1"]}, # vol=2500.5, price=50k -> >125M USD
+            "XETHZUSD": {"v": ["500", "10.0"], "c": ["2000.0", "1"]},     # vol=10, price=2k -> 20k USD
+            "DOGEUSD":  {"v": ["100000", "500000.0"], "c": ["0.1", "1"]},  # vol=500k, price=0.1 -> 50k USD
+        }
+    ]
+
+    # Set a min volume of $100,000 USD
+    config = UniverseConfig(include_pairs=[], exclude_pairs=[], min_24h_volume_usd=100000.0)
+
+    universe = build_universe(mock_client, mock_region_profile, config)
+
+    pair_names = {p.canonical for p in universe}
+
+    assert len(universe) == 1
+    assert "XBTUSD" in pair_names
+    assert "ETHUSD" not in pair_names # Excluded due to low volume
+    assert "DOGEUSD" not in pair_names # Excluded due to low volume
+
+    # Verify that get_public was called twice
+    assert mock_client.get_public.call_count == 2
+    mock_client.get_public.assert_any_call("AssetPairs")
+
+    # Check the Ticker call in an order-independent way
+    ticker_call_args = mock_client.get_public.call_args_list[1]
+    assert ticker_call_args[0][0] == "Ticker"
+    called_pairs = set(ticker_call_args[1]["params"]["pair"].split(','))
+    expected_pairs = {"XBTUSD", "ETHUSD", "DOGEUSD"}
+    assert called_pairs == expected_pairs
