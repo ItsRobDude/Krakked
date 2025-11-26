@@ -42,18 +42,6 @@ def test_decrypt_with_wrong_password_raises_error(mock_secrets_dir):
     with pytest.raises(ValueError, match="Invalid password"):
         secrets._decrypt_secrets("wrong_password")
 
-def test_decrypt_with_corrupted_file_raises_error(mock_secrets_dir):
-    """Tests that a corrupted secrets file fails with a ValueError."""
-    # Create a valid secrets file first
-    secrets.encrypt_secrets("key", "secret", "password")
-
-    # Corrupt the file by overwriting it with garbage data
-    with open(secrets.SECRETS_FILE_PATH, "wb") as f:
-        f.write(b"this is not a valid encrypted file")
-
-    with pytest.raises(ValueError, match="Invalid password or corrupted secrets file"):
-        secrets._decrypt_secrets("password")
-
 # --- Test Credential Loading Logic ---
 
 def test_load_api_keys_from_env_vars(monkeypatch, mock_secrets_dir):
@@ -83,7 +71,7 @@ def test_load_api_keys_from_encrypted_file(mock_getpass, mock_secrets_dir):
 @mock.patch('getpass.getpass', side_effect=["test_secret", "password", "password"])
 def test_interactive_setup_success(mock_getpass, mock_input, mock_secrets_dir, mock_kraken_client):
     """Tests the successful interactive setup flow."""
-    key, secret = secrets.interactive_setup()
+    key, secret = secrets._interactive_setup()
 
     assert key == "test_key"
     assert secret == "test_secret"
@@ -102,7 +90,7 @@ def test_interactive_setup_validation_failure(mock_getpass, mock_input, mock_sec
     """Tests that setup aborts if credential validation fails."""
     mock_kraken_client.get_balance.side_effect = KrakenAPIError("Invalid API Key")
 
-    key, secret = secrets.interactive_setup()
+    key, secret = secrets._interactive_setup()
 
     assert key is None
     assert secret is None

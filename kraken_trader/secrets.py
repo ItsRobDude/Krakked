@@ -59,7 +59,7 @@ def _decrypt_secrets(password: str) -> dict:
 
 # --- First-Time Setup ---
 
-def interactive_setup() -> tuple[str | None, str | None]:
+def _interactive_setup() -> tuple[str | None, str | None]:
     """
     Guides the user through the first-time setup process for API keys.
     Validates credentials against Kraken before saving.
@@ -129,4 +129,4 @@ def load_api_keys() -> tuple[str | None, str | None]:
             return None, None
 
     # 3. No credentials found, trigger interactive setup
-    return interactive_setup()
+    return _interactive_setup()
