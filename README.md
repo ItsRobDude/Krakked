@@ -1,5 +1,5 @@
 # Krakked
-Scripts n things
+
 
 Kraken Connection Module – Phase 1 Design Contract
 1. Purpose & Scope
