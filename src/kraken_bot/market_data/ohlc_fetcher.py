@@ -94,15 +94,15 @@ def backfill_ohlc(
         total_bars_fetched += len(bars)
 
         # Kraken's pagination uses the 'last' timestamp from the response
-        last_val = response.get("last")
-        last_ts = int(last_val) if last_val is not None else 0
-
-        # If 'since' was None (first page), we must continue.
-        # If 'since' is not None, we stop if the timestamp isn't advancing.
-        if since is not None and last_ts <= since:
+        last_ts = int(response.get("last", 0))
+        if last_ts > since:
+            since = last_ts
+        else:
+            # No more pages
             break
 
-        since = last_ts
+        # A small sleep to be polite, even with the rate limiter
+        time.sleep(0.5)
 
     logger.info(f"Completed backfill for {pair_metadata.canonical} ({timeframe}). Fetched {total_bars_fetched} new bars.")
     return total_bars_fetched
