@@ -25,14 +25,11 @@ def _is_usd_spot_pair(pair_data: Dict[str, Any], region_profile: RegionProfile) 
     if pair_data.get("aclass_base") != "currency":
         return False
 
-    # 4. No leverage is allowed
-    if pair_data.get("leverage_buy") or pair_data.get("leverage_sell"):
-        return False
-
-    # 5. Apply region profile constraint (redundant with above, but good for clarity)
-    if not region_profile.capabilities.supports_margin and (pair_data.get("leverage_buy") or pair_data.get("leverage_sell")):
-        logger.warning(f"Pair {pair_data.get('altname')} has leverage but profile does not support margin. Excluding.")
-        return False
+    # 4. Note on leverage:
+    # We do NOT exclude pairs based on leverage capability (leverage_buy/sell arrays).
+    # Pairs like XBTUSD support margin but are the primary spot markets.
+    # Whether we USE margin is controlled by RegionProfile at the execution layer,
+    # not by excluding the pair from the universe.
 
     return True
 
@@ -41,12 +38,16 @@ def _create_pair_metadata(raw_name: str, pair_data: Dict[str, Any]) -> PairMetad
     Constructs a PairMetadata object from the raw API response data.
     """
     altname = pair_data.get("altname")
-    base, quote = altname.split("USD") if "USD" in altname else (None, None)
+    base_raw = pair_data.get("base")
+    quote_raw = pair_data.get("quote")
+
+    # Normalize quote to "USD" if it's ZUSD or USD (which we've already filtered for)
+    quote_normalized = "USD" if quote_raw in ["ZUSD", "USD"] else quote_raw
 
     return PairMetadata(
         canonical=altname,
-        base=base,
-        quote="USD", # We filter for USD pairs
+        base=base_raw,
+        quote=quote_normalized,
         rest_symbol=altname,
         ws_symbol=pair_data.get("wsname"),
         raw_name=raw_name,
