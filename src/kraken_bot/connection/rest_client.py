@@ -129,3 +129,17 @@ class KrakenRESTClient:
         Makes a POST request to a private Kraken API endpoint (most private endpoints use POST).
         """
         return self._request("post", endpoint, params=params, private=True)
+
+    def get_ledgers(self, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """
+        Retrieves information about ledger entries.
+        Endpoint: Ledgers
+        """
+        return self.get_private("Ledgers", params=params)
+
+    def get_closed_orders(self, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """
+        Retrieves information about closed orders.
+        Endpoint: ClosedOrders
+        """
+        return self.get_private("ClosedOrders", params=params)
