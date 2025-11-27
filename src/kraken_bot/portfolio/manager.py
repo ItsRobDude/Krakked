@@ -167,7 +167,56 @@ class PortfolioService:
 
         self.store.save_cash_flows(cash_flow_records)
 
-        # 3. Rebuild State (The Core Logic)
+        # 3. Fetch Closed Orders (if configured or always?)
+        # For Phase 3, getting trades is primary, but to populate the new 'orders' and 'order_trades' tables
+        # we should fetch ClosedOrders.
+        # This allows us to link trades to orders later.
+
+        # We need to know 'since' for orders.
+        # Not easily tracked in 'store' explicitly yet, maybe query max 'closed' time from orders table?
+        # For now, let's use the same 'since_ts' or skip if simplified.
+        # But to fulfill the schema refactor purpose, we should ingest them.
+
+        try:
+            # We don't have a 'get_orders' on store yet, so we can't easily find 'since'.
+            # We can rely on 'start' from config or just fetch recent.
+            # Or use 'since_ts' from trades as a proxy (roughly same time).
+            order_params = {}
+            if since_ts:
+                order_params["start"] = since_ts
+
+            # ClosedOrders pagination
+            while True:
+                c_resp = self.rest_client.get_closed_orders(params=order_params)
+                closed = c_resp.get("closed", {})
+                if not closed:
+                    break
+
+                # Convert to list
+                batch_orders = []
+                for txid, info in closed.items():
+                    info['id'] = txid
+                    batch_orders.append(info)
+
+                if not batch_orders:
+                    break
+
+                batch_orders.sort(key=lambda x: x.get('closetm', 0))
+
+                self.store.save_orders(batch_orders)
+
+                if len(batch_orders) < 50:
+                    break
+
+                # Pagination
+                # Use closetime of last order
+                last_tm = batch_orders[-1].get('closetm', 0)
+                order_params['start'] = last_tm
+
+        except Exception as e:
+            logger.warning(f"Failed to sync ClosedOrders: {e}")
+
+        # 4. Rebuild State (The Core Logic)
         self._rebuild_state()
 
         # 4. Reconcile
