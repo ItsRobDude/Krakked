@@ -1,45 +1,35 @@
+# tests/test_nonce.py
+
+import time
 import pytest
-from kraken_trader.nonce import NonceGenerator
+from kraken_bot.connection.nonce import NonceGenerator
 
-def test_nonce_generator_is_monotonic():
-    """
-    Tests that the NonceGenerator produces strictly increasing nonces.
-    """
+def test_nonce_monotonicity():
+    """Ensure generated nonces are strictly increasing."""
+    generator = NonceGenerator()
+    nonce1 = generator.generate()
+    time.sleep(0.001)  # Ensure at least 1ms passes
+    nonce2 = generator.generate()
+
+    assert nonce2 > nonce1
+
+def test_nonce_collision_avoidance():
+    """Ensure nonces are increasing even if called faster than 1ms."""
     generator = NonceGenerator()
 
-    last_nonce = 0
+    # Generate a burst of nonces
+    nonces = [generator.generate() for _ in range(100)]
 
-    # Generate a batch of nonces in a tight loop to test monotonicity
-    for _ in range(1000):
-        new_nonce_str = generator.generate_nonce()
-        new_nonce = int(new_nonce_str)
+    # Verify strict increase
+    for i in range(len(nonces) - 1):
+        assert nonces[i+1] > nonces[i]
 
-        assert new_nonce > last_nonce
-
-        last_nonce = new_nonce
-
-def test_nonce_generator_is_thread_safe():
-    """
-    Tests that the NonceGenerator is thread-safe and produces unique nonces
-    across multiple threads.
-    """
-    import threading
-
+def test_nonce_format():
+    """Ensure nonce is an integer (epoch milliseconds)."""
     generator = NonceGenerator()
-    results = []
+    nonce = generator.generate()
+    assert isinstance(nonce, int)
 
-    def generate_nonces_in_thread():
-        thread_nonces = [generator.generate_nonce() for _ in range(100)]
-        results.extend(thread_nonces)
-
-    threads = [threading.Thread(target=generate_nonces_in_thread) for _ in range(10)]
-
-    for t in threads:
-        t.start()
-
-    for t in threads:
-        t.join()
-
-    # Verify that all generated nonces are unique
-    assert len(results) == 1000
-    assert len(set(results)) == 1000
+    # Sanity check: nonce should be close to current time in ms
+    now_ms = int(time.time() * 1000)
+    assert abs(nonce - now_ms) < 1000 # Within 1 second

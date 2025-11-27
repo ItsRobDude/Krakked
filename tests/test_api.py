@@ -2,7 +2,7 @@
 
 import pytest
 import time
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, patch, PropertyMock
 from kraken_bot.config import AppConfig, UniverseConfig, MarketDataConfig, ConnectionStatus
 from kraken_bot.market_data.api import MarketDataAPI
 from kraken_bot.market_data.exceptions import DataStaleError
@@ -43,7 +43,8 @@ def test_get_data_status(mock_store, mock_ws_client_class, mock_build_universe, 
     api._rest_client.get_public.return_value = {} # Successful call
 
     mock_ws_instance = mock_ws_client_class.return_value
-    mock_ws_instance._websocket.open = True
+    # Mock the is_connected property using PropertyMock
+    type(mock_ws_instance).is_connected = PropertyMock(return_value=True)
     mock_ws_instance.last_update_ts = {"XBTUSD": time.monotonic()}
     api._ws_client = mock_ws_instance
 
@@ -61,14 +62,14 @@ def test_get_data_status(mock_store, mock_ws_client_class, mock_build_universe, 
 
     # --- Test Case 3: WebSocket is disconnected ---
     api._rest_client.get_public.side_effect = None # Reset side effect
-    mock_ws_instance._websocket.open = False
+    type(mock_ws_instance).is_connected = PropertyMock(return_value=False)
     status = api.get_data_status()
     assert status.websocket_connected is False
     assert status.streaming_pairs == 0
     assert status.stale_pairs == 1 # The one pair is now stale
 
     # --- Test Case 4: Data is stale ---
-    mock_ws_instance._websocket.open = True
+    type(mock_ws_instance).is_connected = PropertyMock(return_value=True)
     # Set the last update to be older than the tolerance
     mock_ws_instance.last_update_ts = {"XBTUSD": time.monotonic() - 120}
     status = api.get_data_status()

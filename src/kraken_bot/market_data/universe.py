@@ -80,7 +80,10 @@ def _filter_by_volume(
 
     retained_pairs = []
     for pair in pairs:
-        ticker_info = ticker_response.get(pair.raw_name) # Ticker response uses the raw name
+        # Kraken sometimes returns the raw name, sometimes the altname/rest_symbol.
+        # Check both to be safe.
+        ticker_info = ticker_response.get(pair.raw_name) or ticker_response.get(pair.rest_symbol)
+
         if not ticker_info:
             logger.warning(f"Could not find ticker info for {pair.canonical}. Retaining.")
             retained_pairs.append(pair)

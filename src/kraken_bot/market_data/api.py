@@ -162,7 +162,7 @@ class MarketDataAPI:
             rest_ok = False
 
         # 2. Check WebSocket status
-        ws_connected = self._ws_client is not None and self._ws_client._websocket is not None and self._ws_client._websocket.open
+        ws_connected = self._ws_client.is_connected if self._ws_client else False
 
         streaming_count = 0
         stale_count = 0
