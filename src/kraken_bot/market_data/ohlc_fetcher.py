@@ -25,7 +25,9 @@ def _parse_ohlc_response(response: Dict[str, Any], pair: str) -> List[OHLCBar]:
     """
     bars = []
     # The key for the pair data in the response can be the raw_name or altname
-    pair_key = next(iter(response))
+    pair_key = next((key for key in response.keys() if key != "last"), None)
+    if not pair_key:
+        return bars
 
     # Exclude the last item, which is the incomplete running candle
     for row in response[pair_key][:-1]:
@@ -94,8 +96,19 @@ def backfill_ohlc(
         total_bars_fetched += len(bars)
 
         # Kraken's pagination uses the 'last' timestamp from the response
-        last_ts = int(response.get("last", 0))
-        if last_ts > since:
+        last_raw = response.get("last")
+        if last_raw is None:
+            break
+
+        try:
+            last_ts = int(last_raw)
+        except (TypeError, ValueError):
+            logger.warning(
+                f"Received non-numeric 'last' value from OHLC response for {pair_metadata.canonical}: {last_raw}"
+            )
+            break
+
+        if since is None or last_ts > since:
             since = last_ts
         else:
             # No more pages
