@@ -3,7 +3,7 @@
 import pytest
 import time
 from unittest.mock import MagicMock, patch, PropertyMock
-from kraken_bot.config import AppConfig, UniverseConfig, MarketDataConfig, ConnectionStatus
+from kraken_bot.config import AppConfig, UniverseConfig, MarketDataConfig, ConnectionStatus, PortfolioConfig
 from kraken_bot.market_data.api import MarketDataAPI
 from kraken_bot.market_data.exceptions import DataStaleError
 
@@ -18,7 +18,8 @@ def mock_config() -> AppConfig:
             ohlc_store={},
             backfill_timeframes=[],
             ws_timeframes=[]
-        )
+        ),
+        portfolio=PortfolioConfig()
     )
 
 @patch('kraken_bot.market_data.api.build_universe')
