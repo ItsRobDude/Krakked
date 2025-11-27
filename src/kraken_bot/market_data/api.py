@@ -86,6 +86,28 @@ class MarketDataAPI:
             raise PairNotFoundError(pair)
         return self._ohlc_store.get_bars(pair, timeframe, lookback)
 
+    def get_ohlc_since(self, pair: str, timeframe: str, since_ts: int) -> List[OHLCBar]:
+        if pair not in self._universe_map:
+            raise PairNotFoundError(pair)
+        return self._ohlc_store.get_bars_since(pair, timeframe, since_ts)
+
+    def backfill_ohlc(self, pair: str, timeframe: str, since: Optional[int] = None) -> int:
+        """
+        Backfills historical OHLC data for the given pair and timeframe.
+        Returns the number of bars fetched.
+        """
+        if pair not in self._universe_map:
+            raise PairNotFoundError(pair)
+
+        pair_meta = self._universe_map[pair]
+        return backfill_ohlc(
+            pair_metadata=pair_meta,
+            timeframe=timeframe,
+            since=since,
+            client=self._rest_client,
+            store=self._ohlc_store
+        )
+
     def _check_staleness(self, pair: str):
         if not self._ws_client:
             raise DataStaleError(pair, -1, self._ws_stale_tolerance) # No client running
@@ -140,7 +162,7 @@ class MarketDataAPI:
             rest_ok = False
 
         # 2. Check WebSocket status
-        ws_connected = self._ws_client is not None and self._ws_client._websocket is not None and self._ws_client._websocket.open
+        ws_connected = self._ws_client.is_connected if self._ws_client else False
 
         streaming_count = 0
         stale_count = 0

@@ -33,6 +33,11 @@ class KrakenWSClientV2:
         self.ticker_cache: Dict[str, Dict[str, Any]] = {}
         self.ohlc_cache: Dict[str, Dict[str, Any]] = {} # key: pair, value: {timeframe: ohlc_data}
 
+    @property
+    def is_connected(self) -> bool:
+        """Returns True if the WebSocket connection is open."""
+        return self._websocket is not None and self._websocket.open
+
     def start(self):
         """Starts the WebSocket client in a separate thread."""
         if self._running:
@@ -149,7 +154,11 @@ class KrakenWSClientV2:
                             await self._handle_message(message)
                         except asyncio.TimeoutError:
                             # No message received, send a ping to keep connection alive
-                            await ws.ping()
+                            try:
+                                await ws.ping()
+                            except Exception:
+                                logger.warning("WebSocket ping failed. Reconnecting.")
+                                break
                         except websockets.exceptions.ConnectionClosed:
                             logger.warning("WebSocket connection closed unexpectedly.")
                             break
