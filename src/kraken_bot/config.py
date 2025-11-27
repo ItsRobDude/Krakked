@@ -92,7 +92,6 @@ class PairMetadata:
     volume_decimals: int
     lot_size: float
     status: str
-    min_order_size: float
 
 @dataclass
 class OHLCBar:

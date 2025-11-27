@@ -25,7 +25,9 @@ def _parse_ohlc_response(response: Dict[str, Any], pair: str) -> List[OHLCBar]:
     """
     bars = []
     # The key for the pair data in the response can be the raw_name or altname
-    pair_key = next(iter(response))
+    pair_key = next((key for key in response.keys() if key != "last"), None)
+    if not pair_key:
+        return bars
 
     # Exclude the last item, which is the incomplete running candle
     for row in response[pair_key][:-1]:
@@ -84,36 +86,36 @@ def backfill_ohlc(
 
         bars = _parse_ohlc_response(response, pair_metadata.canonical)
 
-        # Filter out any bars with a timestamp <= the last seen timestamp from the previous page
-        # This is necessary because Kraken's `since` parameter is inclusive.
-        last_seen_ts = since
-        if last_seen_ts:
-            new_bars = [b for b in bars if b.timestamp > last_seen_ts]
-        else:
-            new_bars = bars
-
-        if not new_bars:
+        if not bars:
             logger.info(f"No new closed candles for {pair_metadata.canonical}. Backfill complete.")
             break
 
         if store:
-            store.append_bars(pair_metadata.canonical, timeframe, new_bars)
+            store.append_bars(pair_metadata.canonical, timeframe, bars)
 
-        total_bars_fetched += len(new_bars)
+        total_bars_fetched += len(bars)
 
         # Kraken's pagination uses the 'last' timestamp from the response
-        last_val = response.get("last")
-        last_ts = int(last_val) if last_val is not None else 0
-
-        # If 'since' is not None, we stop if the timestamp isn't advancing.
-        if since is not None and last_ts <= since:
+        last_raw = response.get("last")
+        if last_raw is None:
             break
 
-        # If the API provides no further pagination timestamp, we must stop.
-        if last_ts == 0:
+        try:
+            last_ts = int(last_raw)
+        except (TypeError, ValueError):
+            logger.warning(
+                f"Received non-numeric 'last' value from OHLC response for {pair_metadata.canonical}: {last_raw}"
+            )
             break
 
-        since = last_ts
+        if since is None or last_ts > since:
+            since = last_ts
+        else:
+            # No more pages
+            break
+
+        # A small sleep to be polite, even with the rate limiter
+        time.sleep(0.5)
 
     logger.info(f"Completed backfill for {pair_metadata.canonical} ({timeframe}). Fetched {total_bars_fetched} new bars.")
     return total_bars_fetched

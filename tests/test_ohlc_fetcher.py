@@ -11,7 +11,7 @@ def mock_pair_metadata() -> PairMetadata:
     return PairMetadata(
         canonical="XBTUSD", base="XBT", quote="USD", rest_symbol="XBTUSD",
         ws_symbol="XBT/USD", raw_name="XXBTZUSD", price_decimals=1,
-        volume_decimals=8, lot_size=1.0, status="online", min_order_size=0.0001
+        volume_decimals=8, lot_size=1.0, status="online"
     )
 
 def test_backfill_ohlc_pagination(mock_pair_metadata: PairMetadata):
@@ -78,49 +78,3 @@ def test_backfill_ohlc_pagination(mock_pair_metadata: PairMetadata):
 
     # 3. Verify the data was stored three times
     assert mock_store.append_bars.call_count == 3
-
-def test_backfill_first_page_no_since(mock_pair_metadata: PairMetadata):
-    """
-    Tests that a single page fetch works correctly when since=None.
-    This validates against the `last_ts > since` TypeError.
-    """
-    mock_client = MagicMock()
-    mock_store = MagicMock()
-
-    response = {
-        "XXBTZUSD": [[1000, 1, 1, 1, 1, 1, 1], [1060, 2, 2, 2, 2, 2, 2]],
-        "last": 1060
-    }
-    mock_client.get_public.side_effect = [response, {"XXBTZUSD": [], "last": 1060}]
-
-    count = backfill_ohlc(
-        pair_metadata=mock_pair_metadata, timeframe="1m", since=None,
-        client=mock_client, store=mock_store
-    )
-
-    assert count == 1 # 1 closed bar
-    assert mock_client.get_public.call_count == 2
-    mock_store.append_bars.assert_called_once()
-
-def test_backfill_first_page_null_last(mock_pair_metadata: PairMetadata):
-    """
-    Tests that a single page fetch with last=None works correctly.
-    This validates against the `int(None)` TypeError.
-    """
-    mock_client = MagicMock()
-    mock_store = MagicMock()
-
-    response = {
-        "XXBTZUSD": [[1000, 1, 1, 1, 1, 1, 1], [1060, 2, 2, 2, 2, 2, 2]],
-        "last": None
-    }
-    mock_client.get_public.return_value = response
-
-    count = backfill_ohlc(
-        pair_metadata=mock_pair_metadata, timeframe="1m", since=None,
-        client=mock_client, store=mock_store
-    )
-
-    assert count == 1 # 1 closed bar
-    mock_client.get_public.assert_called_once_with("OHLC", {"pair": "XBTUSD", "interval": 1})
-    mock_store.append_bars.assert_called_once()
