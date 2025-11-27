@@ -848,5 +848,3 @@ Phase 2 is considered complete when:
 * [ ] A small, well‑defined public API is exposed: universe, metadata, OHLC, live prices, and data status.
 * [ ] The pytest suite passes and covers universe filtering, OHLC loading, WS message handling, and rate limiting.
 
-You can paste this directly into a `docs/PHASE2_MARKET_DATA.md` or a GitHub issue and hand it to whoever’s implementing Phase 2.
-
