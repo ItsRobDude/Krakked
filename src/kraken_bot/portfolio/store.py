@@ -144,6 +144,15 @@ class SQLitePortfolioStore(PortfolioStore):
             # Let's assume flattened dict with 'id'.
 
             raw_json = json.dumps(trade)
+
+            # Handle 'trades' field which can be a list of strings
+            trades_val = trade.get("trades")
+            trades_csv = None
+            if isinstance(trades_val, list):
+                trades_csv = ",".join(str(t) for t in trades_val)
+            elif trades_val is not None:
+                trades_csv = str(trades_val)
+
             cursor.execute("""
                 INSERT OR IGNORE INTO trades (
                     id, ordertxid, pair, time, type, ordertype, price, cost, fee, vol,
@@ -170,7 +179,7 @@ class SQLitePortfolioStore(PortfolioStore):
                 float(trade.get("cvol", 0)) if trade.get("cvol") else None,
                 float(trade.get("cmargin", 0)) if trade.get("cmargin") else None,
                 float(trade.get("net", 0)) if trade.get("net") else None,
-                trade.get("trades"), # trades list CSV
+                trades_csv, # trades list CSV
                 raw_json
             ))
         conn.commit()

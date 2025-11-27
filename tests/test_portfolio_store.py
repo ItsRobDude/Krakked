@@ -27,6 +27,21 @@ def test_save_and_get_trades(store):
     assert len(fetched_since) == 1
     assert fetched_since[0]['id'] == "T2"
 
+def test_save_trades_with_list_field(store):
+    # Regression test for 'InterfaceError' when 'trades' is a list
+    trade_with_list = {
+        "id": "T3", "pair": "XBTUSD", "time": 1002, "type": "buy",
+        "price": 50000, "vol": 1, "cost": 50000,
+        "trades": ["TX1", "TX2"]
+    }
+    store.save_trades([trade_with_list])
+
+    fetched = store.get_trades(since=1002)
+    assert len(fetched) == 1
+    assert fetched[0]['id'] == "T3"
+    # Verify raw_json preserved the list
+    assert fetched[0]['trades'] == ["TX1", "TX2"]
+
 def test_save_and_get_cash_flows(store):
     flows = [
         CashFlowRecord("C1", 1000, "USD", 1000.0, "deposit", "Initial"),
