@@ -328,3 +328,20 @@ Runs successfully.
 Covers the main behaviors listed in the Testing section.
 
 If all of that is true, you have the “secure, tested Kraken connection module” that the later phases can safely build on.
+
+---
+
+## Current Status: Phase 2 Complete
+
+Phase 2 of the project, the **Market Data & Pair Universe Module**, has been implemented. The core logic resides in the `src/kraken_bot/market_data/` directory.
+
+The implemented modules map to the design contract as follows:
+
+| Contract Section                      | Implemented Module(s)                                       | Status      |
+| ------------------------------------- | ----------------------------------------------------------- | ----------- |
+| **2. Pair Universe**                  | `market_data/universe.py`                                   | ✅ Complete |
+| **3. Historical Market Data (REST)**  | `market_data/ohlc_fetcher.py`, `market_data/ohlc_store.py`  | ✅ Complete |
+| **4. Real-Time Market Data (WebSocket)**| `market_data/ws_client.py`                                  | ✅ Complete |
+| **5. Rate Limits & Reliability**      | `connection/rate_limiter.py`, `connection/rest_client.py`   | ✅ Complete |
+| **6. Public API of the Module**       | `market_data/api.py`                                        | ✅ Complete |
+| **7. Testing Expectations**           | `tests/test_universe.py`, `tests/test_ohlc_store.py`, etc.  | ✅ Complete |
