@@ -17,11 +17,6 @@ class PortfolioStore(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def save_orders(self, orders: List[Dict[str, Any]]):
-        """Saves raw order data and trade mappings."""
-        pass
-
-    @abc.abstractmethod
     def get_trades(self, pair: Optional[str] = None, limit: Optional[int] = None, since: Optional[int] = None) -> List[Dict[str, Any]]:
         """Retrieves raw trade data."""
         pass
@@ -74,93 +69,10 @@ class SQLitePortfolioStore(PortfolioStore):
 
         cursor.execute("SELECT version FROM schema_version WHERE id = 1")
         row = cursor.fetchone()
-        current_version = 0
         if row is None:
-             cursor.execute("INSERT INTO schema_version (id, version) VALUES (1, 2)")
-             current_version = 0 # New DB, but we'll run create table logic which is idempotent
-        else:
-             current_version = row[0]
+             cursor.execute("INSERT INTO schema_version (id, version) VALUES (1, 1)")
 
-        # Schema V1 definition (Conceptual): 'trades' had 'trades_csv' column.
-        # Schema V2 definition: 'trades' has NO 'trades_csv'. New 'orders' and 'order_trades'.
-
-        if current_version < 2:
-            self._migrate_to_v2(conn, cursor, current_version)
-            # Update version
-            cursor.execute("UPDATE schema_version SET version = 2 WHERE id = 1")
-
-        conn.commit()
-        conn.close()
-
-    def _migrate_to_v2(self, conn, cursor, current_version):
-        logger.info(f"Migrating database from version {current_version} to 2...")
-
-        # 1. Create new normalized tables
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS orders (
-                order_id TEXT PRIMARY KEY,
-                pair TEXT,
-                status TEXT,
-                opened REAL,
-                closed REAL,
-                raw_json TEXT NOT NULL
-            )
-        """)
-
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS order_trades (
-                order_id TEXT NOT NULL,
-                trade_id TEXT NOT NULL,
-                PRIMARY KEY (order_id, trade_id),
-                FOREIGN KEY (order_id) REFERENCES orders(order_id),
-                FOREIGN KEY (trade_id) REFERENCES trades(id)
-            )
-        """)
-
-        # 2. Update 'trades' table.
-        # If 'trades' exists and has 'trades_csv', we should migrate.
-        # Check if table exists
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='trades'")
-        if cursor.fetchone():
-            # Table exists. Check columns.
-            cursor.execute("PRAGMA table_info(trades)")
-            columns = [info[1] for info in cursor.fetchall()]
-
-            if "trades_csv" in columns:
-                # Need to migrate
-                logger.info("Migrating 'trades' table to remove 'trades_csv'...")
-
-                # Rename old
-                cursor.execute("ALTER TABLE trades RENAME TO trades_legacy")
-
-                # Create new
-                self._create_trades_table_v2(cursor)
-
-                # Copy data
-                # All columns except trades_csv
-                # We need to list common columns explicitly to be safe
-                common_cols = [
-                    "id", "ordertxid", "pair", "time", "type", "ordertype", "price",
-                    "cost", "fee", "vol", "margin", "misc", "posstatus", "cprice",
-                    "ccost", "cfee", "cvol", "cmargin", "net", "raw_json"
-                ]
-                cols_str = ", ".join(common_cols)
-                cursor.execute(f"INSERT INTO trades ({cols_str}) SELECT {cols_str} FROM trades_legacy")
-
-                # Drop old
-                cursor.execute("DROP TABLE trades_legacy")
-            else:
-                # Table exists but 'trades_csv' missing? Maybe already V2 format but version wasn't bumped?
-                # Or a clean run. Ensure schema matches V2.
-                pass
-        else:
-            # Table doesn't exist, create it (V2)
-            self._create_trades_table_v2(cursor)
-
-        # 3. Create other tables if not exist (cash_flows, snapshots)
-        self._create_other_tables(cursor)
-
-    def _create_trades_table_v2(self, cursor):
+        # Trades Table
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS trades (
                 id TEXT PRIMARY KEY,
@@ -182,13 +94,13 @@ class SQLitePortfolioStore(PortfolioStore):
                 cvol REAL,
                 cmargin REAL,
                 net REAL,
-                raw_json TEXT NOT NULL
+                trades_csv TEXT,
+                raw_json TEXT
             )
         """)
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_trades_time ON trades(time)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_trades_pair ON trades(pair)")
 
-    def _create_other_tables(self, cursor):
         # Cash Flows Table
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS cash_flows (
@@ -214,6 +126,9 @@ class SQLitePortfolioStore(PortfolioStore):
         """)
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_snapshots_timestamp ON snapshots(timestamp)")
 
+        conn.commit()
+        conn.close()
+
     def save_trades(self, trades: List[Dict[str, Any]]):
         if not trades:
             return
@@ -224,16 +139,19 @@ class SQLitePortfolioStore(PortfolioStore):
         for trade in trades:
             raw_json = json.dumps(trade)
 
-            # We no longer handle 'trades' list field in the 'trades' table.
-            # If the object is actually an Order (with 'trades' list), it should be passed to save_orders.
-            # But just in case, we ignore that field here.
+            trades_val = trade.get("trades")
+            trades_csv = None
+            if isinstance(trades_val, list):
+                trades_csv = ",".join(str(t) for t in trades_val)
+            elif trades_val is not None:
+                trades_csv = str(trades_val)
 
             cursor.execute("""
                 INSERT OR IGNORE INTO trades (
                     id, ordertxid, pair, time, type, ordertype, price, cost, fee, vol,
                     margin, misc, posstatus, cprice, ccost, cfee, cvol, cmargin, net,
-                    raw_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    trades_csv, raw_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 trade.get("id"),
                 trade.get("ordertxid"),
@@ -254,55 +172,9 @@ class SQLitePortfolioStore(PortfolioStore):
                 float(trade.get("cvol", 0)) if trade.get("cvol") else None,
                 float(trade.get("cmargin", 0)) if trade.get("cmargin") else None,
                 float(trade.get("net", 0)) if trade.get("net") else None,
+                trades_csv,
                 raw_json
             ))
-        conn.commit()
-        conn.close()
-
-    def save_orders(self, orders: List[Dict[str, Any]]):
-        if not orders:
-            return
-
-        conn = self._get_conn()
-        cursor = conn.cursor()
-
-        for order in orders:
-            # Assuming 'order' has 'id' or we use keys from dict if it's a map?
-            # Kraken ClosedOrders returns {txid: {order info...}}
-            # We assume flattened here.
-
-            order_id = order.get("id")
-            if not order_id:
-                # Should not happen if pre-processed
-                continue
-
-            raw_json = json.dumps(order)
-
-            cursor.execute("""
-                INSERT OR IGNORE INTO orders (
-                    order_id, pair, status, opened, closed, raw_json
-                ) VALUES (?, ?, ?, ?, ?, ?)
-            """, (
-                order_id,
-                order.get("pair"), # Actually Kraken calls it 'descr' -> 'pair', need deep parsing?
-                # Kraken ClosedOrders: {id: { status:..., opentm:..., closetm:..., descr: {pair: ...} }}
-                # We assume simple fields for now or rely on raw_json for details.
-                # If parsed:
-                order.get("status"),
-                order.get("opentm"),
-                order.get("closetm"),
-                raw_json
-            ))
-
-            # Handle trades list
-            trade_ids = order.get("trades")
-            if trade_ids and isinstance(trade_ids, list):
-                for trade_id in trade_ids:
-                    cursor.execute("""
-                        INSERT OR IGNORE INTO order_trades (order_id, trade_id)
-                        VALUES (?, ?)
-                    """, (order_id, str(trade_id)))
-
         conn.commit()
         conn.close()
 
