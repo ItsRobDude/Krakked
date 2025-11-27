@@ -54,7 +54,6 @@ def _create_pair_metadata(raw_name: str, pair_data: Dict[str, Any]) -> PairMetad
         volume_decimals=pair_data.get("lot_decimals"),
         lot_size=float(pair_data.get("lot_multiplier", 1.0)),
         status=pair_data.get("status"),
-        min_order_size=float(pair_data.get("ordermin", 0.0)),
     )
 
 def _filter_by_volume(

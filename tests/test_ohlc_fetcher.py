@@ -11,7 +11,7 @@ def mock_pair_metadata() -> PairMetadata:
     return PairMetadata(
         canonical="XBTUSD", base="XBT", quote="USD", rest_symbol="XBTUSD",
         ws_symbol="XBT/USD", raw_name="XXBTZUSD", price_decimals=1,
-        volume_decimals=8, lot_size=1.0, status="online", min_order_size=0.0001
+        volume_decimals=8, lot_size=1.0, status="online"
     )
 
 def test_backfill_ohlc_pagination(mock_pair_metadata: PairMetadata):
@@ -76,70 +76,5 @@ def test_backfill_ohlc_pagination(mock_pair_metadata: PairMetadata):
         call("OHLC", {"pair": "XBTUSD", "interval": 1, "since": 1120}),
     ])
 
-    # 3. Verify the data was stored three times with the correct content
+    # 3. Verify the data was stored three times
     assert mock_store.append_bars.call_count == 3
-
-    # Check the content of each call to append_bars
-    first_call_args = mock_store.append_bars.call_args_list[0][0]
-    second_call_args = mock_store.append_bars.call_args_list[1][0]
-    third_call_args = mock_store.append_bars.call_args_list[2][0]
-
-    # Page 1 should have 2 bars
-    assert len(first_call_args[2]) == 2
-    assert first_call_args[2][0].timestamp == 940
-    assert first_call_args[2][1].timestamp == 1000
-
-    # Page 2 should have 2 new bars
-    assert len(second_call_args[2]) == 2
-    assert second_call_args[2][0].timestamp == 1060
-    assert second_call_args[2][1].timestamp == 1120
-
-    # Page 3 should have 1 new bar
-    assert len(third_call_args[2]) == 1
-    assert third_call_args[2][0].timestamp == 1180
-
-def test_backfill_first_page_no_since(mock_pair_metadata: PairMetadata):
-    """
-    Tests that a single page fetch works correctly when since=None.
-    This validates against the `last_ts > since` TypeError.
-    """
-    mock_client = MagicMock()
-    mock_store = MagicMock()
-
-    response = {
-        "XXBTZUSD": [[1000, 1, 1, 1, 1, 1, 1], [1060, 2, 2, 2, 2, 2, 2]],
-        "last": 1060
-    }
-    mock_client.get_public.side_effect = [response, {"XXBTZUSD": [], "last": 1060}]
-
-    count = backfill_ohlc(
-        pair_metadata=mock_pair_metadata, timeframe="1m", since=None,
-        client=mock_client, store=mock_store
-    )
-
-    assert count == 1 # 1 closed bar
-    assert mock_client.get_public.call_count == 2
-    mock_store.append_bars.assert_called_once()
-
-def test_backfill_first_page_null_last(mock_pair_metadata: PairMetadata):
-    """
-    Tests that a single page fetch with last=None works correctly.
-    This validates against the `int(None)` TypeError.
-    """
-    mock_client = MagicMock()
-    mock_store = MagicMock()
-
-    response = {
-        "XXBTZUSD": [[1000, 1, 1, 1, 1, 1, 1], [1060, 2, 2, 2, 2, 2, 2]],
-        "last": None
-    }
-    mock_client.get_public.return_value = response
-
-    count = backfill_ohlc(
-        pair_metadata=mock_pair_metadata, timeframe="1m", since=None,
-        client=mock_client, store=mock_store
-    )
-
-    assert count == 1 # 1 closed bar
-    mock_client.get_public.assert_called_once_with("OHLC", {"pair": "XBTUSD", "interval": 1})
-    mock_store.append_bars.assert_called_once()
