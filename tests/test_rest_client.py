@@ -1,6 +1,7 @@
 # tests/test_rest_client.py
 
 import pytest
+import requests
 import time
 from unittest.mock import MagicMock, patch
 from kraken_bot.connection.rest_client import KrakenRESTClient
@@ -13,6 +14,7 @@ def client():
 def test_public_request_success(client):
     with patch.object(client.session, 'get') as mock_get:
         mock_response = MagicMock()
+        mock_response.status_code = 200
         mock_response.json.return_value = {"error": [], "result": {"server_time": 123456}}
         mock_response.raise_for_status.return_value = None
         mock_get.return_value = mock_response
@@ -33,6 +35,7 @@ def test_private_request_signature_generation(client):
 
     with patch.object(client.session, 'post') as mock_post:
         mock_response = MagicMock()
+        mock_response.status_code = 200
         mock_response.json.return_value = {"error": [], "result": {"balance": 100}}
         mock_post.return_value = mock_response
 
@@ -49,6 +52,7 @@ def test_private_request_signature_generation(client):
 def test_api_error_handling(client):
     with patch.object(client.session, 'get') as mock_get:
         mock_response = MagicMock()
+        mock_response.status_code = 200
         mock_response.json.return_value = {"error": ["EGeneral:Invalid arguments"]}
         mock_get.return_value = mock_response
 
@@ -58,6 +62,7 @@ def test_api_error_handling(client):
 def test_rate_limit_error_handling(client):
     with patch.object(client.session, 'get') as mock_get:
         mock_response = MagicMock()
+        mock_response.status_code = 200
         mock_response.json.return_value = {"error": ["EAPI:Rate limit exceeded"]}
         mock_get.return_value = mock_response
 
@@ -70,8 +75,27 @@ def test_rate_limit_error_handling(client):
 def test_service_unavailable_error_handling(client):
     with patch.object(client.session, 'get') as mock_get:
         mock_response = MagicMock()
+        mock_response.status_code = 200
         mock_response.json.return_value = {"error": ["EService:Unavailable"]}
         mock_get.return_value = mock_response
 
         with pytest.raises(ServiceUnavailableError):
+            client.get_public("Time")
+
+
+def test_timeout_maps_to_service_unavailable(client):
+    with patch.object(client.session, 'get', side_effect=requests.exceptions.Timeout("timeout")):
+        with pytest.raises(ServiceUnavailableError):
+            client.get_public("Time")
+
+
+def test_http_rate_limit_status_maps_to_rate_limit_error(client):
+    with patch.object(client.session, 'get') as mock_get:
+        mock_response = MagicMock()
+        mock_response.status_code = 429
+        mock_response.raise_for_status.side_effect = requests.exceptions.HTTPError(response=mock_response)
+        mock_response.json.return_value = {"error": []}
+        mock_get.return_value = mock_response
+
+        with pytest.raises(RateLimitError):
             client.get_public("Time")

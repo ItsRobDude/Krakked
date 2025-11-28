@@ -93,17 +93,28 @@ class KrakenRESTClient:
             else:
                 raise ValueError(f"Unsupported method: {method}")
 
+            if response.status_code == 429:
+                raise RateLimitError("Rate limit exceeded")
+
+            if 500 <= response.status_code < 600:
+                raise ServiceUnavailableError(f"Kraken API Service Error: HTTP {response.status_code}")
+
             response.raise_for_status()
             response_json = response.json()
 
-            if response_json.get("error"):
-                error_msg = str(response_json["error"])
+            error_messages = response_json.get("error") or []
+            if error_messages:
+                error_msg = "; ".join(error_messages)
 
                 # Categorize errors
                 if "EAPI:Rate limit exceeded" in error_msg:
                     time.sleep(1) # Backoff slightly
                     raise RateLimitError(error_msg)
-                elif "EAPI:Invalid key" in error_msg or "EAPI:Invalid signature" in error_msg or "EAPI:Invalid nonce" in error_msg:
+                elif (
+                    "EAPI:Invalid key" in error_msg
+                    or "EAPI:Invalid signature" in error_msg
+                    or "EAPI:Invalid nonce" in error_msg
+                ):
                     raise AuthError(error_msg)
                 elif "EService:Unavailable" in error_msg or "EService:Busy" in error_msg:
                     raise ServiceUnavailableError(error_msg)
@@ -113,12 +124,16 @@ class KrakenRESTClient:
             return response_json.get("result", {})
 
         except requests.exceptions.HTTPError as e:
-             # Handle HTTP 5xx errors as service issues
-            if 500 <= e.response.status_code < 600:
+            status_code = e.response.status_code if e.response else None
+            if status_code == 429:
+                raise RateLimitError("Rate limit exceeded") from e
+            if status_code and 500 <= status_code < 600:
                 raise ServiceUnavailableError(f"Kraken API Service Error: {e}") from e
             raise KrakenAPIError(f"HTTP Error: {e}") from e
+        except requests.exceptions.Timeout as e:
+            raise ServiceUnavailableError(f"Request timed out: {e}") from e
         except requests.exceptions.RequestException as e:
-            raise KrakenAPIError(f"Network Error: {e}") from e
+            raise ServiceUnavailableError(f"Network Error: {e}") from e
 
     def get_public(self, endpoint: str, params: dict = None) -> Dict[str, Any]:
         """Makes a GET request to a public Kraken API endpoint."""
