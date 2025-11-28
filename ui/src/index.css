@@ -51,6 +51,10 @@ body {
   backdrop-filter: blur(6px);
 }
 
+.card--dashboard {
+  width: min(1080px, 100%);
+}
+
 .card__body {
   padding: clamp(1.75rem, 3vw, 2.5rem);
   position: relative;
@@ -74,6 +78,145 @@ body {
 .subtitle {
   margin: 0;
   color: #cbd5e1;
+  font-size: 0.95rem;
+}
+
+.dashboard {
+  padding: clamp(1.75rem, 3vw, 2.75rem);
+}
+
+.dashboard__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1.8rem;
+}
+
+.dashboard__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 1rem;
+}
+
+.panel {
+  background: rgba(15, 23, 42, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 16px;
+  padding: 1.1rem 1.25rem;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+
+.panel__header h2 {
+  margin: 0;
+  font-size: 1.1rem;
+  color: #f8fafc;
+}
+
+.panel__description {
+  margin: 0.65rem 0 0.5rem;
+  color: #cbd5e1;
+}
+
+.panel__hint {
+  margin: 0;
+  color: #94a3b8;
+  font-size: 0.9rem;
+}
+
+.placeholder-list {
+  padding-left: 1.1rem;
+  margin: 0.2rem 0 0;
+  color: #e2e8f0;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.status-pill {
+  padding: 0.35rem 0.75rem;
+  border-radius: 999px;
+  font-weight: 700;
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border: 1px solid rgba(34, 197, 94, 0.25);
+  background: rgba(34, 197, 94, 0.12);
+  color: #bef264;
+}
+
+.status-pill[data-status='reconnected'] {
+  border-color: rgba(14, 165, 233, 0.25);
+  background: rgba(14, 165, 233, 0.12);
+  color: #7dd3fc;
+}
+
+.balance-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 0.75rem;
+}
+
+.balance-card {
+  padding: 0.9rem 1rem;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.04);
+  background: linear-gradient(145deg, rgba(59, 130, 246, 0.07), rgba(15, 23, 42, 0.9));
+}
+
+.balance-card__label {
+  margin: 0;
+  color: #cbd5e1;
+  font-weight: 600;
+}
+
+.balance-card__value {
+  margin: 0.15rem 0 0;
+  font-size: 1.35rem;
+  font-weight: 800;
+  color: #f8fafc;
+}
+
+.balance-card__subvalue {
+  margin: 0.15rem 0 0;
+  color: #94a3b8;
+}
+
+.activity-list {
+  list-style: none;
+  padding: 0;
+  margin: 0.4rem 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+}
+
+.activity-list__item {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  align-items: flex-start;
+}
+
+.activity-list__label {
+  margin: 0;
+  color: #e2e8f0;
+  font-weight: 700;
+}
+
+.activity-list__detail {
+  margin: 0.15rem 0 0;
+  color: #cbd5e1;
+}
+
+.activity-list__time {
+  color: #94a3b8;
   font-size: 0.95rem;
 }
 
