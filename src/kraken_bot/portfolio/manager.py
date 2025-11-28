@@ -223,6 +223,9 @@ class PortfolioService:
     def get_asset_exposure(self, include_manual: Optional[bool] = None):
         return self.portfolio.get_asset_exposure(include_manual=include_manual)
 
+    def get_realized_pnl_by_strategy(self, include_manual: Optional[bool] = None) -> Dict[str, float]:
+        return self.portfolio.get_realized_pnl_by_strategy(include_manual=include_manual)
+
     def create_snapshot(self) -> PortfolioSnapshot:
         return self.portfolio.snapshot()
 
