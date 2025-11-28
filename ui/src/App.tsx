@@ -172,9 +172,9 @@ function App() {
   return (
     <div className="app-shell">
       <div className="background" aria-hidden="true" />
-      <main className="card" aria-labelledby="welcome-heading">
-        <div className="card__body">
-          <header className="card__header">
+      <main className="auth" aria-labelledby="welcome-heading">
+        <div className="auth__inner">
+          <header className="auth__header">
             <p className="eyebrow">Authentication</p>
             <h1 id="welcome-heading">Welcome to Krakked</h1>
             <p className="subtitle">Enter your Kraken API credentials to connect.</p>
