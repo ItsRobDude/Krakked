@@ -2,7 +2,7 @@
 
 import time
 import logging
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Dict, List, Optional, Tuple
 from collections import defaultdict
 from pathlib import Path
 
@@ -30,9 +30,6 @@ class PortfolioService:
         self.balances: Dict[str, AssetBalance] = {}
         self.positions: Dict[str, SpotPosition] = {}
         self.realized_pnl_history: List[RealizedPnLRecord] = [] # Could be large, maybe load on demand or summary
-
-        # Caches
-        self._order_cache: Dict[str, Dict] = {} # order_id -> order_dict
 
         # Aggregates
         self.realized_pnl_base_by_pair: Dict[str, float] = defaultdict(float)
@@ -67,14 +64,32 @@ class PortfolioService:
         logger.info("Syncing portfolio...")
 
         # 1. Fetch and Save Trades
+        # We need to find the latest trade we have to know 'since'
+        # For now, let's just get the last trade timestamp from DB
         latest_trades = self.store.get_trades(limit=1) # ordered by time desc
         since_ts = latest_trades[0]['time'] if latest_trades else None
+
+        # Kraken API 'since' for trades is usually by txid or timestamp?
+        # TradesHistory input 'start' is timestamp.
+        # But response 'last' is string ID.
+        # Let's use timestamp based on last trade time.
+        # Note: Kraken 'TradesHistory' returns 'trades' (dict) and 'count'.
+
+        # Warning: 'since' in Kraken might need offset or careful handling.
+        # Using a safe overlap or tracking 'last' id is better.
+        # For this phase, let's trust 'start=timestamp'
 
         params = {}
         if since_ts:
             params["start"] = since_ts
 
+        # Paginate through trades?
+        # For Phase 3 basic implementation, let's assume one call or simple loop.
+        # But 'TradesHistory' can return 50 results.
+
         new_trades = []
+        # TODO: Pagination logic. For now, fetch recent.
+        # If this is first run, we might need 'all'.
 
         while True:
             resp = self.rest_client.get_private("TradesHistory", params=params)
@@ -82,6 +97,7 @@ class PortfolioService:
             if not trades_dict:
                 break
 
+            # Convert dict {id: trade} to list of trades with 'id' injected
             batch = []
             for txid, trade_data in trades_dict.items():
                 trade_data['id'] = txid
@@ -96,17 +112,27 @@ class PortfolioService:
             self.store.save_trades(batch)
             new_trades.extend(batch)
 
+            # If we get fewer than 50 (default limit), we are done.
+            # Note: 'count' in response is total count of trades, not count in page.
             if len(batch) < 50:
                 break
 
+            # Safety break to prevent infinite loops in case of API issues
+            # Assuming max 100 pages for now (5000 trades) is reasonable for one sync call
+            # But the loop condition must be robust.
+            # Check if last_ts is advancing?
+            pass
+
+            # Update params for next page
             # Use the timestamp of the last trade in batch plus a small epsilon
+            # to avoid fetching the same trade again (assuming exclusive start if using ID,
+            # but documentation says start timestamp is inclusive or exclusive?
+            # "Starting unix timestamp or trade tx id of results (exclusive)" -> Exclusive.
+            # So last timestamp should be safe.
             last_ts = batch[-1]['time']
             params['start'] = last_ts
 
-        # 2. Sync Closed Orders (for Strategy Tagging)
-        self._sync_closed_orders(since_ts)
-
-        # 3. Fetch Ledgers for Cash Flows
+        # 2. Fetch Ledgers for Cash Flows
         # (Similar logic, fetch new, save to store)
         # Using timestamps
         latest_cashflows = self.store.get_cash_flows(limit=1)
@@ -259,112 +285,46 @@ class PortfolioService:
             else:
                 self._process_cash_flow(event['data'])
 
-    def _sync_closed_orders(self, since_ts: Optional[float]):
-        """
-        Fetches and saves ClosedOrders to support strategy tagging.
-        """
-        params = {}
-        if since_ts:
-            params["start"] = since_ts
-
-        while True:
-            try:
-                resp = self.rest_client.get_closed_orders(params=params)
-                closed = resp.get("closed", {})
-                if not closed:
-                    break
-
-                batch = []
-                for txid, info in closed.items():
-                    info['id'] = txid
-                    batch.append(info)
-
-                if not batch:
-                    break
-
-                # Sort by closetm or opentm
-                batch.sort(key=lambda x: float(x.get('closetm') or x.get('opentm') or 0))
-
-                self.store.save_orders(batch)
-
-                if len(batch) < 50:
-                    break
-
-                # Pagination
-                last_order = batch[-1]
-                last_tm = float(last_order.get('closetm') or last_order.get('opentm') or 0)
-                params['start'] = last_tm
-            except Exception as e:
-                logger.warning(f"Failed to sync ClosedOrders: {e}")
-                break
-
-    def _resolve_strategy_tag(self, trade: Dict) -> str:
-        """
-        Resolves strategy tag from the parent order's userref.
-        Format: KRKKD:<strategy_name>
-        """
-        order_id = trade.get('ordertxid')
-        if not order_id:
-            return "manual"
-
-        # Use cache if available
-        if order_id in self._order_cache:
-            order = self._order_cache[order_id]
-        else:
-            order = self.store.get_order(order_id)
-            if order:
-                self._order_cache[order_id] = order
-
-        if not order:
-            return "manual"
-
-        userref = order.get('userref')
-        if not userref:
-            return "manual"
-
-        # Placeholder for userref decoding if we use integer encoding
-        # Or if we store string comment? Kraken userref is integer.
-        # If we use a mapping or if Phase 4 writes integer codes.
-        # For now, let's assume manual unless explicit map exists or if simple int check.
-        # But wait, userref is int32.
-        # Spec says: "Look at userref... if they match a known bot/strategy tag".
-        # Implementation: We'll just return f"userref:{userref}" for now or "manual".
-        # Or if we have a mapping in config?
-        # Let's return "bot" if userref > 0 else "manual" for Phase 3 simplicity?
-        # Actually, let's stick to "manual" default.
-        if userref:
-             return f"userref:{userref}"
-        return "manual"
-
-    def _round_amount(self, amount: float, pair_meta) -> float:
-        return round(amount, pair_meta.volume_decimals)
-
-    def _round_price(self, price: float, pair_meta) -> float:
-        return round(price, pair_meta.price_decimals)
-
     def _process_trade(self, trade: Dict):
         """
         Updates positions and balances based on a trade.
         Implements WAC.
         """
         pair = trade['pair']
+        # Normalized Pair?
+        # trade['pair'] is like 'XBTUSD' or 'XXBTZUSD'
+        # We should canonicalize.
         try:
             pair_meta = self.market_data.get_pair_metadata(pair)
             canonical_pair = pair_meta.canonical
             base_asset = pair_meta.base # Normalized e.g. XBT
             quote_asset = pair_meta.quote # Normalized e.g. USD
         except Exception:
+            # Fallback if pair not in universe (e.g. delisted)
+            # Log warning and try best effort parsing?
+            # For Phase 3, let's skip or warn.
             logger.warning(f"Unknown pair {pair} in trade history. Skipping position update, but balance might be affected.")
             return
 
         # Trade details
+        # Kraken: type='buy' means we bought base, sold quote.
         side = trade['type']
-        price = self._round_price(float(trade['price']), pair_meta)
-        vol = self._round_amount(float(trade['vol']), pair_meta)
-        cost = float(trade['cost']) # Cost is usually price * vol but better to trust API
+        price = float(trade['price'])
+        vol = float(trade['vol'])
+        cost = float(trade['cost']) # vol * price
         fee = float(trade['fee'])
 
+        # Fee asset? Kraken doesn't explicitly field 'fee_asset' in standard dict,
+        # but usually it's Quote (unless specified).
+        # We assume Quote for simplicity unless we parse detailed ledgers for every trade.
+        # Phase 3 spec: "Convert fees to base currency... Subtract from realized PnL"
+        # We need to know fee asset.
+        # Often fee is in Quote.
         fee_asset = quote_asset # Assumption
+
+        # Update Balances (Virtual tracking)
+        # Buy: +Base, -Quote (cost + fee if fee in quote)
+        # Sell: -Base, +Quote (cost - fee if fee in quote)
 
         # Update Position (WAC)
         pos = self.positions.get(canonical_pair)
@@ -380,32 +340,42 @@ class PortfolioService:
             )
             self.positions[canonical_pair] = pos
 
+        # Fee in Base Currency
+        # If fee_asset is USD (base_currency), fee_base = fee
+        # If fee_asset is XBT, fee_base = fee * price_of_XBTUSD
         fee_in_base_currency = self._convert_to_base_currency(fee, fee_asset)
         pos.fees_paid_base += fee_in_base_currency
         self.fees_paid_base_by_pair[canonical_pair] += fee_in_base_currency
 
         if side == 'buy':
             # WAC Update
+            # New Cost Basis = (Old Total Cost + New Cost) / (Old Qty + New Qty)
             old_total_cost = pos.base_size * pos.avg_entry_price
             new_total_qty = pos.base_size + vol
             if new_total_qty > 0:
-                # Use raw cost for precision
                 pos.avg_entry_price = (old_total_cost + cost) / new_total_qty
-            pos.base_size = self._round_amount(new_total_qty, pair_meta)
+            pos.base_size = new_total_qty
 
         elif side == 'sell':
             # Realized PnL
+            # PnL = (Sell Price - Avg Cost) * Sold Qty
             pnl_quote = (price - pos.avg_entry_price) * vol
+
+            # Convert PnL to base currency (if quote is not base currency)
+            # Usually Quote IS base currency (USD).
+            # If pair is ETHXBT, quote is XBT. PnL is in XBT. Convert XBT to USD.
             pnl_base = self._convert_to_base_currency(pnl_quote, quote_asset)
+
+            # Subtract fees from PnL?
+            # Spec: "Realized PnL... Includes all trade-related fees"
+            # So Realized PnL (Net) = Gross PnL - Fee(in base)
             pnl_base_net = pnl_base - fee_in_base_currency
 
             pos.realized_pnl_base += pnl_base_net
             self.realized_pnl_base_by_pair[canonical_pair] += pnl_base_net
 
             # Reduce size
-            pos.base_size = self._round_amount(max(0.0, pos.base_size - vol), pair_meta)
-
-            strategy_tag = self._resolve_strategy_tag(trade)
+            pos.base_size = max(0.0, pos.base_size - vol)
 
             # Record PnL Event
             self.realized_pnl_history.append(RealizedPnLRecord(
@@ -418,8 +388,15 @@ class PortfolioService:
                 quote_delta=cost,
                 fee_asset=fee_asset,
                 fee_amount=fee,
-                pnl_quote=pnl_base_net,
-                strategy_tag=strategy_tag
+                pnl_quote=pnl_base_net, # Storing base net here as 'pnl_quote' field name is confusing in model?
+                # Model says 'pnl_quote'.
+                # Let's assume model meant 'pnl in report currency'?
+                # Or 'pnl in quote currency of the pair'?
+                # Spec: "pnl_quote: float # realized PnL in quote (USD) for this trade" -> Confusing if quote!=USD.
+                # Let's store PnL in Base Currency (USD) in that field or rename.
+                # Spec says "pnl_quote ... realized PnL in quote (USD)" -> Implies Quote=USD.
+                # I'll store the Base Currency PnL there.
+                strategy_tag="manual" # Default for now
             ))
 
     def _process_cash_flow(self, record: CashFlowRecord):
@@ -624,6 +601,13 @@ class PortfolioService:
         # Build asset valuations from current balances and prices
         asset_valuations = []
         for asset, bal in self.balances.items():
+            # Recalculate or use cached value?
+            # get_equity() logic calculated total equity but didn't return per-asset details explicitly except in aggregate.
+            # But get_asset_exposure does.
+            # Let's reuse logic or call `get_asset_exposure`?
+            # get_asset_exposure returns `AssetExposure` objects.
+            # We need `AssetValuation` objects.
+
             val_base = self._convert_to_base_currency(bal.total, asset)
             source_pair = f"{asset}{self.config.base_currency}" if asset != self.config.base_currency else None
 
@@ -647,65 +631,3 @@ class PortfolioService:
 
         self.store.save_snapshot(snapshot)
         return snapshot
-
-    def get_trade_history(self, pair: Optional[str] = None, limit: Optional[int] = None, include_manual: Optional[bool] = None) -> List[Dict]:
-        """
-        Returns recent trades from the internal log.
-        """
-        raw_trades = self.store.get_trades(pair=pair, limit=limit)
-
-        # Note: If we need to filter by 'manual' tag here, we need the tags.
-        # But tags are stored in RealizedPnLRecord, not directly in raw_trades (unless we denormalize).
-        # Or we resolve them on the fly.
-        # However, the spec says "Returns recent trades from the internal log".
-        # And "Optional ... manual/bot filtering".
-        # Since 'strategy_tag' is not on the raw trade table, we might need to join or look up order.
-        # If include_manual is explicitly True/False, we must filter.
-
-        if include_manual is None:
-            # Default behavior based on config?
-            # If track_manual_trades is False, does that mean we exclude them from history?
-            # Usually get_trade_history implies "All trades".
-            # But "PnL summary" might filter.
-            # Let's return all if None.
-            return raw_trades
-
-        filtered = []
-        for t in raw_trades:
-            tag = self._resolve_strategy_tag(t)
-            is_manual = (tag == "manual")
-
-            # If include_manual is False, exclude manual trades.
-            if include_manual is False and is_manual:
-                continue
-
-            # If include_manual is True or None, include everything (default behavior usually includes all unless restricted)
-            # Spec says "Optional manual/bot filtering".
-            # If the intention of include_manual=True is "ONLY manual", that would be different.
-            # But typically 'include_manual' toggles visibility.
-            # Let's assume standard visibility:
-            # None: All
-            # True: All (explicitly allowing manual)
-            # False: No manual
-
-            filtered.append(t)
-
-        return filtered
-
-    def get_fee_summary(self) -> Dict[str, Any]:
-        """
-        Returns aggregated fees by asset and pair.
-        """
-        # We track fees_paid_base_by_pair.
-        # But we might want fees by asset too.
-        # Since we convert all fees to base in the manager for PnL, we have base totals.
-        # To get original fee asset totals, we'd need to re-scan trades or keep another aggregate.
-        # For Phase 3, let's return the base currency fees we track.
-
-        return {
-            "total_fees_base": sum(self.fees_paid_base_by_pair.values()),
-            "by_pair_base": dict(self.fees_paid_base_by_pair)
-        }
-
-    def get_cash_flows(self, asset: Optional[str] = None, limit: Optional[int] = None) -> List[CashFlowRecord]:
-        return self.store.get_cash_flows(asset=asset, limit=limit)

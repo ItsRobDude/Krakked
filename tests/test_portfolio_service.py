@@ -23,10 +23,6 @@ def mock_market_data():
     pair_meta.canonical = "XBTUSD"
     pair_meta.base = "XBT"
     pair_meta.quote = "USD"
-    # Set precision for rounding tests
-    pair_meta.price_decimals = 1
-    pair_meta.volume_decimals = 8
-
     md.get_pair_metadata.return_value = pair_meta
 
     # Prices
@@ -122,76 +118,3 @@ def test_get_equity(service):
     # 10k USD + 1 BTC(50k) = 60k
     assert equity.equity_base == 60000.0
     assert equity.cash_base == 10000.0
-
-def test_strategy_tagging(service):
-    # 1. Store an order with userref
-    order = {
-        "id": "O100",
-        "status": "closed",
-        "userref": 999,
-        "descr": {"pair": "XBTUSD", "type": "buy"}
-    }
-    service.store.save_orders([order])
-
-    # 2. Process a trade linked to that order
-    trade = {
-        "id": "T100", "ordertxid": "O100", "pair": "XBTUSD", "time": 1000,
-        "type": "sell", "price": 50000, "cost": 50000, "fee": 0, "vol": 1.0
-    }
-    # Need a position to sell against or just force it (shorting not supported but math runs)
-    # Let's seed a position first
-    service.positions["XBTUSD"] = SpotPosition("XBTUSD", "XBT", "USD", 1.0, 40000, 0, 0)
-
-    service._process_trade(trade)
-
-    # Verify tag
-    rec = service.realized_pnl_history[0]
-    assert rec.strategy_tag == "userref:999"
-
-def test_rounding(service):
-    # pair_meta has price_decimals=1, vol_decimals=8
-
-    trade = {
-        "id": "T1", "ordertxid": "O1", "pair": "XBTUSD", "time": 1000,
-        "type": "buy", "price": 50000.1234, "cost": 50000,
-        "fee": 0, "vol": 1.123456789
-    }
-
-    service._process_trade(trade)
-
-    pos = service.positions["XBTUSD"]
-    # Volume should be rounded to 8 decimals
-    # 1.123456789 -> 1.12345679 (round half up default? Python round)
-    # Python round(1.123456789, 8) -> 1.12345679
-    assert pos.base_size == 1.12345679
-
-def test_get_trade_history_filtering(service):
-    # Setup some dummy trades in store
-    trades = [
-        {"id": "T_MANUAL", "ordertxid": "O_MANUAL", "pair": "XBTUSD", "time": 1000, "type": "buy", "price": 50000, "cost": 50000, "fee": 0, "vol": 1},
-        {"id": "T_BOT", "ordertxid": "O_BOT", "pair": "XBTUSD", "time": 1001, "type": "buy", "price": 50000, "cost": 50000, "fee": 0, "vol": 1}
-    ]
-    service.store.save_trades(trades)
-
-    # Setup orders for tagging
-    orders = [
-        {"id": "O_MANUAL", "status": "closed", "userref": None}, # No userref = manual
-        {"id": "O_BOT", "status": "closed", "userref": 123} # Userref = bot
-    ]
-    service.store.save_orders(orders)
-
-    # Pre-populate cache so _resolve_strategy_tag works without full rebuild logic if needed
-    # But _resolve_strategy_tag calls store.get_order which works on SQLite.
-
-    # 1. Default (None) -> Include All
-    hist = service.get_trade_history(include_manual=None)
-    assert len(hist) == 2
-
-    # 2. False -> Exclude Manual
-    hist = service.get_trade_history(include_manual=False)
-    assert len(hist) == 1
-    assert hist[0]['id'] == "T_BOT"
-
-    # 3. True -> Include All (Explicit)
-    hist = service.get_trade_history(include_manual=True)
-    assert len(hist) == 2
