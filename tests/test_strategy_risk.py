@@ -43,6 +43,7 @@ def test_risk_engine_sizing():
 
     # Setup Data
     market.get_latest_price.return_value = 100.0
+    market.get_pair_metadata.return_value = MagicMock(liquidity_24h_usd=1_000_000.0)
     # Mock OHLC for ATR
     from dataclasses import dataclass
     @dataclass
@@ -101,6 +102,7 @@ def test_kill_switch_drawdown():
     config = RiskConfig(max_daily_drawdown_pct=5.0)
     market = MagicMock(spec=MarketDataAPI)
     portfolio = MagicMock(spec=PortfolioService)
+    market.get_pair_metadata.return_value = MagicMock(liquidity_24h_usd=1_000_000.0)
 
     # Equity dropped from 10000 (snapshot) to 9000 (current) -> 10% drawdown
     portfolio.get_equity.return_value = EquityView(
@@ -133,6 +135,7 @@ def test_max_per_asset():
     market = MagicMock(spec=MarketDataAPI)
     portfolio = MagicMock(spec=PortfolioService)
     market.get_latest_price.return_value = 100.0
+    market.get_pair_metadata.return_value = MagicMock(liquidity_24h_usd=1_000_000.0)
 
     portfolio.get_equity.return_value = EquityView(
         equity_base=10000.0, cash_base=10000.0, realized_pnl_base_total=0,

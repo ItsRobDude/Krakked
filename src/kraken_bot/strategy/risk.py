@@ -199,6 +199,9 @@ class RiskEngine:
         if not price or price <= 0:
             return self._create_blocked_action(pair, intents[0].strategy_id, "Missing price data", ctx)
 
+        blocked_reasons: List[str] = []
+        liquidity_24h = self._get_pair_liquidity(pair)
+
         target_usd_by_strategy: Dict[str, float] = {}
         strategies_involved: List[str] = []
 
@@ -226,7 +229,24 @@ class RiskEngine:
         current_base = sum(p.base_size for p in pair_positions)
         current_usd = current_base * price
 
-        adjusted_targets, blocked_reasons = self._apply_limits(target_usd_by_strategy, current_by_strategy, ctx)
+        liquidity_threshold = self.config.min_liquidity_24h_usd
+        total_target_usd = sum(target_usd_by_strategy.values())
+        if (
+            liquidity_threshold
+            and liquidity_24h is not None
+            and total_target_usd > current_usd
+            and liquidity_24h < liquidity_threshold
+        ):
+            blocked_reasons.append(
+                f"Below min_liquidity_24h_usd ({liquidity_24h:,.2f} < {liquidity_threshold:,.2f})"
+            )
+            for key in list(target_usd_by_strategy.keys()):
+                target_usd_by_strategy[key] = min(
+                    target_usd_by_strategy[key], current_by_strategy.get(key, 0.0)
+                )
+
+        adjusted_targets, limit_reasons = self._apply_limits(target_usd_by_strategy, current_by_strategy, ctx)
+        blocked_reasons.extend(limit_reasons)
         target_usd = sum(adjusted_targets.values())
 
         action_type = "none"
@@ -347,6 +367,15 @@ class RiskEngine:
     def _is_manual_position(position: Any) -> bool:
         strategy_tag: Optional[str] = getattr(position, "strategy_tag", None)
         return not strategy_tag or strategy_tag == "manual"
+
+    def _get_pair_liquidity(self, pair: str) -> Optional[float]:
+        try:
+            metadata = self.market_data.get_pair_metadata(pair)
+            liquidity: Optional[float] = getattr(metadata, "liquidity_24h_usd", None)
+            return liquidity
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Unable to fetch liquidity for %s: %s", pair, exc)
+            return None
 
     def _size_by_volatility(self, pair: str, timeframe: str, price: float, ctx: RiskContext) -> float:
         tf = timeframe or "1d"

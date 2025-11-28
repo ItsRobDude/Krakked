@@ -101,6 +101,7 @@ def _filter_by_volume(
         volume_24h_usd = volume_24h_base * last_price
 
         if volume_24h_usd >= min_volume:
+            pair.liquidity_24h_usd = volume_24h_usd
             retained_pairs.append(pair)
         else:
             logger.debug(f"Excluding {pair.canonical} due to low volume: ${volume_24h_usd:,.2f}")

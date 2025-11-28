@@ -37,6 +37,8 @@ class PairMetadataStore:
         for item in data:
             if "min_order_size" not in item:
                 item = {**item, "min_order_size": 0.0}
+            if "liquidity_24h_usd" not in item:
+                item = {**item, "liquidity_24h_usd": None}
             normalized_items.append(PairMetadata(**item))
 
         return normalized_items
