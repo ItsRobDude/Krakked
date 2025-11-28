@@ -14,9 +14,10 @@ from .models import ExecutionPlan, RiskAdjustedAction, DecisionRecord, StrategyI
 from .base import Strategy, StrategyContext
 from .risk import RiskEngine
 
-# Registry for available strategies.
-# TODO: In Phase 6, implement dynamic discovery or a more robust plugin system.
-from .strategies.demo_strategy import TrendFollowingStrategy
+# Import strategies dynamically or via registry?
+# For now, explicit import of known strategies or a registry pattern.
+# We'll use a simple registry in this module or importing from strategies package.
+from .strategies.demo_strategy import TrendFollowingStrategy # Will create this next
 
 logger = logging.getLogger(__name__)
 
@@ -105,10 +106,19 @@ class StrategyRiskEngine:
         all_intents: List[StrategyIntent] = []
 
         for name, strategy in self.strategies.items():
-            # TODO: Phase 5/6 - Implement smarter scheduling (only run if candle closed).
-            # Currently, we run every cycle and rely on strategy logic or external scheduler.
+            # Determine timeframes to run?
+            # Strategies define their timeframes.
+            # We assume for now we run ALL configured timeframes every cycle,
+            # and the strategy internal logic checks "is this a new bar?".
+            # Or the runner handles it.
+            # Simplified: Strategy checks if it should act.
 
-            # TODO: Implement per-strategy universe filtering based on StrategyConfig.
+            # TODO: Only run if candle closed?
+            # Passing 'now' to strategy context.
+
+            # Filter universe?
+            # Strategy config has universe_filter?
+            # Base context universe on global config for now.
             universe = self.config.universe.include_pairs
 
             ctx = StrategyContext(
