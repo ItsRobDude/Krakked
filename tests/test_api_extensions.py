@@ -2,7 +2,7 @@
 
 import pytest
 from unittest.mock import MagicMock, patch
-from kraken_bot.config import AppConfig, MarketDataConfig, PairMetadata, OHLCBar
+from kraken_bot.config import AppConfig, MarketDataConfig, PairMetadata, OHLCBar, PortfolioConfig
 from kraken_bot.market_data.api import MarketDataAPI
 from kraken_bot.market_data.exceptions import PairNotFoundError
 
@@ -16,7 +16,8 @@ def mock_config() -> AppConfig:
             ohlc_store={"root_dir": "/tmp/test", "backend": "parquet"},
             backfill_timeframes=[],
             ws_timeframes=[]
-        )
+        ),
+        portfolio=PortfolioConfig()
     )
 
 @pytest.fixture
