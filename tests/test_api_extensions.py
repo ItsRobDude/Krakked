@@ -4,7 +4,7 @@ import pytest
 from unittest.mock import MagicMock, patch
 from kraken_bot.config import AppConfig, MarketDataConfig, PairMetadata, OHLCBar, PortfolioConfig
 from kraken_bot.market_data.api import MarketDataAPI
-from kraken_bot.market_data.exceptions import PairNotFoundError
+from kraken_bot.market_data.exceptions import PairNotFoundError, UniverseDiscoveryError
 
 @pytest.fixture
 def mock_config() -> AppConfig:
@@ -68,3 +68,48 @@ def test_backfill_ohlc_delegation(api):
 def test_backfill_ohlc_pair_not_found(api):
     with pytest.raises(PairNotFoundError):
         api.backfill_ohlc("UNKNOWN", "1h")
+
+
+def test_refresh_universe_falls_back_on_discovery_failure(mock_config):
+    cached_meta = PairMetadata(
+        canonical="ETHUSD",
+        base="ETH",
+        quote="USD",
+        rest_symbol="XETHZUSD",
+        ws_symbol="ETH/USD",
+        raw_name="XETHZUSD",
+        price_decimals=2,
+        volume_decimals=8,
+        lot_size=1,
+        status="online",
+    )
+
+    with patch('kraken_bot.market_data.api.FileOHLCStore'):
+        with patch('kraken_bot.market_data.api.PairMetadataStore') as mock_store_cls:
+            store_instance = mock_store_cls.return_value
+            store_instance.load.return_value = [cached_meta]
+
+            with patch('kraken_bot.market_data.api.build_universe') as mock_build_universe:
+                mock_build_universe.side_effect = UniverseDiscoveryError(Exception("discovery failed"))
+
+                api = MarketDataAPI(mock_config)
+                api.refresh_universe()
+
+                assert api.get_universe() == [cached_meta]
+                store_instance.save.assert_not_called()
+
+
+def test_refresh_universe_respects_intentional_empty_universe(mock_config):
+    with patch('kraken_bot.market_data.api.FileOHLCStore'):
+        with patch('kraken_bot.market_data.api.PairMetadataStore') as mock_store_cls:
+            store_instance = mock_store_cls.return_value
+
+            with patch('kraken_bot.market_data.api.build_universe') as mock_build_universe:
+                mock_build_universe.return_value = []
+                store_instance.load.return_value = ["should_not_be_used"]
+
+                api = MarketDataAPI(mock_config)
+                api.refresh_universe()
+
+                assert api.get_universe() == []
+                store_instance.load.assert_not_called()

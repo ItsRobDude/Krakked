@@ -11,7 +11,11 @@ from kraken_bot.market_data.ohlc_store import OHLCStore, FileOHLCStore
 from kraken_bot.market_data.ohlc_fetcher import backfill_ohlc
 from kraken_bot.market_data.ws_client import KrakenWSClientV2
 from kraken_bot.market_data.metadata_store import PairMetadataStore
-from kraken_bot.market_data.exceptions import PairNotFoundError, DataStaleError
+from kraken_bot.market_data.exceptions import (
+    PairNotFoundError,
+    DataStaleError,
+    UniverseDiscoveryError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -73,19 +77,23 @@ class MarketDataAPI:
 
     def refresh_universe(self):
         """Re-fetches the asset pairs and rebuilds the universe."""
-        self._universe = build_universe(
-            self._rest_client,
-            self._config.region,
-            self._config.universe
-        )
-
-        if self._universe:
-            self._metadata_store.save(self._universe)
-        else:
+        try:
+            self._universe = build_universe(
+                self._rest_client,
+                self._config.region,
+                self._config.universe
+            )
+        except UniverseDiscoveryError:
             cached = self._metadata_store.load()
             if cached:
-                logger.warning("Falling back to cached pair metadata due to empty universe response.")
+                logger.warning("Falling back to cached pair metadata due to discovery failure.")
                 self._universe = cached
+            else:
+                logger.error("Pair discovery failed and no cached metadata is available.")
+                self._universe = []
+        else:
+            if self._universe:
+                self._metadata_store.save(self._universe)
 
         self._universe_map = {p.canonical: p for p in self._universe}
         logger.info(f"Universe refreshed. Contains {len(self._universe)} pairs.")

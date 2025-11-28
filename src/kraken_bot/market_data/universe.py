@@ -4,6 +4,7 @@ from typing import Any, Dict, List
 import logging
 from kraken_bot.config import RegionProfile, UniverseConfig, PairMetadata
 from kraken_bot.connection.rest_client import KrakenRESTClient
+from kraken_bot.market_data.exceptions import UniverseDiscoveryError
 
 logger = logging.getLogger(__name__)
 
@@ -119,7 +120,7 @@ def build_universe(
         asset_pairs_response = client.get_public("AssetPairs")
     except Exception as e:
         logger.error(f"Failed to fetch asset pairs from Kraken: {e}")
-        return []
+        raise UniverseDiscoveryError(e)
 
     # 2. Apply filtering logic
     candidate_pairs = {}
