@@ -317,6 +317,7 @@ class PairMetadata:
     lot_size: float
     min_order_size: float
     status: str
+    liquidity_24h_usd: float | None = None
 
 @dataclass
 class OHLCBar:
