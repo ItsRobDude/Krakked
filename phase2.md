@@ -117,12 +117,11 @@ The module builds an internal **pair universe** as follows:
 
    * Quote asset maps to USD (usually `ZUSD` in the response).
    * `status == "online"` only (ignore `cancel_only`, `post_only` for now).
-   * No margin leverage:
+   * `aclass` indicates a spot asset (not futures/margin aclass values).
+   * Include even if `leverage_buy`/`leverage_sell` arrays are populated; leverage settings are **not** used to exclude USD spot pairs.
+   * Respect `RegionProfile` for margin/futures constraints at **execution/risk enforcement time**, not at universe construction:
 
-     * `leverage_buy` and `leverage_sell` arrays are empty.
-   * Respect `RegionProfile`:
-
-     * If `supports_margin == False`, do **not** include margin‑only products, even if present.
+     * Phase 2 may surface pairs that Kraken labels as margin‑capable, but order placement/risk checks (later phases) must enforce `supports_margin`/`supports_futures`.
 3. Extract and store metadata for each pair:
 
    * `raw_name`: the AssetPairs key (e.g. `"XXBTZUSD"`).
