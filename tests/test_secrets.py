@@ -46,15 +46,15 @@ def test_encrypt_and_decrypt_flow(mock_config_dir):
     with patch("getpass.getpass", return_value=password):
         # We also need to patch os.getenv to ensure it doesn't try to use env vars
         with patch.dict(os.environ, {}, clear=True):
-             # Also need to mock get_config_dir inside load_api_keys via secrets module patch
-             # (Wait, mock_config_dir fixture already patches it globally in the module? No, only where imported)
-             # The fixture patches 'kraken_bot.secrets.get_config_dir'. Correct.
+            # Also need to mock get_config_dir inside load_api_keys via secrets module patch
+            # (Wait, mock_config_dir fixture already patches it globally in the module? No, only where imported)
+            # The fixture patches 'kraken_bot.secrets.get_config_dir'. Correct.
 
-             result = load_api_keys()
-             assert result.api_key == api_key
-             assert result.api_secret == api_secret
-             assert result.status == CredentialStatus.LOADED
-             assert result.source == "secrets_file"
+            result = load_api_keys(allow_interactive_setup=True)
+            assert result.api_key == api_key
+            assert result.api_secret == api_secret
+            assert result.status == CredentialStatus.LOADED
+            assert result.source == "secrets_file"
 
 
 def test_load_api_keys_not_found_without_interactive(mock_config_dir):
@@ -76,6 +76,20 @@ def test_load_api_keys_uses_interactive_setup_when_allowed(mock_config_dir):
 
     mock_setup.assert_called_once()
     assert result == expected_result
+
+
+def test_load_api_keys_requires_password_env_when_non_interactive(mock_config_dir):
+    secrets_file = mock_config_dir / "secrets.enc"
+    secrets_file.write_text("placeholder")
+
+    with patch.dict(os.environ, {}, clear=True), patch("getpass.getpass") as mock_getpass:
+        result = load_api_keys()
+
+    mock_getpass.assert_not_called()
+    assert result.status == CredentialStatus.AUTH_ERROR
+    assert result.api_key is None
+    assert result.api_secret is None
+    assert result.source == "secrets_file"
 
 def test_decrypt_bad_password(mock_config_dir):
     api_key = "test_key"
