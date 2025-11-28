@@ -52,11 +52,8 @@ class SQLitePortfolioStore(PortfolioStore):
         self.db_path = db_path
         self._init_db()
 
-    def _get_conn(self):
-        return sqlite3.connect(self.db_path)
-
     def _init_db(self):
-        conn = self._get_conn()
+        conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
 
         # Schema Version
@@ -129,6 +126,9 @@ class SQLitePortfolioStore(PortfolioStore):
         conn.commit()
         conn.close()
 
+    def _get_conn(self):
+        return sqlite3.connect(self.db_path)
+
     def save_trades(self, trades: List[Dict[str, Any]]):
         if not trades:
             return
@@ -137,8 +137,15 @@ class SQLitePortfolioStore(PortfolioStore):
         cursor = conn.cursor()
 
         for trade in trades:
+            # We assume 'trade' is the raw dictionary from Kraken API or internal representation
+            # The 'id' in our table maps to the trade ID (key in the dictionary usually)
+            # However, Kraken 'TradesHistory' returns a dict where keys are trade IDs.
+            # We need to handle that before calling this, or assume 'trades' here is a list of flattened dicts with 'id' field.
+            # Let's assume flattened dict with 'id'.
+
             raw_json = json.dumps(trade)
 
+            # Handle 'trades' field which can be a list of strings
             trades_val = trade.get("trades")
             trades_csv = None
             if isinstance(trades_val, list):
@@ -172,7 +179,7 @@ class SQLitePortfolioStore(PortfolioStore):
                 float(trade.get("cvol", 0)) if trade.get("cvol") else None,
                 float(trade.get("cmargin", 0)) if trade.get("cmargin") else None,
                 float(trade.get("net", 0)) if trade.get("net") else None,
-                trades_csv,
+                trades_csv, # trades list CSV
                 raw_json
             ))
         conn.commit()
@@ -193,7 +200,9 @@ class SQLitePortfolioStore(PortfolioStore):
             query += " AND time >= ?"
             params.append(since)
 
-        query += " ORDER BY time DESC"
+        query += " ORDER BY time DESC" # Default newest first? Or oldest? Spec says "get_trades", usually for history.
+        # But 'sync' might want newest first to find last.
+        # Actually standard for history is often reverse chronological.
 
         if limit:
             query += " LIMIT ?"
