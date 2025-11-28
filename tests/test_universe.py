@@ -54,10 +54,20 @@ def mock_kraken_asset_pairs_response() -> dict:
             "altname": "XBTUSDT", "wsname": "XBT/USDT", "aclass_base": "currency",
             "quote": "USDT", "status": "online", "leverage_buy": [], "leverage_sell": [],
         },
-        "ETHUSD.M": { # Simulated Margin pair (with leverage) - should be included now if it matches other criteria
+        "ETHUSD.M": { # Simulated Margin pair (with marker)
             "altname": "ETHUSDM", "wsname": "ETH/USD.M", "aclass_base": "currency",
             "quote": "ZUSD", "status": "online",
+            "leverage_buy": [], "leverage_sell": []
+        },
+        "XMRUSD": { # Leverage enabled
+            "altname": "XMRUSD", "wsname": "XMR/USD", "aclass_base": "currency",
+            "quote": "ZUSD", "status": "online",
             "leverage_buy": [2, 5], "leverage_sell": [2, 5]
+        },
+        "ADAUSD.F": { # Futures-style marker
+            "altname": "ADAUSDF", "wsname": "ADA/USD.F", "aclass_base": "currency",
+            "quote": "ZUSD", "status": "online",
+            "leverage_buy": [], "leverage_sell": []
         },
         "ADAUSD": { # Cancel-only pair
             "altname": "ADAUSD", "wsname": "ADA/USD", "aclass_base": "currency",
@@ -66,7 +76,7 @@ def mock_kraken_asset_pairs_response() -> dict:
     }
 
 def test_universe_filtering(mock_region_profile, mock_kraken_asset_pairs_response):
-    """Tests the core filtering logic for USD spot pairs (leverage capability is allowed)."""
+    """Tests the core filtering logic for USD spot pairs with region capability constraints."""
     mock_client = MagicMock()
     mock_client.get_public.return_value = mock_kraken_asset_pairs_response
 
@@ -74,15 +84,17 @@ def test_universe_filtering(mock_region_profile, mock_kraken_asset_pairs_respons
 
     universe = build_universe(mock_client, mock_region_profile, universe_config)
 
-    assert len(universe) == 4
+    assert len(universe) == 3
     pair_names = {p.canonical for p in universe}
     assert "XBTUSD" in pair_names
     assert "ETHUSD" in pair_names
     assert "DOGEUSD" in pair_names
-    assert "ETHUSDM" in pair_names # Now included because leverage is allowed
 
     assert "XBTEUR" not in pair_names # Non-USD
     assert "ADAUSD" not in pair_names # cancel_only
+    assert "ETHUSDM" not in pair_names # Margin-marked pair excluded for US/CA
+    assert "ADAUSDF" not in pair_names # Futures marker excluded for US/CA
+    assert "XMRUSD" not in pair_names # Leverage-enabled pair excluded
 
 def test_universe_overrides(mock_region_profile, mock_kraken_asset_pairs_response):
     """Tests the include_pairs and exclude_pairs configuration overrides."""
@@ -92,7 +104,7 @@ def test_universe_overrides(mock_region_profile, mock_kraken_asset_pairs_respons
     # Test exclude override
     exclude_config = UniverseConfig(include_pairs=[], exclude_pairs=["XBTUSD"], min_24h_volume_usd=0)
     universe_excluded = build_universe(mock_client, mock_region_profile, exclude_config)
-    assert len(universe_excluded) == 3
+    assert len(universe_excluded) == 2
     assert "XBTUSD" not in {p.canonical for p in universe_excluded}
 
     # Test include override (to include a pair that would otherwise be filtered)
@@ -118,7 +130,16 @@ def test_universe_volume_filtering(mock_region_profile, mock_kraken_asset_pairs_
     """Tests that the volume filter correctly removes low-liquidity pairs."""
     mock_client = MagicMock()
     # Filter response to only include what we expect to pass the initial filter
-    filtered_response = {k: v for k, v in mock_kraken_asset_pairs_response.items() if v["quote"] in ["ZUSD", "USD"] and v["status"] == "online"}
+    filtered_response = {
+        k: v
+        for k, v in mock_kraken_asset_pairs_response.items()
+        if v["quote"] in ["ZUSD", "USD"]
+        and v["status"] == "online"
+        and not v["leverage_buy"]
+        and not v["leverage_sell"]
+        and ".M" not in k
+        and ".F" not in k
+    }
 
     mock_client.get_public.side_effect = [
         # First call for AssetPairs
@@ -128,7 +149,6 @@ def test_universe_volume_filtering(mock_region_profile, mock_kraken_asset_pairs_
             "XXBTZUSD": {"v": ["1000", "2500.5"], "c": ["50000.0", "1"]}, # vol=2500.5, price=50k -> >125M USD
             "XETHZUSD": {"v": ["500", "10.0"], "c": ["2000.0", "1"]},     # vol=10, price=2k -> 20k USD
             "DOGEUSD":  {"v": ["100000", "500000.0"], "c": ["0.1", "1"]},  # vol=500k, price=0.1 -> 50k USD
-            "ETHUSD.M": {"v": ["10.0", "10.0"], "c": ["3000.0", "1"]},     # Low volume -> should be filtered
         }
     ]
 
@@ -143,7 +163,7 @@ def test_universe_volume_filtering(mock_region_profile, mock_kraken_asset_pairs_
     assert "XBTUSD" in pair_names
     assert "ETHUSD" not in pair_names # Excluded due to low volume
     assert "DOGEUSD" not in pair_names # Excluded due to low volume
-    assert "ETHUSDM" not in pair_names # Excluded due to low volume
+    assert "ETHUSDM" not in pair_names # Excluded from initial filter
 
     # Verify that get_public was called twice
     assert mock_client.get_public.call_count == 2
@@ -153,14 +173,23 @@ def test_universe_volume_filtering(mock_region_profile, mock_kraken_asset_pairs_
     ticker_call_args = mock_client.get_public.call_args_list[1]
     assert ticker_call_args[0][0] == "Ticker"
     called_pairs = set(ticker_call_args[1]["params"]["pair"].split(','))
-    expected_pairs = {"XBTUSD", "ETHUSD", "DOGEUSD", "ETHUSDM"}
+    expected_pairs = {"XBTUSD", "ETHUSD", "DOGEUSD"}
     assert called_pairs == expected_pairs
 
 
 def test_universe_volume_filtering_missing_ticker(mock_region_profile, mock_kraken_asset_pairs_response):
     """Tests that pairs with missing ticker data are retained (fallback behavior)."""
     mock_client = MagicMock()
-    filtered_response = {k: v for k, v in mock_kraken_asset_pairs_response.items() if v["quote"] in ["ZUSD", "USD"] and v["status"] == "online"}
+    filtered_response = {
+        k: v
+        for k, v in mock_kraken_asset_pairs_response.items()
+        if v["quote"] in ["ZUSD", "USD"]
+        and v["status"] == "online"
+        and not v["leverage_buy"]
+        and not v["leverage_sell"]
+        and ".M" not in k
+        and ".F" not in k
+    }
 
     mock_client.get_public.side_effect = [
         filtered_response,
@@ -180,8 +209,8 @@ def test_universe_volume_filtering_missing_ticker(mock_region_profile, mock_krak
 
     pair_names = {p.canonical for p in universe}
 
-    assert len(universe) == 2
+    assert len(universe) == 1
     assert "XBTUSD" in pair_names
-    assert "ETHUSDM" in pair_names # Retained because ticker info was missing
+    assert "ETHUSDM" not in pair_names # Excluded from initial filter
     assert "ETHUSD" not in pair_names
     assert "DOGEUSD" not in pair_names

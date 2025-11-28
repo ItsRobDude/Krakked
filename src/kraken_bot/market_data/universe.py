@@ -7,7 +7,9 @@ from kraken_bot.connection.rest_client import KrakenRESTClient
 
 logger = logging.getLogger(__name__)
 
-def _is_usd_spot_pair(pair_data: Dict[str, Any], region_profile: RegionProfile) -> bool:
+def _is_usd_spot_pair(
+    raw_name: str, pair_data: Dict[str, Any], region_profile: RegionProfile
+) -> bool:
     """
     Checks if a given asset pair from Kraken's API response is a valid USD spot pair
     that meets the criteria defined in the design contract.
@@ -25,11 +27,33 @@ def _is_usd_spot_pair(pair_data: Dict[str, Any], region_profile: RegionProfile) 
     if pair_data.get("aclass_base") != "currency":
         return False
 
-    # 4. Note on leverage:
-    # We do NOT exclude pairs based on leverage capability (leverage_buy/sell arrays).
-    # Pairs like XBTUSD support margin but are the primary spot markets.
-    # Whether we USE margin is controlled by RegionProfile at the execution layer,
-    # not by excluding the pair from the universe.
+    # 4. Reject leverage-capable pairs for spot-only universe
+    leverage_buy = pair_data.get("leverage_buy") or []
+    leverage_sell = pair_data.get("leverage_sell") or []
+    if leverage_buy or leverage_sell:
+        return False
+
+    # 5. Respect region capabilities and exclude margin/futures-marked pairs
+    raw_upper = raw_name.upper()
+    alt_upper = (pair_data.get("altname") or "").upper()
+    ws_upper = (pair_data.get("wsname") or "").upper()
+
+    def _has_marker(marker: str) -> bool:
+        return any(marker in name for name in (raw_upper, alt_upper, ws_upper))
+
+    margin_marker = _has_marker(".M") or alt_upper.endswith("M")
+    futures_marker = _has_marker(".F") or alt_upper.endswith("F")
+
+    capabilities = region_profile.capabilities
+    if margin_marker and not capabilities.supports_margin:
+        return False
+
+    if futures_marker and not capabilities.supports_futures:
+        return False
+
+    # Futures and explicitly margin-suffixed markets are not part of the spot universe
+    if margin_marker or futures_marker:
+        return False
 
     return True
 
@@ -124,7 +148,7 @@ def build_universe(
     # 2. Apply filtering logic
     candidate_pairs = {}
     for raw_name, pair_data in asset_pairs_response.items():
-        if _is_usd_spot_pair(pair_data, region_profile):
+        if _is_usd_spot_pair(raw_name, pair_data, region_profile):
             metadata = _create_pair_metadata(raw_name, pair_data)
             candidate_pairs[metadata.canonical] = metadata
 
