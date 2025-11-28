@@ -39,7 +39,7 @@ def test_handle_ticker_message(ws_client: KrakenWSClientV2):
 
     assert "XBTUSD" in ws_client.ticker_cache
     assert ws_client.ticker_cache["XBTUSD"]["bid"] == "59999.0"
-    assert "XBTUSD" in ws_client.last_update_ts
+    assert "XBTUSD" in ws_client.last_ticker_update_ts
 
 def test_handle_ohlc_message(ws_client: KrakenWSClientV2):
     """Tests that a valid ohlc message correctly updates the ohlc_cache."""
@@ -66,7 +66,7 @@ def test_handle_ohlc_message(ws_client: KrakenWSClientV2):
     # The key format needs to be determined from the implementation, assuming `1m`
     assert "1m" in ws_client.ohlc_cache["ETHUSD"]
     assert ws_client.ohlc_cache["ETHUSD"]["1m"]["open"] == "2000.5"
-    assert "ETHUSD" in ws_client.last_update_ts
+    assert ws_client.last_ohlc_update_ts["ETHUSD"]["1m"] > 0
 
 def test_handle_message_unknown_symbol(ws_client: KrakenWSClientV2, caplog):
     """Tests that a message for an unknown symbol is logged and ignored."""
