@@ -268,7 +268,10 @@ The `StrategyRunner` precomputes per-strategy universes and timeframes based on:
 * Phase 4 must define a deterministic mapping:
 
   * e.g. `userref` = numeric ID, and `portfolio.strategy_tags` in config maps IDs → strategy names.
+  * In the current stopgap, `strategy_tag` is derived directly from trade metadata (userref/comment) captured on fills; if the tag does not map to a configured strategy, it is treated as an unknown tag rather than coerced.
 * This ensures PnL and exposure attribution by strategy is consistent across Strategy, Risk, and Portfolio layers.
+* Unknown tags are surfaced as their own strategy keys in exposure views so operators can see which trades need cleanup. Manual positions are those with no known tag (or an unmapped/blank tag) and are tracked separately for inclusion/exclusion in risk budgets.
+* TODO (later phases): normalize incoming tags against configured strategies and treat any unrecognized tag as manual for budgeting and alerting so unknown buckets disappear once the OMS wiring is live.
 
 ---
 

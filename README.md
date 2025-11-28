@@ -112,6 +112,8 @@ Phase 4 produces risk-adjusted actions but still relies on Phase 5 to wire order
 
 `strategy_id` is carried end-to-end: strategies emit `StrategyIntent`, the risk engine normalizes that into `RiskAdjustedAction`, and the resulting `DecisionRecord` snapshots the same identifier for audit/history. Each strategy config supports an optional `userref` field in `StrategyConfig` to give the strategy a stable numeric tag; configure it now so Phase 5’s OMS can reuse it for Kraken order tagging and PnL attribution. OMS/userref plumbing itself is intentionally deferred to Phase 5, but providing `userref` early guarantees consistent attribution once execution wiring lands.
 
+Today the portfolio layer derives `strategy_tag` straight from trade metadata (userref/comments on fills). Tags that do not map to configured strategies are surfaced as unknown buckets in exposure views, while missing/blank tags are treated as manual positions so you can decide whether they should count toward budgets. A later phase will normalize tags against configured strategies and treat any unrecognized tag as manual to avoid dangling unknown buckets once OMS tagging is wired through.
+
 ## 🧪 Testing
 
 To run the test suite:
