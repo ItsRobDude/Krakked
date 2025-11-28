@@ -85,6 +85,7 @@ def test_handle_message_unknown_symbol(ws_client: KrakenWSClientV2, caplog):
 
 def test_subscription_acknowledgment(ws_client: KrakenWSClientV2, caplog):
     """Tests that subscription acknowledgments are stored and logged."""
+    caplog.set_level("INFO")
     message = {
         "event": "subscriptionStatus",
         "channel": "ticker",
@@ -101,6 +102,7 @@ def test_subscription_acknowledgment(ws_client: KrakenWSClientV2, caplog):
 
 def test_subscription_failure(ws_client: KrakenWSClientV2, caplog):
     """Tests that subscription failures are captured and logged."""
+    caplog.set_level("ERROR")
     message = {
         "event": "subscriptionStatus",
         "channel": "ohlc",
