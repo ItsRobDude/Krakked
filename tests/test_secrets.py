@@ -130,8 +130,8 @@ def test_persist_api_keys_can_force_save_unvalidated(mock_config_dir):
     assert secrets["validation_error"] == "service"
 
 
-def test_interactive_setup_service_error_sets_force_save_flag(mock_config_dir):
-    with patch("builtins.input", return_value="key"), patch(
+def test_interactive_setup_service_error_prompts_and_allows_skip(mock_config_dir):
+    with patch("builtins.input", side_effect=["key", "n"]), patch(
         "getpass.getpass", side_effect=["secret"]
     ), patch("kraken_bot.secrets.KrakenRESTClient") as mock_client:
         mock_instance = mock_client.return_value
@@ -158,3 +158,23 @@ def test_interactive_setup_auth_error_blocks_force_save(mock_config_dir):
     assert result.validated is False
     assert result.can_force_save is False
     assert result.validation_error == "auth bad"
+
+
+def test_interactive_setup_service_error_can_force_save(mock_config_dir):
+    with patch("builtins.input", side_effect=["key", "y"]), patch(
+        "getpass.getpass", side_effect=["secret", "pw", "pw"]
+    ), patch("kraken_bot.secrets.KrakenRESTClient") as mock_client:
+        mock_instance = mock_client.return_value
+        mock_instance.get_private.side_effect = ServiceUnavailableError("unavailable")
+
+        result = _interactive_setup()
+
+    secrets = _decrypt_secrets("pw")
+    assert secrets["api_key"] == "key"
+    assert secrets["api_secret"] == "secret"
+    assert secrets["validated"] is False
+    assert secrets["validation_error"] == "unavailable"
+
+    assert result.status == CredentialStatus.LOADED
+    assert result.validated is False
+    assert result.validation_error == "unavailable"

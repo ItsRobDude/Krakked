@@ -163,6 +163,49 @@ def _interactive_setup() -> CredentialResult:
         )
     except (RateLimitError, ServiceUnavailableError, KrakenAPIError) as e:
         print(f"\nCould not validate credentials due to a service/network issue: {e}")
+        save_unvalidated = input(
+            "Validation failed due to service issues. Save credentials unvalidated anyway? (y/N): "
+        ).strip().lower()
+        if save_unvalidated.startswith("y"):
+            while True:
+                password = getpass.getpass("Create a master password to encrypt your keys: ")
+                password_confirm = getpass.getpass("Confirm master password: ")
+                if password == password_confirm:
+                    break
+                print("Passwords do not match. Please try again.")
+
+            try:
+                persist_api_keys(
+                    api_key,
+                    api_secret,
+                    password,
+                    validated=False,
+                    validation_error=str(e),
+                    force_save_unvalidated=True,
+                )
+                secrets_path = get_config_dir() / SECRETS_FILE_NAME
+                print(f"\nCredentials encrypted and saved to: {secrets_path}")
+                print("IMPORTANT: You must remember this password to run the bot.")
+                return CredentialResult(
+                    api_key,
+                    api_secret,
+                    CredentialStatus.LOADED,
+                    source="interactive",
+                    validated=False,
+                    validation_error=str(e),
+                )
+            except Exception as save_error:
+                print(f"\nAn error occurred while saving secrets: {save_error}")
+                return CredentialResult(
+                    None,
+                    None,
+                    CredentialStatus.SERVICE_ERROR,
+                    source="interactive",
+                    validated=False,
+                    validation_error=str(e),
+                    error=save_error,
+                )
+
         print("Please retry later. Keys have not been saved.")
         return CredentialResult(
             api_key,
