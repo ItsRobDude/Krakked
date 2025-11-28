@@ -128,36 +128,51 @@ def build_universe(
 
     # 2. Apply filtering logic
     candidate_pairs = {}
+    raw_pairs_by_altname = {}
     for raw_name, pair_data in asset_pairs_response.items():
+        altname = pair_data.get("altname")
+        if altname:
+            raw_pairs_by_altname[altname] = (raw_name, pair_data)
+
         if _is_valid_usd_spot_pair(raw_name, pair_data, region_profile):
             metadata = _create_pair_metadata(raw_name, pair_data)
             candidate_pairs[metadata.canonical] = metadata
 
     logger.info(f"Found {len(candidate_pairs)} candidate USD spot pairs after initial filtering.")
 
-    # 3. Apply overrides from config
+    # 3. Apply include/exclude overrides with hard validity handling
+    forced_includes = set()
     universe_after_overrides = set(candidate_pairs.keys())
 
     if universe_config.include_pairs:
         for pair in universe_config.include_pairs:
-            if pair in candidate_pairs:
+            raw_pair_entry = raw_pairs_by_altname.get(pair)
+            if raw_pair_entry and _is_valid_usd_spot_pair(*raw_pair_entry, region_profile):
+                forced_includes.add(pair)
                 universe_after_overrides.add(pair)
             else:
-                logger.warning(f"Pair '{pair}' in 'include_pairs' not found in valid asset pairs from Kraken.")
+                logger.warning(
+                    f"Pair '{pair}' in 'include_pairs' failed hard validity checks and will be ignored."
+                )
 
     if universe_config.exclude_pairs:
-        universe_after_overrides -= set(universe_config.exclude_pairs)
+        excluded = set(universe_config.exclude_pairs)
+        forced_includes -= excluded
+        universe_after_overrides -= excluded
 
     logger.info(f"Universe size after include/exclude overrides: {len(universe_after_overrides)}")
 
-    # Create metadata objects for the pairs that passed the override stage
-    pairs_to_filter = [candidate_pairs[p] for p in universe_after_overrides]
+    # Create metadata objects for the pairs that will undergo soft filtering
+    pairs_to_filter = [candidate_pairs[p] for p in universe_after_overrides if p not in forced_includes]
 
-    # 4. Implement 24h volume filtering
+    # 4. Implement 24h volume filtering (soft filter)
     if universe_config.min_24h_volume_usd > 0:
-        final_pairs = _filter_by_volume(client, pairs_to_filter, universe_config.min_24h_volume_usd)
+        filtered_pairs = _filter_by_volume(client, pairs_to_filter, universe_config.min_24h_volume_usd)
     else:
-        final_pairs = pairs_to_filter
+        filtered_pairs = pairs_to_filter
+
+    # Merge forced includes back into the final set
+    final_pairs = filtered_pairs + [candidate_pairs[p] for p in forced_includes]
 
     # 5. Return the final list of metadata objects
     result = sorted(final_pairs, key=lambda p: p.canonical)
