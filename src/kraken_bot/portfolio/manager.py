@@ -188,8 +188,8 @@ class PortfolioService:
     def drift_flag(self) -> bool:
         return self.portfolio.drift_flag
 
-    def get_equity(self):
-        return self.portfolio.equity_view()
+    def get_equity(self, include_manual: Optional[bool] = None):
+        return self.portfolio.equity_view(include_manual=include_manual)
 
     def get_positions(self):
         return self.portfolio.get_positions()
@@ -220,8 +220,8 @@ class PortfolioService:
     def get_fee_summary(self) -> Dict[str, float]:
         return self.portfolio.get_fee_summary()
 
-    def get_asset_exposure(self):
-        return self.portfolio.get_asset_exposure()
+    def get_asset_exposure(self, include_manual: Optional[bool] = None):
+        return self.portfolio.get_asset_exposure(include_manual=include_manual)
 
     def create_snapshot(self) -> PortfolioSnapshot:
         return self.portfolio.snapshot()

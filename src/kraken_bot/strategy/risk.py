@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 import pandas as pd
@@ -43,9 +43,14 @@ class RiskContext:
     equity_usd: float
     realized_pnl_usd: float
     unrealized_pnl_usd: float
+    total_exposure_usd: float
+    total_exposure_pct: float
+    per_strategy_exposure_usd: Dict[str, float]
+    per_strategy_exposure_pct: Dict[str, float]
     open_positions: List[Any]
     asset_exposures: List[Any]
     manual_positions: List[Any]
+    manual_positions_included: bool
     drift_flag: bool
     daily_drawdown_pct: float
 
@@ -58,9 +63,34 @@ class RiskEngine:
         self._kill_switch_active = False
 
     def build_risk_context(self) -> RiskContext:
-        equity_view = self.portfolio.get_equity()
+        include_manual = self.config.include_manual_positions
+        equity_view = self.portfolio.get_equity(include_manual=include_manual)
         positions = self.portfolio.get_positions()
-        exposures = self.portfolio.get_asset_exposure()
+        exposures = self.portfolio.get_asset_exposure(include_manual=include_manual)
+
+        manual_positions: List[Any] = []
+        included_positions: List[Any] = []
+        for pos in positions:
+            price = self.market_data.get_latest_price(pos.pair)
+            pos.current_value_base = (pos.base_size * price) if price else 0.0
+            if self._is_manual_position(pos):
+                manual_positions.append(pos)
+                if not include_manual:
+                    continue
+            included_positions.append(pos)
+
+        total_exposure_usd = sum(pos.current_value_base for pos in included_positions)
+        total_exposure_pct = (total_exposure_usd / equity_view.equity_base * 100.0) if equity_view.equity_base else 0.0
+
+        per_strategy_exposure_usd: Dict[str, float] = {}
+        per_strategy_exposure_pct: Dict[str, float] = {}
+        for pos in included_positions:
+            strategy_key = pos.strategy_tag or "manual"
+            per_strategy_exposure_usd[strategy_key] = per_strategy_exposure_usd.get(strategy_key, 0.0) + pos.current_value_base
+
+        if equity_view.equity_base:
+            for strategy_key, usd in per_strategy_exposure_usd.items():
+                per_strategy_exposure_pct[strategy_key] = (usd / equity_view.equity_base) * 100.0
 
         now_ts = int(datetime.now(timezone.utc).timestamp())
         day_ago = now_ts - 86400
@@ -73,14 +103,18 @@ class RiskEngine:
         if max_equity_24h > 0:
             drawdown_pct = ((max_equity_24h - current_equity) / max_equity_24h) * 100.0
 
-        manual_positions: List[Any] = []
         return RiskContext(
             equity_usd=current_equity,
             realized_pnl_usd=equity_view.realized_pnl_base_total,
             unrealized_pnl_usd=equity_view.unrealized_pnl_base_total,
+            total_exposure_usd=total_exposure_usd,
+            total_exposure_pct=total_exposure_pct,
+            per_strategy_exposure_usd=per_strategy_exposure_usd,
+            per_strategy_exposure_pct=per_strategy_exposure_pct,
             open_positions=positions,
             asset_exposures=exposures,
             manual_positions=manual_positions,
+            manual_positions_included=include_manual,
             drift_flag=equity_view.drift_flag,
             daily_drawdown_pct=drawdown_pct,
         )
@@ -175,7 +209,7 @@ class RiskEngine:
         current_base = current_pos.base_size if current_pos else 0.0
         current_usd = current_base * price
 
-        target_usd, blocked_reasons = self._apply_limits(total_desired_usd, ctx)
+        target_usd, blocked_reasons = self._apply_limits(total_desired_usd, current_usd, ctx)
 
         action_type = "none"
         if target_usd > current_usd + 10.0:
@@ -203,12 +237,22 @@ class RiskEngine:
             risk_limits_snapshot=asdict(self.config),
         )
 
-    def _apply_limits(self, target_usd: float, ctx: RiskContext) -> tuple[float, List[str]]:
+    def _apply_limits(self, target_usd: float, current_usd: float, ctx: RiskContext) -> tuple[float, List[str]]:
         blocked_reasons: List[str] = []
         max_asset_usd = ctx.equity_usd * (self.config.max_per_asset_pct / 100.0)
         if target_usd > max_asset_usd:
             blocked_reasons.append(f"Max per asset limit ({target_usd:.2f} > {max_asset_usd:.2f})")
             target_usd = max_asset_usd
+
+        portfolio_limit_usd = ctx.equity_usd * (self.config.max_portfolio_risk_pct / 100.0)
+        projected_total = ctx.total_exposure_usd - current_usd + target_usd
+        if projected_total > portfolio_limit_usd:
+            available = max(portfolio_limit_usd - (ctx.total_exposure_usd - current_usd), 0.0)
+            blocked_reasons.append(
+                "Max portfolio exposure limit "
+                f"({projected_total:.2f} > {portfolio_limit_usd:.2f})"
+            )
+            target_usd = min(target_usd, available)
 
         if ctx.open_positions:
             active_count = len([p for p in ctx.open_positions if p.base_size * self.market_data.get_latest_price(p.pair) > 10.0])
@@ -220,6 +264,11 @@ class RiskEngine:
             target_usd = 0.0
 
         return target_usd, blocked_reasons
+
+    @staticmethod
+    def _is_manual_position(position: Any) -> bool:
+        strategy_tag: Optional[str] = getattr(position, "strategy_tag", None)
+        return not strategy_tag or strategy_tag == "manual"
 
     def _size_by_volatility(self, pair: str, timeframe: str, price: float, ctx: RiskContext) -> float:
         tf = timeframe or "1d"
@@ -258,10 +307,6 @@ class RiskEngine:
 
     def get_status(self) -> RiskStatus:
         ctx = self.build_risk_context()
-        total_exposure = sum(p.current_value_base for p in ctx.open_positions)
-        total_equity = ctx.equity_usd
-        total_exp_pct = (total_exposure / total_equity * 100) if total_equity > 0 else 0.0
-
         per_asset: Dict[str, float] = {}
         for exp in ctx.asset_exposures:
             per_asset[exp.asset] = exp.percentage_of_equity * 100
@@ -270,7 +315,7 @@ class RiskEngine:
             kill_switch_active=self._kill_switch_active,
             daily_drawdown_pct=ctx.daily_drawdown_pct,
             drift_flag=ctx.drift_flag,
-            total_exposure_pct=total_exp_pct,
+            total_exposure_pct=ctx.total_exposure_pct,
             per_asset_exposure_pct=per_asset,
-            per_strategy_exposure_pct={},
+            per_strategy_exposure_pct=ctx.per_strategy_exposure_pct,
         )
