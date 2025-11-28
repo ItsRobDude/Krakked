@@ -45,6 +45,8 @@ class RiskContext:
     unrealized_pnl_usd: float
     total_exposure_usd: float
     total_exposure_pct: float
+    manual_exposure_usd: float
+    manual_exposure_pct: float
     per_strategy_exposure_usd: Dict[str, float]
     per_strategy_exposure_pct: Dict[str, float]
     open_positions: List[Any]
@@ -63,10 +65,10 @@ class RiskEngine:
         self._kill_switch_active = False
 
     def build_risk_context(self) -> RiskContext:
-        include_manual = self.config.include_manual_positions
-        equity_view = self.portfolio.get_equity(include_manual=include_manual)
+        include_manual_for_strategies = self.config.include_manual_positions
+        equity_view = self.portfolio.get_equity(include_manual=True)
         positions = self.portfolio.get_positions()
-        exposures = self.portfolio.get_asset_exposure(include_manual=include_manual)
+        exposures = self.portfolio.get_asset_exposure(include_manual=True)
 
         manual_positions: List[Any] = []
         included_positions: List[Any] = []
@@ -75,12 +77,15 @@ class RiskEngine:
             pos.current_value_base = (pos.base_size * price) if price else 0.0
             if self._is_manual_position(pos):
                 manual_positions.append(pos)
-                if not include_manual:
+                if not include_manual_for_strategies:
                     continue
             included_positions.append(pos)
 
-        total_exposure_usd = sum(pos.current_value_base for pos in included_positions)
+        total_exposure_usd = sum(pos.current_value_base for pos in positions)
         total_exposure_pct = (total_exposure_usd / equity_view.equity_base * 100.0) if equity_view.equity_base else 0.0
+
+        manual_exposure_usd = sum(pos.current_value_base for pos in manual_positions)
+        manual_exposure_pct = (manual_exposure_usd / equity_view.equity_base * 100.0) if equity_view.equity_base else 0.0
 
         per_strategy_exposure_usd: Dict[str, float] = {}
         per_strategy_exposure_pct: Dict[str, float] = {}
@@ -109,12 +114,14 @@ class RiskEngine:
             unrealized_pnl_usd=equity_view.unrealized_pnl_base_total,
             total_exposure_usd=total_exposure_usd,
             total_exposure_pct=total_exposure_pct,
+            manual_exposure_usd=manual_exposure_usd,
+            manual_exposure_pct=manual_exposure_pct,
             per_strategy_exposure_usd=per_strategy_exposure_usd,
             per_strategy_exposure_pct=per_strategy_exposure_pct,
             open_positions=positions,
             asset_exposures=exposures,
             manual_positions=manual_positions,
-            manual_positions_included=include_manual,
+            manual_positions_included=include_manual_for_strategies,
             drift_flag=equity_view.drift_flag,
             daily_drawdown_pct=drawdown_pct,
         )
@@ -192,24 +199,35 @@ class RiskEngine:
         if not price or price <= 0:
             return self._create_blocked_action(pair, intents[0].strategy_id, "Missing price data", ctx)
 
-        total_desired_usd = 0.0
+        target_usd_by_strategy: Dict[str, float] = {}
         strategies_involved: List[str] = []
 
         for intent in intents:
             strategies_involved.append(intent.strategy_id)
             if intent.side == "flat" or intent.intent_type in ["exit", "close"]:
+                target_usd_by_strategy[intent.strategy_id] = 0.0
                 continue
 
             exposure = intent.desired_exposure_usd
             if exposure is None:
                 exposure = self._size_by_volatility(pair, intent.timeframe, price, ctx)
-            total_desired_usd += exposure or 0.0
+            target_usd_by_strategy[intent.strategy_id] = exposure or 0.0
 
-        current_pos = next((p for p in ctx.open_positions if p.pair == pair), None)
-        current_base = current_pos.base_size if current_pos else 0.0
+        current_by_strategy: Dict[str, float] = {}
+        pair_positions = [p for p in ctx.open_positions if p.pair == pair]
+        for pos in pair_positions:
+            strategy_key = pos.strategy_tag or "manual"
+            current_by_strategy[strategy_key] = current_by_strategy.get(strategy_key, 0.0) + (pos.base_size * price)
+
+        manual_current = current_by_strategy.get("manual", 0.0)
+        if manual_current > 0 and "manual" not in target_usd_by_strategy:
+            target_usd_by_strategy["manual"] = manual_current
+
+        current_base = sum(p.base_size for p in pair_positions)
         current_usd = current_base * price
 
-        target_usd, blocked_reasons = self._apply_limits(total_desired_usd, current_usd, ctx)
+        adjusted_targets, blocked_reasons = self._apply_limits(target_usd_by_strategy, current_by_strategy, ctx)
+        target_usd = sum(adjusted_targets.values())
 
         action_type = "none"
         if target_usd > current_usd + 10.0:
@@ -237,33 +255,93 @@ class RiskEngine:
             risk_limits_snapshot=asdict(self.config),
         )
 
-    def _apply_limits(self, target_usd: float, current_usd: float, ctx: RiskContext) -> tuple[float, List[str]]:
+    def _apply_limits(
+        self, target_by_strategy: Dict[str, float], current_by_strategy: Dict[str, float], ctx: RiskContext
+    ) -> tuple[Dict[str, float], List[str]]:
         blocked_reasons: List[str] = []
+
+        def clamp_total(available_total: float, reason: str, targets: Dict[str, float]) -> Dict[str, float]:
+            manual_target = targets.get("manual", 0.0)
+            non_manual_keys = [k for k in targets.keys() if k != "manual"]
+            non_manual_total = sum(targets[k] for k in non_manual_keys)
+
+            if available_total < manual_target:
+                for k in non_manual_keys:
+                    targets[k] = 0.0
+                blocked_reasons.append(reason)
+                return targets
+
+            remaining_for_strategies = available_total - manual_target
+            if non_manual_total <= remaining_for_strategies or non_manual_total == 0:
+                blocked_reasons.append(reason)
+                return targets
+
+            scale = remaining_for_strategies / non_manual_total if non_manual_total > 0 else 0.0
+            for k in non_manual_keys:
+                targets[k] *= scale
+            blocked_reasons.append(reason)
+            return targets
+
+        target_by_strategy = target_by_strategy.copy()
+        total_target_usd = sum(target_by_strategy.values())
+        current_usd = sum(current_by_strategy.values())
+
+        for strategy_id, pct_limit in self.config.max_per_strategy_pct.items():
+            if strategy_id == "manual" and not ctx.manual_positions_included:
+                continue
+
+            if strategy_id not in target_by_strategy:
+                continue
+
+            allowed_usd = ctx.equity_usd * (pct_limit / 100.0)
+            current_total_for_strategy = ctx.per_strategy_exposure_usd.get(strategy_id, 0.0)
+            current_pair_usd = current_by_strategy.get(strategy_id, 0.0)
+            projected_total = current_total_for_strategy - current_pair_usd + target_by_strategy[strategy_id]
+
+            if projected_total > allowed_usd:
+                available = max(allowed_usd - (current_total_for_strategy - current_pair_usd), 0.0)
+                reason = (
+                    f"Strategy {strategy_id} budget exceeded "
+                    f"({projected_total:.2f} > {allowed_usd:.2f})"
+                )
+                target_by_strategy[strategy_id] = min(target_by_strategy[strategy_id], available)
+                blocked_reasons.append(reason)
+
+        total_target_usd = sum(target_by_strategy.values())
+
         max_asset_usd = ctx.equity_usd * (self.config.max_per_asset_pct / 100.0)
-        if target_usd > max_asset_usd:
-            blocked_reasons.append(f"Max per asset limit ({target_usd:.2f} > {max_asset_usd:.2f})")
-            target_usd = max_asset_usd
+        projected_total = ctx.total_exposure_usd - current_usd + total_target_usd
+        if projected_total > max_asset_usd:
+            available = max(max_asset_usd - (ctx.total_exposure_usd - current_usd), 0.0)
+            reason = f"Max per asset limit ({projected_total:.2f} > {max_asset_usd:.2f})"
+            target_by_strategy = clamp_total(available, reason, target_by_strategy)
+            total_target_usd = sum(target_by_strategy.values())
 
         portfolio_limit_usd = ctx.equity_usd * (self.config.max_portfolio_risk_pct / 100.0)
-        projected_total = ctx.total_exposure_usd - current_usd + target_usd
+        projected_total = ctx.total_exposure_usd - current_usd + total_target_usd
         if projected_total > portfolio_limit_usd:
             available = max(portfolio_limit_usd - (ctx.total_exposure_usd - current_usd), 0.0)
-            blocked_reasons.append(
+            reason = (
                 "Max portfolio exposure limit "
                 f"({projected_total:.2f} > {portfolio_limit_usd:.2f})"
             )
-            target_usd = min(target_usd, available)
+            target_by_strategy = clamp_total(available, reason, target_by_strategy)
+            total_target_usd = sum(target_by_strategy.values())
 
         if ctx.open_positions:
-            active_count = len([p for p in ctx.open_positions if p.base_size * self.market_data.get_latest_price(p.pair) > 10.0])
+            active_count = len(
+                [p for p in ctx.open_positions if p.base_size * self.market_data.get_latest_price(p.pair) > 10.0]
+            )
         else:
             active_count = 0
 
-        if active_count >= self.config.max_open_positions and target_usd > 0:
+        if active_count >= self.config.max_open_positions and total_target_usd > current_usd:
             blocked_reasons.append(f"Max open positions reached ({active_count})")
-            target_usd = 0.0
+            for key in list(target_by_strategy.keys()):
+                if key != "manual":
+                    target_by_strategy[key] = min(target_by_strategy[key], current_by_strategy.get(key, 0.0))
 
-        return target_usd, blocked_reasons
+        return target_by_strategy, blocked_reasons
 
     @staticmethod
     def _is_manual_position(position: Any) -> bool:
@@ -316,6 +394,7 @@ class RiskEngine:
             daily_drawdown_pct=ctx.daily_drawdown_pct,
             drift_flag=ctx.drift_flag,
             total_exposure_pct=ctx.total_exposure_pct,
+            manual_exposure_pct=ctx.manual_exposure_pct,
             per_asset_exposure_pct=per_asset,
             per_strategy_exposure_pct=ctx.per_strategy_exposure_pct,
         )

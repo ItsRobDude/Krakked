@@ -158,6 +158,7 @@ def test_data_stale_error_skips_timeframe():
         daily_drawdown_pct=0.0,
         drift_flag=False,
         total_exposure_pct=0.0,
+        manual_exposure_pct=0.0,
         per_asset_exposure_pct={},
         per_strategy_exposure_pct={},
     )
