@@ -190,6 +190,10 @@ RiskContext:
 
 This is not exposed directly, but actions and logs are derived from it.
 
+### 3.4 Strategy ID propagation & tagging
+
+`strategy_id` must remain stable through the full decision pipeline: strategies emit `StrategyIntent`, the risk engine emits matching `RiskAdjustedAction` entries, and the runner can optionally persist `DecisionRecord` rows that reference the same identifier for audit/history. Each `StrategyConfig` includes an optional `userref` (numeric) field to give strategies a durable tag; set it now so Phase 5’s OMS can reuse it for Kraken order tagging and PnL attribution. OMS/userref propagation itself is deferred to Phase 5, but preconfiguring `userref` ensures consistent attribution once execution wiring is live.
+
 ---
 
 ## 4. Strategy Framework
