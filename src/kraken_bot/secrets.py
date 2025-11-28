@@ -14,7 +14,12 @@ from cryptography.hazmat.backends import default_backend
 
 from kraken_bot.config import get_config_dir
 from kraken_bot.connection.rest_client import KrakenRESTClient
-from kraken_bot.connection.exceptions import AuthError, ServiceUnavailableError, KrakenAPIError
+from kraken_bot.connection.exceptions import (
+    AuthError,
+    RateLimitError,
+    ServiceUnavailableError,
+    KrakenAPIError,
+)
 
 # --- Constants ---
 SECRETS_FILE_NAME = "secrets.enc"
@@ -156,7 +161,7 @@ def _interactive_setup() -> CredentialResult:
             validation_error=str(e),
             error=e,
         )
-    except (ServiceUnavailableError, KrakenAPIError) as e:
+    except (RateLimitError, ServiceUnavailableError, KrakenAPIError) as e:
         print(f"\nCould not validate credentials due to a service/network issue: {e}")
         print("Please retry later. Keys have not been saved.")
         return CredentialResult(
