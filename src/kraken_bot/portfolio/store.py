@@ -354,7 +354,13 @@ class SQLitePortfolioStore(PortfolioStore):
         # We store the heavy lifting in JSON
         data = {
             "asset_valuations": [
-                {"asset": av.asset, "amount": av.amount, "value_base": av.value_base, "source_pair": av.source_pair}
+                {
+                    "asset": av.asset,
+                    "amount": av.amount,
+                    "value_base": av.value_base,
+                    "source_pair": av.source_pair,
+                    "valuation_status": av.valuation_status,
+                }
                 for av in snapshot.asset_valuations
             ],
             "realized_pnl_base_total": snapshot.realized_pnl_base_total,
@@ -405,7 +411,14 @@ class SQLitePortfolioStore(PortfolioStore):
                 equity_base=row[1],
                 cash_base=row[2],
                 asset_valuations=[
-                    AssetValuation(**av) for av in data["asset_valuations"]
+                    AssetValuation(
+                        asset=av.get("asset"),
+                        amount=av.get("amount", 0.0),
+                        value_base=av.get("value_base", 0.0),
+                        source_pair=av.get("source_pair"),
+                        valuation_status=av.get("valuation_status", "valued"),
+                    )
+                    for av in data["asset_valuations"]
                 ],
                 realized_pnl_base_total=data["realized_pnl_base_total"],
                 unrealized_pnl_base_total=data["unrealized_pnl_base_total"],
