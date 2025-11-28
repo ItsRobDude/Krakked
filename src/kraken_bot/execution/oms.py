@@ -2,10 +2,12 @@
 
 from typing import Dict, List, Optional
 from datetime import datetime
+from uuid import uuid4
 
 from kraken_bot.strategy.models import ExecutionPlan
 
 from .adapter import KrakenExecutionAdapter
+from .exceptions import ExecutionError
 from .models import ExecutionResult, LocalOrder
 
 
@@ -24,7 +26,44 @@ class ExecutionService:
         Actual routing, submission, and reconciliation will be implemented in later phases.
         """
         result = ExecutionResult(plan_id=plan.plan_id, started_at=datetime.utcnow())
-        raise NotImplementedError("Plan execution logic will be implemented in a later phase")
+
+        for action in plan.actions:
+            if action.blocked or action.action_type == "none":
+                continue
+
+            delta = action.target_base_size - action.current_base_size
+            if delta == 0:
+                continue
+
+            side = "buy" if delta > 0 else "sell"
+            volume = abs(delta)
+
+            order = LocalOrder(
+                local_id=str(uuid4()),
+                plan_id=plan.plan_id,
+                strategy_id=action.strategy_id,
+                pair=action.pair,
+                side=side,
+                order_type=plan.metadata.get("order_type", ""),
+                userref=action.userref,
+                requested_base_size=volume,
+                requested_price=plan.metadata.get("requested_price"),
+            )
+
+            try:
+                order = self.adapter.submit_order(order)
+                self.register_order(order)
+            except ExecutionError as exc:
+                message = str(exc)
+                order.last_error = message
+                result.errors.append(message)
+
+            result.orders.append(order)
+
+        result.completed_at = datetime.utcnow()
+        result.success = not result.errors
+        self.record_execution_result(result)
+        return result
 
     def register_order(self, order: LocalOrder) -> None:
         """Track an order locally and index it by Kraken order id when available."""
