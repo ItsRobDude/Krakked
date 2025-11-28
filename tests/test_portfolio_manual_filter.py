@@ -38,6 +38,25 @@ class InMemoryStore(PortfolioStore):
     def save_execution_plan(self, plan):
         pass
 
+    def save_order(self, order):
+        self.orders = getattr(self, "orders", []) + [order]
+
+    def update_order_status(
+        self,
+        local_id,
+        status,
+        kraken_order_id=None,
+        cumulative_base_filled=None,
+        avg_fill_price=None,
+        last_error=None,
+        raw_response=None,
+        event_message=None,
+    ):
+        pass
+
+    def save_execution_result(self, result):
+        self.execution_results = getattr(self, "execution_results", []) + [result]
+
     def get_execution_plans(self, plan_id=None, since=None, limit=None):
         return []
 
