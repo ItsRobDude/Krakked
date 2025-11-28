@@ -4,12 +4,16 @@ import os
 import stat
 import pytest
 from unittest.mock import patch
+from kraken_bot.connection.exceptions import AuthError, ServiceUnavailableError
 from kraken_bot.secrets import (
     load_api_keys,
     encrypt_secrets,
     _decrypt_secrets,
     SecretsDecryptionError,
     CredentialStatus,
+    CredentialResult,
+    persist_api_keys,
+    _interactive_setup,
 )
 
 # Mock config dir to avoid writing to real system
@@ -52,6 +56,27 @@ def test_encrypt_and_decrypt_flow(mock_config_dir):
              assert result.status == CredentialStatus.LOADED
              assert result.source == "secrets_file"
 
+
+def test_load_api_keys_not_found_without_interactive(mock_config_dir):
+    with patch.dict(os.environ, {}, clear=True):
+        result = load_api_keys()
+
+    assert result.api_key is None
+    assert result.api_secret is None
+    assert result.status == CredentialStatus.NOT_FOUND
+    assert result.source == "none"
+
+
+def test_load_api_keys_uses_interactive_setup_when_allowed(mock_config_dir):
+    expected_result = CredentialResult("key", "secret", CredentialStatus.LOADED, source="interactive")
+
+    with patch("kraken_bot.secrets._interactive_setup", return_value=expected_result) as mock_setup:
+        with patch.dict(os.environ, {}, clear=True):
+            result = load_api_keys(allow_interactive_setup=True)
+
+    mock_setup.assert_called_once()
+    assert result == expected_result
+
 def test_decrypt_bad_password(mock_config_dir):
     api_key = "test_key"
     api_secret = "test_secret"
@@ -61,3 +86,61 @@ def test_decrypt_bad_password(mock_config_dir):
     # Directly call _decrypt_secrets with wrong password to verify exception
     with pytest.raises(SecretsDecryptionError):
         _decrypt_secrets("wrong_password")
+
+
+def test_encrypt_includes_validation_metadata(mock_config_dir):
+    api_key = "meta_key"
+    api_secret = "meta_secret"
+    password = "pw"
+
+    encrypt_secrets(api_key, api_secret, password, validated=True, validation_error=None)
+
+    secrets = _decrypt_secrets(password)
+    assert secrets["api_key"] == api_key
+    assert secrets["api_secret"] == api_secret
+    assert secrets["validated"] is True
+    assert secrets["validated_at"] is not None
+    assert secrets["validation_error"] is None
+
+
+def test_persist_api_keys_requires_force_for_unvalidated(mock_config_dir):
+    with pytest.raises(ValueError):
+        persist_api_keys("key", "secret", "pw", validated=False)
+
+
+def test_persist_api_keys_can_force_save_unvalidated(mock_config_dir):
+    persist_api_keys("key", "secret", "pw", validated=False, validation_error="service", force_save_unvalidated=True)
+
+    secrets = _decrypt_secrets("pw")
+    assert secrets["validated"] is False
+    assert secrets["validation_error"] == "service"
+
+
+def test_interactive_setup_service_error_sets_force_save_flag(mock_config_dir):
+    with patch("builtins.input", return_value="key"), patch(
+        "getpass.getpass", side_effect=["secret"]
+    ), patch("kraken_bot.secrets.KrakenRESTClient") as mock_client:
+        mock_instance = mock_client.return_value
+        mock_instance.get_private.side_effect = ServiceUnavailableError("unavailable")
+
+        result = _interactive_setup()
+
+    assert result.status == CredentialStatus.SERVICE_ERROR
+    assert result.validated is False
+    assert result.can_force_save is True
+    assert result.validation_error == "unavailable"
+
+
+def test_interactive_setup_auth_error_blocks_force_save(mock_config_dir):
+    with patch("builtins.input", return_value="key"), patch(
+        "getpass.getpass", side_effect=["secret"]
+    ), patch("kraken_bot.secrets.KrakenRESTClient") as mock_client:
+        mock_instance = mock_client.return_value
+        mock_instance.get_private.side_effect = AuthError("auth bad")
+
+        result = _interactive_setup()
+
+    assert result.status == CredentialStatus.AUTH_ERROR
+    assert result.validated is False
+    assert result.can_force_save is False
+    assert result.validation_error == "auth bad"

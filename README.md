@@ -4,14 +4,14 @@ A modular, robust Kraken trading bot designed for spot trading (CA/USA) with a f
 
 ## 🚀 Current Status
 
-This repository is still early stage and backend-only. Phase 1 connectivity is mostly in place, but it needs hardening, and the other phases exist as prototypes rather than finished features. No execution layer or user interface has been built yet.
+This repository includes working, test-covered implementations for the early phases, but it is still a backend-only project. No execution layer or user interface has been built yet.
 
 | Module | Status | Notes |
 | :--- | :--- | :--- |
-| **Phase 1: Connection** | 🟡 Mostly implemented | REST client, rate limiting, nonce handling, and encrypted credential setup are present; validation metadata and resilient defaults still need work. |
-| **Phase 2: Market Data** | 🧪 Prototype | Universe discovery, OHLC fetcher, and WebSocket client exist but need integration, persistence, and staleness/retention polish. |
-| **Phase 3: Portfolio** | 🧪 Prototype | Portfolio models and SQLite store are present; reconciliation, retention, and PnL robustness remain TODO. |
-| **Phase 4: Strategy & Risk** | 🧪 Prototype | Strategy scaffolding and risk checks exist for demos only; no live execution routing. |
+| **Phase 1: Connection** | ✅ Implemented | REST client with signed private calls, configurable rate limiting, nonce handling, and encrypted credential storage/validation. |
+| **Phase 2: Market Data** | ✅ Implemented | Pair-universe discovery, OHLC backfill to a pluggable store, and WebSocket v2 streaming with staleness checks. |
+| **Phase 3: Portfolio** | ✅ Implemented | Portfolio service with SQLite persistence, weighted-average cost PnL, fee tracking, and cashflow detection. |
+| **Phase 4: Strategy & Risk** | ✅ Implemented | Strategy loader, intent/risk engine, and scenario simulations; no live execution wiring. |
 | **Phase 5: Execution** | ⏳ Not started | Order Management System (OMS), trade execution, order lifecycle management. |
 | **Phase 6: UI/Control** | ⏳ Not started | CLI/web interface for monitoring and manual control. |
 

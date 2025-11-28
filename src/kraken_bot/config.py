@@ -1,11 +1,12 @@
 # src/kraken_bot/config.py
 
+import logging
 from dataclasses import dataclass, field
-import yaml
-import os
-from typing import Dict, List, Optional, Any
 from pathlib import Path
+from typing import Any, Dict, List, Optional
+
 import appdirs
+import yaml
 
 @dataclass
 class RegionCapabilities:
@@ -93,19 +94,64 @@ def load_config(config_path: Path = None) -> AppConfig:
     """
     Loads the main application configuration from the default location or a specified path.
     """
+    logger = logging.getLogger(__name__)
+
     if config_path is None:
         config_path = get_config_dir() / "config.yaml"
 
     config_path = config_path.expanduser()
 
     if not config_path.exists():
-        raise FileNotFoundError(f"Configuration file not found at {config_path}")
+        logger.warning(
+            "Configuration file not found; using defaults",
+            extra={"event": "config_missing_file", "config_path": str(config_path)},
+        )
+        raw_config: Dict[str, Any] = {}
+    else:
+        with open(config_path, "r") as f:
+            raw_config = yaml.safe_load(f) or {}
 
-    with open(config_path, "r") as f:
-        raw_config = yaml.safe_load(f)
+    if not isinstance(raw_config, dict):
+        logger.warning(
+            "Configuration file is not a mapping; falling back to defaults",
+            extra={"event": "config_invalid_format", "config_path": str(config_path)},
+        )
+        raw_config = {}
+
+    default_region = RegionProfile(
+        code="US_CA",
+        capabilities=RegionCapabilities(
+            supports_margin=False,
+            supports_futures=False,
+            supports_staking=False,
+        ),
+        default_quote="USD",
+    )
+
+    region_data = raw_config.get("region") or {}
+    if not isinstance(region_data, dict):
+        logger.warning(
+            "Region config is not a mapping; using default region profile",
+            extra={"event": "config_invalid_region", "config_path": str(config_path)},
+        )
+        region_data = {}
+
+    capabilities_data = region_data.get("capabilities") or {}
+    if not isinstance(capabilities_data, dict):
+        logger.warning(
+            "Region capabilities config is not a mapping; defaulting to conservative capabilities",
+            extra={"event": "config_invalid_capabilities", "config_path": str(config_path)},
+        )
+        capabilities_data = {}
 
     # Parsing Portfolio Config with defaults
-    portfolio_data = raw_config.get("portfolio", {})
+    portfolio_data = raw_config.get("portfolio") or {}
+    if not isinstance(portfolio_data, dict):
+        logger.warning(
+            "Portfolio config is not a mapping; using defaults",
+            extra={"event": "config_invalid_portfolio", "config_path": str(config_path)},
+        )
+        portfolio_data = {}
     portfolio_config = PortfolioConfig(
         base_currency=portfolio_data.get("base_currency", "USD"),
         valuation_pairs=portfolio_data.get("valuation_pairs", {}),
@@ -118,7 +164,13 @@ def load_config(config_path: Path = None) -> AppConfig:
     )
 
     # Parsing Risk Config with defaults
-    risk_data = raw_config.get("risk", {})
+    risk_data = raw_config.get("risk") or {}
+    if not isinstance(risk_data, dict):
+        logger.warning(
+            "Risk config is not a mapping; using defaults",
+            extra={"event": "config_invalid_risk", "config_path": str(config_path)},
+        )
+        risk_data = {}
     risk_config = RiskConfig(
         max_risk_per_trade_pct=risk_data.get("max_risk_per_trade_pct", 1.0),
         max_portfolio_risk_pct=risk_data.get("max_portfolio_risk_pct", 10.0),
@@ -133,12 +185,34 @@ def load_config(config_path: Path = None) -> AppConfig:
     )
 
     # Parsing Strategies Config
-    strategies_data = raw_config.get("strategies", {})
+    strategies_data = raw_config.get("strategies") or {}
+    if not isinstance(strategies_data, dict):
+        logger.warning(
+            "Strategies config is not a mapping; using defaults",
+            extra={"event": "config_invalid_strategies", "config_path": str(config_path)},
+        )
+        strategies_data = {}
     strategy_configs = {}
 
     # Process 'configs' section
-    raw_strategy_configs = strategies_data.get("configs", {})
+    raw_strategy_configs = strategies_data.get("configs") or {}
+    if not isinstance(raw_strategy_configs, dict):
+        logger.warning(
+            "Strategy configs section is not a mapping; skipping strategy-specific configs",
+            extra={"event": "config_invalid_strategy_configs", "config_path": str(config_path)},
+        )
+        raw_strategy_configs = {}
     for name, cfg in raw_strategy_configs.items():
+        if not isinstance(cfg, dict):
+            logger.warning(
+                "Strategy config is not a mapping; skipping entry",
+                extra={
+                    "event": "config_invalid_strategy_entry",
+                    "config_path": str(config_path),
+                    "strategy": name,
+                },
+            )
+            continue
         # Copy cfg to avoid modifying the original dictionary during pop
         cfg_copy = cfg.copy()
 
@@ -168,27 +242,47 @@ def load_config(config_path: Path = None) -> AppConfig:
         configs=strategy_configs
     )
 
+    universe_data = raw_config.get("universe") or {}
+    if not isinstance(universe_data, dict):
+        logger.warning(
+            "Universe config is not a mapping; using defaults",
+            extra={"event": "config_invalid_universe", "config_path": str(config_path)},
+        )
+        universe_data = {}
+
+    market_data = raw_config.get("market_data") or {}
+    if not isinstance(market_data, dict):
+        logger.warning(
+            "Market data config is not a mapping; using defaults",
+            extra={"event": "config_invalid_market_data", "config_path": str(config_path)},
+        )
+        market_data = {}
+
     return AppConfig(
         region=RegionProfile(
-            code=raw_config["region"]["code"],
-            capabilities=RegionCapabilities(**raw_config["region"]["capabilities"]),
-            default_quote=raw_config["region"]["default_quote"]
+            code=region_data.get("code", default_region.code),
+            capabilities=RegionCapabilities(
+                supports_margin=capabilities_data.get("supports_margin", default_region.capabilities.supports_margin),
+                supports_futures=capabilities_data.get("supports_futures", default_region.capabilities.supports_futures),
+                supports_staking=capabilities_data.get("supports_staking", default_region.capabilities.supports_staking),
+            ),
+            default_quote=region_data.get("default_quote", default_region.default_quote),
         ),
         universe=UniverseConfig(
-            include_pairs=raw_config.get("universe", {}).get("include_pairs", []),
-            exclude_pairs=raw_config.get("universe", {}).get("exclude_pairs", []),
-            min_24h_volume_usd=raw_config.get("universe", {}).get("min_24h_volume_usd", 0.0)
+            include_pairs=universe_data.get("include_pairs", []),
+            exclude_pairs=universe_data.get("exclude_pairs", []),
+            min_24h_volume_usd=universe_data.get("min_24h_volume_usd", 0.0),
         ),
         market_data=MarketDataConfig(
-            ws=raw_config.get("market_data", {}).get("ws", {}),
-            ohlc_store=raw_config.get("market_data", {}).get("ohlc_store", {}),
-            backfill_timeframes=raw_config.get("market_data", {}).get("backfill_timeframes", ["1d", "4h", "1h"]),
-            ws_timeframes=raw_config.get("market_data", {}).get("ws_timeframes", ["1m"]),
-            metadata_path=raw_config.get("market_data", {}).get("metadata_path")
+            ws=market_data.get("ws", {}),
+            ohlc_store=market_data.get("ohlc_store", {}),
+            backfill_timeframes=market_data.get("backfill_timeframes", ["1d", "4h", "1h"]),
+            ws_timeframes=market_data.get("ws_timeframes", ["1m"]),
+            metadata_path=market_data.get("metadata_path"),
         ),
         portfolio=portfolio_config,
         risk=risk_config,
-        strategies=strategies_config
+        strategies=strategies_config,
     )
 
 @dataclass
