@@ -148,3 +148,4 @@ cython_debug/
 ui/node_modules/
 ui/dist/
 ui/.vite/
+ui/*.tsbuildinfo
