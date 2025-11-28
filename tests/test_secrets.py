@@ -30,6 +30,20 @@ def test_load_from_env_vars(mock_config_dir):
         assert result.status == CredentialStatus.LOADED
         assert result.source == "environment"
 
+
+def test_partial_env_vars_return_auth_error(mock_config_dir):
+    with patch.dict(os.environ, {"KRAKEN_API_KEY": "env_key"}, clear=True), patch(
+        "getpass.getpass"
+    ) as mock_getpass:
+        result = load_api_keys()
+
+    mock_getpass.assert_not_called()
+    assert result.api_key == "env_key"
+    assert result.api_secret is None
+    assert result.status == CredentialStatus.AUTH_ERROR
+    assert result.source == "environment"
+    assert "both" in result.validation_error.lower()
+
 def test_encrypt_and_decrypt_flow(mock_config_dir):
     api_key = "test_key"
     api_secret = "test_secret"

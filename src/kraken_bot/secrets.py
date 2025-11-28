@@ -317,6 +317,17 @@ def load_api_keys(allow_interactive_setup: bool = False) -> CredentialResult:
     """
     api_key = os.getenv("KRAKEN_API_KEY")
     api_secret = os.getenv("KRAKEN_API_SECRET")
+    if bool(api_key) ^ bool(api_secret):
+        message = "Both KRAKEN_API_KEY and KRAKEN_API_SECRET must be set together."
+        print(message)
+        return CredentialResult(
+            api_key,
+            api_secret,
+            CredentialStatus.AUTH_ERROR,
+            source="environment",
+            validation_error=message,
+        )
+
     if api_key and api_secret:
         print("Loaded API keys from environment variables.")
         return CredentialResult(api_key, api_secret, CredentialStatus.LOADED, source="environment")
