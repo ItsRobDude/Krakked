@@ -4,7 +4,8 @@ import os
 import json
 import getpass
 import base64
-from pathlib import Path
+from enum import Enum
+from dataclasses import dataclass
 from cryptography.fernet import Fernet, InvalidToken
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
@@ -12,11 +13,31 @@ from cryptography.hazmat.backends import default_backend
 
 from kraken_bot.config import get_config_dir
 from kraken_bot.connection.rest_client import KrakenRESTClient
+from kraken_bot.connection.exceptions import AuthError, ServiceUnavailableError, KrakenAPIError
 
 # --- Constants ---
 SECRETS_FILE_NAME = "secrets.enc"
 _SALT_SIZE = 16
 _KDF_ITERATIONS = 480000  # Recommended by NIST for PBKDF2
+
+
+class CredentialStatus(Enum):
+    """Explicit status for credential loading/validation flows."""
+
+    LOADED = "loaded"
+    NOT_FOUND = "not_found"
+    AUTH_ERROR = "auth_error"
+    SERVICE_ERROR = "service_error"
+    DECRYPTION_FAILED = "decryption_failed"
+
+
+@dataclass
+class CredentialResult:
+    api_key: str | None
+    api_secret: str | None
+    status: CredentialStatus
+    source: str | None = None
+    error: Exception | None = None
 
 class SecretsDecryptionError(Exception):
     """Raised when decryption fails (wrong password or corrupted file)."""
@@ -48,8 +69,11 @@ def encrypt_secrets(api_key: str, api_secret: str, password: str) -> None:
     secrets_data = json.dumps({"api_key": api_key, "api_secret": api_secret}).encode()
     encrypted_data = fernet.encrypt(secrets_data)
 
-    with open(secrets_path, "wb") as f:
+    # Ensure file is created with user-only permissions
+    fd = os.open(secrets_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "wb") as f:
         f.write(salt + encrypted_data)
+    secrets_path.chmod(0o600)
 
 def _decrypt_secrets(password: str) -> dict:
     """Loads and decrypts secrets from the file."""
@@ -74,10 +98,10 @@ def _decrypt_secrets(password: str) -> dict:
 
 # --- First-Time Setup ---
 
-def _interactive_setup() -> tuple[str | None, str | None]:
+def _interactive_setup() -> CredentialResult:
     """
     Guides the user through the first-time setup process for API keys.
-    Validates credentials against Kraken before saving.
+    Validates credentials against Kraken before saving and returns structured results.
     """
     print("--- Kraken API Credential Setup ---")
     print("No API keys found. Please enter them below.")
@@ -86,17 +110,20 @@ def _interactive_setup() -> tuple[str | None, str | None]:
 
     print("\nValidating credentials with Kraken...")
     try:
-        # We need a client that can sign requests.
-        # But we don't have one fully initialized yet.
-        # We'll instantiate a temporary client with these keys.
         client = KrakenRESTClient(api_key=api_key, api_secret=api_secret)
-        # Attempt a private call (Balance) to verify permissions
         client.get_private("Balance")
         print("Credentials are valid.")
-    except Exception as e:
+    except AuthError as e:
         print(f"\nCredential validation failed: {e}")
         print("Please check your API key and permissions. Nothing will be saved.")
-        return None, None
+        return CredentialResult(api_key, api_secret, CredentialStatus.AUTH_ERROR, source="interactive", error=e)
+    except (ServiceUnavailableError, KrakenAPIError) as e:
+        print(f"\nCould not validate credentials due to a service/network issue: {e}")
+        print("Please retry later. Keys have not been saved.")
+        return CredentialResult(api_key, api_secret, CredentialStatus.SERVICE_ERROR, source="interactive", error=e)
+    except Exception as e:
+        print(f"\nAn unexpected error occurred during validation: {e}")
+        return CredentialResult(api_key, api_secret, CredentialStatus.SERVICE_ERROR, source="interactive", error=e)
 
     while True:
         password = getpass.getpass("Create a master password to encrypt your keys: ")
@@ -107,57 +134,40 @@ def _interactive_setup() -> tuple[str | None, str | None]:
 
     try:
         encrypt_secrets(api_key, api_secret, password)
-        # Re-construct path just for display
         secrets_path = get_config_dir() / SECRETS_FILE_NAME
         print(f"\nCredentials encrypted and saved to: {secrets_path}")
         print("IMPORTANT: You must remember this password to run the bot.")
-        return api_key, api_secret
+        return CredentialResult(api_key, api_secret, CredentialStatus.LOADED, source="interactive")
     except Exception as e:
         print(f"\nAn error occurred while saving secrets: {e}")
-        return None, None
+        return CredentialResult(None, None, CredentialStatus.SERVICE_ERROR, source="interactive", error=e)
 
 
 # --- Core Credential Loading ---
 
-def load_api_keys() -> tuple[str | None, str | None]:
+def load_api_keys() -> CredentialResult:
     """
-    Loads API keys, following a specific priority.
-
-    Priority:
-    1. Environment variables (KRAKEN_API_KEY, KRAKEN_API_SECRET)
-    2. Encrypted secrets file (secrets.enc)
-    3. Interactive first-time setup
-
-    Returns:
-        A tuple of (api_key, api_secret), or (None, None) if not found.
+    Loads API keys, following a specific priority, and returns a structured result
+    describing how credentials were obtained or why they could not be retrieved.
     """
-    # 1. Environment variables
     api_key = os.getenv("KRAKEN_API_KEY")
     api_secret = os.getenv("KRAKEN_API_SECRET")
     if api_key and api_secret:
         print("Loaded API keys from environment variables.")
-        return api_key, api_secret
+        return CredentialResult(api_key, api_secret, CredentialStatus.LOADED, source="environment")
 
-    # 2. Encrypted secrets file
     secrets_path = get_config_dir() / SECRETS_FILE_NAME
     if secrets_path.exists():
         password = os.getenv("KRAKEN_BOT_SECRET_PW") or getpass.getpass("Enter master password to decrypt API keys: ")
         try:
             secrets = _decrypt_secrets(password)
             print("Loaded API keys from encrypted file.")
-            return secrets.get("api_key"), secrets.get("api_secret")
+            return CredentialResult(secrets.get("api_key"), secrets.get("api_secret"), CredentialStatus.LOADED, source="secrets_file")
         except SecretsDecryptionError as e:
-            # Here we let the exception bubble up or handle it.
-            # Per feedback, better to raise or let caller handle, but existing logic returned None.
-            # We will print the error and return None to trigger interactive setup or failure,
-            # BUT the instruction said "Raise a specific exception ... so the caller can decide".
-            # Since this is the top-level loader, raising effectively crashes the CLI, which is fine if auth fails.
-            # However, `load_api_keys` signature implies returning optional keys.
-            # For strict compliance with feedback:
-            raise e
+            print("Failed to decrypt secrets file with provided password.")
+            return CredentialResult(None, None, CredentialStatus.DECRYPTION_FAILED, source="secrets_file", error=e)
         except Exception as e:
             print(f"Error loading secrets: {e}")
-            return None, None
+            return CredentialResult(None, None, CredentialStatus.SERVICE_ERROR, source="secrets_file", error=e)
 
-    # 3. No credentials found, trigger interactive setup
     return _interactive_setup()
