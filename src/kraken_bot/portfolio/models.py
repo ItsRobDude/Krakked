@@ -22,6 +22,9 @@ class SpotPosition:
     fees_paid_base: float
     unrealized_pnl_base: float = 0.0
     current_value_base: float = 0.0
+    strategy_tag: Optional[str] = None
+    raw_userref: Optional[str] = None
+    comment: Optional[str] = None
 
 @dataclass
 class RealizedPnLRecord:
@@ -36,6 +39,8 @@ class RealizedPnLRecord:
     fee_amount: float
     pnl_quote: float
     strategy_tag: Optional[str]
+    raw_userref: Optional[str] = None
+    comment: Optional[str] = None
 
 @dataclass
 class CashFlowRecord:

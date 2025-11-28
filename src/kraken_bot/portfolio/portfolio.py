@@ -114,6 +114,8 @@ class Portfolio:
         cost = float(trade["cost"])
         fee = float(trade.get("fee", 0.0))
 
+        strategy_tag, raw_userref, comment = self._extract_trade_tags(trade)
+
         position = self.positions.get(pair)
         if position is None:
             position = SpotPosition(
@@ -124,6 +126,9 @@ class Portfolio:
                 avg_entry_price=0.0,
                 realized_pnl_base=0.0,
                 fees_paid_base=0.0,
+                strategy_tag=strategy_tag,
+                raw_userref=raw_userref,
+                comment=comment,
             )
             self.positions[pair] = position
 
@@ -156,9 +161,15 @@ class Portfolio:
                     fee_asset=quote_asset,
                     fee_amount=fee,
                     pnl_quote=pnl_base,
-                    strategy_tag=self._derive_strategy_tag(trade),
+                    strategy_tag=strategy_tag,
+                    raw_userref=raw_userref,
+                    comment=comment,
                 )
             )
+
+        position.strategy_tag = strategy_tag
+        position.raw_userref = raw_userref
+        position.comment = comment
 
     def _process_cash_flow(self, record: CashFlowRecord):
         balance = self.balances.get(record.asset, AssetBalance(record.asset, 0.0, 0.0, 0.0))
@@ -215,6 +226,8 @@ class Portfolio:
                 cash += value_base
 
         for position in self.positions.values():
+            if not include_manual and self._is_manual_tag(position.strategy_tag):
+                continue
             current_price = self.market_data.get_latest_price(position.pair)
             if current_price is None:
                 continue
@@ -264,7 +277,11 @@ class Portfolio:
             realized_pnl_base_total=equity.realized_pnl_base_total,
             unrealized_pnl_base_total=equity.unrealized_pnl_base_total,
             realized_pnl_base_by_pair=self._filtered_realized_pnl(self._should_include_manual(None)),
-            unrealized_pnl_base_by_pair={p.pair: p.unrealized_pnl_base for p in self.positions.values()},
+            unrealized_pnl_base_by_pair={
+                p.pair: p.unrealized_pnl_base
+                for p in self.positions.values()
+                if self._should_include_manual(None) or not self._is_manual_tag(p.strategy_tag)
+            },
         )
 
         if persist:
@@ -287,14 +304,23 @@ class Portfolio:
     def _should_include_manual(self, include_manual: Optional[bool]) -> bool:
         return self.config.track_manual_trades if include_manual is None else include_manual
 
-    def _derive_strategy_tag(self, trade: Dict) -> str:
+    def _extract_trade_tags(self, trade: Dict) -> tuple[str, Optional[str], Optional[str]]:
+        raw_userref = str(trade["userref"]) if trade.get("userref") is not None else None
+        comment = str(trade["comment"]) if trade.get("comment") else None
         if trade.get("strategy_tag"):
-            return str(trade["strategy_tag"])
-        if trade.get("userref") is not None:
-            return str(trade["userref"])
-        if trade.get("comment"):
-            return str(trade["comment"])
-        return "manual"
+            strategy_tag = str(trade["strategy_tag"])
+        elif raw_userref is not None:
+            strategy_tag = raw_userref
+        elif comment is not None:
+            strategy_tag = comment
+        else:
+            strategy_tag = "manual"
+
+        return strategy_tag, raw_userref, comment
+
+    @staticmethod
+    def _is_manual_tag(strategy_tag: Optional[str]) -> bool:
+        return not strategy_tag or strategy_tag == "manual"
 
     def _is_asset_included(self, asset: str) -> bool:
         if self.config.include_assets and asset not in self.config.include_assets:
@@ -395,7 +421,7 @@ class Portfolio:
     def _filtered_realized_pnl(self, include_manual: bool) -> Dict[str, float]:
         realized_by_pair: Dict[str, float] = defaultdict(float)
         for record in self.realized_pnl_history:
-            if include_manual or record.strategy_tag != "manual":
+            if include_manual or not self._is_manual_tag(record.strategy_tag):
                 realized_by_pair[record.pair] += record.pnl_quote
         if not realized_by_pair:
             return {}
