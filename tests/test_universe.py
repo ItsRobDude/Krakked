@@ -101,8 +101,9 @@ def test_universe_filtering(mock_region_profile, mock_kraken_asset_pairs_respons
     assert "XBTEUR" not in pair_names # Non-USD
     assert "ADAUSD" not in pair_names # cancel_only
 
-def test_universe_overrides(mock_region_profile, mock_kraken_asset_pairs_response):
+def test_universe_overrides(mock_region_profile, mock_kraken_asset_pairs_response, caplog):
     """Tests the include_pairs and exclude_pairs configuration overrides."""
+    caplog.set_level("WARNING")
     mock_client = MagicMock()
     mock_client.get_public.return_value = mock_kraken_asset_pairs_response
 
@@ -112,23 +113,14 @@ def test_universe_overrides(mock_region_profile, mock_kraken_asset_pairs_respons
     assert len(universe_excluded) == 5
     assert "XBTUSD" not in {p.canonical for p in universe_excluded}
 
-    # Test include override (to include a pair that would otherwise be filtered)
-    # We'll set DOGEUSD to status="cancel_only" to simulate an excluded pair
+    # Test that include cannot bypass hard validity and emits a warning
     mock_kraken_asset_pairs_response["DOGEUSD"]["status"] = "cancel_only"
     mock_client.get_public.return_value = mock_kraken_asset_pairs_response
-
-    # Even with include_pairs, it must exist in valid candidate pairs to be added automatically?
-    # The logic says:
-    # if pair in universe_config.include_pairs: if pair in candidate_pairs: add it.
-    # So if it's filtered out by status, include_pairs won't save it unless we change logic.
-    # The current logic:
-    # 2. Apply filtering -> candidate_pairs (DOGEUSD excluded)
-    # 3. Apply overrides -> check include_pairs. If not in candidate_pairs, log warning.
 
     include_config = UniverseConfig(include_pairs=["DOGEUSD"], exclude_pairs=["XBTUSD", "ETHUSD"], min_24h_volume_usd=0)
     universe_included = build_universe(mock_client, mock_region_profile, include_config)
 
-    # DOGEUSD is filtered out by status, so include_pairs cannot resurrect it if it's invalid
+    assert any("DOGEUSD" in message for message in caplog.messages)
     assert len(universe_included) == 3
     assert "DOGEUSD" not in {p.canonical for p in universe_included}
 
@@ -183,6 +175,54 @@ def test_universe_volume_filtering(mock_region_profile, mock_kraken_asset_pairs_
     called_pairs = set(ticker_call_args[1]["params"]["pair"].split(','))
     expected_pairs = {"XBTUSD", "ETHUSD", "DOGEUSD", "ETHUSDM", "XMRUSD", "ADAUSDF"}
     assert called_pairs == expected_pairs
+
+
+def test_include_pairs_bypass_volume_filter(mock_region_profile, mock_kraken_asset_pairs_response):
+    """Valid include_pairs should skip soft volume filtering."""
+    mock_client = MagicMock()
+    filtered_response = {
+        k: v
+        for k, v in mock_kraken_asset_pairs_response.items()
+        if v["quote"] in ["ZUSD", "USD"]
+        and v.get("aclass_base") == "currency"
+        and v["status"] == "online"
+    }
+
+    mock_client.get_public.side_effect = [
+        filtered_response,
+        {
+            "XXBTZUSD": {"v": ["1000", "2500.5"], "c": ["50000.0", "1"]},
+            "XETHZUSD": {"v": ["500", "10.0"], "c": ["2000.0", "1"]},
+            "DOGEUSD":  {"v": ["100000", "500000.0"], "c": ["0.1", "1"]},
+            "ETHUSDM":  {"v": ["100", "1.0"], "c": ["2000.0", "1"]},
+            "XMRUSD":   {"v": ["100", "5.0"], "c": ["150.0", "1"]},
+            "ADAUSDF":  {"v": ["100000", "20000.0"], "c": ["0.3", "1"]},
+        }
+    ]
+
+    config = UniverseConfig(include_pairs=["ETHUSD"], exclude_pairs=[], min_24h_volume_usd=100000.0)
+
+    universe = build_universe(mock_client, mock_region_profile, config)
+    pair_names = {p.canonical for p in universe}
+
+    assert pair_names == {"XBTUSD", "ETHUSD"}
+
+    ticker_call_args = mock_client.get_public.call_args_list[1]
+    called_pairs = set(ticker_call_args[1]["params"]["pair"].split(','))
+    assert "ETHUSD" not in called_pairs
+    assert called_pairs == {"XBTUSD", "DOGEUSD", "ETHUSDM", "XMRUSD", "ADAUSDF"}
+
+
+def test_exclude_applies_to_forced_includes(mock_region_profile, mock_kraken_asset_pairs_response):
+    """exclude_pairs should remove pairs even if they are in include_pairs."""
+    mock_client = MagicMock()
+    mock_client.get_public.return_value = mock_kraken_asset_pairs_response
+
+    config = UniverseConfig(include_pairs=["ETHUSD"], exclude_pairs=["ETHUSD"], min_24h_volume_usd=0)
+
+    universe = build_universe(mock_client, mock_region_profile, config)
+
+    assert "ETHUSD" not in {p.canonical for p in universe}
 
 
 def test_universe_volume_filtering_missing_ticker(mock_region_profile, mock_kraken_asset_pairs_response):
