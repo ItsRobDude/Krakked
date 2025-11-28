@@ -1,6 +1,6 @@
 # src/kraken_bot/portfolio/models.py
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional, List, Dict
 from datetime import datetime
 
@@ -52,6 +52,7 @@ class AssetValuation:
     amount: float
     value_base: float
     source_pair: Optional[str]
+    valuation_status: str = "valued"
 
 @dataclass
 class PortfolioSnapshot:
@@ -70,6 +71,7 @@ class AssetExposure:
     amount: float
     value_base: float
     percentage_of_equity: float
+    valuation_status: str = "valued"
 
 @dataclass
 class EquityView:
@@ -78,3 +80,4 @@ class EquityView:
     realized_pnl_base_total: float
     unrealized_pnl_base_total: float
     drift_flag: bool
+    unvalued_assets: List[str] = field(default_factory=list)

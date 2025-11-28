@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import time
 from collections import defaultdict
+from dataclasses import dataclass
 from typing import Dict, Iterable, List, Optional
 
 from kraken_bot.config import PortfolioConfig
@@ -25,6 +26,13 @@ from kraken_bot.portfolio.models import (
     SpotPosition,
 )
 from kraken_bot.portfolio.store import PortfolioStore
+
+
+@dataclass
+class ConversionResult:
+    value_base: float
+    source_pair: Optional[str]
+    status: str
 
 
 class Portfolio:
@@ -119,7 +127,8 @@ class Portfolio:
             )
             self.positions[pair] = position
 
-        fee_in_base = self._convert_to_base_currency(fee, quote_asset)
+        fee_conversion = self._convert_to_base_currency(fee, quote_asset)
+        fee_in_base = fee_conversion.value_base
         position.fees_paid_base += fee_in_base
         self.fees_paid_base_by_pair[pair] += fee_in_base
 
@@ -130,7 +139,8 @@ class Portfolio:
             position.base_size = new_total_qty
         else:
             gross_pnl_quote = (price - position.avg_entry_price) * vol
-            pnl_base = self._convert_to_base_currency(gross_pnl_quote, quote_asset) - fee_in_base
+            pnl_conversion = self._convert_to_base_currency(gross_pnl_quote, quote_asset)
+            pnl_base = pnl_conversion.value_base - fee_in_base
             position.realized_pnl_base += pnl_base
             self.realized_pnl_base_by_pair[pair] += pnl_base
             position.base_size = max(0.0, position.base_size - vol)
@@ -146,7 +156,7 @@ class Portfolio:
                     fee_asset=quote_asset,
                     fee_amount=fee,
                     pnl_quote=pnl_base,
-                    strategy_tag="manual",
+                    strategy_tag=self._derive_strategy_tag(trade),
                 )
             )
 
@@ -180,7 +190,7 @@ class Portfolio:
         for asset, pos_total in position_totals.items():
             balance_total = self.balances.get(asset, AssetBalance(asset, 0.0, 0.0, 0.0)).total
             diff_qty = abs(pos_total - balance_total)
-            diff_value = self._convert_to_base_currency(diff_qty, asset)
+            diff_value = self._convert_to_base_currency(diff_qty, asset).value_base
             if diff_value > self.config.reconciliation_tolerance:
                 drift_detected = True
                 break
@@ -188,14 +198,19 @@ class Portfolio:
         self.drift_flag = drift_detected
         return drift_detected
 
-    def equity_view(self) -> EquityView:
+    def equity_view(self, include_manual: Optional[bool] = None) -> EquityView:
+        include_manual = self._should_include_manual(include_manual)
         equity = 0.0
         cash = 0.0
         unrealized = 0.0
+        unvalued_assets: List[str] = []
 
         for asset, balance in self.balances.items():
-            value_base = self._convert_to_base_currency(balance.total, asset)
+            conversion = self._convert_to_base_currency(balance.total, asset)
+            value_base = conversion.value_base
             equity += value_base
+            if conversion.status == "unvalued":
+                unvalued_assets.append(asset)
             if asset == self.config.base_currency:
                 cash += value_base
 
@@ -209,27 +224,37 @@ class Portfolio:
             position.unrealized_pnl_base = current_val - cost_basis
             unrealized += position.unrealized_pnl_base
 
+        realized_by_pair = self._filtered_realized_pnl(include_manual)
+
         return EquityView(
             equity_base=equity,
             cash_base=cash,
-            realized_pnl_base_total=sum(self.realized_pnl_base_by_pair.values()),
+            realized_pnl_base_total=sum(realized_by_pair.values()),
             unrealized_pnl_base_total=unrealized,
             drift_flag=self.drift_flag,
+            unvalued_assets=unvalued_assets,
         )
 
     def snapshot(self, now: Optional[int] = None, persist: bool = True, enforce_retention: bool = True) -> PortfolioSnapshot:
         now = now or int(time.time())
         equity = self.equity_view()
 
-        valuations = [
-            AssetValuation(
-                asset=asset,
-                amount=balance.total,
-                value_base=self._convert_to_base_currency(balance.total, asset),
-                source_pair=f"{asset}{self.config.base_currency}" if asset != self.config.base_currency else None,
+        valuations: List[AssetValuation] = []
+        for asset, balance in self.balances.items():
+            if not self._is_asset_included(asset):
+                continue
+            conversion = self._convert_to_base_currency(balance.total, asset)
+            valuations.append(
+                AssetValuation(
+                    asset=asset,
+                    amount=balance.total,
+                    value_base=conversion.value_base,
+                    source_pair=conversion.source_pair
+                    if asset != self.config.base_currency
+                    else None,
+                    valuation_status=conversion.status,
+                )
             )
-            for asset, balance in self.balances.items()
-        ]
 
         snapshot = PortfolioSnapshot(
             timestamp=now,
@@ -238,7 +263,7 @@ class Portfolio:
             asset_valuations=valuations,
             realized_pnl_base_total=equity.realized_pnl_base_total,
             unrealized_pnl_base_total=equity.unrealized_pnl_base_total,
-            realized_pnl_base_by_pair=dict(self.realized_pnl_base_by_pair),
+            realized_pnl_base_by_pair=self._filtered_realized_pnl(self._should_include_manual(None)),
             unrealized_pnl_base_by_pair={p.pair: p.unrealized_pnl_base for p in self.positions.values()},
         )
 
@@ -259,14 +284,43 @@ class Portfolio:
     # ------------------------------------------------------------------
     # Utility helpers
     # ------------------------------------------------------------------
-    def _convert_to_base_currency(self, amount: float, asset: str) -> float:
+    def _should_include_manual(self, include_manual: Optional[bool]) -> bool:
+        return self.config.track_manual_trades if include_manual is None else include_manual
+
+    def _derive_strategy_tag(self, trade: Dict) -> str:
+        if trade.get("strategy_tag"):
+            return str(trade["strategy_tag"])
+        if trade.get("userref") is not None:
+            return str(trade["userref"])
+        if trade.get("comment"):
+            return str(trade["comment"])
+        return "manual"
+
+    def _is_asset_included(self, asset: str) -> bool:
+        if self.config.include_assets and asset not in self.config.include_assets:
+            return False
+        if self.config.exclude_assets and asset in self.config.exclude_assets:
+            return False
+        return True
+
+    def _convert_to_base_currency(self, amount: float, asset: str) -> ConversionResult:
         if amount == 0 or not asset:
-            return 0.0
+            return ConversionResult(0.0, None, "valued")
+        if not self._is_asset_included(asset):
+            return ConversionResult(0.0, None, "excluded")
         if asset == self.config.base_currency:
-            return amount
-        pair = f"{asset}{self.config.base_currency}"
-        price = self.market_data.get_latest_price(pair)
-        return amount * price if price is not None else 0.0
+            return ConversionResult(amount, None, "valued")
+
+        pair = self.config.valuation_pairs.get(asset) or f"{asset}{self.config.base_currency}"
+        price = None
+        try:
+            price = self.market_data.get_latest_price(pair)
+        except Exception:
+            price = None
+
+        if price is None:
+            return ConversionResult(0.0, pair, "unvalued")
+        return ConversionResult(amount * price, pair, "valued")
 
     def _normalize_asset(self, asset: str) -> str:
         return asset.replace("Z", "", 1) if asset.startswith("Z") else asset.replace("X", "", 1)
@@ -286,7 +340,10 @@ class Portfolio:
         equity = self.equity_view()
         exposures: List[AssetExposure] = []
         for asset, balance in self.balances.items():
-            value_base = self._convert_to_base_currency(balance.total, asset)
+            if not self._is_asset_included(asset):
+                continue
+            conversion = self._convert_to_base_currency(balance.total, asset)
+            value_base = conversion.value_base
             pct = (value_base / equity.equity_base) if equity.equity_base else 0.0
             exposures.append(
                 AssetExposure(
@@ -294,7 +351,17 @@ class Portfolio:
                     amount=balance.total,
                     value_base=value_base,
                     percentage_of_equity=pct,
+                    valuation_status=conversion.status,
                 )
             )
         return exposures
+
+    def _filtered_realized_pnl(self, include_manual: bool) -> Dict[str, float]:
+        realized_by_pair: Dict[str, float] = defaultdict(float)
+        for record in self.realized_pnl_history:
+            if include_manual or record.strategy_tag != "manual":
+                realized_by_pair[record.pair] += record.pnl_quote
+        if not realized_by_pair:
+            return {}
+        return dict(realized_by_pair)
 
