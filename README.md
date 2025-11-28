@@ -80,6 +80,32 @@ The bot uses two configuration files stored in your OS-specific user configurati
     *   Contains region settings, universe selection, strategy parameters, and risk limits.
     *   *Example schema available in `src/kraken_bot/config.py`*.
 
+    Example with execution defaults:
+
+    ```yaml
+    region:
+      code: "US_CA"
+      capabilities:
+        supports_margin: false
+        supports_futures: false
+        supports_staking: false
+      default_quote: "USD"
+
+    execution:
+      mode: "paper"                  # "live" | "paper" | "dry_run"
+      default_order_type: "limit"    # "market" | "limit"
+      max_slippage_bps: 50            # 0.5% price protection for limit offsets
+      time_in_force: "GTC"            # Good-til-cancel default
+      post_only: false                # Maker-only preference
+      validate_only: true             # Automatically flips to false when mode == "live"
+      dead_man_switch_seconds: 600    # Auto-cancel window (0 to disable)
+      max_retries: 3                  # Per-order retry budget
+      retry_backoff_seconds: 2        # Initial retry delay
+      retry_backoff_factor: 2.0       # Exponential backoff multiplier
+      max_concurrent_orders: 10       # Concurrency guardrail
+      min_order_notional_usd: 20.0    # Floor to avoid dust orders
+    ```
+
 2.  **`secrets.enc`** (Encrypted Credentials):
     *   Stores your Kraken API Key and Secret securely.
     *   **Setup**: The bot includes a setup utility (CLI) to prompt for keys and create this file. (Usage instructions coming in Phase 6).
