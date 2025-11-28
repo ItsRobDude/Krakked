@@ -6,7 +6,7 @@ from typing import Dict, List, Optional, Tuple
 from collections import defaultdict
 from pathlib import Path
 
-from kraken_bot.config import AppConfig, PortfolioConfig
+from kraken_bot.config import AppConfig, PortfolioConfig, OHLCBar
 from kraken_bot.market_data.api import MarketDataAPI
 from kraken_bot.connection.rest_client import KrakenRESTClient
 from .models import (
@@ -40,6 +40,11 @@ class PortfolioService:
 
         # Last sync state
         self.last_trade_sync_ts: float = 0.0
+
+        # Cached pricing for replay
+        self._price_cache: Dict[str, List[OHLCBar]] = {}
+        self.calculated_balances: Dict[str, AssetBalance] = {}
+        self.live_balances: Dict[str, AssetBalance] = {}
 
     def initialize(self):
         """
@@ -84,13 +89,9 @@ class PortfolioService:
         if since_ts:
             params["start"] = since_ts
 
-        # Paginate through trades?
-        # For Phase 3 basic implementation, let's assume one call or simple loop.
-        # But 'TradesHistory' can return 50 results.
-
         new_trades = []
-        # TODO: Pagination logic. For now, fetch recent.
-        # If this is first run, we might need 'all'.
+        safety_counter = 0
+        last_cursor = since_ts
 
         while True:
             resp = self.rest_client.get_private("TradesHistory", params=params)
@@ -98,13 +99,11 @@ class PortfolioService:
             if not trades_dict:
                 break
 
-            # Convert dict {id: trade} to list of trades with 'id' injected
             batch = []
             for txid, trade_data in trades_dict.items():
                 trade_data['id'] = txid
                 batch.append(trade_data)
 
-            # Sort by time to process in order
             batch.sort(key=lambda x: x['time'])
 
             if not batch:
@@ -113,25 +112,27 @@ class PortfolioService:
             self.store.save_trades(batch)
             new_trades.extend(batch)
 
-            # If we get fewer than 50 (default limit), we are done.
-            # Note: 'count' in response is total count of trades, not count in page.
-            if len(batch) < 50:
+            resp_last = resp.get("last")
+            try:
+                resp_last = float(resp_last) if resp_last is not None else None
+            except (TypeError, ValueError):
+                resp_last = None
+
+            if resp_last is not None and resp_last == last_cursor:
                 break
 
-            # Safety break to prevent infinite loops in case of API issues
-            # Assuming max 100 pages for now (5000 trades) is reasonable for one sync call
-            # But the loop condition must be robust.
-            # Check if last_ts is advancing?
-            pass
+            if resp_last is not None:
+                params["start"] = resp_last
+                last_cursor = resp_last
+            else:
+                last_ts = batch[-1]['time']
+                last_cursor = last_ts + 1e-6
+                params['start'] = last_cursor
 
-            # Update params for next page
-            # Use the timestamp of the last trade in batch plus a small epsilon
-            # to avoid fetching the same trade again (assuming exclusive start if using ID,
-            # but documentation says start timestamp is inclusive or exclusive?
-            # "Starting unix timestamp or trade tx id of results (exclusive)" -> Exclusive.
-            # So last timestamp should be safe.
-            last_ts = batch[-1]['time']
-            params['start'] = last_ts
+            safety_counter += 1
+            if safety_counter > 200:
+                logger.warning("TradesHistory pagination aborted after 200 pages to avoid infinite loop.")
+                break
 
         # 2. Fetch Ledgers for Cash Flows
         # (Similar logic, fetch new, save to store)
@@ -199,48 +200,44 @@ class PortfolioService:
         """
         # Identify pairs needed for fee conversion
         # Fee asset -> Base currency (e.g. XBT -> USD => XBTUSD)
+        if not trades:
+            return
+
+        base_ccy = self.config.base_currency
+        trade_times = [int(t.get("time", 0)) for t in trades if t.get("time") is not None]
+        if not trade_times:
+            return
+        earliest_ts = min(trade_times)
+
         needed_pairs = set()
         for t in trades:
-            # We only care if fee > 0 and fee_asset != base_currency
-            # In _process_trade logic:
-            # fee_asset assumed to be quote_asset.
-            # If quote_asset != base_currency (USD), we need QuoteBase pair.
-            # But typically quote IS USD.
-            # What if pair is ETHXBT? Quote is XBT. Fee in XBT.
-            # We need XBTUSD.
-            pass
-            # Logic inside _process_trade is:
-            # fee_asset = quote_asset (assumption)
-            # _convert_to_base_currency(fee, fee_asset)
+            pair = t.get("pair")
+            if not pair:
+                continue
+            try:
+                meta = self.market_data.get_pair_metadata(pair)
+            except Exception:
+                continue
 
-            # So we need to ensure we have price for pair: f"{fee_asset}{base_currency}"
-            # How to get fee_asset without full parsing logic?
-            # Rough approximation:
-            # Normalized Pair -> Quote Asset.
-            # This requires iterating and parsing all pairs.
-            # Just do it lazily?
-            # The concern is "flood".
-            # If we just do it via REST Ticker for ALL pairs in universe once?
-            pass
+            for asset in (meta.base, meta.quote):
+                if asset == base_ccy:
+                    continue
+                valuation_pair = self.config.valuation_pairs.get(asset) or f"{asset}{base_ccy}"
+                needed_pairs.add(valuation_pair)
 
-        # Simple optimization: Ensure MarketData has updated tickers.
-        # If WS is running, we are good.
-        # If not, fetch all tickers for universe?
-        # Only if we aren't connected.
+        timeframe = None
         try:
-            status = self.market_data.get_data_status()
-            if not status.websocket_connected or status.streaming_pairs == 0:
-                # Fetch all tickers via REST to populate cache/provide data
-                # MarketDataAPI doesn't expose a method to "bulk fetch tickers to cache".
-                # But we can call REST client manually and cache locally?
-                # _convert_to_base_currency uses self.market_data.get_latest_price(pair).
-                # That method uses self._ws_client.ticker_cache.
-                # If WS client is None, it returns None.
-                # So we CANNOT use get_latest_price if WS is down.
-                # We need a fallback or side-channel.
-                pass
+            timeframe = self.app_config.market_data.backfill_timeframes[0]
         except Exception:
-            pass
+            timeframe = "1m"
+
+        for pair in needed_pairs:
+            try:
+                self.market_data.backfill_ohlc(pair, timeframe, since=earliest_ts)
+                bars = self.market_data.get_ohlc_since(pair, timeframe, earliest_ts) or []
+                self._price_cache[pair] = sorted(bars, key=lambda b: b.timestamp)
+            except Exception:
+                logger.debug(f"Could not prefetch prices for {pair}", exc_info=True)
 
     def _rebuild_state(self):
         """
@@ -260,6 +257,9 @@ class PortfolioService:
         all_trades = self.store.get_trades(limit=None) # get_trades sorts DESC by default in my impl
         # Need ASC for replay
         all_trades.sort(key=lambda x: x['time'])
+
+        # Prefetch pricing for fee/PnL conversion
+        self._prefetch_prices(all_trades)
 
         # Load all cash flows (oldest first)
         # Note: Cash flows affect balances but not positions (usually)
@@ -285,6 +285,11 @@ class PortfolioService:
                 self._process_trade(event['data'])
             else:
                 self._process_cash_flow(event['data'])
+
+        self.calculated_balances = {
+            asset: AssetBalance(asset=bal.asset, free=bal.free, reserved=bal.reserved, total=bal.total)
+            for asset, bal in self.balances.items()
+        }
 
     def _process_trade(self, trade: Dict):
         """
@@ -341,10 +346,11 @@ class PortfolioService:
             )
             self.positions[canonical_pair] = pos
 
-        # Fee in Base Currency
-        # If fee_asset is USD (base_currency), fee_base = fee
-        # If fee_asset is XBT, fee_base = fee * price_of_XBTUSD
-        fee_in_base_currency = self._convert_to_base_currency(fee, fee_asset)
+        fee_in_base_currency = self._convert_to_base_currency(
+            fee,
+            fee_asset,
+            timestamp=int(trade.get("time", 0)),
+        )
         pos.fees_paid_base += fee_in_base_currency
         self.fees_paid_base_by_pair[canonical_pair] += fee_in_base_currency
 
@@ -362,10 +368,11 @@ class PortfolioService:
             # PnL = (Sell Price - Avg Cost) * Sold Qty
             pnl_quote = (price - pos.avg_entry_price) * vol
 
-            # Convert PnL to base currency (if quote is not base currency)
-            # Usually Quote IS base currency (USD).
-            # If pair is ETHXBT, quote is XBT. PnL is in XBT. Convert XBT to USD.
-            pnl_base = self._convert_to_base_currency(pnl_quote, quote_asset)
+            pnl_base = self._convert_to_base_currency(
+                pnl_quote,
+                quote_asset,
+                timestamp=int(trade.get("time", 0)),
+            )
 
             # Subtract fees from PnL?
             # Spec: "Realized PnL... Includes all trade-related fees"
@@ -406,49 +413,47 @@ class PortfolioService:
         bal.free += record.amount
         self.balances[record.asset] = bal
 
-    def _convert_to_base_currency(self, amount: float, asset: str) -> float:
-        if amount == 0: return 0.0
+    def _convert_to_base_currency(
+        self,
+        amount: float,
+        asset: str,
+        timestamp: Optional[int] = None,
+        prefer_pair: Optional[str] = None,
+        observed_price: Optional[float] = None,
+    ) -> float:
+        if amount == 0:
+            return 0.0
         if asset == self.config.base_currency:
             return amount
 
-        # Try to find a pair
-        # e.g. convert XBT to USD -> Look for XBTUSD
-        pair = f"{asset}{self.config.base_currency}"
-        try:
-            # We need historical price?
-            # For "Backfill/Replay", we strictly speaking need price AT TIME OF TRADE.
-            # This is hard without full OHLC history loaded.
-            # Phase 3 Spec: "Use the trade's own price when fee asset is base or quote..."
-            # If fee is third asset, use "get_latest_price" (which implies current price, not historical).
-            # Using current price for historical fee conversion is wrong but might be the simplified requirement.
-            # Actually, if we are replaying history, we might not have historical price easily available.
+        pair = prefer_pair or self.config.valuation_pairs.get(asset) or f"{asset}{self.config.base_currency}"
 
-            # Simplified approach for Phase 3 Replay:
-            # If asset is Quote (e.g. USD), it's 1:1.
-            # If asset is Base (e.g. BTC) and we just traded it, use the Trade Price?
-            # But here we are in a helper function.
+        price = observed_price or self._get_cached_price(pair, timestamp)
 
-            # Let's use `get_latest_price` as a fallback, fully acknowledging it distorts historical PnL if replayed.
-            # Ideally we'd use the trade price if applicable.
+        if price is None:
+            try:
+                price = self.market_data.get_latest_price(pair)
+            except Exception:
+                price = None
 
-            price = self.market_data.get_latest_price(pair)
+        if price is None:
+            return 0.0
 
-            # Fallback if get_latest_price failed (e.g. WS down, no cache)
-            if price is None:
-                # Try REST API once? Or log warning and return 0 (safe failure)?
-                # To prevent flood, we can check a local short-term cache or just fail.
-                # Returning 0 affects PnL but keeps app running.
-                # Let's try to get it from REST if critical?
-                # No, that's the "flood" risk.
-                # Better to warn.
-                # logger.debug(f"Could not value {asset} in {self.config.base_currency}")
-                return 0.0
+        return amount * price
 
-            if price:
-                return amount * price
-        except:
-            pass
-        return 0.0
+    def _get_cached_price(self, pair: str, timestamp: Optional[int]) -> Optional[float]:
+        bars = self._price_cache.get(pair)
+        if not bars:
+            return None
+
+        if timestamp is None:
+            return bars[-1].close
+
+        for bar in bars:
+            if bar.timestamp >= timestamp:
+                return bar.close
+
+        return bars[-1].close if bars else None
 
     def _reconcile(self):
         """
@@ -471,41 +476,45 @@ class PortfolioService:
         for asset_raw, amount_str in balance_resp.items():
             asset = self._normalize_asset(asset_raw)
             amount = float(amount_str)
-            # We don't have 'reserved' from simple Balance call (need TradeBalance or extended Balance?)
-            # Standard Balance just gives total.
             new_balances[asset] = AssetBalance(
                 asset=asset,
-                free=amount, # Assuming all free for now
+                free=amount,
                 reserved=0.0,
                 total=amount
             )
-        self.balances = new_balances
+        self.live_balances = new_balances
 
-        # Drift Check
-        # Implementation:
-        # 1. Sum position sizes by asset.
         asset_position_sums = defaultdict(float)
         for pos in self.positions.values():
             asset_position_sums[pos.base_asset] += pos.base_size
 
-        drift = False
+        calc_balances = self.calculated_balances or self.balances
         discrepancies = {}
-        for asset, pos_sum in asset_position_sums.items():
-            bal = self.balances.get(asset)
-            bal_total = bal.total if bal else 0.0
 
-            # Value difference in Base Currency
-            diff_qty = abs(pos_sum - bal_total)
-
-            # Convert diff to USD
-            diff_val = self._convert_to_base_currency(diff_qty, asset)
-
+        for asset in set(list(calc_balances.keys()) + list(new_balances.keys())):
+            calc_total = calc_balances.get(asset).total if calc_balances.get(asset) else 0.0
+            live_total = new_balances.get(asset).total if new_balances.get(asset) else 0.0
+            diff_val = self._convert_to_base_currency(abs(calc_total - live_total), asset)
             if diff_val > self.config.reconciliation_tolerance:
-                discrepancies[asset] = diff_val
-                drift = True
+                discrepancies[asset] = {
+                    "calc_balance": calc_total,
+                    "live_balance": live_total,
+                    "drift_base": diff_val,
+                }
 
-        self.drift_flag = drift
-        if drift:
+        for asset, pos_sum in asset_position_sums.items():
+            live_total = new_balances.get(asset).total if new_balances.get(asset) else 0.0
+            diff_val = self._convert_to_base_currency(abs(pos_sum - live_total), asset)
+            if diff_val > self.config.reconciliation_tolerance:
+                entry = discrepancies.setdefault(asset, {})
+                entry.update({
+                    "position_qty": pos_sum,
+                    "live_balance": live_total,
+                    "position_drift_base": diff_val,
+                })
+
+        self.drift_flag = bool(discrepancies)
+        if self.drift_flag:
             logger.warning(f"Portfolio Drift Detected: {discrepancies}")
 
     def get_equity(self) -> EquityView:
