@@ -58,10 +58,19 @@ class RiskContext:
 
 
 class RiskEngine:
-    def __init__(self, config: RiskConfig, market_data: MarketDataAPI, portfolio: PortfolioService):
+    def __init__(
+        self,
+        config: RiskConfig,
+        market_data: MarketDataAPI,
+        portfolio: PortfolioService,
+        strategy_userrefs: Optional[Dict[str, Optional[int]]] = None,
+        strategy_tags: Optional[Dict[str, Optional[str]]] = None,
+    ):
         self.config = config
         self.market_data = market_data
         self.portfolio = portfolio
+        self.strategy_userrefs = strategy_userrefs or {}
+        self.strategy_tags = strategy_tags or {}
         self._kill_switch_active = False
 
     def build_risk_context(self) -> RiskContext:
@@ -152,6 +161,20 @@ class RiskEngine:
         actions = [self._process_pair_intents(pair, pair_intents, ctx) for pair, pair_intents in intents_by_pair.items()]
         return actions
 
+    def _resolve_userref(self, strategies: List[str]) -> Optional[int]:
+        unique_strategies = {sid for sid in strategies if sid}
+        if len(unique_strategies) != 1:
+            return None
+        strategy_id = next(iter(unique_strategies))
+        return self.strategy_userrefs.get(strategy_id)
+
+    def _resolve_strategy_tag(self, strategies: List[str]) -> Optional[str]:
+        unique_strategies = {sid for sid in strategies if sid}
+        if len(unique_strategies) != 1:
+            return None
+        strategy_id = next(iter(unique_strategies))
+        return self.strategy_tags.get(strategy_id) or strategy_id
+
     def _block_all_opens(self, intents: List[StrategyIntent], ctx: RiskContext, reason: str) -> List[RiskAdjustedAction]:
         actions: List[RiskAdjustedAction] = []
         for intent in intents:
@@ -166,6 +189,8 @@ class RiskEngine:
                     RiskAdjustedAction(
                         pair=intent.pair,
                         strategy_id=intent.strategy_id,
+                        strategy_tag=self._resolve_strategy_tag([intent.strategy_id]),
+                        userref=self._resolve_userref([intent.strategy_id]),
                         action_type="reduce" if target_base > 0 else "close",
                         target_base_size=target_base,
                         target_notional_usd=target_usd,
@@ -182,6 +207,8 @@ class RiskEngine:
                 RiskAdjustedAction(
                     pair=intent.pair,
                     strategy_id=intent.strategy_id,
+                    strategy_tag=self._resolve_strategy_tag([intent.strategy_id]),
+                    userref=self._resolve_userref([intent.strategy_id]),
                     action_type="none",
                     target_base_size=current_size,
                     target_notional_usd=current_size * price,
@@ -265,6 +292,8 @@ class RiskEngine:
         return RiskAdjustedAction(
             pair=pair,
             strategy_id=",".join(strategies_involved),
+            strategy_tag=self._resolve_strategy_tag(strategies_involved),
+            userref=self._resolve_userref(strategies_involved),
             action_type=action_type,
             target_base_size=target_base,
             target_notional_usd=target_usd,
@@ -402,6 +431,8 @@ class RiskEngine:
         return RiskAdjustedAction(
             pair=pair,
             strategy_id=strategy_id,
+            strategy_tag=self._resolve_strategy_tag([strategy_id]),
+            userref=self._resolve_userref([strategy_id]),
             action_type="none",
             target_base_size=current_base,
             target_notional_usd=0.0,

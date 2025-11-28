@@ -28,6 +28,8 @@ class RiskAdjustedAction:
     reason: str                       # human-readable explanation
     blocked: bool                     # true if action is blocked by risk limits
     blocked_reasons: List[str]        # list of violated limits, if any
+    strategy_tag: Optional[str] = None
+    userref: Optional[int] = None
     risk_limits_snapshot: Dict[str, Any] = field(default_factory=dict) # config values, equity, etc.
 
 @dataclass

@@ -34,7 +34,14 @@ class StrategyEngine:
         self.config = config
         self.market_data = market_data
         self.portfolio = portfolio
-        self.risk_engine = RiskEngine(config.risk, market_data, portfolio)
+        strategy_userrefs = {name: cfg.userref for name, cfg in config.strategies.configs.items()}
+        self.risk_engine = RiskEngine(
+            config.risk,
+            market_data,
+            portfolio,
+            strategy_userrefs=strategy_userrefs,
+            strategy_tags={name: name for name in config.strategies.configs.keys()},
+        )
 
         self.strategies: Dict[str, Strategy] = {}
         self.strategy_states: Dict[str, StrategyState] = {}
