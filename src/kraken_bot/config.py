@@ -34,6 +34,22 @@ class MarketDataConfig:
     ws_timeframes: list[str]
     metadata_path: Optional[str] = None
 
+
+@dataclass
+class ExecutionConfig:
+    mode: str = "paper"
+    default_order_type: str = "limit"
+    max_slippage_bps: int = 50
+    time_in_force: str = "GTC"
+    post_only: bool = False
+    validate_only: bool = True
+    dead_man_switch_seconds: int = 600
+    max_retries: int = 3
+    retry_backoff_seconds: int = 2
+    retry_backoff_factor: float = 2.0
+    max_concurrent_orders: int = 10
+    min_order_notional_usd: float = 20.0
+
 @dataclass
 class PortfolioConfig:
     base_currency: str = "USD"
@@ -79,6 +95,7 @@ class AppConfig:
     universe: UniverseConfig
     market_data: MarketDataConfig
     portfolio: PortfolioConfig
+    execution: ExecutionConfig = field(default_factory=ExecutionConfig)
     risk: RiskConfig = field(default_factory=RiskConfig)
     strategies: StrategiesConfig = field(default_factory=StrategiesConfig)
 
@@ -277,6 +294,49 @@ def load_config(config_path: Path = None) -> AppConfig:
         ohlc_store_config = {}
     merged_ohlc_store = {**default_ohlc_store, **ohlc_store_config}
 
+    execution_data = raw_config.get("execution") or {}
+    if not isinstance(execution_data, dict):
+        logger.warning(
+            "Execution config is not a mapping; using defaults",
+            extra={"event": "config_invalid_execution", "config_path": str(config_path)},
+        )
+        execution_data = {}
+
+    default_execution = ExecutionConfig()
+    execution_mode = execution_data.get("mode", default_execution.mode)
+    validate_only = execution_data.get("validate_only")
+    if validate_only is None:
+        validate_only = execution_mode != "live"
+
+    execution_config = ExecutionConfig(
+        mode=execution_mode,
+        default_order_type=execution_data.get(
+            "default_order_type", default_execution.default_order_type
+        ),
+        max_slippage_bps=execution_data.get(
+            "max_slippage_bps", default_execution.max_slippage_bps
+        ),
+        time_in_force=execution_data.get("time_in_force", default_execution.time_in_force),
+        post_only=execution_data.get("post_only", default_execution.post_only),
+        validate_only=validate_only,
+        dead_man_switch_seconds=execution_data.get(
+            "dead_man_switch_seconds", default_execution.dead_man_switch_seconds
+        ),
+        max_retries=execution_data.get("max_retries", default_execution.max_retries),
+        retry_backoff_seconds=execution_data.get(
+            "retry_backoff_seconds", default_execution.retry_backoff_seconds
+        ),
+        retry_backoff_factor=execution_data.get(
+            "retry_backoff_factor", default_execution.retry_backoff_factor
+        ),
+        max_concurrent_orders=execution_data.get(
+            "max_concurrent_orders", default_execution.max_concurrent_orders
+        ),
+        min_order_notional_usd=execution_data.get(
+            "min_order_notional_usd", default_execution.min_order_notional_usd
+        ),
+    )
+
     return AppConfig(
         region=RegionProfile(
             code=region_data.get("code", default_region.code),
@@ -300,6 +360,7 @@ def load_config(config_path: Path = None) -> AppConfig:
             metadata_path=market_data.get("metadata_path"),
         ),
         portfolio=portfolio_config,
+        execution=execution_config,
         risk=risk_config,
         strategies=strategies_config,
     )
