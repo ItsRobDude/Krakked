@@ -77,3 +77,19 @@ def test_get_data_status(mock_store, mock_ws_client_class, mock_build_universe, 
     assert status.websocket_connected is True
     assert status.streaming_pairs == 0
     assert status.stale_pairs == 1
+
+
+@patch('kraken_bot.market_data.api.build_universe')
+@patch('kraken_bot.market_data.api.PairMetadataStore')
+def test_get_universe_returns_canonical_pairs(mock_metadata_store, mock_build_universe, mock_config):
+    pair_one = MagicMock()
+    pair_one.canonical = "XBTUSD"
+    pair_two = MagicMock()
+    pair_two.canonical = "ETHUSD"
+    mock_build_universe.return_value = [pair_one, pair_two]
+
+    api = MarketDataAPI(mock_config)
+    api.refresh_universe()
+
+    assert api.get_universe() == ["XBTUSD", "ETHUSD"]
+    assert api.get_universe_metadata() == [pair_one, pair_two]

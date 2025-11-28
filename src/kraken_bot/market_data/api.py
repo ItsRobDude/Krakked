@@ -90,7 +90,12 @@ class MarketDataAPI:
         self._universe_map = {p.canonical: p for p in self._universe}
         logger.info(f"Universe refreshed. Contains {len(self._universe)} pairs.")
 
-    def get_universe(self) -> List[PairMetadata]:
+    def get_universe(self) -> List[str]:
+        """Returns the canonical symbols for all pairs in the universe."""
+        return [p.canonical for p in self._universe]
+
+    def get_universe_metadata(self) -> List[PairMetadata]:
+        """Returns the full metadata objects for all pairs in the universe."""
         return self._universe
 
     def get_pair_metadata(self, pair: str) -> PairMetadata:

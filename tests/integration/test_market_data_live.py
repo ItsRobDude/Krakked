@@ -49,9 +49,12 @@ def test_live_market_data_flow(tmp_path):
         assert len(universe) > 0, "Universe should not be empty"
 
         # Verify XBTUSD is in there
-        xbt_usd = next((p for p in universe if p.canonical == "XBTUSD"), None)
-        assert xbt_usd is not None, "XBTUSD should be in the universe"
+        assert "XBTUSD" in universe, "XBTUSD should be in the universe"
         print(f"[Live Test] Universe size: {len(universe)}. Found XBTUSD.")
+
+        universe_metadata = api.get_universe_metadata()
+        xbt_usd = next((p for p in universe_metadata if p.canonical == "XBTUSD"), None)
+        assert xbt_usd is not None, "XBTUSD metadata should be available"
 
         # 3. Backfill OHLC
         # Fetch a small amount of 1h data (e.g., last 24 hours)
