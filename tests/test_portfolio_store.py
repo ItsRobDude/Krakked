@@ -2,8 +2,10 @@
 
 import pytest
 import os
+from datetime import datetime
 from kraken_bot.portfolio.store import SQLitePortfolioStore
 from kraken_bot.portfolio.models import CashFlowRecord, PortfolioSnapshot, AssetValuation
+from kraken_bot.strategy.models import DecisionRecord, ExecutionPlan, RiskAdjustedAction
 
 @pytest.fixture
 def store(tmp_path):
@@ -100,3 +102,86 @@ def test_prune_snapshots(store):
     snapshots = store.get_snapshots()
     assert len(snapshots) == 1
     assert snapshots[0].timestamp == 200
+
+
+def test_get_trades_with_until_and_ordering(store):
+    trades = [
+        {"id": "T1", "pair": "XBTUSD", "time": 1000, "price": 50000, "vol": 1, "cost": 50000, "type": "buy"},
+        {"id": "T2", "pair": "XBTUSD", "time": 1005, "price": 52000, "vol": 1, "cost": 52000, "type": "buy"},
+        {"id": "T3", "pair": "ETHUSD", "time": 1010, "price": 3000, "vol": 2, "cost": 6000, "type": "sell"},
+    ]
+    store.save_trades(trades)
+
+    limited = store.get_trades(until=1005, ascending=True)
+    assert [t["id"] for t in limited] == ["T1", "T2"]
+
+    eth_only = store.get_trades(pair="ETHUSD")
+    assert len(eth_only) == 1
+    assert eth_only[0]["id"] == "T3"
+
+
+def test_get_cash_flows_with_until_and_ordering(store):
+    flows = [
+        CashFlowRecord("C1", 1000, "USD", 1000.0, "deposit", "Initial"),
+        CashFlowRecord("C2", 1010, "USD", -50.0, "withdrawal", "Test"),
+        CashFlowRecord("C3", 1020, "ETH", 1.0, "deposit", None),
+    ]
+    store.save_cash_flows(flows)
+
+    usd_flows = store.get_cash_flows(asset="USD", ascending=True)
+    assert [f.id for f in usd_flows] == ["C1", "C2"]
+
+    bounded = store.get_cash_flows(until=1015)
+    assert len(bounded) == 2
+    assert bounded[0].id == "C2"
+
+
+def test_decision_and_execution_plan_retrieval(store):
+    decision = DecisionRecord(
+        time=1700000000,
+        plan_id="PLAN-1",
+        strategy_name="trend",
+        pair="XBTUSD",
+        action_type="open",
+        target_position_usd=1000.0,
+        blocked=False,
+        block_reason=None,
+        kill_switch_active=False,
+        raw_json="{}",
+    )
+    store.add_decision(decision)
+
+    decisions = store.get_decisions(plan_id="PLAN-1")
+    assert len(decisions) == 1
+    assert decisions[0].strategy_name == "trend"
+
+    plan = ExecutionPlan(
+        plan_id="PLAN-1",
+        generated_at=datetime.utcfromtimestamp(1700000000),
+        actions=[
+            RiskAdjustedAction(
+                pair="XBTUSD",
+                strategy_id="trend",
+                action_type="open",
+                target_base_size=0.01,
+                target_notional_usd=1000.0,
+                current_base_size=0.0,
+                reason="entry",
+                blocked=False,
+                blocked_reasons=[],
+                risk_limits_snapshot={},
+            )
+        ],
+        metadata={"note": "test"},
+    )
+
+    store.save_execution_plan(plan)
+
+    fetched = store.get_execution_plan("PLAN-1")
+    assert fetched is not None
+    assert fetched.plan_id == "PLAN-1"
+    assert fetched.actions[0].pair == "XBTUSD"
+    assert fetched.metadata["note"] == "test"
+
+    recent = store.get_execution_plans(since=1699999999, limit=1)
+    assert len(recent) == 1

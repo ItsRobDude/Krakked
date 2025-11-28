@@ -333,8 +333,44 @@ class Portfolio:
                 serializable[key] = value
         return serializable
 
+    def get_position(self, pair: str) -> Optional[SpotPosition]:
+        return self.positions.get(pair)
+
     def get_positions(self) -> List[SpotPosition]:
         return list(self.positions.values())
+
+    def get_trade_history(
+        self,
+        pair: Optional[str] = None,
+        limit: Optional[int] = None,
+        since: Optional[int] = None,
+        until: Optional[int] = None,
+        ascending: bool = False,
+    ) -> List[Dict]:
+        return self.store.get_trades(pair=pair, limit=limit, since=since, until=until, ascending=ascending)
+
+    def get_cash_flows(
+        self,
+        asset: Optional[str] = None,
+        limit: Optional[int] = None,
+        since: Optional[int] = None,
+        until: Optional[int] = None,
+        ascending: bool = False,
+    ) -> List[CashFlowRecord]:
+        return self.store.get_cash_flows(asset=asset, limit=limit, since=since, until=until, ascending=ascending)
+
+    def get_fee_summary(self) -> Dict[str, float]:
+        return {
+            "by_pair": dict(self.fees_paid_base_by_pair),
+            "total_base": sum(self.fees_paid_base_by_pair.values()),
+        }
+
+    def get_snapshots(self, since: Optional[int] = None, limit: Optional[int] = None) -> List[PortfolioSnapshot]:
+        return self.store.get_snapshots(since=since, limit=limit)
+
+    def get_latest_snapshot(self) -> Optional[PortfolioSnapshot]:
+        snapshots = self.get_snapshots(limit=1)
+        return snapshots[0] if snapshots else None
 
     def get_asset_exposure(self) -> List[AssetExposure]:
         equity = self.equity_view()

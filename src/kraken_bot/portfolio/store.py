@@ -5,10 +5,13 @@ import sqlite3
 import json
 import logging
 from dataclasses import asdict
-from typing import List, Optional, Dict, Any
+from datetime import datetime
+from typing import List, Optional, Dict, Any, TYPE_CHECKING
 from pathlib import Path
 from .models import RealizedPnLRecord, CashFlowRecord, PortfolioSnapshot, AssetValuation
-from kraken_bot.strategy.models import DecisionRecord, ExecutionPlan
+
+if TYPE_CHECKING:
+    from kraken_bot.strategy.models import DecisionRecord, ExecutionPlan, RiskAdjustedAction
 
 logger = logging.getLogger(__name__)
 
@@ -19,8 +22,15 @@ class PortfolioStore(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def get_trades(self, pair: Optional[str] = None, limit: Optional[int] = None, since: Optional[int] = None) -> List[Dict[str, Any]]:
-        """Retrieves raw trade data."""
+    def get_trades(
+        self,
+        pair: Optional[str] = None,
+        limit: Optional[int] = None,
+        since: Optional[int] = None,
+        until: Optional[int] = None,
+        ascending: bool = False,
+    ) -> List[Dict[str, Any]]:
+        """Retrieves raw trade data with optional filtering and ordering."""
         pass
 
     @abc.abstractmethod
@@ -29,8 +39,15 @@ class PortfolioStore(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def get_cash_flows(self, asset: Optional[str] = None, limit: Optional[int] = None, since: Optional[int] = None) -> List[CashFlowRecord]:
-        """Retrieves cash flow records."""
+    def get_cash_flows(
+        self,
+        asset: Optional[str] = None,
+        limit: Optional[int] = None,
+        since: Optional[int] = None,
+        until: Optional[int] = None,
+        ascending: bool = False,
+    ) -> List[CashFlowRecord]:
+        """Retrieves cash flow records with optional filtering and ordering."""
         pass
 
     @abc.abstractmethod
@@ -49,13 +66,32 @@ class PortfolioStore(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def add_decision(self, record: DecisionRecord):
+    def add_decision(self, record: "DecisionRecord"):
         """Saves a strategy decision record."""
         pass
 
     @abc.abstractmethod
-    def save_execution_plan(self, plan: ExecutionPlan):
+    def get_decisions(
+        self, plan_id: Optional[str] = None, since: Optional[int] = None, limit: Optional[int] = None, strategy_name: Optional[str] = None
+    ) -> List["DecisionRecord"]:
+        """Retrieves strategy decision records."""
+        pass
+
+    @abc.abstractmethod
+    def save_execution_plan(self, plan: "ExecutionPlan"):
         """Persist an execution plan for downstream consumption."""
+        pass
+
+    @abc.abstractmethod
+    def get_execution_plans(
+        self, plan_id: Optional[str] = None, since: Optional[int] = None, limit: Optional[int] = None
+    ) -> List["ExecutionPlan"]:
+        """Fetch stored execution plans."""
+        pass
+
+    @abc.abstractmethod
+    def get_execution_plan(self, plan_id: str) -> Optional["ExecutionPlan"]:
+        """Fetch a specific execution plan by id."""
         pass
 
 
@@ -259,24 +295,34 @@ class SQLitePortfolioStore(PortfolioStore):
         conn.commit()
         conn.close()
 
-    def get_trades(self, pair: Optional[str] = None, limit: Optional[int] = None, since: Optional[int] = None) -> List[Dict[str, Any]]:
+    def get_trades(
+        self,
+        pair: Optional[str] = None,
+        limit: Optional[int] = None,
+        since: Optional[int] = None,
+        until: Optional[int] = None,
+        ascending: bool = False,
+    ) -> List[Dict[str, Any]]:
         conn = self._get_conn()
         cursor = conn.cursor()
 
         query = "SELECT raw_json FROM trades WHERE 1=1"
-        params = []
+        params: List[Any] = []
 
         if pair:
             query += " AND pair = ?"
             params.append(pair)
 
-        if since:
+        if since is not None:
             query += " AND time >= ?"
             params.append(since)
 
-        query += " ORDER BY time DESC" # Default newest first? Or oldest? Spec says "get_trades", usually for history.
-        # But 'sync' might want newest first to find last.
-        # Actually standard for history is often reverse chronological.
+        if until is not None:
+            query += " AND time <= ?"
+            params.append(until)
+
+        order = "ASC" if ascending else "DESC"
+        query += f" ORDER BY time {order}"
 
         if limit:
             query += " LIMIT ?"
@@ -311,22 +357,34 @@ class SQLitePortfolioStore(PortfolioStore):
         conn.commit()
         conn.close()
 
-    def get_cash_flows(self, asset: Optional[str] = None, limit: Optional[int] = None, since: Optional[int] = None) -> List[CashFlowRecord]:
+    def get_cash_flows(
+        self,
+        asset: Optional[str] = None,
+        limit: Optional[int] = None,
+        since: Optional[int] = None,
+        until: Optional[int] = None,
+        ascending: bool = False,
+    ) -> List[CashFlowRecord]:
         conn = self._get_conn()
         cursor = conn.cursor()
 
         query = "SELECT id, time, asset, amount, type, note FROM cash_flows WHERE 1=1"
-        params = []
+        params: List[Any] = []
 
         if asset:
             query += " AND asset = ?"
             params.append(asset)
 
-        if since:
+        if since is not None:
             query += " AND time >= ?"
             params.append(since)
 
-        query += " ORDER BY time DESC"
+        if until is not None:
+            query += " AND time <= ?"
+            params.append(until)
+
+        order = "ASC" if ascending else "DESC"
+        query += f" ORDER BY time {order}"
 
         if limit:
             query += " LIMIT ?"
@@ -434,7 +492,9 @@ class SQLitePortfolioStore(PortfolioStore):
         conn.commit()
         conn.close()
 
-    def add_decision(self, record: DecisionRecord):
+    def add_decision(self, record: "DecisionRecord"):
+        from kraken_bot.strategy.models import DecisionRecord
+
         conn = self._get_conn()
         cursor = conn.cursor()
 
@@ -459,7 +519,9 @@ class SQLitePortfolioStore(PortfolioStore):
         conn.commit()
         conn.close()
 
-    def save_execution_plan(self, plan: ExecutionPlan):
+    def save_execution_plan(self, plan: "ExecutionPlan"):
+        from kraken_bot.strategy.models import ExecutionPlan
+
         conn = self._get_conn()
         cursor = conn.cursor()
 
@@ -488,3 +550,110 @@ class SQLitePortfolioStore(PortfolioStore):
 
         conn.commit()
         conn.close()
+
+    def get_decisions(
+        self, plan_id: Optional[str] = None, since: Optional[int] = None, limit: Optional[int] = None, strategy_name: Optional[str] = None
+    ) -> List["DecisionRecord"]:
+        from kraken_bot.strategy.models import DecisionRecord
+
+        conn = self._get_conn()
+        cursor = conn.cursor()
+
+        query = """
+            SELECT time, plan_id, strategy_name, pair, action_type, target_position_usd,
+                   blocked, block_reason, kill_switch_active, raw_json
+            FROM decisions
+            WHERE 1=1
+        """
+        params: List[Any] = []
+
+        if plan_id:
+            query += " AND plan_id = ?"
+            params.append(plan_id)
+
+        if strategy_name:
+            query += " AND strategy_name = ?"
+            params.append(strategy_name)
+
+        if since is not None:
+            query += " AND time >= ?"
+            params.append(since)
+
+        query += " ORDER BY time DESC"
+
+        if limit:
+            query += " LIMIT ?"
+            params.append(limit)
+
+        cursor.execute(query, params)
+        rows = cursor.fetchall()
+        conn.close()
+
+        return [
+            DecisionRecord(
+                time=row[0],
+                plan_id=row[1],
+                strategy_name=row[2],
+                pair=row[3],
+                action_type=row[4],
+                target_position_usd=row[5],
+                blocked=bool(row[6]),
+                block_reason=row[7],
+                kill_switch_active=bool(row[8]),
+                raw_json=row[9],
+            )
+            for row in rows
+        ]
+
+    def _row_to_execution_plan(self, row) -> "ExecutionPlan":
+        from kraken_bot.strategy.models import ExecutionPlan, RiskAdjustedAction
+
+        plan_id, generated_at_ts, _, _, metadata_json, plan_json = row
+        plan_data = json.loads(plan_json) if plan_json else {}
+        actions_payload = plan_data.get("actions", [])
+        actions = [RiskAdjustedAction(**action) for action in actions_payload]
+
+        generated_at = (
+            datetime.fromtimestamp(generated_at_ts) if isinstance(generated_at_ts, (int, float)) else datetime.fromisoformat(str(generated_at_ts))
+        )
+        metadata = json.loads(metadata_json) if metadata_json else {}
+
+        return ExecutionPlan(
+            plan_id=plan_id,
+            generated_at=generated_at,
+            actions=actions,
+            metadata=metadata,
+        )
+
+    def get_execution_plans(
+        self, plan_id: Optional[str] = None, since: Optional[int] = None, limit: Optional[int] = None
+    ) -> List["ExecutionPlan"]:
+        conn = self._get_conn()
+        cursor = conn.cursor()
+
+        query = "SELECT plan_id, generated_at, action_count, blocked_actions, metadata_json, plan_json FROM execution_plans WHERE 1=1"
+        params: List[Any] = []
+
+        if plan_id:
+            query += " AND plan_id = ?"
+            params.append(plan_id)
+
+        if since is not None:
+            query += " AND generated_at >= ?"
+            params.append(since)
+
+        query += " ORDER BY generated_at DESC"
+
+        if limit:
+            query += " LIMIT ?"
+            params.append(limit)
+
+        cursor.execute(query, params)
+        rows = cursor.fetchall()
+        conn.close()
+
+        return [self._row_to_execution_plan(row) for row in rows]
+
+    def get_execution_plan(self, plan_id: str) -> Optional["ExecutionPlan"]:
+        plans = self.get_execution_plans(plan_id=plan_id, limit=1)
+        return plans[0] if plans else None

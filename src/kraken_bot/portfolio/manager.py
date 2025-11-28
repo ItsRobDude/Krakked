@@ -560,6 +560,35 @@ class PortfolioService:
     def get_positions(self) -> List[SpotPosition]:
         return list(self.positions.values())
 
+    def get_position(self, pair: str) -> Optional[SpotPosition]:
+        return self.positions.get(pair)
+
+    def get_trade_history(
+        self,
+        pair: Optional[str] = None,
+        limit: Optional[int] = None,
+        since: Optional[int] = None,
+        until: Optional[int] = None,
+        ascending: bool = False,
+    ) -> List[Dict]:
+        return self.store.get_trades(pair=pair, limit=limit, since=since, until=until, ascending=ascending)
+
+    def get_cash_flows(
+        self,
+        asset: Optional[str] = None,
+        limit: Optional[int] = None,
+        since: Optional[int] = None,
+        until: Optional[int] = None,
+        ascending: bool = False,
+    ) -> List[CashFlowRecord]:
+        return self.store.get_cash_flows(asset=asset, limit=limit, since=since, until=until, ascending=ascending)
+
+    def get_fee_summary(self) -> Dict[str, float]:
+        return {
+            "by_pair": dict(self.fees_paid_base_by_pair),
+            "total_base": sum(self.fees_paid_base_by_pair.values()),
+        }
+
     def get_asset_exposure(self) -> List[AssetExposure]:
         equity_view = self.get_equity()
         total_equity = equity_view.equity_base
@@ -617,12 +646,30 @@ class PortfolioService:
             self.store.prune_snapshots(cutoff)
         return snapshot
 
+    def get_snapshots(self, since: Optional[int] = None, limit: Optional[int] = None) -> List[PortfolioSnapshot]:
+        return self.store.get_snapshots(since=since, limit=limit)
+
+    def get_latest_snapshot(self) -> Optional[PortfolioSnapshot]:
+        snapshots = self.get_snapshots(limit=1)
+        return snapshots[0] if snapshots else None
+
     def record_decision(self, record: DecisionRecord):
         """
         Persists a strategy decision record to the portfolio store.
         """
         self.store.add_decision(record)
 
+    def get_decisions(
+        self, plan_id: Optional[str] = None, since: Optional[int] = None, limit: Optional[int] = None, strategy_name: Optional[str] = None
+    ) -> List[DecisionRecord]:
+        return self.store.get_decisions(plan_id=plan_id, since=since, limit=limit, strategy_name=strategy_name)
+
     def record_execution_plan(self, plan):
         """Persist a full execution plan for downstream execution services."""
         self.store.save_execution_plan(plan)
+
+    def get_execution_plans(self, plan_id: Optional[str] = None, since: Optional[int] = None, limit: Optional[int] = None):
+        return self.store.get_execution_plans(plan_id=plan_id, since=since, limit=limit)
+
+    def get_execution_plan(self, plan_id: str):
+        return self.store.get_execution_plan(plan_id)
