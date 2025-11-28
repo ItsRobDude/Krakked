@@ -15,6 +15,8 @@ This repository includes working, test-covered implementations for the early pha
 | **Phase 5: Execution** | ⏳ Not started | Order Management System (OMS), trade execution, order lifecycle management. |
 | **Phase 6: UI/Control** | ⏳ Not started | CLI/web interface for monitoring and manual control. |
 
+See the consolidated phase contract in [`docs/contract.md`](docs/contract.md) for the full design scope across Phases 1–7. Individual phase files remain available for historical reference.
+
 ## 🏗️ Architecture
 
 The bot is organized into distinct modules:
