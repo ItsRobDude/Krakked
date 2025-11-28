@@ -398,8 +398,8 @@ class Portfolio:
         snapshots = self.get_snapshots(limit=1)
         return snapshots[0] if snapshots else None
 
-    def get_asset_exposure(self) -> List[AssetExposure]:
-        equity = self.equity_view()
+    def get_asset_exposure(self, include_manual: Optional[bool] = None) -> List[AssetExposure]:
+        equity = self.equity_view(include_manual=include_manual)
         exposures: List[AssetExposure] = []
         for asset, balance in self.balances.items():
             if not self._is_asset_included(asset):
