@@ -10,6 +10,7 @@ from kraken_bot.secrets import (
     _decrypt_secrets,
     SecretsDecryptionError,
     CredentialStatus,
+    CredentialResult,
 )
 
 # Mock config dir to avoid writing to real system
@@ -51,6 +52,27 @@ def test_encrypt_and_decrypt_flow(mock_config_dir):
              assert result.api_secret == api_secret
              assert result.status == CredentialStatus.LOADED
              assert result.source == "secrets_file"
+
+
+def test_load_api_keys_not_found_without_interactive(mock_config_dir):
+    with patch.dict(os.environ, {}, clear=True):
+        result = load_api_keys()
+
+    assert result.api_key is None
+    assert result.api_secret is None
+    assert result.status == CredentialStatus.NOT_FOUND
+    assert result.source == "none"
+
+
+def test_load_api_keys_uses_interactive_setup_when_allowed(mock_config_dir):
+    expected_result = CredentialResult("key", "secret", CredentialStatus.LOADED, source="interactive")
+
+    with patch("kraken_bot.secrets._interactive_setup", return_value=expected_result) as mock_setup:
+        with patch.dict(os.environ, {}, clear=True):
+            result = load_api_keys(allow_interactive_setup=True)
+
+    mock_setup.assert_called_once()
+    assert result == expected_result
 
 def test_decrypt_bad_password(mock_config_dir):
     api_key = "test_key"

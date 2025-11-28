@@ -145,10 +145,16 @@ def _interactive_setup() -> CredentialResult:
 
 # --- Core Credential Loading ---
 
-def load_api_keys() -> CredentialResult:
+def load_api_keys(allow_interactive_setup: bool = False) -> CredentialResult:
     """
     Loads API keys, following a specific priority, and returns a structured result
     describing how credentials were obtained or why they could not be retrieved.
+
+    Args:
+        allow_interactive_setup: When True, the function will prompt the user to
+            perform the interactive setup flow if no credentials are available.
+            When False, missing credentials return a NOT_FOUND status without
+            prompting, enabling non-interactive environments to detect the state.
     """
     api_key = os.getenv("KRAKEN_API_KEY")
     api_secret = os.getenv("KRAKEN_API_SECRET")
@@ -170,4 +176,7 @@ def load_api_keys() -> CredentialResult:
             print(f"Error loading secrets: {e}")
             return CredentialResult(None, None, CredentialStatus.SERVICE_ERROR, source="secrets_file", error=e)
 
-    return _interactive_setup()
+    if allow_interactive_setup:
+        return _interactive_setup()
+
+    return CredentialResult(None, None, CredentialStatus.NOT_FOUND, source="none")
