@@ -11,7 +11,7 @@ def mock_pair_metadata() -> PairMetadata:
     return PairMetadata(
         canonical="XBTUSD", base="XBT", quote="USD", rest_symbol="XBTUSD",
         ws_symbol="XBT/USD", raw_name="XXBTZUSD", price_decimals=1,
-        volume_decimals=8, lot_size=1.0, status="online"
+        volume_decimals=8, lot_size=1.0, min_order_size=0.0, status="online"
     )
 
 def test_backfill_ohlc_pagination(mock_pair_metadata: PairMetadata):

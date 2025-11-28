@@ -42,6 +42,12 @@ def _create_pair_metadata(raw_name: str, pair_data: Dict[str, Any]) -> PairMetad
     # Normalize quote to "USD" if it's ZUSD or USD (which we've already filtered for)
     quote_normalized = "USD" if quote_raw in ["ZUSD", "USD"] else quote_raw
 
+    min_order_size_raw = pair_data.get("ordermin", 0.0)
+    try:
+        min_order_size = float(min_order_size_raw)
+    except (TypeError, ValueError):
+        min_order_size = 0.0
+
     return PairMetadata(
         canonical=altname,
         base=base_raw,
@@ -52,6 +58,7 @@ def _create_pair_metadata(raw_name: str, pair_data: Dict[str, Any]) -> PairMetad
         price_decimals=pair_data.get("pair_decimals"),
         volume_decimals=pair_data.get("lot_decimals"),
         lot_size=float(pair_data.get("lot_multiplier", 1.0)),
+        min_order_size=min_order_size,
         status=pair_data.get("status"),
     )
 

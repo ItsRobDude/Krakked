@@ -10,8 +10,8 @@ from kraken_bot.market_data.ws_client import KrakenWSClientV2
 def mock_pairs() -> list[PairMetadata]:
     """Provides a mock list of PairMetadata for testing."""
     return [
-        PairMetadata("XBTUSD", "XBT", "USD", "XBTUSD", "XBT/USD", "XXBTZUSD", 8, 8, 1.0, "online"),
-        PairMetadata("ETHUSD", "ETH", "USD", "ETHUSD", "ETH/USD", "XETHZUSD", 8, 8, 1.0, "online"),
+        PairMetadata("XBTUSD", "XBT", "USD", "XBTUSD", "XBT/USD", "XXBTZUSD", 8, 8, 1.0, 0.0, "online"),
+        PairMetadata("ETHUSD", "ETH", "USD", "ETHUSD", "ETH/USD", "XETHZUSD", 8, 8, 1.0, 0.0, "online"),
     ]
 
 @pytest.fixture

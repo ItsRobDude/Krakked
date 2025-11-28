@@ -28,7 +28,7 @@ def api(mock_config):
             pair_meta = PairMetadata(
                 canonical="XBTUSD", base="XBT", quote="USD", rest_symbol="XXBTZUSD",
                 ws_symbol="XBT/USD", raw_name="XXBTZUSD", price_decimals=1,
-                volume_decimals=8, lot_size=1, status="online"
+                volume_decimals=8, lot_size=1, min_order_size=0.0, status="online"
             )
             mock_build_universe.return_value = [pair_meta]
 
