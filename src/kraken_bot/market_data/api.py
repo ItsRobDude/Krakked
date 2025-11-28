@@ -77,13 +77,22 @@ class MarketDataAPI:
 
     def refresh_universe(self):
         """Re-fetches the asset pairs and rebuilds the universe."""
+        discovery_failed = False
         try:
-            self._universe = build_universe(
+            discovered_universe = build_universe(
                 self._rest_client,
                 self._config.region,
                 self._config.universe
             )
-        except UniverseDiscoveryError:
+        except UniverseDiscoveryError as err:
+            logger.error("Pair discovery failed: %s", err)
+            discovery_failed = True
+        else:
+            self._universe = discovered_universe
+            if self._universe:
+                self._metadata_store.save(self._universe)
+
+        if discovery_failed:
             cached = self._metadata_store.load()
             if cached:
                 logger.warning("Falling back to cached pair metadata due to discovery failure.")
@@ -91,9 +100,6 @@ class MarketDataAPI:
             else:
                 logger.error("Pair discovery failed and no cached metadata is available.")
                 self._universe = []
-        else:
-            if self._universe:
-                self._metadata_store.save(self._universe)
 
         self._universe_map = {p.canonical: p for p in self._universe}
         logger.info(f"Universe refreshed. Contains {len(self._universe)} pairs.")
