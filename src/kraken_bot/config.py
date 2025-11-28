@@ -31,6 +31,7 @@ class MarketDataConfig:
     ohlc_store: dict
     backfill_timeframes: list[str]
     ws_timeframes: list[str]
+    metadata_path: Optional[str] = None
 
 @dataclass
 class PortfolioConfig:
@@ -77,8 +78,8 @@ class AppConfig:
     universe: UniverseConfig
     market_data: MarketDataConfig
     portfolio: PortfolioConfig
-    risk: RiskConfig
-    strategies: StrategiesConfig
+    risk: RiskConfig = field(default_factory=RiskConfig)
+    strategies: StrategiesConfig = field(default_factory=StrategiesConfig)
 
 
 def get_config_dir() -> Path:
@@ -182,7 +183,8 @@ def load_config(config_path: Path = None) -> AppConfig:
             ws=raw_config.get("market_data", {}).get("ws", {}),
             ohlc_store=raw_config.get("market_data", {}).get("ohlc_store", {}),
             backfill_timeframes=raw_config.get("market_data", {}).get("backfill_timeframes", ["1d", "4h", "1h"]),
-            ws_timeframes=raw_config.get("market_data", {}).get("ws_timeframes", ["1m"])
+            ws_timeframes=raw_config.get("market_data", {}).get("ws_timeframes", ["1m"]),
+            metadata_path=raw_config.get("market_data", {}).get("metadata_path")
         ),
         portfolio=portfolio_config,
         risk=risk_config,
