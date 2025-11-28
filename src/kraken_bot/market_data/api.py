@@ -130,11 +130,23 @@ class MarketDataAPI:
             store=self._ohlc_store
         )
 
-    def _check_staleness(self, pair: str):
+    def _check_ticker_staleness(self, pair: str):
         if not self._ws_client:
             raise DataStaleError(pair, -1, self._ws_stale_tolerance) # No client running
 
-        last_update = self._ws_client.last_update_ts.get(pair)
+        last_update = self._ws_client.last_ticker_update_ts.get(pair)
+        if not last_update:
+            raise DataStaleError(pair, -1, self._ws_stale_tolerance) # No updates yet
+
+        stale_time = time.monotonic() - last_update
+        if stale_time > self._ws_stale_tolerance:
+            raise DataStaleError(pair, stale_time, self._ws_stale_tolerance)
+
+    def _check_ohlc_staleness(self, pair: str, timeframe: str):
+        if not self._ws_client:
+            raise DataStaleError(pair, -1, self._ws_stale_tolerance) # No client running
+
+        last_update = self._ws_client.last_ohlc_update_ts.get(pair, {}).get(timeframe)
         if not last_update:
             raise DataStaleError(pair, -1, self._ws_stale_tolerance) # No updates yet
 
@@ -143,7 +155,7 @@ class MarketDataAPI:
             raise DataStaleError(pair, stale_time, self._ws_stale_tolerance)
 
     def get_latest_price(self, pair: str) -> Optional[float]:
-        self._check_staleness(pair)
+        self._check_ticker_staleness(pair)
         ticker = self._ws_client.ticker_cache.get(pair)
         if ticker:
             # Return mid-price (avg of best bid and ask)
@@ -151,14 +163,14 @@ class MarketDataAPI:
         return None
 
     def get_best_bid_ask(self, pair: str) -> Optional[Dict[str, float]]:
-        self._check_staleness(pair)
+        self._check_ticker_staleness(pair)
         ticker = self._ws_client.ticker_cache.get(pair)
         if ticker:
             return {"bid": float(ticker["bid"]), "ask": float(ticker["ask"])}
         return None
 
     def get_live_ohlc(self, pair: str, timeframe: str) -> Optional[OHLCBar]:
-        self._check_staleness(pair)
+        self._check_ohlc_staleness(pair, timeframe)
         ohlc_data = self._ws_client.ohlc_cache.get(pair, {}).get(timeframe)
         if ohlc_data:
             return OHLCBar(
@@ -192,7 +204,7 @@ class MarketDataAPI:
         if ws_connected:
             for pair_meta in self._universe:
                 try:
-                    self._check_staleness(pair_meta.canonical)
+                    self._check_ticker_staleness(pair_meta.canonical)
                     streaming_count += 1
                 except DataStaleError:
                     stale_count += 1

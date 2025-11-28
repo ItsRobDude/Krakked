@@ -29,7 +29,8 @@ class KrakenWSClientV2:
         self._websocket: Optional[websockets.WebSocketClientProtocol] = None
 
         # In-memory cache
-        self.last_update_ts: Dict[str, float] = defaultdict(float)
+        self.last_ticker_update_ts: Dict[str, float] = defaultdict(float)
+        self.last_ohlc_update_ts: Dict[str, Dict[str, float]] = defaultdict(dict)
         self.ticker_cache: Dict[str, Dict[str, Any]] = {}
         self.ohlc_cache: Dict[str, Dict[str, Any]] = {} # key: pair, value: {timeframe: ohlc_data}
         self.subscription_status: Dict[str, Dict[str, Dict[str, Any]]] = defaultdict(dict)
@@ -150,10 +151,9 @@ class KrakenWSClientV2:
                 logger.warning(f"Received data for unknown ws_symbol: {ws_symbol}")
                 return
 
-            self.last_update_ts[canonical_pair] = time.monotonic()
-
             if channel == "ticker":
                 self.ticker_cache[canonical_pair] = data["data"][0]
+                self.last_ticker_update_ts[canonical_pair] = time.monotonic()
             elif channel == "ohlc":
                 interval = data.get("params", {}).get("interval")
                 timeframe_key = self._get_timeframe_from_interval(interval)
@@ -164,6 +164,7 @@ class KrakenWSClientV2:
                 if canonical_pair not in self.ohlc_cache:
                     self.ohlc_cache[canonical_pair] = {}
                 self.ohlc_cache[canonical_pair][timeframe_key] = data["data"][0]
+                self.last_ohlc_update_ts[canonical_pair][timeframe_key] = time.monotonic()
 
     def _run(self):
         """The main run loop with reconnection logic."""
