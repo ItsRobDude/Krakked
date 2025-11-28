@@ -1,0 +1,98 @@
+Screen {
+    layout: horizontal;
+}
+
+/* Left sidebar: fixed width */
+#status {
+    width: 32;
+    padding: 1 2;
+    border: solid $surface;
+}
+
+/* Right side: holds dashboard & risk views */
+#right_root {
+    layout: vertical;
+    padding: 1 1;
+}
+
+/* DASHBOARD VIEW --------------------------------------------------------- */
+
+#dashboard_root {
+    layout: vertical;
+}
+
+/* Top summary block */
+#summary {
+    height: 9;
+    border: solid $surface;
+    padding: 1 2;
+    margin-bottom: 1;
+}
+
+/* Middle row: positions + assets side by side */
+#middle {
+    layout: horizontal;
+    height: 14;
+    margin-bottom: 1;
+}
+
+/* Positions panel */
+#positions_block {
+    layout: vertical;
+    border: solid $surface;
+    padding: 1 1;
+    margin-right: 1;
+}
+
+/* Asset integrity panel */
+#assets_block {
+    layout: vertical;
+    border: solid $surface;
+    padding: 1 1;
+}
+
+/* Log panel at the bottom */
+#log_block {
+    layout: vertical;
+    height: 12;
+    border: solid $surface;
+    padding: 1 1;
+}
+
+/* Titles like "POSITIONS", "ASSET INTEGRITY", "LOG" */
+.block-title {
+    text-style: bold;
+    padding-bottom: 1;
+}
+
+
+/* RISK VIEW -------------------------------------------------------------- */
+
+#risk_root {
+    layout: vertical;
+}
+
+/* Top risk summary */
+#risk_summary {
+    border: solid $surface;
+    padding: 1 2;
+    height: 5;
+    margin-bottom: 1;
+}
+
+/* Risk exposure tables */
+#risk_tables {
+    layout: horizontal;
+    height: 20;
+}
+
+#risk_asset_block,
+#risk_strategy_block {
+    layout: vertical;
+    border: solid $surface;
+    padding: 1 1;
+}
+
+#risk_asset_block {
+    margin-right: 1;
+}
