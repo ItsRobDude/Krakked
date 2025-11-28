@@ -17,18 +17,8 @@ class PortfolioStore(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def save_orders(self, orders: List[Dict[str, Any]]):
-        """Saves raw order data and trade mappings."""
-        pass
-
-    @abc.abstractmethod
     def get_trades(self, pair: Optional[str] = None, limit: Optional[int] = None, since: Optional[int] = None) -> List[Dict[str, Any]]:
         """Retrieves raw trade data."""
-        pass
-
-    @abc.abstractmethod
-    def get_order(self, order_id: str) -> Optional[Dict[str, Any]]:
-        """Retrieves a single order by ID."""
         pass
 
     @abc.abstractmethod
@@ -62,11 +52,8 @@ class SQLitePortfolioStore(PortfolioStore):
         self.db_path = db_path
         self._init_db()
 
-    def _get_conn(self):
-        return sqlite3.connect(self.db_path)
-
     def _init_db(self):
-        conn = self._get_conn()
+        conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
 
         # Schema Version
@@ -79,36 +66,10 @@ class SQLitePortfolioStore(PortfolioStore):
 
         cursor.execute("SELECT version FROM schema_version WHERE id = 1")
         row = cursor.fetchone()
-        current_version = 0
         if row is None:
-             cursor.execute("INSERT INTO schema_version (id, version) VALUES (1, 3)")
-             current_version = 0
-        else:
-             current_version = row[0]
+             cursor.execute("INSERT INTO schema_version (id, version) VALUES (1, 1)")
 
-        # Schema Evolution:
-        # V1: trades table with trades_csv
-        # V2: (conceptual) trades table without trades_csv, plus orders/order_trades tables?
-        # V3: Explicit orders table with userref, status, etc.
-
-        # We ensure tables exist first
-        self._create_tables(cursor)
-
-        # If upgrading from V1/V2 to V3, we might need specific migrations?
-        # For now, create IF NOT EXISTS is idempotent.
-        # But if we want to migrate data from V1 (trades_csv) to V2/V3 structure?
-        # Let's keep it simple: Ensure tables exist.
-
-        if current_version < 3:
-            cursor.execute("UPDATE schema_version SET version = 3 WHERE id = 1")
-
-        conn.commit()
-        conn.close()
-
-    def _create_tables(self, cursor):
-        # Trades Table (V3 version: keeps trades_csv for robustness/compat, or strict?)
-        # User requested: "Keep using TradesHistory as the canonical trade source and store each trade in the trades table as we currently do (with the existing list/raw_json handling)."
-        # So we keep `trades` as is.
+        # Trades Table
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS trades (
                 id TEXT PRIMARY KEY,
@@ -137,22 +98,6 @@ class SQLitePortfolioStore(PortfolioStore):
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_trades_time ON trades(time)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_trades_pair ON trades(pair)")
 
-        # Orders Table (New for Phase 3 "Full")
-        # order_id, pair, time, type, status, userref, raw_json
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS orders (
-                order_id TEXT PRIMARY KEY,
-                pair TEXT,
-                time REAL,
-                type TEXT,
-                status TEXT,
-                userref INTEGER,
-                raw_json TEXT NOT NULL
-            )
-        """)
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_orders_time ON orders(time)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_orders_userref ON orders(userref)")
-
         # Cash Flows Table
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS cash_flows (
@@ -178,6 +123,12 @@ class SQLitePortfolioStore(PortfolioStore):
         """)
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_snapshots_timestamp ON snapshots(timestamp)")
 
+        conn.commit()
+        conn.close()
+
+    def _get_conn(self):
+        return sqlite3.connect(self.db_path)
+
     def save_trades(self, trades: List[Dict[str, Any]]):
         if not trades:
             return
@@ -186,8 +137,15 @@ class SQLitePortfolioStore(PortfolioStore):
         cursor = conn.cursor()
 
         for trade in trades:
+            # We assume 'trade' is the raw dictionary from Kraken API or internal representation
+            # The 'id' in our table maps to the trade ID (key in the dictionary usually)
+            # However, Kraken 'TradesHistory' returns a dict where keys are trade IDs.
+            # We need to handle that before calling this, or assume 'trades' here is a list of flattened dicts with 'id' field.
+            # Let's assume flattened dict with 'id'.
+
             raw_json = json.dumps(trade)
 
+            # Handle 'trades' field which can be a list of strings
             trades_val = trade.get("trades")
             trades_csv = None
             if isinstance(trades_val, list):
@@ -221,54 +179,7 @@ class SQLitePortfolioStore(PortfolioStore):
                 float(trade.get("cvol", 0)) if trade.get("cvol") else None,
                 float(trade.get("cmargin", 0)) if trade.get("cmargin") else None,
                 float(trade.get("net", 0)) if trade.get("net") else None,
-                trades_csv,
-                raw_json
-            ))
-        conn.commit()
-        conn.close()
-
-    def save_orders(self, orders: List[Dict[str, Any]]):
-        if not orders:
-            return
-
-        conn = self._get_conn()
-        cursor = conn.cursor()
-
-        for order in orders:
-            # Kraken ClosedOrders: key is txid, val is dict with status, userref etc.
-            # We assume input is a list of dicts where 'id' is the txid.
-
-            order_id = order.get("id")
-            if not order_id:
-                continue
-
-            raw_json = json.dumps(order)
-
-            # Fields: pair, time, type, status, userref
-            # 'descr' usually holds pair, type.
-            descr = order.get("descr", {})
-            pair = descr.get("pair")
-            otype = descr.get("type") # buy/sell
-
-            # time: opentm or closetm? Usually index by opentm or closetm.
-            # Let's use closetm as primary time for closed orders? Or opentm?
-            # Schema says just 'time'. Let's use 'closetm' if available, else 'opentm'.
-            # Actually, for tagging, we just need to look it up.
-            ts = order.get("closetm") or order.get("opentm")
-
-            userref = order.get("userref")
-
-            cursor.execute("""
-                INSERT OR REPLACE INTO orders (
-                    order_id, pair, time, type, status, userref, raw_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
-            """, (
-                order_id,
-                pair,
-                float(ts) if ts else 0.0,
-                otype,
-                order.get("status"),
-                int(userref) if userref else None,
+                trades_csv, # trades list CSV
                 raw_json
             ))
         conn.commit()
@@ -289,7 +200,9 @@ class SQLitePortfolioStore(PortfolioStore):
             query += " AND time >= ?"
             params.append(since)
 
-        query += " ORDER BY time DESC"
+        query += " ORDER BY time DESC" # Default newest first? Or oldest? Spec says "get_trades", usually for history.
+        # But 'sync' might want newest first to find last.
+        # Actually standard for history is often reverse chronological.
 
         if limit:
             query += " LIMIT ?"
@@ -300,17 +213,6 @@ class SQLitePortfolioStore(PortfolioStore):
         conn.close()
 
         return [json.loads(row[0]) for row in rows]
-
-    def get_order(self, order_id: str) -> Optional[Dict[str, Any]]:
-        conn = self._get_conn()
-        cursor = conn.cursor()
-        cursor.execute("SELECT raw_json FROM orders WHERE order_id = ?", (order_id,))
-        row = cursor.fetchone()
-        conn.close()
-
-        if row:
-            return json.loads(row[0])
-        return None
 
     def save_cash_flows(self, records: List[CashFlowRecord]):
         if not records:

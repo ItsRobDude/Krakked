@@ -1,9 +1,7 @@
 # tests/test_portfolio_store.py
 
 import pytest
-import sqlite3
 import os
-import json
 from kraken_bot.portfolio.store import SQLitePortfolioStore
 from kraken_bot.portfolio.models import CashFlowRecord, PortfolioSnapshot, AssetValuation
 
@@ -40,38 +38,9 @@ def test_save_trades_with_list_field(store):
 
     fetched = store.get_trades(since=1002)
     assert len(fetched) == 1
-    # raw_json should still have it
+    assert fetched[0]['id'] == "T3"
+    # Verify raw_json preserved the list
     assert fetched[0]['trades'] == ["TX1", "TX2"]
-
-def test_save_and_get_orders(store):
-    # Test saving ClosedOrders (which have list fields)
-    orders = [
-        {
-            "id": "O1",
-            "status": "closed",
-            "opentm": 1000,
-            "closetm": 1005,
-            "userref": 12345,
-            "descr": {"pair": "XBTUSD", "type": "buy"},
-            "trades": ["T1", "T2"]
-        }
-    ]
-    store.save_orders(orders)
-
-    # Retrieve via direct SQL or get_order
-    order = store.get_order("O1")
-    assert order is not None
-    assert order["id"] == "O1"
-    assert order["userref"] == 12345
-
-    # Verify userref persistence
-    conn = sqlite3.connect(store.db_path)
-    cursor = conn.cursor()
-    cursor.execute("SELECT userref, status FROM orders WHERE order_id='O1'")
-    row = cursor.fetchone()
-    assert row[0] == 12345
-    assert row[1] == "closed"
-    conn.close()
 
 def test_save_and_get_cash_flows(store):
     flows = [
