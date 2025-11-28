@@ -67,7 +67,13 @@ def test_risk_engine_sizing():
     portfolio.store = MagicMock()
     portfolio.store.get_snapshots.return_value = []
 
-    engine = RiskEngine(config, market, portfolio)
+    engine = RiskEngine(
+        config,
+        market,
+        portfolio,
+        strategy_userrefs={"test": 42},
+        strategy_tags={"test": "trend_v1"},
+    )
 
     # Intent
     intent = StrategyIntent(
@@ -97,6 +103,8 @@ def test_risk_engine_sizing():
     # Allow some floating point variance
     assert 490 < action.target_notional_usd < 510
     assert not action.blocked
+    assert action.userref == 42
+    assert action.strategy_tag == "trend_v1"
 
 def test_kill_switch_drawdown():
     config = RiskConfig(max_daily_drawdown_pct=5.0)

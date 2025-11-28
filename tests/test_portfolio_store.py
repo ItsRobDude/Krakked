@@ -162,6 +162,8 @@ def test_decision_and_execution_plan_retrieval(store):
             RiskAdjustedAction(
                 pair="XBTUSD",
                 strategy_id="trend",
+                strategy_tag="trend",
+                userref=123,
                 action_type="open",
                 target_base_size=0.01,
                 target_notional_usd=1000.0,
@@ -181,6 +183,8 @@ def test_decision_and_execution_plan_retrieval(store):
     assert fetched is not None
     assert fetched.plan_id == "PLAN-1"
     assert fetched.actions[0].pair == "XBTUSD"
+    assert fetched.actions[0].userref == 123
+    assert fetched.actions[0].strategy_tag == "trend"
     assert fetched.metadata["note"] == "test"
 
     recent = store.get_execution_plans(since=1699999999, limit=1)
