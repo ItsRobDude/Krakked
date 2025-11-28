@@ -2,6 +2,7 @@
 
 import time
 import logging
+from pathlib import Path
 from typing import List, Dict, Optional
 from kraken_bot.config import AppConfig, PairMetadata, OHLCBar
 from kraken_bot.connection.rest_client import KrakenRESTClient
@@ -9,6 +10,7 @@ from kraken_bot.market_data.universe import build_universe
 from kraken_bot.market_data.ohlc_store import OHLCStore, FileOHLCStore
 from kraken_bot.market_data.ohlc_fetcher import backfill_ohlc
 from kraken_bot.market_data.ws_client import KrakenWSClientV2
+from kraken_bot.market_data.metadata_store import PairMetadataStore
 from kraken_bot.market_data.exceptions import PairNotFoundError, DataStaleError
 
 logger = logging.getLogger(__name__)
@@ -21,6 +23,12 @@ class MarketDataAPI:
         self._config = config
         self._rest_client = KrakenRESTClient()
         self._ohlc_store: OHLCStore = FileOHLCStore(config.market_data)
+        metadata_path = (
+            Path(config.market_data.metadata_path).expanduser()
+            if config.market_data.metadata_path
+            else None
+        )
+        self._metadata_store = PairMetadataStore(metadata_path)
 
         self._universe: List[PairMetadata] = []
         self._universe_map: Dict[str, PairMetadata] = {}
@@ -70,6 +78,15 @@ class MarketDataAPI:
             self._config.region,
             self._config.universe
         )
+
+        if self._universe:
+            self._metadata_store.save(self._universe)
+        else:
+            cached = self._metadata_store.load()
+            if cached:
+                logger.warning("Falling back to cached pair metadata due to empty universe response.")
+                self._universe = cached
+
         self._universe_map = {p.canonical: p for p in self._universe}
         logger.info(f"Universe refreshed. Contains {len(self._universe)} pairs.")
 
