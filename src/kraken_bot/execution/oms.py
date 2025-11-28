@@ -1,6 +1,6 @@
 # src/kraken_bot/execution/oms.py
 
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, TYPE_CHECKING
 from datetime import datetime
 from uuid import uuid4
 
@@ -10,12 +10,16 @@ from .adapter import KrakenExecutionAdapter
 from .exceptions import ExecutionError
 from .models import ExecutionResult, LocalOrder
 
+if TYPE_CHECKING:
+    from kraken_bot.portfolio.store import PortfolioStore
+
 
 class ExecutionService:
     """Lightweight OMS façade for coordinating plan execution and order tracking."""
 
-    def __init__(self, adapter: KrakenExecutionAdapter):
+    def __init__(self, adapter: KrakenExecutionAdapter, store: Optional["PortfolioStore"] = None):
         self.adapter = adapter
+        self.store = store
         self.open_orders: Dict[str, LocalOrder] = {}
         self.recent_executions: List[ExecutionResult] = []
         self.kraken_to_local: Dict[str, str] = {}
@@ -53,16 +57,25 @@ class ExecutionService:
             try:
                 order = self.adapter.submit_order(order)
                 self.register_order(order)
+                if self.store:
+                    self.store.save_order(order)
             except ExecutionError as exc:
                 message = str(exc)
                 order.last_error = message
+                order.status = "error"
+                order.updated_at = datetime.utcnow()
                 result.errors.append(message)
+
+                if self.store:
+                    self.store.save_order(order)
 
             result.orders.append(order)
 
         result.completed_at = datetime.utcnow()
         result.success = not result.errors
         self.record_execution_result(result)
+        if self.store:
+            self.store.save_execution_result(result)
         return result
 
     def register_order(self, order: LocalOrder) -> None:
@@ -102,3 +115,14 @@ class ExecutionService:
 
         if status in {"filled", "canceled", "rejected", "error"}:
             self.open_orders.pop(local_id, None)
+
+        if self.store:
+            self.store.update_order_status(
+                local_id=local_id,
+                status=status,
+                kraken_order_id=kraken_order_id,
+                cumulative_base_filled=order.cumulative_base_filled,
+                avg_fill_price=order.avg_fill_price,
+                last_error=order.last_error,
+                raw_response=order.raw_response,
+            )

@@ -12,6 +12,7 @@ from .models import RealizedPnLRecord, CashFlowRecord, PortfolioSnapshot, AssetV
 
 if TYPE_CHECKING:
     from kraken_bot.strategy.models import DecisionRecord, ExecutionPlan, RiskAdjustedAction
+    from kraken_bot.execution.models import LocalOrder, ExecutionResult
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +84,31 @@ class PortfolioStore(abc.ABC):
         pass
 
     @abc.abstractmethod
+    def save_order(self, order: "LocalOrder"):
+        """Persist an execution order."""
+        pass
+
+    @abc.abstractmethod
+    def update_order_status(
+        self,
+        local_id: str,
+        status: str,
+        kraken_order_id: Optional[str] = None,
+        cumulative_base_filled: Optional[float] = None,
+        avg_fill_price: Optional[float] = None,
+        last_error: Optional[str] = None,
+        raw_response: Optional[Dict[str, Any]] = None,
+        event_message: Optional[str] = None,
+    ):
+        """Update order status and record the change."""
+        pass
+
+    @abc.abstractmethod
+    def save_execution_result(self, result: "ExecutionResult"):
+        """Persist an execution result."""
+        pass
+
+    @abc.abstractmethod
     def get_execution_plans(
         self, plan_id: Optional[str] = None, since: Optional[int] = None, limit: Optional[int] = None
     ) -> List["ExecutionPlan"]:
@@ -121,8 +147,8 @@ class SQLitePortfolioStore(PortfolioStore):
             current_version = row[0]
         else:
             # New DB
-            cursor.execute("INSERT INTO schema_version (id, version) VALUES (1, 4)")
-            current_version = 4
+            cursor.execute("INSERT INTO schema_version (id, version) VALUES (1, 5)")
+            current_version = 5
 
         # Trades Table
         cursor.execute("""
@@ -200,6 +226,7 @@ class SQLitePortfolioStore(PortfolioStore):
 
             # Update version
             cursor.execute("UPDATE schema_version SET version = 4 WHERE id = 1")
+            current_version = 4
         else:
             # Ensure table exists even if version is current (for fresh installs)
             cursor.execute("""
@@ -232,6 +259,109 @@ class SQLitePortfolioStore(PortfolioStore):
             )
         """)
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_execution_plans_generated_at ON execution_plans(generated_at)")
+
+        # Upgrade for V5: Execution orders and results
+        if current_version < 5:
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS execution_orders (
+                    local_id TEXT PRIMARY KEY,
+                    plan_id TEXT,
+                    strategy_id TEXT,
+                    pair TEXT NOT NULL,
+                    side TEXT NOT NULL,
+                    order_type TEXT,
+                    kraken_order_id TEXT,
+                    userref INTEGER,
+                    requested_base_size REAL,
+                    requested_price REAL,
+                    status TEXT,
+                    created_at REAL,
+                    updated_at REAL,
+                    cumulative_base_filled REAL,
+                    avg_fill_price REAL,
+                    last_error TEXT,
+                    raw_request_json TEXT,
+                    raw_response_json TEXT
+                )
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_execution_orders_plan_id ON execution_orders(plan_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_execution_orders_kraken_id ON execution_orders(kraken_order_id)")
+
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS execution_order_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    local_order_id TEXT NOT NULL,
+                    plan_id TEXT,
+                    event_time REAL NOT NULL,
+                    status TEXT,
+                    message TEXT,
+                    raw_json TEXT
+                )
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_execution_order_events_order ON execution_order_events(local_order_id)")
+
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS execution_results (
+                    plan_id TEXT PRIMARY KEY,
+                    started_at REAL,
+                    completed_at REAL,
+                    success INTEGER,
+                    errors_json TEXT
+                )
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_execution_results_started_at ON execution_results(started_at)")
+
+            cursor.execute("UPDATE schema_version SET version = 5 WHERE id = 1")
+            current_version = 5
+        else:
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS execution_orders (
+                    local_id TEXT PRIMARY KEY,
+                    plan_id TEXT,
+                    strategy_id TEXT,
+                    pair TEXT NOT NULL,
+                    side TEXT NOT NULL,
+                    order_type TEXT,
+                    kraken_order_id TEXT,
+                    userref INTEGER,
+                    requested_base_size REAL,
+                    requested_price REAL,
+                    status TEXT,
+                    created_at REAL,
+                    updated_at REAL,
+                    cumulative_base_filled REAL,
+                    avg_fill_price REAL,
+                    last_error TEXT,
+                    raw_request_json TEXT,
+                    raw_response_json TEXT
+                )
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_execution_orders_plan_id ON execution_orders(plan_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_execution_orders_kraken_id ON execution_orders(kraken_order_id)")
+
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS execution_order_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    local_order_id TEXT NOT NULL,
+                    plan_id TEXT,
+                    event_time REAL NOT NULL,
+                    status TEXT,
+                    message TEXT,
+                    raw_json TEXT
+                )
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_execution_order_events_order ON execution_order_events(local_order_id)")
+
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS execution_results (
+                    plan_id TEXT PRIMARY KEY,
+                    started_at REAL,
+                    completed_at REAL,
+                    success INTEGER,
+                    errors_json TEXT
+                )
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_execution_results_started_at ON execution_results(started_at)")
 
         conn.commit()
         conn.close()
@@ -545,6 +675,145 @@ class SQLitePortfolioStore(PortfolioStore):
                 len([a for a in plan.actions if a.blocked]),
                 json.dumps(plan.metadata, default=str),
                 plan_json,
+            ),
+        )
+
+        conn.commit()
+        conn.close()
+
+    def save_order(self, order: "LocalOrder"):
+        from kraken_bot.execution.models import LocalOrder
+
+        conn = self._get_conn()
+        cursor = conn.cursor()
+
+        created_ts = order.created_at.timestamp() if isinstance(order.created_at, datetime) else None
+        updated_ts = order.updated_at.timestamp() if isinstance(order.updated_at, datetime) else None
+
+        cursor.execute(
+            """
+            INSERT OR REPLACE INTO execution_orders (
+                local_id, plan_id, strategy_id, pair, side, order_type, kraken_order_id, userref,
+                requested_base_size, requested_price, status, created_at, updated_at,
+                cumulative_base_filled, avg_fill_price, last_error, raw_request_json, raw_response_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                order.local_id,
+                order.plan_id,
+                order.strategy_id,
+                order.pair,
+                order.side,
+                order.order_type,
+                order.kraken_order_id,
+                order.userref,
+                order.requested_base_size,
+                order.requested_price,
+                order.status,
+                created_ts,
+                updated_ts,
+                order.cumulative_base_filled,
+                order.avg_fill_price,
+                order.last_error,
+                json.dumps(order.raw_request, default=str) if order.raw_request else None,
+                json.dumps(order.raw_response, default=str) if order.raw_response else None,
+            ),
+        )
+
+        cursor.execute(
+            """
+            INSERT INTO execution_order_events (
+                local_order_id, plan_id, event_time, status, message, raw_json
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                order.local_id,
+                order.plan_id,
+                updated_ts or created_ts or datetime.utcnow().timestamp(),
+                order.status,
+                order.last_error,
+                json.dumps(order.raw_response, default=str) if order.raw_response else None,
+            ),
+        )
+
+        conn.commit()
+        conn.close()
+
+    def update_order_status(
+        self,
+        local_id: str,
+        status: str,
+        kraken_order_id: Optional[str] = None,
+        cumulative_base_filled: Optional[float] = None,
+        avg_fill_price: Optional[float] = None,
+        last_error: Optional[str] = None,
+        raw_response: Optional[Dict[str, Any]] = None,
+        event_message: Optional[str] = None,
+    ):
+        conn = self._get_conn()
+        cursor = conn.cursor()
+
+        cursor.execute("SELECT plan_id FROM execution_orders WHERE local_id = ?", (local_id,))
+        order_row = cursor.fetchone()
+
+        now_ts = datetime.utcnow().timestamp()
+        updates: Dict[str, Any] = {
+            "status": status,
+            "updated_at": now_ts,
+        }
+
+        if kraken_order_id is not None:
+            updates["kraken_order_id"] = kraken_order_id
+        if cumulative_base_filled is not None:
+            updates["cumulative_base_filled"] = cumulative_base_filled
+        if avg_fill_price is not None:
+            updates["avg_fill_price"] = avg_fill_price
+        if last_error is not None:
+            updates["last_error"] = last_error
+        if raw_response is not None:
+            updates["raw_response_json"] = json.dumps(raw_response, default=str)
+
+        set_clause = ", ".join(f"{k} = ?" for k in updates)
+        params = list(updates.values()) + [local_id]
+        cursor.execute(f"UPDATE execution_orders SET {set_clause} WHERE local_id = ?", params)
+
+        cursor.execute(
+            """
+            INSERT INTO execution_order_events (
+                local_order_id, plan_id, event_time, status, message, raw_json
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                local_id,
+                order_row[0] if order_row else None,
+                now_ts,
+                status,
+                event_message or last_error,
+                json.dumps(raw_response, default=str) if raw_response is not None else None,
+            ),
+        )
+
+        conn.commit()
+        conn.close()
+
+    def save_execution_result(self, result: "ExecutionResult"):
+        from kraken_bot.execution.models import ExecutionResult
+
+        conn = self._get_conn()
+        cursor = conn.cursor()
+
+        cursor.execute(
+            """
+            INSERT OR REPLACE INTO execution_results (
+                plan_id, started_at, completed_at, success, errors_json
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                result.plan_id,
+                result.started_at.timestamp() if result.started_at else None,
+                result.completed_at.timestamp() if result.completed_at else None,
+                1 if result.success else 0,
+                json.dumps(result.errors, default=str) if result.errors else json.dumps([]),
             ),
         )
 
