@@ -11,6 +11,7 @@ from pathlib import Path
 from .models import RealizedPnLRecord, CashFlowRecord, PortfolioSnapshot, AssetValuation
 
 if TYPE_CHECKING:
+    from kraken_bot.execution.models import ExecutionResult, LocalOrder
     from kraken_bot.strategy.models import DecisionRecord, ExecutionPlan, RiskAdjustedAction
 
 logger = logging.getLogger(__name__)
@@ -94,6 +95,31 @@ class PortfolioStore(abc.ABC):
         """Fetch a specific execution plan by id."""
         pass
 
+    @abc.abstractmethod
+    def save_local_order(self, order: "LocalOrder"):
+        """Persist or update a LocalOrder snapshot."""
+        pass
+
+    @abc.abstractmethod
+    def update_local_order(self, order: "LocalOrder"):
+        """Alias for saving a LocalOrder update."""
+        pass
+
+    @abc.abstractmethod
+    def save_execution_result(self, result: "ExecutionResult"):
+        """Persist an execution result and its associated orders."""
+        pass
+
+    @abc.abstractmethod
+    def get_open_orders(self) -> List["LocalOrder"]:
+        """Fetch currently open or pending LocalOrders."""
+        pass
+
+    @abc.abstractmethod
+    def get_recent_executions(self, limit: int = 10) -> List["ExecutionResult"]:
+        """Fetch recent execution results ordered by start time."""
+        pass
+
 
 class SQLitePortfolioStore(PortfolioStore):
     def __init__(self, db_path: str = "portfolio.db"):
@@ -121,8 +147,8 @@ class SQLitePortfolioStore(PortfolioStore):
             current_version = row[0]
         else:
             # New DB
-            cursor.execute("INSERT INTO schema_version (id, version) VALUES (1, 4)")
-            current_version = 4
+            cursor.execute("INSERT INTO schema_version (id, version) VALUES (1, 5)")
+            current_version = 5
 
         # Trades Table
         cursor.execute("""
@@ -198,7 +224,7 @@ class SQLitePortfolioStore(PortfolioStore):
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_decisions_time ON decisions(time)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_decisions_plan_id ON decisions(plan_id)")
 
-            # Update version
+            current_version = 4
             cursor.execute("UPDATE schema_version SET version = 4 WHERE id = 1")
         else:
             # Ensure table exists even if version is current (for fresh installs)
@@ -220,6 +246,85 @@ class SQLitePortfolioStore(PortfolioStore):
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_decisions_time ON decisions(time)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_decisions_plan_id ON decisions(plan_id)")
 
+        # Upgrade for V5: Execution order/result tables
+        if current_version < 5:
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS execution_orders (
+                    local_id TEXT PRIMARY KEY,
+                    plan_id TEXT,
+                    strategy_id TEXT,
+                    pair TEXT NOT NULL,
+                    side TEXT NOT NULL,
+                    order_type TEXT NOT NULL,
+                    kraken_order_id TEXT,
+                    userref INTEGER,
+                    requested_base_size REAL NOT NULL,
+                    requested_price REAL,
+                    status TEXT NOT NULL,
+                    cumulative_base_filled REAL NOT NULL DEFAULT 0.0,
+                    avg_fill_price REAL,
+                    created_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL,
+                    last_error TEXT,
+                    raw_request TEXT,
+                    raw_response TEXT
+                )
+            """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS execution_results (
+                    plan_id TEXT PRIMARY KEY,
+                    started_at INTEGER NOT NULL,
+                    completed_at INTEGER,
+                    success INTEGER NOT NULL,
+                    error_summary TEXT,
+                    raw_json TEXT
+                )
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_execution_orders_plan_id ON execution_orders(plan_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_execution_orders_status ON execution_orders(status)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_execution_orders_updated_at ON execution_orders(updated_at)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_execution_results_started_at ON execution_results(started_at)")
+
+            current_version = 5
+            cursor.execute("UPDATE schema_version SET version = 5 WHERE id = 1")
+        else:
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS execution_orders (
+                    local_id TEXT PRIMARY KEY,
+                    plan_id TEXT,
+                    strategy_id TEXT,
+                    pair TEXT NOT NULL,
+                    side TEXT NOT NULL,
+                    order_type TEXT NOT NULL,
+                    kraken_order_id TEXT,
+                    userref INTEGER,
+                    requested_base_size REAL NOT NULL,
+                    requested_price REAL,
+                    status TEXT NOT NULL,
+                    cumulative_base_filled REAL NOT NULL DEFAULT 0.0,
+                    avg_fill_price REAL,
+                    created_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL,
+                    last_error TEXT,
+                    raw_request TEXT,
+                    raw_response TEXT
+                )
+            """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS execution_results (
+                    plan_id TEXT PRIMARY KEY,
+                    started_at INTEGER NOT NULL,
+                    completed_at INTEGER,
+                    success INTEGER NOT NULL,
+                    error_summary TEXT,
+                    raw_json TEXT
+                )
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_execution_orders_plan_id ON execution_orders(plan_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_execution_orders_status ON execution_orders(status)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_execution_orders_updated_at ON execution_orders(updated_at)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_execution_results_started_at ON execution_results(started_at)")
+
         # Execution Plans Table
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS execution_plans (
@@ -238,6 +343,79 @@ class SQLitePortfolioStore(PortfolioStore):
 
     def _get_conn(self):
         return sqlite3.connect(self.db_path)
+
+    @staticmethod
+    def _ts(dt: Optional[datetime]) -> Optional[int]:
+        return int(dt.timestamp()) if dt else None
+
+    @staticmethod
+    def _local_order_from_row(row) -> "LocalOrder":
+        from kraken_bot.execution.models import LocalOrder
+
+        (
+            local_id,
+            plan_id,
+            strategy_id,
+            pair,
+            side,
+            order_type,
+            kraken_order_id,
+            userref,
+            requested_base_size,
+            requested_price,
+            status,
+            cumulative_base_filled,
+            avg_fill_price,
+            created_at,
+            updated_at,
+            last_error,
+            raw_request,
+            raw_response,
+        ) = row
+
+        return LocalOrder(
+            local_id=local_id,
+            plan_id=plan_id,
+            strategy_id=strategy_id,
+            pair=pair,
+            side=side,
+            order_type=order_type,
+            kraken_order_id=kraken_order_id,
+            userref=userref,
+            requested_base_size=requested_base_size,
+            requested_price=requested_price,
+            status=status,
+            cumulative_base_filled=cumulative_base_filled,
+            avg_fill_price=avg_fill_price,
+            created_at=datetime.fromtimestamp(created_at),
+            updated_at=datetime.fromtimestamp(updated_at),
+            last_error=last_error,
+            raw_request=json.loads(raw_request) if raw_request else {},
+            raw_response=json.loads(raw_response) if raw_response else None,
+        )
+
+    @staticmethod
+    def _serialize_order(order: "LocalOrder") -> Dict[str, Any]:
+        return {
+            "local_id": order.local_id,
+            "plan_id": order.plan_id,
+            "strategy_id": order.strategy_id,
+            "pair": order.pair,
+            "side": order.side,
+            "order_type": order.order_type,
+            "kraken_order_id": order.kraken_order_id,
+            "userref": order.userref,
+            "requested_base_size": order.requested_base_size,
+            "requested_price": order.requested_price,
+            "status": order.status,
+            "cumulative_base_filled": order.cumulative_base_filled,
+            "avg_fill_price": order.avg_fill_price,
+            "created_at": order.created_at.isoformat(),
+            "updated_at": order.updated_at.isoformat(),
+            "last_error": order.last_error,
+            "raw_request": order.raw_request,
+            "raw_response": order.raw_response,
+        }
 
     def save_trades(self, trades: List[Dict[str, Any]]):
         if not trades:
@@ -625,6 +803,29 @@ class SQLitePortfolioStore(PortfolioStore):
             metadata=metadata,
         )
 
+    def _execution_result_from_row(self, row, orders: List["LocalOrder"]) -> "ExecutionResult":
+        from kraken_bot.execution.models import ExecutionResult
+
+        plan_id, started_at, completed_at, success, error_summary, raw_json = row
+        errors: List[str] = []
+        if raw_json:
+            try:
+                payload = json.loads(raw_json)
+                errors = payload.get("errors", []) or errors
+            except json.JSONDecodeError:
+                logger.warning("Failed to decode execution result raw_json for plan %s", plan_id)
+        if not errors and error_summary:
+            errors = [error_summary]
+
+        return ExecutionResult(
+            plan_id=plan_id,
+            started_at=datetime.fromtimestamp(started_at),
+            completed_at=datetime.fromtimestamp(completed_at) if completed_at is not None else None,
+            success=bool(success),
+            orders=orders,
+            errors=errors,
+        )
+
     def get_execution_plans(
         self, plan_id: Optional[str] = None, since: Optional[int] = None, limit: Optional[int] = None
     ) -> List["ExecutionPlan"]:
@@ -657,3 +858,135 @@ class SQLitePortfolioStore(PortfolioStore):
     def get_execution_plan(self, plan_id: str) -> Optional["ExecutionPlan"]:
         plans = self.get_execution_plans(plan_id=plan_id, limit=1)
         return plans[0] if plans else None
+
+    def save_local_order(self, order: "LocalOrder"):
+        conn = self._get_conn()
+        cursor = conn.cursor()
+
+        cursor.execute(
+            """
+            INSERT OR REPLACE INTO execution_orders (
+                local_id, plan_id, strategy_id, pair, side, order_type, kraken_order_id, userref,
+                requested_base_size, requested_price, status, cumulative_base_filled, avg_fill_price,
+                created_at, updated_at, last_error, raw_request, raw_response
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                order.local_id,
+                order.plan_id,
+                order.strategy_id,
+                order.pair,
+                order.side,
+                order.order_type,
+                order.kraken_order_id,
+                order.userref,
+                order.requested_base_size,
+                order.requested_price,
+                order.status,
+                order.cumulative_base_filled,
+                order.avg_fill_price,
+                self._ts(order.created_at),
+                self._ts(order.updated_at),
+                order.last_error,
+                json.dumps(order.raw_request, default=str) if order.raw_request is not None else None,
+                json.dumps(order.raw_response, default=str) if order.raw_response is not None else None,
+            ),
+        )
+
+        conn.commit()
+        conn.close()
+
+    def update_local_order(self, order: "LocalOrder"):
+        # For now, treat updates as an upsert to keep the latest snapshot.
+        self.save_local_order(order)
+
+    def save_execution_result(self, result: "ExecutionResult"):
+        serialized_orders = [self._serialize_order(o) for o in result.orders]
+        raw_json = json.dumps(
+            {
+                "plan_id": result.plan_id,
+                "started_at": result.started_at.isoformat(),
+                "completed_at": result.completed_at.isoformat() if result.completed_at else None,
+                "success": result.success,
+                "orders": serialized_orders,
+                "errors": result.errors,
+            },
+            default=str,
+        )
+
+        for order in result.orders:
+            self.save_local_order(order)
+
+        conn = self._get_conn()
+        cursor = conn.cursor()
+
+        cursor.execute(
+            """
+            INSERT OR REPLACE INTO execution_results (
+                plan_id, started_at, completed_at, success, error_summary, raw_json
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                result.plan_id,
+                self._ts(result.started_at),
+                self._ts(result.completed_at),
+                1 if result.success else 0,
+                "; ".join(result.errors) if result.errors else None,
+                raw_json,
+            ),
+        )
+
+        conn.commit()
+        conn.close()
+
+    def get_open_orders(self) -> List["LocalOrder"]:
+        final_statuses = ["filled", "canceled", "rejected", "error"]
+        placeholders = ",".join(["?"] * len(final_statuses))
+
+        conn = self._get_conn()
+        cursor = conn.cursor()
+
+        cursor.execute(
+            f"SELECT local_id, plan_id, strategy_id, pair, side, order_type, kraken_order_id, userref, "
+            f"requested_base_size, requested_price, status, cumulative_base_filled, avg_fill_price, "
+            f"created_at, updated_at, last_error, raw_request, raw_response "
+            f"FROM execution_orders WHERE status NOT IN ({placeholders}) "
+            f"ORDER BY updated_at DESC",
+            final_statuses,
+        )
+
+        rows = cursor.fetchall()
+        conn.close()
+
+        return [self._local_order_from_row(row) for row in rows]
+
+    def get_recent_executions(self, limit: int = 10) -> List["ExecutionResult"]:
+        if limit <= 0:
+            return []
+
+        conn = self._get_conn()
+        cursor = conn.cursor()
+
+        cursor.execute(
+            "SELECT plan_id, started_at, completed_at, success, error_summary, raw_json "
+            "FROM execution_results ORDER BY started_at DESC LIMIT ?",
+            (limit,),
+        )
+        result_rows = cursor.fetchall()
+
+        executions: List["ExecutionResult"] = []
+        for row in result_rows:
+            plan_id = row[0]
+            cursor.execute(
+                "SELECT local_id, plan_id, strategy_id, pair, side, order_type, kraken_order_id, userref, "
+                "requested_base_size, requested_price, status, cumulative_base_filled, avg_fill_price, "
+                "created_at, updated_at, last_error, raw_request, raw_response "
+                "FROM execution_orders WHERE plan_id = ? ORDER BY created_at ASC",
+                (plan_id,),
+            )
+            order_rows = cursor.fetchall()
+            orders = [self._local_order_from_row(o_row) for o_row in order_rows]
+            executions.append(self._execution_result_from_row(row, orders))
+
+        conn.close()
+        return executions
