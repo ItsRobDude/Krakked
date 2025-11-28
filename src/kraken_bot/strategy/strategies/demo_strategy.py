@@ -35,14 +35,7 @@ class TrendFollowingStrategy(Strategy):
     def generate_intents(self, ctx: StrategyContext) -> List[StrategyIntent]:
         intents = []
 
-        # Iterate over universe
-        # Ideally we loop over configured timeframes.
-        # But Context has a specific timeframe?
-        # The engine creates Context.
-        # If the engine passes "1h", and we trade "1h", we proceed.
-
-        # For Demo: Assume ctx.timeframe matches or we just check specific timeframe
-        tf = self.params.timeframes[0] # Pick first for simplicity
+        tf = ctx.timeframe
 
         for pair in ctx.universe:
             # Get OHLC

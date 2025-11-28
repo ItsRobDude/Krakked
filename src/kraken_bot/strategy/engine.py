@@ -85,13 +85,25 @@ class StrategyEngine:
 
         all_intents: List[StrategyIntent] = []
         for name, strategy in self.strategies.items():
-            context = self._build_context(now, strategy.config)
-            try:
-                intents = strategy.generate_intents(context)
-                all_intents.extend(intents)
-                self.strategy_states[name].last_intents_at = now
-            except Exception as exc:  # pragma: no cover - defensive
-                logger.error("Error generating intents for %s: %s", name, exc)
+            configured_timeframes = strategy.config.params.get("timeframes")
+            if isinstance(configured_timeframes, (list, tuple)):
+                timeframes = list(configured_timeframes)
+            elif configured_timeframes is not None:
+                timeframes = [configured_timeframes]
+            else:
+                single_timeframe = strategy.config.params.get("timeframe")
+                timeframes = [single_timeframe] if single_timeframe else ["1h"]
+
+            for timeframe in timeframes:
+                context = self._build_context(now, strategy.config, timeframe)
+                try:
+                    intents = strategy.generate_intents(context)
+                    all_intents.extend(intents)
+                    self.strategy_states[name].last_intents_at = now
+                except Exception as exc:  # pragma: no cover - defensive
+                    logger.error(
+                        "Error generating intents for %s on timeframe %s: %s", name, timeframe, exc
+                    )
 
         risk_actions = self.risk_engine.process_intents(all_intents)
         self._persist_actions(plan_id, now, risk_actions)
@@ -125,9 +137,8 @@ class StrategyEngine:
 
         return True
 
-    def _build_context(self, now: datetime, strategy_config: StrategyConfig) -> StrategyContext:
+    def _build_context(self, now: datetime, strategy_config: StrategyConfig, timeframe: str) -> StrategyContext:
         universe = self.config.universe.include_pairs
-        timeframe = strategy_config.params.get("timeframe") or strategy_config.params.get("timeframes", ["1h"])[0]
         return StrategyContext(
             now=now,
             universe=universe,
