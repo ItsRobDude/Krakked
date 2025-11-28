@@ -19,3 +19,12 @@ class PairNotFoundError(MarketDataError):
         self.pair = pair
         message = f"Pair '{pair}' not found in the universe."
         super().__init__(message)
+
+
+class UniverseDiscoveryError(MarketDataError):
+    """Raised when the pair discovery process fails due to upstream errors."""
+
+    def __init__(self, original_exception: Exception):
+        self.original_exception = original_exception
+        message = f"Failed to discover pair universe: {original_exception}"
+        super().__init__(message)
