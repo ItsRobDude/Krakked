@@ -386,6 +386,19 @@ class PortfolioService:
             pos.base_size = max(0.0, pos.base_size - vol)
 
             # Record PnL Event
+            strategy_tag = None
+            raw_userref = None
+            comment = None
+            if trade.get('strategy_tag') is not None:
+                strategy_tag = str(trade['strategy_tag'])
+            if trade.get('userref') is not None:
+                raw_userref = str(trade['userref'])
+                strategy_tag = strategy_tag or raw_userref
+            if trade.get('comment'):
+                comment = str(trade['comment'])
+                strategy_tag = strategy_tag or comment
+            strategy_tag = strategy_tag or "manual"
+
             self.realized_pnl_history.append(RealizedPnLRecord(
                 trade_id=trade['id'],
                 order_id=trade.get('ordertxid'),
@@ -404,7 +417,9 @@ class PortfolioService:
                 # Let's store PnL in Base Currency (USD) in that field or rename.
                 # Spec says "pnl_quote ... realized PnL in quote (USD)" -> Implies Quote=USD.
                 # I'll store the Base Currency PnL there.
-                strategy_tag="manual" # Default for now
+                strategy_tag=strategy_tag,
+                raw_userref=raw_userref,
+                comment=comment
             ))
 
     def _process_cash_flow(self, record: CashFlowRecord):
