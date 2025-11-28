@@ -10,6 +10,7 @@ from typing import Dict, List, Optional, Type
 
 from kraken_bot.config import AppConfig, StrategyConfig
 from kraken_bot.market_data.api import MarketDataAPI
+from kraken_bot.market_data.exceptions import DataStaleError
 from kraken_bot.portfolio.manager import PortfolioService
 from .base import Strategy, StrategyContext
 from .models import DecisionRecord, ExecutionPlan, RiskAdjustedAction, RiskStatus, StrategyIntent, StrategyState
@@ -81,7 +82,7 @@ class StrategyEngine:
         logger.info("Starting decision cycle %s", plan_id)
 
         if not self._data_ready():
-            return ExecutionPlan(plan_id=plan_id, generated_at=now, actions=[], metadata={"error": "REST API unreachable"})
+            return ExecutionPlan(plan_id=plan_id, generated_at=now, actions=[], metadata={"error": "Market data unavailable"})
 
         all_intents: List[StrategyIntent] = []
         for name, strategy in self.strategies.items():
@@ -100,6 +101,15 @@ class StrategyEngine:
                     intents = strategy.generate_intents(context)
                     all_intents.extend(intents)
                     self.strategy_states[name].last_intents_at = now
+                except DataStaleError as exc:
+                    logger.warning(
+                        "Skipping intents for %s on timeframe %s due to stale data for %s: %s",
+                        name,
+                        timeframe,
+                        exc.pair,
+                        exc,
+                    )
+                    continue
                 except Exception as exc:  # pragma: no cover - defensive
                     logger.error(
                         "Error generating intents for %s on timeframe %s: %s", name, timeframe, exc
@@ -127,6 +137,14 @@ class StrategyEngine:
 
         if not status.rest_api_reachable:
             logger.error("REST API not reachable. Aborting cycle.")
+            return False
+
+        if not status.websocket_connected:
+            logger.error("WebSocket not connected. Aborting cycle.")
+            return False
+
+        if status.stale_pairs > 0:
+            logger.error("%d stale pairs detected. Aborting cycle.", status.stale_pairs)
             return False
 
         try:
