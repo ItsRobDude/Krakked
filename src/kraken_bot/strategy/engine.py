@@ -103,11 +103,13 @@ class StrategyEngine:
                     self.strategy_states[name].last_intents_at = now
                 except DataStaleError as exc:
                     logger.warning(
-                        "Skipping intents for %s on timeframe %s due to stale data for %s: %s",
+                        (
+                            "Stale market data for %s on timeframe %s (pair %s); "
+                            "skipping this context and continuing."
+                        ),
                         name,
                         timeframe,
                         exc.pair,
-                        exc,
                     )
                     continue
                 except Exception as exc:  # pragma: no cover - defensive
@@ -141,10 +143,6 @@ class StrategyEngine:
 
         if not status.websocket_connected:
             logger.error("WebSocket not connected. Aborting cycle.")
-            return False
-
-        if status.stale_pairs > 0:
-            logger.error("%d stale pairs detected. Aborting cycle.", status.stale_pairs)
             return False
 
         try:
