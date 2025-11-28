@@ -1,4 +1,11 @@
 import { FormEvent, useMemo, useState } from 'react';
+import { FooterHotkeys } from './components/FooterHotkeys';
+import { KpiGrid } from './components/KpiGrid';
+import { Layout } from './components/Layout';
+import { LogPanel } from './components/LogPanel';
+import { PositionsTable } from './components/PositionsTable';
+import { Sidebar } from './components/Sidebar';
+import { WalletTable } from './components/WalletTable';
 import { validateCredentials } from './services/credentials';
 
 const initialState = {
@@ -15,80 +22,87 @@ type SubmissionState = {
   message?: string;
 };
 
-type DashboardProps = {
-  botStatus: string;
-  balances: Array<{ asset: string; amount: string; valueUSD: string }>;
-  recentActivity: Array<{ label: string; detail: string; timestamp: string }>;
-  onLogout: () => void;
-};
+function DashboardShell({ onLogout }: { onLogout: () => void }) {
+  const sidebarItems = [
+    { label: 'Overview', description: 'KPIs & positions', active: true, badge: 'Live' },
+    { label: 'Signals', description: 'Strategy stream', badge: 'Soon' },
+    { label: 'Backtests', description: 'Historical runs' },
+    { label: 'Settings', description: 'API keys & risk' },
+  ];
 
-function DashboardShell({ botStatus, balances, recentActivity, onLogout }: DashboardProps) {
+  const kpis = [
+    { label: '24h PnL', value: '+2.94%', change: '+0.40%', hint: 'Vs prior period' },
+    { label: 'Open Exposure', value: '$14,200', change: '3 positions', hint: 'Auto-hedged' },
+    { label: 'Funding Used', value: '38%', change: 'Low risk', hint: 'Configurable' },
+    { label: 'Latency', value: '220ms', change: 'OK', hint: 'Order routing' },
+  ];
+
+  const positions = [
+    { pair: 'ETH/USD', side: 'long', size: '1.35 ETH', entry: '$3,048.00', mark: '$3,065.44', pnl: '+$23.45', status: 'Trailing' },
+    { pair: 'BTC/USD', side: 'short', size: '0.08 BTC', entry: '$65,220.00', mark: '$64,880.12', pnl: '+$27.19', status: 'Monitoring' },
+    { pair: 'SOL/USD', side: 'long', size: '120 SOL', entry: '$148.10', mark: '$145.92', pnl: '-$261.60', status: 'Stop nearby' },
+  ];
+
+  const balances = [
+    { asset: 'ETH', total: '1.4200', available: '0.6700', valueUsd: '$4,120.50' },
+    { asset: 'BTC', total: '0.0780', available: '0.0500', valueUsd: '$5,140.20' },
+    { asset: 'USDT', total: '6,500', available: '6,500', valueUsd: '$6,500.00' },
+    { asset: 'SOL', total: '250', available: '110', valueUsd: '$36,480.00' },
+  ];
+
+  const logs = [
+    { level: 'info', message: 'Balance sync finished. 5 assets refreshed.', timestamp: 'Just now', source: 'balances' },
+    { level: 'warning', message: 'Order book latency above threshold on ETH/USD.', timestamp: '2m ago', source: 'market-data' },
+    { level: 'info', message: 'Strategy backfill loaded 24h of trades.', timestamp: '15m ago', source: 'strategy' },
+    { level: 'error', message: 'Websocket reconnect triggered for auth feed.', timestamp: '28m ago', source: 'connectivity' },
+  ];
+
+  const hotkeys = [
+    { keys: 'R', description: 'Restart the bot service' },
+    { keys: 'Shift + C', description: 'Cancel all working orders' },
+    { keys: 'L', description: 'Toggle live log streaming' },
+    { keys: 'G', description: 'Refresh balances and positions' },
+  ];
+
   return (
-    <div className="dashboard">
-      <header className="dashboard__header">
-        <div>
-          <p className="eyebrow">Kraken Bot</p>
-          <h1 id="dashboard-heading">Dashboard</h1>
-          <p className="subtitle">Placeholder data until backend wiring is connected.</p>
-        </div>
+    <Layout
+      title="Trading Overview"
+      subtitle="Composable blocks ready for streaming data."
+      sidebar={<Sidebar items={sidebarItems} footer={{ label: 'Session', value: 'Connected' }} />}
+      actions={
         <button type="button" className="ghost-button" onClick={onLogout}>
           Log out
         </button>
-      </header>
+      }
+      footer={<FooterHotkeys hotkeys={hotkeys} />}
+    >
+      <section className="panel">
+        <div className="panel__header">
+          <h2>Connection</h2>
+          <span className="status-pill" data-status="connected">
+            Connected
+          </span>
+        </div>
+        <p className="panel__description">Panels below are wired to accept streamed props.</p>
+        <ul className="placeholder-list">
+          <li>Swap in websocket payloads for KPIs, balances, and logs.</li>
+          <li>Use the sidebar badges to reflect live system status.</li>
+          <li>Footer hotkeys can be hooked into command handlers.</li>
+        </ul>
+      </section>
 
-      <div className="dashboard__grid">
-        <section className="panel">
-          <div className="panel__header">
-            <h2>Connection</h2>
-            <span className="status-pill" data-status={botStatus.toLowerCase()}>
-              {botStatus}
-            </span>
-          </div>
-          <p className="panel__description">
-            This section will be populated with live bot status once the API is connected.
-          </p>
-          <ul className="placeholder-list">
-            <li>Next step: wire Kraken credential validation to persist session.</li>
-            <li>Expose websocket health and heartbeat timestamps.</li>
-            <li>Show trading mode and configured strategies.</li>
-          </ul>
-        </section>
+      <KpiGrid items={kpis} />
 
-        <section className="panel">
-          <div className="panel__header">
-            <h2>Balances</h2>
-            <p className="panel__hint">Sample data props for upcoming integration</p>
-          </div>
-          <div className="balance-grid">
-            {balances.map((balance) => (
-              <div className="balance-card" key={balance.asset}>
-                <p className="balance-card__label">{balance.asset}</p>
-                <p className="balance-card__value">{balance.amount}</p>
-                <p className="balance-card__subvalue">{balance.valueUSD} USD</p>
-              </div>
-            ))}
-          </div>
-        </section>
-
-        <section className="panel">
-          <div className="panel__header">
-            <h2>Recent Activity</h2>
-            <p className="panel__hint">Replace with server-driven events</p>
-          </div>
-          <ul className="activity-list">
-            {recentActivity.map((item) => (
-              <li className="activity-list__item" key={item.timestamp + item.label}>
-                <div>
-                  <p className="activity-list__label">{item.label}</p>
-                  <p className="activity-list__detail">{item.detail}</p>
-                </div>
-                <time className="activity-list__time">{item.timestamp}</time>
-              </li>
-            ))}
-          </ul>
-        </section>
+      <div className="dashboard__columns">
+        <div className="dashboard__column dashboard__column--wide">
+          <PositionsTable positions={positions} />
+          <LogPanel entries={logs} />
+        </div>
+        <div className="dashboard__column">
+          <WalletTable balances={balances} />
+        </div>
       </div>
-    </div>
+    </Layout>
   );
 }
 
@@ -109,18 +123,6 @@ function App() {
       form.apiSecret.trim().length === 0,
     [form.apiKey, form.apiSecret, submission.status],
   );
-
-  const placeholderBalances = [
-    { asset: 'ETH', amount: '1.4200', valueUSD: '4,120.50' },
-    { asset: 'BTC', amount: '0.078', valueUSD: '5,140.20' },
-    { asset: 'USDT', amount: '6,500', valueUSD: '6,500.00' },
-  ];
-
-  const placeholderActivity = [
-    { label: 'Strategy backfill', detail: 'Loaded 24h market history for ETH/USD.', timestamp: 'Just now' },
-    { label: 'Heartbeat', detail: 'Websocket ping acknowledged.', timestamp: '2m ago' },
-    { label: 'Balance sync', detail: 'Account balances refreshed.', timestamp: '15m ago' },
-  ];
 
   const handleChange = (field: keyof typeof initialState) => (event: React.ChangeEvent<HTMLInputElement>) => {
     setForm((previous) => ({ ...previous, [field]: event.target.value }));
@@ -164,19 +166,7 @@ function App() {
   };
 
   if (isAuthenticated) {
-    return (
-      <div className="app-shell">
-        <div className="background" aria-hidden="true" />
-        <main className="card card--dashboard" aria-labelledby="dashboard-heading">
-          <DashboardShell
-            botStatus={submission.status === 'success' ? 'Connected' : 'Reconnected'}
-            balances={placeholderBalances}
-            recentActivity={placeholderActivity}
-            onLogout={handleLogout}
-          />
-        </main>
-      </div>
-    );
+    return <DashboardShell onLogout={handleLogout} />;
   }
 
   return (
