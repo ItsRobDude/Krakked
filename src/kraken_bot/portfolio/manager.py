@@ -15,7 +15,7 @@ from .models import (
 )
 from .store import PortfolioStore, SQLitePortfolioStore
 from .exceptions import ReconciliationError, PositionNotFoundError
-from src.kraken_bot.strategy.models import DecisionRecord
+from kraken_bot.strategy.models import DecisionRecord
 
 logger = logging.getLogger(__name__)
 
@@ -613,3 +613,7 @@ class PortfolioService:
         Persists a strategy decision record to the portfolio store.
         """
         self.store.add_decision(record)
+
+    def record_execution_plan(self, plan):
+        """Persist a full execution plan for downstream execution services."""
+        self.store.save_execution_plan(plan)
