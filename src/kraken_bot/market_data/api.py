@@ -3,7 +3,7 @@
 import time
 import logging
 from pathlib import Path
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 from kraken_bot.config import AppConfig, PairMetadata, OHLCBar
 from kraken_bot.connection.rest_client import KrakenRESTClient
 from kraken_bot.market_data.universe import build_universe
@@ -188,6 +188,7 @@ class MarketDataAPI:
 
         streaming_count = 0
         stale_count = 0
+        subscription_errors = 0
         if ws_connected:
             for pair_meta in self._universe:
                 try:
@@ -195,6 +196,12 @@ class MarketDataAPI:
                     streaming_count += 1
                 except DataStaleError:
                     stale_count += 1
+
+            if self._ws_client:
+                for pair_status in self._ws_client.subscription_status.values():
+                    for status_record in pair_status.values():
+                        if status_record.get("status") != "subscribed":
+                            subscription_errors += 1
         else:
             stale_count = len(self._universe)
 
@@ -203,4 +210,11 @@ class MarketDataAPI:
             websocket_connected=ws_connected,
             streaming_pairs=streaming_count,
             stale_pairs=stale_count,
+            subscription_errors=subscription_errors,
         )
+
+    def get_subscription_status(self) -> Dict[str, Dict[str, Dict[str, Any]]]:
+        """Exposes the current WebSocket subscription status map."""
+        if not self._ws_client:
+            return {}
+        return self._ws_client.subscription_status

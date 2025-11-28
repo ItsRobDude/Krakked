@@ -32,6 +32,7 @@ class KrakenWSClientV2:
         self.last_update_ts: Dict[str, float] = defaultdict(float)
         self.ticker_cache: Dict[str, Dict[str, Any]] = {}
         self.ohlc_cache: Dict[str, Dict[str, Any]] = {} # key: pair, value: {timeframe: ohlc_data}
+        self.subscription_status: Dict[str, Dict[str, Dict[str, Any]]] = defaultdict(dict)
 
     @property
     def is_connected(self) -> bool:
@@ -106,6 +107,29 @@ class KrakenWSClientV2:
     async def _handle_message(self, message: str):
         """Parses an incoming message and updates the cache."""
         data = json.loads(message)
+
+        if "event" in data:
+            event_type = data.get("event")
+            if event_type == "subscriptionStatus":
+                status = data.get("status")
+                channel = data.get("channel")
+                ws_symbol = data.get("symbol")
+                canonical_pair = self._get_canonical_from_ws_symbol(ws_symbol) if ws_symbol else None
+
+                status_record = {"status": status, "message": data.get("errorMessage"), "req_id": data.get("req_id")}
+
+                if canonical_pair and channel:
+                    self.subscription_status[canonical_pair][channel] = status_record
+
+                if status == "subscribed":
+                    logger.info(f"Subscribed to {channel} for {ws_symbol or canonical_pair}.")
+                else:
+                    logger.error(
+                        f"Subscription to {channel} for {ws_symbol or canonical_pair} failed: {data.get('errorMessage', 'unknown error')}"
+                    )
+            else:
+                logger.debug(f"Unhandled event message type: {event_type}")
+            return
 
         if "channel" in data:
             channel = data["channel"]
