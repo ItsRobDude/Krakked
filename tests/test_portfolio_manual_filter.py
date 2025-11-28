@@ -59,6 +59,12 @@ def portfolio(market_data_mock):
     return Portfolio(config, market_data_mock, InMemoryStore())
 
 
+@pytest.fixture
+def portfolio_with_manual_default(market_data_mock):
+    config = PortfolioConfig(base_currency="USD", track_manual_trades=True)
+    return Portfolio(config, market_data_mock, InMemoryStore())
+
+
 def test_manual_trades_respect_toggle_in_equity_view(portfolio):
     manual_buy = {
         "id": "T1",
@@ -152,3 +158,112 @@ def test_manual_realized_pnl_filtered_by_config(portfolio):
 
     manual_view = portfolio.equity_view(include_manual=True)
     assert pytest.approx(manual_view.realized_pnl_base_total, rel=1e-6) == 10.0
+
+
+def test_realized_pnl_by_strategy_groups_manual_and_tagged(portfolio_with_manual_default):
+    tagged_buy = {
+        "id": "T1",
+        "pair": "XBTUSD",
+        "time": 1,
+        "type": "buy",
+        "price": "100",
+        "cost": "100",
+        "fee": "0",
+        "vol": "1",
+        "userref": 42,
+    }
+    tagged_sell = {
+        "id": "T2",
+        "pair": "XBTUSD",
+        "time": 2,
+        "type": "sell",
+        "price": "120",
+        "cost": "120",
+        "fee": "0",
+        "vol": "1",
+        "userref": 42,
+    }
+    manual_buy = {
+        "id": "T3",
+        "pair": "XBTUSD",
+        "time": 3,
+        "type": "buy",
+        "price": "50",
+        "cost": "50",
+        "fee": "0",
+        "vol": "1",
+    }
+    manual_sell = {
+        "id": "T4",
+        "pair": "XBTUSD",
+        "time": 4,
+        "type": "sell",
+        "price": "70",
+        "cost": "70",
+        "fee": "0",
+        "vol": "1",
+    }
+
+    portfolio_with_manual_default.ingest_trades(
+        [tagged_buy, tagged_sell, manual_buy, manual_sell], persist=False
+    )
+
+    grouped = portfolio_with_manual_default.get_realized_pnl_by_strategy()
+
+    assert pytest.approx(grouped["42"], rel=1e-6) == 20.0
+    assert pytest.approx(grouped["manual"], rel=1e-6) == 20.0
+
+
+def test_realized_pnl_by_strategy_respects_manual_flag(portfolio):
+    manual_buy = {
+        "id": "T1",
+        "pair": "XBTUSD",
+        "time": 1,
+        "type": "buy",
+        "price": "50",
+        "cost": "50",
+        "fee": "0",
+        "vol": "1",
+    }
+    manual_sell = {
+        "id": "T2",
+        "pair": "XBTUSD",
+        "time": 2,
+        "type": "sell",
+        "price": "70",
+        "cost": "70",
+        "fee": "0",
+        "vol": "1",
+    }
+    strategy_buy = {
+        "id": "T3",
+        "pair": "XBTUSD",
+        "time": 3,
+        "type": "buy",
+        "price": "100",
+        "cost": "100",
+        "fee": "0",
+        "vol": "1",
+        "userref": 99,
+    }
+    strategy_sell = {
+        "id": "T4",
+        "pair": "XBTUSD",
+        "time": 4,
+        "type": "sell",
+        "price": "110",
+        "cost": "110",
+        "fee": "0",
+        "vol": "1",
+        "userref": 99,
+    }
+
+    portfolio.ingest_trades([manual_buy, manual_sell, strategy_buy, strategy_sell], persist=False)
+
+    default_grouped = portfolio.get_realized_pnl_by_strategy()
+    assert "manual" not in default_grouped
+    assert pytest.approx(default_grouped["99"], rel=1e-6) == 10.0
+
+    grouped_with_manual = portfolio.get_realized_pnl_by_strategy(include_manual=True)
+    assert pytest.approx(grouped_with_manual["manual"], rel=1e-6) == 20.0
+    assert pytest.approx(grouped_with_manual["99"], rel=1e-6) == 10.0
