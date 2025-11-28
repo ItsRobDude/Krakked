@@ -2,6 +2,7 @@
 
 import pytest
 from pathlib import Path
+import appdirs
 from kraken_bot.config import MarketDataConfig, OHLCBar
 from kraken_bot.market_data.ohlc_store import FileOHLCStore
 
@@ -83,3 +84,16 @@ def test_get_bars_non_existent(mock_market_data_config: MarketDataConfig):
     store = FileOHLCStore(mock_market_data_config)
     bars = store.get_bars("NONEXISTENT", "1h", lookback=100)
     assert bars == []
+
+
+def test_file_ohlc_store_defaults(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    """FileOHLCStore should fall back to the user data directory when not configured."""
+    monkeypatch.setattr(appdirs, "user_data_dir", lambda appname: tmp_path / "data")
+
+    config = MarketDataConfig(ws={}, ohlc_store={}, backfill_timeframes=[], ws_timeframes=[])
+    store = FileOHLCStore(config)
+
+    expected_root = tmp_path / "data" / "ohlc"
+    assert store.root_dir == expected_root
+    assert store.backend == "parquet"
+    assert expected_root.exists()
