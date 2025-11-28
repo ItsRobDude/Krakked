@@ -49,7 +49,7 @@ def test_process_trade_buy(service):
     # Setup Market Data for fee conversion (USD fee -> USD)
     service.market_data.get_latest_price.return_value = 1.0 # USDUSD? No, fee is usually Quote (USD)
 
-    service._process_trade(trade)
+    service.portfolio.ingest_trades([trade], persist=False)
 
     pos = service.positions["XBTUSD"]
     assert pos.base_size == 1.0
@@ -63,7 +63,7 @@ def test_process_trade_sell_pnl(service):
         "type": "buy", "ordertype": "limit", "price": 50000, "cost": 50000,
         "fee": 0, "vol": 1.0, "margin": 0, "misc": ""
     }
-    service._process_trade(buy)
+    service.portfolio.ingest_trades([buy], persist=False)
 
     # 2. Sell 0.5 BTC @ 60k
     sell = {
@@ -72,7 +72,7 @@ def test_process_trade_sell_pnl(service):
         "fee": 10, "vol": 0.5, "margin": 0, "misc": ""
     }
 
-    service._process_trade(sell)
+    service.portfolio.ingest_trades([sell], persist=False)
 
     pos = service.positions["XBTUSD"]
     assert pos.base_size == 0.5
