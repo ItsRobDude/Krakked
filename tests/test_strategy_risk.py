@@ -1,0 +1,154 @@
+# tests/test_strategy_risk.py
+
+import pytest
+import pandas as pd
+from datetime import datetime, timezone
+from unittest.mock import MagicMock
+
+from kraken_bot.config import RiskConfig
+from kraken_bot.strategy.risk import RiskEngine, compute_atr, RiskContext
+from kraken_bot.strategy.models import StrategyIntent, RiskAdjustedAction
+from kraken_bot.portfolio.models import SpotPosition, AssetExposure, EquityView
+from kraken_bot.market_data.api import MarketDataAPI
+from kraken_bot.portfolio.manager import PortfolioService
+
+def test_compute_atr():
+    data = {
+        'high': [10, 11, 12, 11, 13],
+        'low': [9, 10, 11, 10, 11],
+        'close': [10, 10.5, 11.5, 10.5, 12.5]
+    }
+    df = pd.DataFrame(data)
+    # TR:
+    # 1: H-L=1
+    # 2: H-L=1, |H-Cp|=1, |L-Cp|=0.5 -> 1
+    # 3: H-L=1, |H-Cp|=1.5, |L-Cp|=0.5 -> 1.5
+    # 4: H-L=1, |H-Cp|=0.5, |L-Cp|=1.5 -> 1.5
+    # 5: H-L=2, |H-Cp|=2.5, |L-Cp|=1.5 -> 2.5
+
+    # ATR(3): Mean of last 3 TRs (1.5, 1.5, 2.5) -> 5.5 / 3 = 1.833...
+
+    atr = compute_atr(df, window=3)
+    assert abs(atr - 1.833) < 0.01
+
+def test_risk_engine_sizing():
+    config = RiskConfig(
+        max_risk_per_trade_pct=1.0,
+        volatility_lookback_bars=3
+    )
+
+    # Mock dependencies
+    market = MagicMock(spec=MarketDataAPI)
+    portfolio = MagicMock(spec=PortfolioService)
+
+    # Setup Data
+    market.get_latest_price.return_value = 100.0
+    # Mock OHLC for ATR
+    from dataclasses import dataclass
+    @dataclass
+    class MockBar:
+        high: float
+        low: float
+        close: float
+
+    market.get_ohlc.return_value = [
+        MockBar(105, 95, 100) for _ in range(15) # Consistent volatility
+    ]
+
+    # Setup Portfolio Equity
+    portfolio.get_equity.return_value = EquityView(
+        equity_base=10000.0, cash_base=10000.0, realized_pnl_base_total=0,
+        unrealized_pnl_base_total=0, drift_flag=False
+    )
+    portfolio.get_positions.return_value = []
+    portfolio.get_asset_exposure.return_value = []
+    # Mock store for snapshots
+    portfolio.store = MagicMock()
+    portfolio.store.get_snapshots.return_value = []
+
+    engine = RiskEngine(config, market, portfolio)
+
+    # Intent
+    intent = StrategyIntent(
+        strategy_id="test",
+        pair="XBTUSD",
+        side="long",
+        intent_type="enter",
+        desired_exposure_usd=None, # Auto-size
+        confidence=1.0,
+        timeframe="1h",
+        generated_at=datetime.now(timezone.utc)
+    )
+
+    actions = engine.process_intents([intent])
+
+    assert len(actions) == 1
+    action = actions[0]
+
+    # Expected Calculation:
+    # ATR ~ 10 (High 105 - Low 95 = 10. No gaps)
+    # Price = 100
+    # Stop Distance = 2 * 10 = 20
+    # Stop % = 20 / 100 = 0.20 (20%)
+    # Risk Amount = 1% of 10000 = 100
+    # Position Size USD = 100 / 0.20 = 500 USD
+
+    # Allow some floating point variance
+    assert 490 < action.target_notional_usd < 510
+    assert not action.blocked
+
+def test_kill_switch_drawdown():
+    config = RiskConfig(max_daily_drawdown_pct=5.0)
+    market = MagicMock(spec=MarketDataAPI)
+    portfolio = MagicMock(spec=PortfolioService)
+
+    # Equity dropped from 10000 (snapshot) to 9000 (current) -> 10% drawdown
+    portfolio.get_equity.return_value = EquityView(
+        equity_base=9000.0, cash_base=9000.0, realized_pnl_base_total=0,
+        unrealized_pnl_base_total=0, drift_flag=False
+    )
+    # Mock snapshots
+    from kraken_bot.portfolio.models import PortfolioSnapshot
+    portfolio.store = MagicMock()
+    # Mock snapshot object behavior
+    snap = MagicMock()
+    snap.equity_base = 10000.0
+    portfolio.store.get_snapshots.return_value = [snap]
+
+    portfolio.get_positions.return_value = []
+    portfolio.get_asset_exposure.return_value = []
+
+    engine = RiskEngine(config, market, portfolio)
+
+    intent = StrategyIntent("test", "XBTUSD", "long", "enter", 1000.0, 1.0, "1h", datetime.now(timezone.utc))
+    actions = engine.process_intents([intent])
+
+    assert actions[0].blocked
+    # Check for substring 'Kill Switch' (case insensitive or exact)
+    assert "Kill Switch" in str(actions[0].reason)
+    assert engine.get_status().kill_switch_active
+
+def test_max_per_asset():
+    config = RiskConfig(max_per_asset_pct=10.0) # 10% max
+    market = MagicMock(spec=MarketDataAPI)
+    portfolio = MagicMock(spec=PortfolioService)
+    market.get_latest_price.return_value = 100.0
+
+    portfolio.get_equity.return_value = EquityView(
+        equity_base=10000.0, cash_base=10000.0, realized_pnl_base_total=0,
+        unrealized_pnl_base_total=0, drift_flag=False
+    )
+    portfolio.get_positions.return_value = []
+    portfolio.get_asset_exposure.return_value = []
+    portfolio.store = MagicMock()
+    portfolio.store.get_snapshots.return_value = []
+
+    engine = RiskEngine(config, market, portfolio)
+
+    # Try to buy 2000 USD (20%)
+    intent = StrategyIntent("test", "XBTUSD", "long", "enter", 2000.0, 1.0, "1h", datetime.now(timezone.utc))
+    actions = engine.process_intents([intent])
+
+    # Should be clamped to 1000 (10%)
+    assert abs(actions[0].target_notional_usd - 1000.0) < 1.0
+    assert "Max per asset limit" in actions[0].reason
