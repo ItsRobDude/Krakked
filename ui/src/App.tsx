@@ -2,8 +2,8 @@ import { FormEvent, useMemo, useState } from 'react';
 import { FooterHotkeys } from './components/FooterHotkeys';
 import { KpiGrid } from './components/KpiGrid';
 import { Layout } from './components/Layout';
-import { LogEntry, LogPanel } from './components/LogPanel';
-import { PositionRow, PositionsTable } from './components/PositionsTable';
+import { LogPanel } from './components/LogPanel';
+import { PositionsTable } from './components/PositionsTable';
 import { Sidebar } from './components/Sidebar';
 import { WalletTable } from './components/WalletTable';
 import { validateCredentials } from './services/credentials';
@@ -37,7 +37,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
     { label: 'Latency', value: '220ms', change: 'OK', hint: 'Order routing' },
   ];
 
-  const positions: PositionRow[] = [
+  const positions = [
     { pair: 'ETH/USD', side: 'long', size: '1.35 ETH', entry: '$3,048.00', mark: '$3,065.44', pnl: '+$23.45', status: 'Trailing' },
     { pair: 'BTC/USD', side: 'short', size: '0.08 BTC', entry: '$65,220.00', mark: '$64,880.12', pnl: '+$27.19', status: 'Monitoring' },
     { pair: 'SOL/USD', side: 'long', size: '120 SOL', entry: '$148.10', mark: '$145.92', pnl: '-$261.60', status: 'Stop nearby' },
@@ -50,7 +50,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
     { asset: 'SOL', total: '250', available: '110', valueUsd: '$36,480.00' },
   ];
 
-  const logs: LogEntry[] = [
+  const logs = [
     { level: 'info', message: 'Balance sync finished. 5 assets refreshed.', timestamp: 'Just now', source: 'balances' },
     { level: 'warning', message: 'Order book latency above threshold on ETH/USD.', timestamp: '2m ago', source: 'market-data' },
     { level: 'info', message: 'Strategy backfill loaded 24h of trades.', timestamp: '15m ago', source: 'strategy' },
@@ -172,9 +172,9 @@ function App() {
   return (
     <div className="app-shell">
       <div className="background" aria-hidden="true" />
-      <main className="card" aria-labelledby="welcome-heading">
-        <div className="card__body">
-          <header className="card__header">
+      <main className="auth" aria-labelledby="welcome-heading">
+        <div className="auth__inner">
+          <header className="auth__header">
             <p className="eyebrow">Authentication</p>
             <h1 id="welcome-heading">Welcome to Krakked</h1>
             <p className="subtitle">Enter your Kraken API credentials to connect.</p>
