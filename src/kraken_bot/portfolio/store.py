@@ -7,6 +7,7 @@ import logging
 from typing import List, Optional, Dict, Any
 from pathlib import Path
 from .models import RealizedPnLRecord, CashFlowRecord, PortfolioSnapshot, AssetValuation
+from src.kraken_bot.strategy.models import DecisionRecord
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +47,11 @@ class PortfolioStore(abc.ABC):
         """Removes old snapshots."""
         pass
 
+    @abc.abstractmethod
+    def add_decision(self, record: DecisionRecord):
+        """Saves a strategy decision record."""
+        pass
+
 
 class SQLitePortfolioStore(PortfolioStore):
     def __init__(self, db_path: str = "portfolio.db"):
@@ -66,8 +72,15 @@ class SQLitePortfolioStore(PortfolioStore):
 
         cursor.execute("SELECT version FROM schema_version WHERE id = 1")
         row = cursor.fetchone()
-        if row is None:
-             cursor.execute("INSERT INTO schema_version (id, version) VALUES (1, 1)")
+
+        # Check current version and upgrade if necessary
+        current_version = 0
+        if row is not None:
+            current_version = row[0]
+        else:
+            # New DB
+            cursor.execute("INSERT INTO schema_version (id, version) VALUES (1, 4)")
+            current_version = 4
 
         # Trades Table
         cursor.execute("""
@@ -122,6 +135,48 @@ class SQLitePortfolioStore(PortfolioStore):
             )
         """)
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_snapshots_timestamp ON snapshots(timestamp)")
+
+        # Upgrade for V4: Decisions Table
+        if current_version < 4:
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS decisions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    time INTEGER NOT NULL,
+                    plan_id TEXT,
+                    strategy_name TEXT,
+                    pair TEXT,
+                    action_type TEXT,
+                    target_position_usd REAL,
+                    blocked INTEGER NOT NULL,
+                    block_reason TEXT,
+                    kill_switch_active INTEGER NOT NULL,
+                    raw_json TEXT
+                )
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_decisions_time ON decisions(time)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_decisions_plan_id ON decisions(plan_id)")
+
+            # Update version
+            cursor.execute("UPDATE schema_version SET version = 4 WHERE id = 1")
+        else:
+             # Ensure table exists even if version is current (for fresh installs)
+             cursor.execute("""
+                CREATE TABLE IF NOT EXISTS decisions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    time INTEGER NOT NULL,
+                    plan_id TEXT,
+                    strategy_name TEXT,
+                    pair TEXT,
+                    action_type TEXT,
+                    target_position_usd REAL,
+                    blocked INTEGER NOT NULL,
+                    block_reason TEXT,
+                    kill_switch_active INTEGER NOT NULL,
+                    raw_json TEXT
+                )
+            """)
+             cursor.execute("CREATE INDEX IF NOT EXISTS idx_decisions_time ON decisions(time)")
+             cursor.execute("CREATE INDEX IF NOT EXISTS idx_decisions_plan_id ON decisions(plan_id)")
 
         conn.commit()
         conn.close()
@@ -344,5 +399,30 @@ class SQLitePortfolioStore(PortfolioStore):
         conn = self._get_conn()
         cursor = conn.cursor()
         cursor.execute("DELETE FROM snapshots WHERE timestamp < ?", (older_than_ts,))
+        conn.commit()
+        conn.close()
+
+    def add_decision(self, record: DecisionRecord):
+        conn = self._get_conn()
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            INSERT INTO decisions (
+                time, plan_id, strategy_name, pair, action_type,
+                target_position_usd, blocked, block_reason, kill_switch_active, raw_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            record.time,
+            record.plan_id,
+            record.strategy_name,
+            record.pair,
+            record.action_type,
+            record.target_position_usd,
+            1 if record.blocked else 0,
+            record.block_reason,
+            1 if record.kill_switch_active else 0,
+            record.raw_json
+        ))
+
         conn.commit()
         conn.close()
