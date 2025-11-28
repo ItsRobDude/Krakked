@@ -125,6 +125,12 @@ class StrategyEngine:
                     )
 
         risk_actions = self.risk_engine.process_intents(all_intents)
+
+        for action in risk_actions:
+            strat_cfg = self.config.strategies.configs.get(action.strategy_id)
+            if strat_cfg and strat_cfg.userref is not None:
+                action.userref = strat_cfg.userref
+
         self._persist_actions(plan_id, now, risk_actions)
 
         plan = ExecutionPlan(

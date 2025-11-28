@@ -12,6 +12,7 @@ from kraken_bot.portfolio.manager import PortfolioService
 from kraken_bot.portfolio.models import EquityView
 from kraken_bot.strategy.models import DecisionRecord, StrategyIntent, StrategyState, RiskStatus
 from kraken_bot.strategy.base import Strategy
+from kraken_bot.strategy.models import RiskAdjustedAction
 
 def test_engine_cycle():
     # Setup Config
@@ -36,6 +37,7 @@ def test_engine_cycle():
         websocket_connected=True,
         stale_pairs=0,
     )
+    market.get_pair_metadata.return_value = MagicMock(liquidity_24h_usd=200000.0)
 
     # IMPORTANT: Mock drift_flag=False explicitly or use real object
     portfolio.get_equity.return_value = EquityView(
@@ -185,3 +187,98 @@ def test_data_stale_error_skips_timeframe():
 
     assert plan.actions == []
     assert "risk_status" in plan.metadata
+
+
+def test_actions_inherit_userref_and_persist_in_execution_plan():
+    class FakeStrategy(Strategy):
+        def warmup(self, market_data, portfolio):
+            return None
+
+        def generate_intents(self, ctx):
+            return [
+                StrategyIntent(
+                    strategy_id=self.id,
+                    pair="XBTUSD",
+                    side="long",
+                    intent_type="enter",
+                    desired_exposure_usd=1000.0,
+                    confidence=0.9,
+                    timeframe=ctx.timeframe,
+                    generated_at=ctx.now,
+                )
+            ]
+
+    strat_config = StrategyConfig(
+        name="fake",
+        type="fake",
+        enabled=True,
+        userref=4242,
+        params={"timeframes": ["1h"]},
+    )
+    strategies_cfg = StrategiesConfig(enabled=["fake"], configs={"fake": strat_config})
+
+    app_config = MagicMock(spec=AppConfig)
+    app_config.strategies = strategies_cfg
+    app_config.risk = RiskConfig()
+    app_config.universe = MagicMock()
+    app_config.universe.include_pairs = ["XBTUSD"]
+
+    market = MagicMock(spec=MarketDataAPI)
+    market.get_data_status.return_value = MagicMock(
+        rest_api_reachable=True,
+        websocket_connected=True,
+        stale_pairs=0,
+    )
+
+    portfolio = MagicMock(spec=PortfolioService)
+    portfolio.record_execution_plan = MagicMock()
+    portfolio.record_decision = MagicMock()
+
+    engine = StrategyRiskEngine(app_config, market, portfolio)
+    engine._data_ready = MagicMock(return_value=True)
+
+    engine.risk_engine = MagicMock()
+    engine.risk_engine._kill_switch_active = False
+    engine.risk_engine.get_status.return_value = RiskStatus(
+        kill_switch_active=False,
+        daily_drawdown_pct=0.0,
+        drift_flag=False,
+        total_exposure_pct=0.0,
+        manual_exposure_pct=0.0,
+        per_asset_exposure_pct={},
+        per_strategy_exposure_pct={},
+    )
+
+    fake_action = RiskAdjustedAction(
+        pair="XBTUSD",
+        strategy_id="fake",
+        action_type="open",
+        target_base_size=0.05,
+        target_notional_usd=1000.0,
+        current_base_size=0.0,
+        reason="test",
+        blocked=False,
+        blocked_reasons=[],
+        risk_limits_snapshot={},
+    )
+    engine.risk_engine.process_intents.return_value = [fake_action]
+
+    fake_strategy = FakeStrategy(strat_config)
+    engine.strategies = {"fake": fake_strategy}
+    engine.strategy_states = {
+        "fake": StrategyState(
+            strategy_id="fake",
+            enabled=True,
+            last_intents_at=None,
+            last_actions_at=None,
+            current_positions=[],
+            pnl_summary={},
+        )
+    }
+
+    plan = engine.run_cycle(datetime.now(timezone.utc))
+
+    assert plan.actions[0].userref == 4242
+    portfolio.record_execution_plan.assert_called_once()
+    persisted_plan = portfolio.record_execution_plan.call_args[0][0]
+    assert persisted_plan.actions[0].userref == 4242
