@@ -315,6 +315,7 @@ class PairMetadata:
     price_decimals: int
     volume_decimals: int
     lot_size: float
+    min_order_size: float
     status: str
 
 @dataclass

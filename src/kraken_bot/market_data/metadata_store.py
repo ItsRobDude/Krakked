@@ -33,4 +33,10 @@ class PairMetadataStore:
             return []
 
         data = json.loads(self._path.read_text())
-        return [PairMetadata(**item) for item in data]
+        normalized_items = []
+        for item in data:
+            if "min_order_size" not in item:
+                item = {**item, "min_order_size": 0.0}
+            normalized_items.append(PairMetadata(**item))
+
+        return normalized_items
