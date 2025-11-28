@@ -56,6 +56,7 @@ class RiskStatus:
     daily_drawdown_pct: float
     drift_flag: bool
     total_exposure_pct: float
+    manual_exposure_pct: float
     per_asset_exposure_pct: Dict[str, float]
     per_strategy_exposure_pct: Dict[str, float]
 
