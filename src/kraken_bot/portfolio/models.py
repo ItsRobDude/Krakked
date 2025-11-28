@@ -76,6 +76,7 @@ class AssetExposure:
     amount: float
     value_base: float
     percentage_of_equity: float
+    source_pair: Optional[str] = None
     valuation_status: str = "valued"
 
 @dataclass
