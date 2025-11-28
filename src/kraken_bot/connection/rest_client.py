@@ -145,6 +145,15 @@ class KrakenRESTClient:
         """
         return self._request("post", endpoint, params=params, private=True)
 
+    def add_order(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        return self.get_private("AddOrder", params=params)
+
+    def cancel_order(self, txid: str) -> Dict[str, Any]:
+        return self.get_private("CancelOrder", {"txid": txid})
+
+    def cancel_all_orders(self) -> Dict[str, Any]:
+        return self.get_private("CancelAll")
+
     def get_ledgers(self, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Retrieves information about ledger entries.
