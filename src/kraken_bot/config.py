@@ -332,3 +332,4 @@ class ConnectionStatus:
     websocket_connected: bool
     streaming_pairs: int
     stale_pairs: int
+    subscription_errors: int

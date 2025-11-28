@@ -81,3 +81,38 @@ def test_handle_message_unknown_symbol(ws_client: KrakenWSClientV2, caplog):
 
     assert not ws_client.ticker_cache.get("DOGEUSD")
     assert "Received data for unknown ws_symbol: DOGE/USD" in caplog.text
+
+
+def test_subscription_acknowledgment(ws_client: KrakenWSClientV2, caplog):
+    """Tests that subscription acknowledgments are stored and logged."""
+    message = {
+        "event": "subscriptionStatus",
+        "channel": "ticker",
+        "symbol": "XBT/USD",
+        "status": "subscribed",
+        "req_id": 1,
+    }
+
+    asyncio.run(ws_client._handle_message(json.dumps(message)))
+
+    assert ws_client.subscription_status["XBTUSD"]["ticker"]["status"] == "subscribed"
+    assert "Subscribed to ticker for XBT/USD" in caplog.text
+
+
+def test_subscription_failure(ws_client: KrakenWSClientV2, caplog):
+    """Tests that subscription failures are captured and logged."""
+    message = {
+        "event": "subscriptionStatus",
+        "channel": "ohlc",
+        "symbol": "ETH/USD",
+        "status": "error",
+        "errorMessage": "Invalid pair",
+        "req_id": 2,
+    }
+
+    asyncio.run(ws_client._handle_message(json.dumps(message)))
+
+    status_record = ws_client.subscription_status["ETHUSD"]["ohlc"]
+    assert status_record["status"] == "error"
+    assert status_record["message"] == "Invalid pair"
+    assert "failed: Invalid pair" in caplog.text

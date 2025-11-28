@@ -47,6 +47,7 @@ def test_get_data_status(mock_store, mock_ws_client_class, mock_build_universe, 
     # Mock the is_connected property using PropertyMock
     type(mock_ws_instance).is_connected = PropertyMock(return_value=True)
     mock_ws_instance.last_update_ts = {"XBTUSD": time.monotonic()}
+    mock_ws_instance.subscription_status = {}
     api._ws_client = mock_ws_instance
 
     status = api.get_data_status()
@@ -55,6 +56,7 @@ def test_get_data_status(mock_store, mock_ws_client_class, mock_build_universe, 
     assert status.websocket_connected is True
     assert status.streaming_pairs == 1
     assert status.stale_pairs == 0
+    assert status.subscription_errors == 0
 
     # --- Test Case 2: REST API fails ---
     api._rest_client.get_public.side_effect = Exception("Connection failed")
@@ -68,15 +70,18 @@ def test_get_data_status(mock_store, mock_ws_client_class, mock_build_universe, 
     assert status.websocket_connected is False
     assert status.streaming_pairs == 0
     assert status.stale_pairs == 1 # The one pair is now stale
+    assert status.subscription_errors == 0
 
     # --- Test Case 4: Data is stale ---
     type(mock_ws_instance).is_connected = PropertyMock(return_value=True)
     # Set the last update to be older than the tolerance
     mock_ws_instance.last_update_ts = {"XBTUSD": time.monotonic() - 120}
+    mock_ws_instance.subscription_status = {"XBTUSD": {"ticker": {"status": "error"}}}
     status = api.get_data_status()
     assert status.websocket_connected is True
     assert status.streaming_pairs == 0
     assert status.stale_pairs == 1
+    assert status.subscription_errors == 1
 
 
 @patch('kraken_bot.market_data.api.build_universe')
