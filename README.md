@@ -82,6 +82,18 @@ The bot uses two configuration files stored in your OS-specific user configurati
     *   Stores your Kraken API Key and Secret securely.
     *   **Setup**: The bot includes a setup utility (CLI) to prompt for keys and create this file. (Usage instructions coming in Phase 6).
 
+### Bootstrap helper
+
+Most modules can start with a ready REST client and parsed configuration using:
+
+```python
+from kraken_bot.bootstrap import bootstrap
+
+client, app_config = bootstrap()
+```
+
+The helper calls `load_config()` and `secrets.load_api_keys(allow_interactive_setup=True)`, raising a `CredentialBootstrapError` when credentials are missing, cannot be decrypted (e.g., wrong `KRAKEN_BOT_SECRET_PW`), or fail validation. Interactive setups are only triggered when keys are missing, so non-interactive environments should supply `KRAKEN_API_KEY`/`KRAKEN_API_SECRET` or the decryption password to avoid errors.
+
 ## 🧪 Testing
 
 To run the test suite:
