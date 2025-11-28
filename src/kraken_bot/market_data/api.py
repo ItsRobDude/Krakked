@@ -196,14 +196,14 @@ class MarketDataAPI:
                     streaming_count += 1
                 except DataStaleError:
                     stale_count += 1
-
-            if self._ws_client:
-                for pair_status in self._ws_client.subscription_status.values():
-                    for status_record in pair_status.values():
-                        if status_record.get("status") != "subscribed":
-                            subscription_errors += 1
         else:
             stale_count = len(self._universe)
+
+        if self._ws_client:
+            for pair_status in self._ws_client.subscription_status.values():
+                for status_record in pair_status.values():
+                    if status_record.get("status") != "subscribed":
+                        subscription_errors += 1
 
         return ConnectionStatus(
             rest_api_reachable=rest_ok,

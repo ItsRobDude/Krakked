@@ -112,20 +112,30 @@ class KrakenWSClientV2:
             event_type = data.get("event")
             if event_type == "subscriptionStatus":
                 status = data.get("status")
-                channel = data.get("channel")
-                ws_symbol = data.get("symbol")
-                canonical_pair = self._get_canonical_from_ws_symbol(ws_symbol) if ws_symbol else None
+                channel = data.get("channel") or "unknown"
+                ws_symbols = data.get("symbol")
+                req_id = data.get("req_id")
+                error_message = data.get("errorMessage")
 
-                status_record = {"status": status, "message": data.get("errorMessage"), "req_id": data.get("req_id")}
+                if not isinstance(ws_symbols, list):
+                    ws_symbols = [ws_symbols]
 
-                if canonical_pair and channel:
-                    self.subscription_status[canonical_pair][channel] = status_record
+                recorded_pairs = []
+                display_names = []
+                for ws_symbol in ws_symbols:
+                    canonical_pair = self._get_canonical_from_ws_symbol(ws_symbol) if ws_symbol else None
+                    pair_key = canonical_pair or ws_symbol or "unknown"
+                    status_record = {"status": status, "message": error_message, "req_id": req_id}
+                    self.subscription_status[pair_key][channel] = status_record
+                    recorded_pairs.append(pair_key)
+                    display_names.append(ws_symbol or canonical_pair or "unknown")
 
+                pair_display = ", ".join(display_names) if display_names else "unknown"
                 if status == "subscribed":
-                    logger.info(f"Subscribed to {channel} for {ws_symbol or canonical_pair}.")
+                    logger.info(f"Subscribed to {channel} for {pair_display}.")
                 else:
                     logger.error(
-                        f"Subscription to {channel} for {ws_symbol or canonical_pair} failed: {data.get('errorMessage', 'unknown error')}"
+                        f"Subscription to {channel} for {pair_display} failed: {error_message or 'unknown error'}"
                     )
             else:
                 logger.debug(f"Unhandled event message type: {event_type}")
