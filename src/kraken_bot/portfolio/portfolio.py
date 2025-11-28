@@ -217,6 +217,8 @@ class Portfolio:
         unvalued_assets: List[str] = []
 
         for asset, balance in self.balances.items():
+            if not self._is_asset_included(asset):
+                continue
             conversion = self._convert_to_base_currency(balance.total, asset)
             value_base = conversion.value_base
             equity += value_base
@@ -413,6 +415,7 @@ class Portfolio:
                     amount=balance.total,
                     value_base=value_base,
                     percentage_of_equity=pct,
+                    source_pair=conversion.source_pair,
                     valuation_status=conversion.status,
                 )
             )
