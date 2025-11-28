@@ -401,11 +401,10 @@ class PortfolioService:
             ))
 
     def _process_cash_flow(self, record: CashFlowRecord):
-        # Update balances?
-        # We rely on LIVE balances for reconciliation.
-        # But we could track expected balances.
-        # For Phase 3, we just store them to report 'Cash Flows'.
-        pass
+        bal = self.balances.get(record.asset, AssetBalance(record.asset, 0.0, 0.0, 0.0))
+        bal.total += record.amount
+        bal.free += record.amount
+        self.balances[record.asset] = bal
 
     def _convert_to_base_currency(self, amount: float, asset: str) -> float:
         if amount == 0: return 0.0
@@ -483,35 +482,6 @@ class PortfolioService:
         self.balances = new_balances
 
         # Drift Check
-        # For each asset in positions, check if position size ~= balance total
-        discrepancies = {}
-        for pair, pos in self.positions.items():
-            asset = pos.base_asset
-            if asset in self.config.exclude_assets:
-                continue
-
-            bal = self.balances.get(asset)
-            bal_total = bal.total if bal else 0.0
-
-            diff = abs(pos.base_size - bal_total)
-            # Note: One asset could be in multiple pairs? (e.g. ETH/USD, ETH/BTC)
-            # If we trade ETH in multiple pairs, 'SpotPosition' tracks "net base units held BECAUSE OF this pair".
-            # Aggregating positions by asset:
-            # But typically we view "Positions" as the breakdown.
-            # If we hold 10 ETH. Bought 5 via ETH/USD, 5 via ETH/BTC.
-            # Position(ETHUSD).size = 5. Position(ETHBTC).size = 5.
-            # Total ETH = 10. Matches Balance.
-
-            # So we need to sum position sizes by asset.
-            pass # We'll do this if we have multiple pairs per asset.
-            # For now assuming 1 pair per asset mostly.
-
-        # Simple reconciliation:
-        # Just check if we are way off?
-        # Actually, if we use Balances as Truth, we might just update Positions to match if drift is small?
-        # Or just flag it.
-        # Spec: "If difference ... exceeds tolerance ... Flags portfolio drift"
-
         # Implementation:
         # 1. Sum position sizes by asset.
         asset_position_sums = defaultdict(float)
@@ -519,6 +489,7 @@ class PortfolioService:
             asset_position_sums[pos.base_asset] += pos.base_size
 
         drift = False
+        discrepancies = {}
         for asset, pos_sum in asset_position_sums.items():
             bal = self.balances.get(asset)
             bal_total = bal.total if bal else 0.0
@@ -631,6 +602,10 @@ class PortfolioService:
         )
 
         self.store.save_snapshot(snapshot)
+        retention_window = int(self.config.snapshot_retention_days * 86400)
+        if retention_window > 0:
+            cutoff = snapshot.timestamp - retention_window
+            self.store.prune_snapshots(cutoff)
         return snapshot
 
     def record_decision(self, record: DecisionRecord):
