@@ -108,6 +108,10 @@ To run the implemented Phase 4 features, set these keys in `config.yaml`:
 
 Phase 4 produces risk-adjusted actions but still relies on Phase 5 to wire order tagging and OMS submission. Execution hooks and tag propagation will arrive with the Phase 5 implementation.
 
+#### Strategy ID propagation and tagging
+
+`strategy_id` is carried end-to-end: strategies emit `StrategyIntent`, the risk engine normalizes that into `RiskAdjustedAction`, and the resulting `DecisionRecord` snapshots the same identifier for audit/history. Each strategy config supports an optional `userref` field in `StrategyConfig` to give the strategy a stable numeric tag; configure it now so Phase 5’s OMS can reuse it for Kraken order tagging and PnL attribution. OMS/userref plumbing itself is intentionally deferred to Phase 5, but providing `userref` early guarantees consistent attribution once execution wiring lands.
+
 ## 🧪 Testing
 
 To run the test suite:
