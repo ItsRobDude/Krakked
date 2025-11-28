@@ -4,11 +4,11 @@ A modular, robust Kraken trading bot designed for spot trading (CA/USA) with a f
 
 ## 🚀 Current Status
 
-This repository includes working, test-covered implementations for the early phases, but it is still a backend-only project. No execution layer or user interface has been built yet.
+This repository includes working, test-covered implementations for the early phases, but it is still a backend-only project. QA flagged an outstanding environment-variable precedence fix in Phase 1; execution wiring and any user interface remain pending.
 
 | Module | Status | Notes |
 | :--- | :--- | :--- |
-| **Phase 1: Connection** | ✅ Implemented | REST client with signed private calls, configurable rate limiting, nonce handling, and encrypted credential storage/validation. |
+| **Phase 1: Connection** | ✅ Implemented | REST client with signed private calls, configurable rate limiting, nonce handling, and encrypted credential storage/validation; environment-variable precedence bug fix pending. |
 | **Phase 2: Market Data** | ✅ Implemented | Pair-universe discovery, OHLC backfill to a pluggable store, and WebSocket v2 streaming with staleness checks. |
 | **Phase 3: Portfolio** | ✅ Implemented | Portfolio service with SQLite persistence, weighted-average cost PnL, fee tracking, and cashflow detection. |
 | **Phase 4: Strategy & Risk** | ✅ Implemented | Strategy loader, intent/risk engine, and scenario simulations; no live execution wiring. |
