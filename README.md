@@ -4,25 +4,40 @@ A modular, robust Kraken trading bot designed for spot trading (CA/USA) with a f
 
 ## 🚀 Current Status
 
-| Module | Status | Description |
+This repository is still early stage and backend-only. Phase 1 connectivity exists but needs hardening and better defaults, and later phases are present as partial implementations rather than finished features. No execution layer or user interface has been built yet.
+
+| Module | Status | Notes |
 | :--- | :--- | :--- |
-| **Phase 1: Connection** | ✅ Completed | `KrakenRESTClient` (public/private), rate limiting, authentication, secrets management. |
-| **Phase 2: Market Data** | ✅ Completed | `MarketDataAPI`, WebSocket V2 integration, historical OHLC backfilling, universe management. |
-| **Phase 3: Portfolio** | ✅ Completed | `PortfolioService`, local SQLite persistence, PnL tracking (WAC), cash flow detection, snapshotting. |
-| **Phase 4: Strategy & Risk** | ✅ Completed | `StrategyRiskEngine`, pluggable strategy framework, centralized risk limits (drawdown, exposure), decision persistence. |
-| **Phase 5: Execution** | ⏳ Pending | Order Management System (OMS), trade execution, order lifecycle management. |
-| **Phase 6: UI/Control** | ⏳ Pending | Web/CLI interface for monitoring and manual control. |
+| **Phase 1: Connection** | 🟡 Partially implemented | REST client, rate limiting, nonce handling, and encrypted credential setup exist, but credential validation metadata, clearer error taxonomy, and config defaults still need work. |
+| **Phase 2: Market Data** | 🧪 Prototype | Universe discovery, OHLC backfill, and WebSocket v2 streaming caches exist; needs sturdier persistence, staleness handling, and integration tests. |
+| **Phase 3: Portfolio** | 🧪 Prototype | Balance/position models and a SQLite-backed store exist; reconciliation loops, retention policies, and PnL validation remain TODO. |
+| **Phase 4: Strategy & Risk** | 🧪 Prototype | Strategy scaffolding, demo strategy, and basic risk checks exist; no intent aggregation or execution routing. |
+| **Phase 5: Execution** | ⏳ Not started | Order Management System (OMS), trade execution, order lifecycle management. |
+| **Phase 6: UI/Control** | ⏳ Not started | CLI/web interface for monitoring and manual control. |
+
+## 📊 Current Progress Details
+
+* **Connectivity (Phase 1)**
+  * Implemented: REST client with nonce handling, retry-aware rate limiter, encrypted credential storage, and CLI setup flow.
+  * Still needed: validation metadata on credentials, resilient config defaults, and clearer auth vs service error surfacing.
+* **Market Data (Phase 2)**
+  * Implemented: tradable-universe builder, OHLC backfill into a pluggable store, pair metadata cache, and WebSocket v2 ticker/ohlc streaming with stale-data detection hooks.
+  * Still needed: stronger persistence durability, retention/staleness enforcement, and integration with downstream consumers.
+* **Portfolio (Phase 3)**
+  * Implemented: portfolio models, portfolio manager, and SQLite persistence primitives.
+  * Still needed: reconciliation loops, retention, and audited PnL calculations.
+* **Strategy & Risk (Phase 4)**
+  * Implemented: strategy interfaces, demo strategy, and basic risk checks.
+  * Still needed: intent aggregation, centralized risk engine, and execution wiring.
 
 ## 🏗️ Architecture
 
 The bot is organized into distinct modules:
 
-*   **`connection`**: Low-level API interaction (REST & WebSocket). Handles auth, signing, retries, and rate limits.
-*   **`market_data`**: Abstracted data access. Provides a unified interface for real-time prices and historical candles.
-*   **`portfolio`**: Accounting engine. Tracks balances, positions, and performance metrics locally to ensure a "source of truth" independent of exchange lag.
-*   **`strategy`**: Decision-making brain.
-    *   **Strategies** emit "intents" (e.g., "I want to be long XBT").
-    *   **Risk Engine** aggregates intents, applies hard limits (max drawdown, per-asset cap), and produces a sanitized `ExecutionPlan`.
+*   **`connection`**: Low-level API interaction (REST only today). Handles auth, signing, retries, and rate limits, plus encrypted credential setup.
+*   **`market_data`**: Abstracted data access. Builds the tradable universe, backfills OHLC, and exposes WebSocket v2 streaming caches with stale-data protection.
+*   **`portfolio`**: Accounting engine. Tracks balances, positions, WAC PnL, and cashflows in memory with SQLite persistence.
+*   **`strategy`**: Decision-making layer. Strategies emit intents that flow through the risk engine for limit enforcement; execution wiring remains TODO.
 
 ## 📦 Installation & Setup
 
