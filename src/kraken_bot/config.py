@@ -90,6 +90,15 @@ def get_config_dir() -> Path:
     return Path(appdirs.user_config_dir("kraken_bot"))
 
 
+def get_default_ohlc_store_config() -> Dict[str, str]:
+    """
+    Provides a sensible default configuration for the OHLC store, pointing to
+    a user-specific data directory with a Parquet backend.
+    """
+    default_root = Path(appdirs.user_data_dir("kraken_bot")) / "ohlc"
+    return {"root_dir": str(default_root), "backend": "parquet"}
+
+
 def load_config(config_path: Path = None) -> AppConfig:
     """
     Loads the main application configuration from the default location or a specified path.
@@ -258,6 +267,16 @@ def load_config(config_path: Path = None) -> AppConfig:
         )
         market_data = {}
 
+    default_ohlc_store = get_default_ohlc_store_config()
+    ohlc_store_config = market_data.get("ohlc_store", {}) or {}
+    if not isinstance(ohlc_store_config, dict):
+        logger.warning(
+            "OHLC store config is not a mapping; using defaults",
+            extra={"event": "config_invalid_ohlc_store", "config_path": str(config_path)},
+        )
+        ohlc_store_config = {}
+    merged_ohlc_store = {**default_ohlc_store, **ohlc_store_config}
+
     return AppConfig(
         region=RegionProfile(
             code=region_data.get("code", default_region.code),
@@ -275,7 +294,7 @@ def load_config(config_path: Path = None) -> AppConfig:
         ),
         market_data=MarketDataConfig(
             ws=market_data.get("ws", {}),
-            ohlc_store=market_data.get("ohlc_store", {}),
+            ohlc_store=merged_ohlc_store,
             backfill_timeframes=market_data.get("backfill_timeframes", ["1d", "4h", "1h"]),
             ws_timeframes=market_data.get("ws_timeframes", ["1m"]),
             metadata_path=market_data.get("metadata_path"),

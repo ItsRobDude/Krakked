@@ -4,7 +4,7 @@ from typing import Protocol, List
 from pathlib import Path
 import pandas as pd
 import logging
-from kraken_bot.config import OHLCBar, MarketDataConfig
+from kraken_bot.config import OHLCBar, MarketDataConfig, get_default_ohlc_store_config
 
 logger = logging.getLogger(__name__)
 
@@ -28,12 +28,21 @@ class FileOHLCStore:
     The directory structure is: <root_dir>/<timeframe>/<pair>.parquet
     """
     def __init__(self, config: MarketDataConfig):
-        store_config = config.ohlc_store
-        if not store_config or "root_dir" not in store_config:
+        default_config = get_default_ohlc_store_config()
+        user_config = config.ohlc_store or {}
+        if not isinstance(user_config, dict):
+            logger.warning("Invalid OHLC store config; using defaults")
+            user_config = {}
+
+        store_config = {**default_config, **user_config}
+
+        if "root_dir" not in store_config:
             raise ValueError("FileOHLCStore requires a 'root_dir' in the market_data.ohlc_store config.")
 
         self.root_dir = Path(store_config["root_dir"]).expanduser()
         self.backend = store_config.get("backend", "parquet")
+
+        self.root_dir.mkdir(parents=True, exist_ok=True)
 
         if self.backend not in ["parquet"]:
             raise ValueError(f"Unsupported file backend: {self.backend}. Only 'parquet' is supported.")
