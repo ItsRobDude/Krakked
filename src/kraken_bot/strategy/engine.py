@@ -1,27 +1,34 @@
-# src/kraken_bot/strategy/engine.py
+"""Strategy orchestration and risk routing."""
 
-import logging
-import time
+from __future__ import annotations
+
 import json
-from datetime import datetime, timezone
-from typing import List, Dict, Optional, Any
+import logging
 from dataclasses import asdict
+from datetime import datetime, timezone
+from typing import Dict, List, Optional, Type
 
-from kraken_bot.config import AppConfig, StrategiesConfig, StrategyConfig
+from kraken_bot.config import AppConfig, StrategyConfig
 from kraken_bot.market_data.api import MarketDataAPI
 from kraken_bot.portfolio.manager import PortfolioService
-from .models import ExecutionPlan, RiskAdjustedAction, DecisionRecord, StrategyIntent, StrategyState, RiskStatus
 from .base import Strategy, StrategyContext
+from .models import DecisionRecord, ExecutionPlan, RiskAdjustedAction, RiskStatus, StrategyIntent, StrategyState
 from .risk import RiskEngine
-
-# Import strategies dynamically or via registry?
-# For now, explicit import of known strategies or a registry pattern.
-# We'll use a simple registry in this module or importing from strategies package.
-from .strategies.demo_strategy import TrendFollowingStrategy # Will create this next
+from .strategies.demo_strategy import TrendFollowingStrategy
 
 logger = logging.getLogger(__name__)
 
-class StrategyRiskEngine:
+
+def _strategy_registry() -> Dict[str, Type[Strategy]]:
+    """Return a mapping of strategy type identifiers to implementations."""
+    return {
+        "trend_following": TrendFollowingStrategy,
+    }
+
+
+class StrategyEngine:
+    """Loads configured strategies, routes intents through risk, and persists plans."""
+
     def __init__(self, config: AppConfig, market_data: MarketDataAPI, portfolio: PortfolioService):
         self.config = config
         self.market_data = market_data
@@ -31,155 +38,137 @@ class StrategyRiskEngine:
         self.strategies: Dict[str, Strategy] = {}
         self.strategy_states: Dict[str, StrategyState] = {}
 
-    def initialize(self):
-        logger.info("Initializing StrategyRiskEngine...")
-
-        # Instantiate strategies based on config
-        registry = {
-            "trend_following": TrendFollowingStrategy,
-            "mean_reversion": None # Placeholder
-        }
+    def initialize(self) -> None:
+        logger.info("Initializing StrategyEngine...")
+        registry = _strategy_registry()
 
         for name, strat_cfg in self.config.strategies.configs.items():
             if not strat_cfg.enabled:
+                logger.info("Skipping disabled strategy %s", name)
                 continue
 
             if name not in self.config.strategies.enabled:
-                # Double check global enabled list
+                logger.info("Strategy %s not in enabled list, skipping", name)
                 continue
 
             strat_class = registry.get(strat_cfg.type)
-            if strat_class:
-                logger.info(f"Loading strategy: {name} ({strat_cfg.type})")
-                strategy = strat_class(strat_cfg)
-                self.strategies[name] = strategy
+            if not strat_class:
+                logger.warning("Unknown strategy type: %s for %s", strat_cfg.type, name)
+                continue
 
-                # Init state
-                self.strategy_states[name] = StrategyState(
-                    strategy_id=name,
-                    enabled=True,
-                    last_intents_at=None,
-                    last_actions_at=None,
-                    current_positions=[],
-                    pnl_summary={}
-                )
-
-                # Warmup
-                try:
-                    strategy.warmup(self.market_data, self.portfolio)
-                except Exception as e:
-                    logger.error(f"Error warming up strategy {name}: {e}")
-            else:
-                logger.warning(f"Unknown strategy type: {strat_cfg.type} for {name}")
-
-        logger.info(f"StrategyRiskEngine initialized with {len(self.strategies)} strategies.")
-
-    def run_cycle(self, now: Optional[datetime] = None) -> ExecutionPlan:
-        """
-        Main decision cycle.
-        """
-        if not now:
-            now = datetime.now(timezone.utc)
-
-        cycle_id = f"plan_{int(now.timestamp())}"
-        logger.info(f"Starting decision cycle {cycle_id}")
-
-        # 1. Sync Data
-        try:
-            # Check Data Status
-            status = self.market_data.get_data_status()
-            # If completely stale, abort?
-            # Or just proceed with caution (risk engine will see old prices?)
-            # Phase 4 spec: "fail fast if data is stale"
-            # How stale is stale?
-            # Let's check rest_api_reachable at least.
-            if not status.rest_api_reachable:
-                 logger.error("REST API not reachable. Aborting cycle.")
-                 return ExecutionPlan(plan_id=cycle_id, generated_at=now, actions=[], metadata={"error": "REST API unreachable"})
-
-            self.portfolio.sync()
-        except Exception as e:
-            logger.error(f"Error syncing data in cycle: {e}")
-            return ExecutionPlan(plan_id=cycle_id, generated_at=now, actions=[], metadata={"error": str(e)})
-
-        # 2. Generate Intents
-        all_intents: List[StrategyIntent] = []
-
-        for name, strategy in self.strategies.items():
-            # Determine timeframes to run?
-            # Strategies define their timeframes.
-            # We assume for now we run ALL configured timeframes every cycle,
-            # and the strategy internal logic checks "is this a new bar?".
-            # Or the runner handles it.
-            # Simplified: Strategy checks if it should act.
-
-            # TODO: Only run if candle closed?
-            # Passing 'now' to strategy context.
-
-            # Filter universe?
-            # Strategy config has universe_filter?
-            # Base context universe on global config for now.
-            universe = self.config.universe.include_pairs
-
-            ctx = StrategyContext(
-                now=now,
-                universe=universe,
-                market_data=self.market_data,
-                portfolio=self.portfolio,
-                timeframe="1h" # Default/Placeholder. Ideally loop over strategy timeframes.
+            strategy = strat_class(strat_cfg)
+            self.strategies[name] = strategy
+            self.strategy_states[name] = StrategyState(
+                strategy_id=name,
+                enabled=True,
+                last_intents_at=None,
+                last_actions_at=None,
+                current_positions=[],
+                pnl_summary={},
             )
 
             try:
-                intents = strategy.generate_intents(ctx)
+                strategy.warmup(self.market_data, self.portfolio)
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.error("Error warming up strategy %s: %s", name, exc)
+
+        logger.info("StrategyEngine initialized with %d strategies", len(self.strategies))
+
+    def run_cycle(self, now: Optional[datetime] = None) -> ExecutionPlan:
+        """Run a full decision cycle and persist the resulting execution plan."""
+        now = now or datetime.now(timezone.utc)
+        plan_id = f"plan_{int(now.timestamp())}"
+        logger.info("Starting decision cycle %s", plan_id)
+
+        if not self._data_ready():
+            return ExecutionPlan(plan_id=plan_id, generated_at=now, actions=[], metadata={"error": "REST API unreachable"})
+
+        all_intents: List[StrategyIntent] = []
+        for name, strategy in self.strategies.items():
+            context = self._build_context(now, strategy.config)
+            try:
+                intents = strategy.generate_intents(context)
                 all_intents.extend(intents)
+                self.strategy_states[name].last_intents_at = now
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.error("Error generating intents for %s: %s", name, exc)
 
-                # Update State
-                state = self.strategy_states[name]
-                state.last_intents_at = now
-
-            except Exception as e:
-                logger.error(f"Error generating intents for {name}: {e}")
-
-        # 3. Risk Evaluation
         risk_actions = self.risk_engine.process_intents(all_intents)
+        self._persist_actions(plan_id, now, risk_actions)
 
-        # 4. Persistence & Logging
-        for action in risk_actions:
-            # Create DecisionRecord
+        plan = ExecutionPlan(
+            plan_id=plan_id,
+            generated_at=now,
+            actions=risk_actions,
+            metadata={"risk_status": asdict(self.risk_engine.get_status())},
+        )
+
+        self._persist_plan(plan)
+        return plan
+
+    def _data_ready(self) -> bool:
+        try:
+            status = self.market_data.get_data_status()
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.error("Unable to fetch data status: %s", exc)
+            return False
+
+        if not status.rest_api_reachable:
+            logger.error("REST API not reachable. Aborting cycle.")
+            return False
+
+        try:
+            self.portfolio.sync()
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.error("Error syncing portfolio: %s", exc)
+            return False
+
+        return True
+
+    def _build_context(self, now: datetime, strategy_config: StrategyConfig) -> StrategyContext:
+        universe = self.config.universe.include_pairs
+        timeframe = strategy_config.params.get("timeframe") or strategy_config.params.get("timeframes", ["1h"])[0]
+        return StrategyContext(
+            now=now,
+            universe=universe,
+            market_data=self.market_data,
+            portfolio=self.portfolio,
+            timeframe=timeframe,
+        )
+
+    def _persist_actions(self, plan_id: str, now: datetime, actions: List[RiskAdjustedAction]) -> None:
+        for action in actions:
             record = DecisionRecord(
                 time=int(now.timestamp()),
-                plan_id=cycle_id,
-                strategy_name=action.strategy_id, # Might be aggregated
+                plan_id=plan_id,
+                strategy_name=action.strategy_id,
                 pair=action.pair,
                 action_type=action.action_type,
                 target_position_usd=action.target_notional_usd,
                 blocked=action.blocked,
-                block_reason=";".join(action.blocked_reasons),
+                block_reason=";".join(action.blocked_reasons) if action.blocked_reasons else None,
                 kill_switch_active=self.risk_engine._kill_switch_active,
-                raw_json=json.dumps(asdict(action), default=str)
+                raw_json=json.dumps(asdict(action), default=str),
             )
             self.portfolio.record_decision(record)
 
-            # Update last actions time for strategies involved
-            if not action.blocked:
-                ids = action.strategy_id.split(",")
-                for sid in ids:
-                    if sid in self.strategy_states:
-                        self.strategy_states[sid].last_actions_at = now
+            for sid in action.strategy_id.split(","):
+                if sid in self.strategy_states:
+                    self.strategy_states[sid].last_actions_at = now
 
-        # 5. Return Plan
-        plan = ExecutionPlan(
-            plan_id=cycle_id,
-            generated_at=now,
-            actions=risk_actions,
-            metadata={
-                "risk_status": asdict(self.risk_engine.get_status())
-            }
-        )
-        return plan
+    def _persist_plan(self, plan: ExecutionPlan) -> None:
+        persist_method = getattr(self.portfolio, "record_execution_plan", None)
+        if callable(persist_method):
+            persist_method(plan)
+        else:  # pragma: no cover - backwards compatibility
+            logger.debug("PortfolioService missing record_execution_plan; skipping persistence.")
 
     def get_risk_status(self) -> RiskStatus:
         return self.risk_engine.get_status()
 
     def get_strategy_state(self) -> List[StrategyState]:
         return list(self.strategy_states.values())
+
+
+# Backwards compatibility alias
+StrategyRiskEngine = StrategyEngine

@@ -4,10 +4,11 @@ import abc
 import sqlite3
 import json
 import logging
+from dataclasses import asdict
 from typing import List, Optional, Dict, Any
 from pathlib import Path
 from .models import RealizedPnLRecord, CashFlowRecord, PortfolioSnapshot, AssetValuation
-from src.kraken_bot.strategy.models import DecisionRecord
+from kraken_bot.strategy.models import DecisionRecord, ExecutionPlan
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +51,11 @@ class PortfolioStore(abc.ABC):
     @abc.abstractmethod
     def add_decision(self, record: DecisionRecord):
         """Saves a strategy decision record."""
+        pass
+
+    @abc.abstractmethod
+    def save_execution_plan(self, plan: ExecutionPlan):
+        """Persist an execution plan for downstream consumption."""
         pass
 
 
@@ -159,8 +165,8 @@ class SQLitePortfolioStore(PortfolioStore):
             # Update version
             cursor.execute("UPDATE schema_version SET version = 4 WHERE id = 1")
         else:
-             # Ensure table exists even if version is current (for fresh installs)
-             cursor.execute("""
+            # Ensure table exists even if version is current (for fresh installs)
+            cursor.execute("""
                 CREATE TABLE IF NOT EXISTS decisions (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     time INTEGER NOT NULL,
@@ -175,8 +181,21 @@ class SQLitePortfolioStore(PortfolioStore):
                     raw_json TEXT
                 )
             """)
-             cursor.execute("CREATE INDEX IF NOT EXISTS idx_decisions_time ON decisions(time)")
-             cursor.execute("CREATE INDEX IF NOT EXISTS idx_decisions_plan_id ON decisions(plan_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_decisions_time ON decisions(time)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_decisions_plan_id ON decisions(plan_id)")
+
+        # Execution Plans Table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS execution_plans (
+                plan_id TEXT PRIMARY KEY,
+                generated_at REAL NOT NULL,
+                action_count INTEGER NOT NULL,
+                blocked_actions INTEGER NOT NULL,
+                metadata_json TEXT,
+                plan_json TEXT
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_execution_plans_generated_at ON execution_plans(generated_at)")
 
         conn.commit()
         conn.close()
@@ -423,6 +442,36 @@ class SQLitePortfolioStore(PortfolioStore):
             1 if record.kill_switch_active else 0,
             record.raw_json
         ))
+
+        conn.commit()
+        conn.close()
+
+    def save_execution_plan(self, plan: ExecutionPlan):
+        conn = self._get_conn()
+        cursor = conn.cursor()
+
+        plan_json = json.dumps({
+            "plan_id": plan.plan_id,
+            "generated_at": plan.generated_at,
+            "actions": [asdict(a) for a in plan.actions],
+            "metadata": plan.metadata,
+        }, default=str)
+
+        cursor.execute(
+            """
+            INSERT OR REPLACE INTO execution_plans (
+                plan_id, generated_at, action_count, blocked_actions, metadata_json, plan_json
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                plan.plan_id,
+                plan.generated_at.timestamp(),
+                len(plan.actions),
+                len([a for a in plan.actions if a.blocked]),
+                json.dumps(plan.metadata, default=str),
+                plan_json,
+            ),
+        )
 
         conn.commit()
         conn.close()

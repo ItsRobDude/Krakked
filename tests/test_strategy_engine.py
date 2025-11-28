@@ -81,6 +81,9 @@ def test_engine_cycle():
     assert isinstance(args, DecisionRecord)
     assert args.pair == "XBTUSD"
 
+    # Execution plan should be persisted for downstream services
+    assert portfolio.record_execution_plan.called
+
 def test_engine_stale_data():
     app_config = MagicMock(spec=AppConfig)
     app_config.strategies = StrategiesConfig()
