@@ -29,14 +29,16 @@ export async function validateCredentials(payload: CredentialPayload): Promise<C
     const result = (await response.json()) as CredentialResponse;
     return result;
   } catch (error) {
-    console.warn('Falling back to placeholder validation. Reason:', error);
+    console.warn('Credential validation failed. Reason:', error);
   }
 
   await new Promise((resolve) => setTimeout(resolve, 600));
 
   const valid = payload.apiKey.trim().length > 0 && payload.apiSecret.trim().length > 0;
   return {
-    success: valid,
-    message: valid ? 'Credentials look good. Ready to load into Kraken bot.' : 'Both fields are required.',
+    success: false,
+    message: valid
+      ? 'Unable to validate credentials right now. Please check your connection or try again later.'
+      : 'Both fields are required.',
   };
 }
