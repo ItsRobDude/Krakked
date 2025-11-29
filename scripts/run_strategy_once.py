@@ -12,6 +12,7 @@ execution into a safe paper-validation mode. It:
 
 from __future__ import annotations
 
+import copy
 import logging
 from typing import Iterable
 
@@ -35,11 +36,17 @@ class _WsStub:
 
 
 
-def _ensure_safe_execution(config: AppConfig) -> None:
+def _ensure_safe_execution(config: AppConfig) -> AppConfig:
     """Force execution settings into paper/validation mode for safety."""
 
-    config.execution.mode = "paper"
-    config.execution.validate_only = True
+    safe_config = copy.deepcopy(config)
+    safe_config.execution.mode = "paper"
+    safe_config.execution.validate_only = True
+    safe_config.execution.allow_live_trading = False
+    logger.info(
+        "Overriding execution config to paper mode with validation-only and live-trading guard"
+    )
+    return safe_config
 
 
 
@@ -57,28 +64,28 @@ def run_strategy_once() -> None:
     """Run a synchronous strategy + execution cycle in a safe, non-live mode."""
 
     client, config = bootstrap(allow_interactive_setup=False)
-    _ensure_safe_execution(config)
+    safe_config = _ensure_safe_execution(config)
 
-    market_data = MarketDataAPI(config)
+    market_data = MarketDataAPI(safe_config)
     market_data.refresh_universe()
     _backfill_pairs(
         market_data,
         market_data.get_universe(),
-        config.market_data.backfill_timeframes,
+        safe_config.market_data.backfill_timeframes,
     )
 
     # Avoid spinning up the websocket loop while still satisfying connectivity checks
     market_data._ws_client = _WsStub()  # type: ignore[attr-defined]
 
-    portfolio = PortfolioService(config, market_data)
+    portfolio = PortfolioService(safe_config, market_data)
     portfolio.rest_client = client
     portfolio.initialize()
 
-    strategy_engine = StrategyEngine(config, market_data, portfolio)
+    strategy_engine = StrategyEngine(safe_config, market_data, portfolio)
     strategy_engine.initialize()
     plan = strategy_engine.run_cycle()
 
-    execution_service = ExecutionService(client=client, config=config.execution)
+    execution_service = ExecutionService(client=client, config=safe_config.execution)
     result = execution_service.execute_plan(plan)
 
     logger.info("Plan %s executed. success=%s errors=%s", plan.plan_id, result.success, result.errors)

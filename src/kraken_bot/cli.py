@@ -15,6 +15,7 @@ from kraken_bot.connection.exceptions import (
 )
 from kraken_bot.connection.rest_client import KrakenRESTClient
 from kraken_bot.secrets import CredentialResult, CredentialStatus
+from scripts import run_strategy_once
 
 
 def _setup_command(_: argparse.Namespace) -> int:
@@ -49,6 +50,13 @@ def _smoke_test_command(args: argparse.Namespace) -> int:
         return 1
 
 
+def _run_once_command(_: argparse.Namespace) -> int:
+    """Run a single strategy + execution cycle in safe mode."""
+
+    run_strategy_once.run_strategy_once()
+    return 0
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="krakked", description="Kraken bot utilities")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -65,6 +73,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Prompt for credentials if they are not already configured",
     )
     smoke_parser.set_defaults(func=_smoke_test_command)
+
+    run_once_parser = subparsers.add_parser(
+        "run-once",
+        help="Run a single strategy cycle with paper trading and validation guardrails",
+    )
+    run_once_parser.set_defaults(func=_run_once_command)
 
     return parser
 
