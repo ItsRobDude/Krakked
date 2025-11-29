@@ -48,6 +48,9 @@ jobs:
       - name: Install Poetry
         run: python -m pip install poetry==1.8.3
 
+      - name: Configure Poetry
+        run: poetry config virtualenvs.in-project true
+
       - name: Install dependencies
         run: poetry install --no-interaction --no-ansi --with dev
 
@@ -70,7 +73,7 @@ jobs:
             poetry run mypy src tests
           else
             npm install -g pyright
-            pyright src ui
+            poetry run pyright src ui
           fi
 
   ui:
