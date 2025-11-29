@@ -60,9 +60,12 @@ def create_api(context: AppContext) -> FastAPI:
         response.headers["X-Request-ID"] = request.state.request_id
         return response
 
-    @app.get(f"{base_path}/api/health")
     async def healthcheck():
         return {"data": {"status": "ok"}, "error": None}
+
+    app.add_api_route(
+        f"{base_path}/api/health", healthcheck, methods=["GET"], name="healthcheck"
+    )
 
     logger.info(
         "UI API initialized",
