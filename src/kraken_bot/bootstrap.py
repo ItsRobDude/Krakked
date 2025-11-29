@@ -18,6 +18,11 @@ class CredentialBootstrapError(RuntimeError):
 def _validate_credentials(result: CredentialResult) -> Tuple[str, str]:
     """Ensure credentials are loaded and usable for the REST client."""
 
+    if result.status is CredentialStatus.MISSING_PASSWORD:
+        raise CredentialBootstrapError(
+            "Encrypted credentials are locked; set KRAKEN_BOT_SECRET_PW to the master password."
+        )
+
     if result.status is not CredentialStatus.LOADED:
         detail = result.validation_error or result.status.value
         raise CredentialBootstrapError(
