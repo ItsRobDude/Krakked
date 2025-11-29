@@ -14,6 +14,7 @@ from kraken_bot.connection.exceptions import (
     ServiceUnavailableError,
 )
 from kraken_bot.connection.rest_client import KrakenRESTClient
+from kraken_bot.ui.logging import build_request_log_extra
 from kraken_bot.ui.models import ApiEnvelope, SystemHealthPayload
 
 logger = logging.getLogger(__name__)
@@ -78,7 +79,10 @@ async def system_health(request: Request) -> ApiEnvelope[SystemHealthPayload]:
             error=None,
         )
     except Exception as exc:  # pragma: no cover - defensive
-        logger.exception("Failed to fetch system health")
+        logger.exception(
+            "Failed to fetch system health",
+            extra=build_request_log_extra(request, event="system_health_failed"),
+        )
         return ApiEnvelope(data=None, error=str(exc))
 
 
@@ -88,7 +92,10 @@ async def get_config(request: Request) -> ApiEnvelope[dict]:
         ctx = _context(request)
         return ApiEnvelope(data=_redacted_config(ctx.config), error=None)
     except Exception as exc:  # pragma: no cover - defensive
-        logger.exception("Failed to fetch config")
+        logger.exception(
+            "Failed to fetch config",
+            extra=build_request_log_extra(request, event="config_fetch_failed"),
+        )
         return ApiEnvelope(data=None, error=str(exc))
 
 
@@ -101,7 +108,9 @@ async def set_execution_mode(
     if ctx.config.ui.read_only:
         logger.warning(
             "Mode change blocked: UI read-only",
-            extra={"event": "mode_change_blocked", "requested_mode": payload.mode},
+            extra=build_request_log_extra(
+                request, event="mode_change_blocked", requested_mode=payload.mode
+            ),
         )
         return ApiEnvelope(data=None, error="UI is in read-only mode")
 
@@ -121,7 +130,9 @@ async def set_execution_mode(
     if new_mode == "live" and not getattr(execution_config, "allow_live_trading", False):
         logger.warning(
             "Live mode change blocked: allow_live_trading is False",
-            extra={"event": "mode_change_blocked", "requested_mode": new_mode},
+            extra=build_request_log_extra(
+                request, event="mode_change_blocked", requested_mode=new_mode
+            ),
         )
         return ApiEnvelope(data=None, error="Live trading not permitted by configuration")
 
@@ -135,12 +146,13 @@ async def set_execution_mode(
 
     logger.info(
         "Execution mode updated",
-        extra={
-            "event": "mode_changed",
-            "old_mode": current_mode,
-            "new_mode": new_mode,
-            "validate_only": execution_config.validate_only,
-        },
+        extra=build_request_log_extra(
+            request,
+            event="mode_changed",
+            old_mode=current_mode,
+            new_mode=new_mode,
+            validate_only=execution_config.validate_only,
+        ),
     )
 
     return ApiEnvelope(
@@ -163,7 +175,7 @@ async def validate_credentials(
     if auth_config.enabled and auth_header != expected_auth:
         logger.warning(
             "Unauthorized credential validation attempt",
-            extra={"event": "credential_validation_unauthorized"},
+            extra=build_request_log_extra(request, event="credential_validation_unauthorized"),
         )
         return ApiEnvelope(data={"valid": False}, error="Unauthorized")
 
@@ -195,7 +207,9 @@ async def validate_credentials(
     except AuthError as exc:
         logger.warning(
             "Credential validation failed",
-            extra={"error": str(exc), "event": "credential_validation_auth_error"},
+            extra=build_request_log_extra(
+                request, event="credential_validation_auth_error", error=str(exc)
+            ),
         )
         return ApiEnvelope(
             data={"valid": False},
@@ -204,7 +218,9 @@ async def validate_credentials(
     except ServiceUnavailableError as exc:
         logger.warning(
             "Credential validation unavailable",
-            extra={"error": str(exc), "event": "credential_validation_unavailable"},
+            extra=build_request_log_extra(
+                request, event="credential_validation_unavailable", error=str(exc)
+            ),
         )
         return ApiEnvelope(
             data={"valid": False},
@@ -213,14 +229,19 @@ async def validate_credentials(
     except KrakenAPIError as exc:
         logger.warning(
             "Credential validation failed with API error",
-            extra={"error": str(exc), "event": "credential_validation_api_error"},
+            extra=build_request_log_extra(
+                request, event="credential_validation_api_error", error=str(exc)
+            ),
         )
         return ApiEnvelope(
             data={"valid": False},
             error="Authentication failed. Please verify your API key/secret.",
         )
     except Exception as exc:  # pragma: no cover - defensive
-        logger.exception("Unexpected error during credential validation")
+        logger.exception(
+            "Unexpected error during credential validation",
+            extra=build_request_log_extra(request, event="credential_validation_failed"),
+        )
         return ApiEnvelope(
             data={"valid": False},
             error=(

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from typing import Callable
+from uuid import uuid4
 
 from fastapi import FastAPI, Request
 from fastapi.middleware import Middleware
@@ -11,6 +12,7 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from kraken_bot.ui.context import AppContext
+from kraken_bot.ui.logging import build_request_log_extra
 from kraken_bot.ui.routes import execution_router, portfolio_router, risk_router, strategies_router, system_router
 
 logger = logging.getLogger(__name__)
@@ -51,11 +53,21 @@ def create_api(context: AppContext) -> FastAPI:
     app.include_router(execution_router, prefix=f"{base_path}/api/execution")
     app.include_router(system_router, prefix=f"{base_path}/api/system")
 
+    @app.middleware("http")
+    async def inject_request_id(request: Request, call_next):
+        request.state.request_id = request.headers.get("X-Request-ID") or str(uuid4())
+        response = await call_next(request)
+        response.headers["X-Request-ID"] = request.state.request_id
+        return response
+
     @app.get(f"{base_path}/api/health")
     async def healthcheck():
         return {"data": {"status": "ok"}, "error": None}
 
-    logger.info("UI API initialized", extra={"base_path": base_path or "/", "auth": auth_config.enabled})
+    logger.info(
+        "UI API initialized",
+        extra=build_request_log_extra(None, event="ui_initialized", base_path=base_path or "/", auth=auth_config.enabled),
+    )
     return app
 
 

@@ -6,6 +6,7 @@ import logging
 
 from fastapi import APIRouter, Request
 
+from kraken_bot.ui.logging import build_request_log_extra
 from kraken_bot.ui.models import ApiEnvelope, KillSwitchPayload, RiskConfigPayload, RiskStatusPayload
 
 logger = logging.getLogger(__name__)
@@ -25,7 +26,10 @@ async def get_risk_status(request: Request) -> ApiEnvelope[RiskStatusPayload]:
         data = RiskStatusPayload(**status.__dict__)
         return ApiEnvelope(data=data, error=None)
     except Exception as exc:  # pragma: no cover - defensive
-        logger.exception("Failed to fetch risk status")
+        logger.exception(
+            "Failed to fetch risk status",
+            extra=build_request_log_extra(request, event="risk_status_failed"),
+        )
         return ApiEnvelope(data=None, error=str(exc))
 
 
@@ -36,7 +40,10 @@ async def get_risk_config(request: Request) -> ApiEnvelope[RiskConfigPayload]:
         data = RiskConfigPayload(**ctx.config.risk.__dict__)
         return ApiEnvelope(data=data, error=None)
     except Exception as exc:  # pragma: no cover - defensive
-        logger.exception("Failed to fetch risk config")
+        logger.exception(
+            "Failed to fetch risk config",
+            extra=build_request_log_extra(request, event="risk_config_fetch_failed"),
+        )
         return ApiEnvelope(data=None, error=str(exc))
 
 
@@ -44,7 +51,10 @@ async def get_risk_config(request: Request) -> ApiEnvelope[RiskConfigPayload]:
 async def update_risk_config(request: Request) -> ApiEnvelope[RiskConfigPayload]:
     ctx = _context(request)
     if ctx.config.ui.read_only:
-        logger.warning("Risk config update blocked: UI read-only", extra={"event": "risk_config_blocked"})
+        logger.warning(
+            "Risk config update blocked: UI read-only",
+            extra=build_request_log_extra(request, event="risk_config_blocked"),
+        )
         return ApiEnvelope(data=None, error="UI is in read-only mode")
 
     try:
@@ -63,12 +73,15 @@ async def update_risk_config(request: Request) -> ApiEnvelope[RiskConfigPayload]
         if updated_fields:
             logger.info(
                 "Updated risk config",
-                extra={"event": "risk_config_updated", "fields": updated_fields},
+                extra=build_request_log_extra(request, event="risk_config_updated", fields=updated_fields),
             )
 
         return ApiEnvelope(data=RiskConfigPayload(**ctx.config.risk.__dict__), error=None)
     except Exception as exc:  # pragma: no cover - defensive
-        logger.exception("Failed to update risk config")
+        logger.exception(
+            "Failed to update risk config",
+            extra=build_request_log_extra(request, event="risk_config_update_failed"),
+        )
         return ApiEnvelope(data=None, error=str(exc))
 
 
@@ -76,7 +89,10 @@ async def update_risk_config(request: Request) -> ApiEnvelope[RiskConfigPayload]
 async def set_kill_switch(request: Request) -> ApiEnvelope[RiskStatusPayload]:
     ctx = _context(request)
     if ctx.config.ui.read_only:
-        logger.warning("Kill switch update blocked: UI read-only", extra={"event": "kill_switch_blocked"})
+        logger.warning(
+            "Kill switch update blocked: UI read-only",
+            extra=build_request_log_extra(request, event="kill_switch_blocked"),
+        )
         return ApiEnvelope(data=None, error="UI is in read-only mode")
 
     try:
@@ -89,9 +105,14 @@ async def set_kill_switch(request: Request) -> ApiEnvelope[RiskStatusPayload]:
         status = ctx.strategy_engine.get_risk_status()
         logger.info(
             "Updated manual kill switch",
-            extra={"event": "kill_switch_updated", "active": payload.active},
+            extra=build_request_log_extra(
+                request, event="kill_switch_updated", active=payload.active
+            ),
         )
         return ApiEnvelope(data=RiskStatusPayload(**status.__dict__), error=None)
     except Exception as exc:  # pragma: no cover - defensive
-        logger.exception("Failed to update kill switch")
+        logger.exception(
+            "Failed to update kill switch",
+            extra=build_request_log_extra(request, event="kill_switch_update_failed"),
+        )
         return ApiEnvelope(data=None, error=str(exc))

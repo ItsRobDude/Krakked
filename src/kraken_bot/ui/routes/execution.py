@@ -8,6 +8,7 @@ from typing import Any, Dict, List
 from fastapi import APIRouter, Request
 
 from kraken_bot.execution.models import ExecutionResult, LocalOrder
+from kraken_bot.ui.logging import build_request_log_extra
 from kraken_bot.ui.models import ApiEnvelope, ExecutionResultPayload, OpenOrderPayload
 
 logger = logging.getLogger(__name__)
@@ -61,7 +62,10 @@ async def get_open_orders(request: Request) -> ApiEnvelope[List[OpenOrderPayload
         open_orders = [_serialize_order(order) for order in ctx.execution_service.get_open_orders()]
         return ApiEnvelope(data=open_orders, error=None)
     except Exception as exc:  # pragma: no cover - defensive
-        logger.exception("Failed to fetch open orders")
+        logger.exception(
+            "Failed to fetch open orders",
+            extra=build_request_log_extra(request, event="open_orders_failed"),
+        )
         return ApiEnvelope(data=None, error=str(exc))
 
 
@@ -75,7 +79,10 @@ async def get_recent_executions(request: Request) -> ApiEnvelope[List[ExecutionR
         ]
         return ApiEnvelope(data=executions, error=None)
     except Exception as exc:  # pragma: no cover - defensive
-        logger.exception("Failed to fetch recent executions")
+        logger.exception(
+            "Failed to fetch recent executions",
+            extra=build_request_log_extra(request, event="recent_executions_failed"),
+        )
         return ApiEnvelope(data=None, error=str(exc))
 
 
@@ -83,15 +90,24 @@ async def get_recent_executions(request: Request) -> ApiEnvelope[List[ExecutionR
 async def cancel_all_orders(request: Request) -> ApiEnvelope[bool]:
     ctx = _context(request)
     if ctx.config.ui.read_only:
-        logger.warning("Cancel all blocked: UI read-only", extra={"event": "cancel_all_blocked"})
+        logger.warning(
+            "Cancel all blocked: UI read-only",
+            extra=build_request_log_extra(request, event="cancel_all_blocked"),
+        )
         return ApiEnvelope(data=None, error="UI is in read-only mode")
 
     try:
         ctx.execution_service.cancel_all()
-        logger.info("All orders canceled via API", extra={"event": "cancel_all_triggered"})
+        logger.info(
+            "All orders canceled via API",
+            extra=build_request_log_extra(request, event="cancel_all_triggered"),
+        )
         return ApiEnvelope(data=True, error=None)
     except Exception as exc:  # pragma: no cover - defensive
-        logger.exception("Failed to cancel all orders")
+        logger.exception(
+            "Failed to cancel all orders",
+            extra=build_request_log_extra(request, event="cancel_all_failed"),
+        )
         return ApiEnvelope(data=None, error=str(exc))
 
 
@@ -101,7 +117,9 @@ async def cancel_order(local_id: str, request: Request) -> ApiEnvelope[bool]:
     if ctx.config.ui.read_only:
         logger.warning(
             "Cancel order blocked: UI read-only",
-            extra={"event": "cancel_order_blocked", "local_id": local_id},
+            extra=build_request_log_extra(
+                request, event="cancel_order_blocked", local_id=local_id
+            ),
         )
         return ApiEnvelope(data=None, error="UI is in read-only mode")
 
@@ -113,11 +131,22 @@ async def cancel_order(local_id: str, request: Request) -> ApiEnvelope[bool]:
         ctx.execution_service.cancel_order(order)
         logger.info(
             "Order canceled via API",
-            extra={"event": "cancel_order_triggered", "local_id": local_id},
+            extra=build_request_log_extra(
+                request,
+                event="cancel_order_triggered",
+                local_id=local_id,
+                plan_id=order.plan_id,
+                strategy_id=order.strategy_id,
+            ),
         )
         return ApiEnvelope(data=True, error=None)
     except Exception as exc:  # pragma: no cover - defensive
-        logger.exception("Failed to cancel order", extra={"local_id": local_id})
+        logger.exception(
+            "Failed to cancel order",
+            extra=build_request_log_extra(
+                request, event="cancel_order_failed", local_id=local_id, plan_id=order.plan_id
+            ),
+        )
         return ApiEnvelope(data=None, error=str(exc))
 
 
@@ -125,7 +154,10 @@ async def cancel_order(local_id: str, request: Request) -> ApiEnvelope[bool]:
 async def flatten_all_positions(request: Request) -> ApiEnvelope[ExecutionResultPayload]:
     ctx = _context(request)
     if ctx.config.ui.read_only:
-        logger.warning("Flatten all blocked: UI read-only", extra={"event": "flatten_all_blocked"})
+        logger.warning(
+            "Flatten all blocked: UI read-only",
+            extra=build_request_log_extra(request, event="flatten_all_blocked"),
+        )
         return ApiEnvelope(data=None, error="UI is in read-only mode")
 
     try:
@@ -171,9 +203,17 @@ async def flatten_all_positions(request: Request) -> ApiEnvelope[ExecutionResult
         result = ctx.execution_service.execute_plan(plan)
         logger.info(
             "Flatten all triggered via API",
-            extra={"event": "flatten_all_triggered", "actions": len(plan.actions)},
+            extra=build_request_log_extra(
+                request,
+                event="flatten_all_triggered",
+                plan_id=plan.plan_id,
+                actions=len(plan.actions),
+            ),
         )
         return ApiEnvelope(data=_serialize_execution_result(result), error=None)
     except Exception as exc:  # pragma: no cover - defensive
-        logger.exception("Failed to flatten all positions")
+        logger.exception(
+            "Failed to flatten all positions",
+            extra=build_request_log_extra(request, event="flatten_all_failed", plan_id=plan.plan_id),
+        )
         return ApiEnvelope(data=None, error=str(exc))
