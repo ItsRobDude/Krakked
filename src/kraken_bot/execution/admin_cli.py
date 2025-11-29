@@ -110,8 +110,6 @@ def panic(args: argparse.Namespace) -> int:
     logger.error("PANIC: canceling all orders", extra={"event": "execution_panic"})
 
     service = _build_service(args.db_path, args.allow_interactive_setup)
-    service.refresh_open_orders()
-    service.reconcile_orders()
     service.cancel_all()
 
     print("Panic cancel-all issued.")
