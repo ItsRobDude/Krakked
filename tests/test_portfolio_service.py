@@ -118,3 +118,36 @@ def test_get_equity(service):
     # 10k USD + 1 BTC(50k) = 60k
     assert equity.equity_base == 60000.0
     assert equity.cash_base == 10000.0
+
+
+def test_equity_uses_fallback_price(service):
+    pos = SpotPosition("XBTUSD", "XBT", "USD", 1.0, 100.0, 0, 0)
+    service.positions["XBTUSD"] = pos
+    service.balances = {}
+
+    service.market_data.get_latest_price.return_value = None
+    service.market_data._get_cached_price_from_store = MagicMock(return_value=120.0)
+
+    equity = service.get_equity()
+
+    pos = service.positions["XBTUSD"]
+    assert pos.current_value_base == pytest.approx(120.0)
+    assert equity.unrealized_pnl_base_total == pytest.approx(20.0)
+    assert equity.drift_flag is True
+
+
+def test_equity_sets_drift_when_no_price(service):
+    pos = SpotPosition("XBTUSD", "XBT", "USD", 1.0, 100.0, 0, 0)
+    service.positions["XBTUSD"] = pos
+    service.balances = {}
+
+    service.market_data.get_latest_price.return_value = None
+    service.market_data._get_cached_price_from_store = MagicMock(return_value=None)
+    service.market_data._get_rest_ticker_price = MagicMock(return_value=None)
+
+    equity = service.get_equity()
+
+    pos = service.positions["XBTUSD"]
+    assert pos.current_value_base == pytest.approx(100.0)
+    assert equity.unrealized_pnl_base_total == pytest.approx(0.0)
+    assert equity.drift_flag is True
