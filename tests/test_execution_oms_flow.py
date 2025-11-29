@@ -187,3 +187,53 @@ def test_reconcile_orders_closes_and_updates_local_order():
     assert order.cumulative_base_filled == pytest.approx(1.0)
     assert order.avg_fill_price == pytest.approx(22.0)
     assert order.local_id not in service.open_orders
+
+
+def test_cancel_all_requests_adapter_and_marks_orders():
+    class _FakeAdapter:
+        def __init__(self):
+            self.config = ExecutionConfig(validate_only=True)
+            self.client = MagicMock()
+            self.client.get_open_orders.return_value = {"open": {}}
+            self.client.get_closed_orders.return_value = {"closed": {}}
+            self.cancel_all_called = False
+
+        def submit_order(self, order: LocalOrder) -> LocalOrder:  # pragma: no cover - unused
+            return order
+
+        def cancel_order(self, order: LocalOrder) -> None:  # pragma: no cover - unused
+            return None
+
+        def cancel_all_orders(self) -> None:
+            self.cancel_all_called = True
+
+    adapter = _FakeAdapter()
+    store = MagicMock()
+    service = ExecutionService(adapter=adapter, store=store)
+
+    order = LocalOrder(
+        local_id="3",
+        plan_id="plan",
+        strategy_id="strategy",
+        pair="ETHUSD",
+        side="buy",
+        order_type="limit",
+        userref=9,
+        requested_base_size=1.0,
+        requested_price=20.0,
+        kraken_order_id="OIDOPEN",
+        status="open",
+    )
+    service.register_order(order)
+
+    service.cancel_all()
+
+    assert adapter.cancel_all_called is True
+    assert order.status == "canceled"
+    assert order.local_id not in service.open_orders
+    store.update_order_status.assert_called_once_with(
+        local_id=order.local_id,
+        status="canceled",
+        kraken_order_id=order.kraken_order_id,
+        event_message="Canceled via cancel_all",
+    )

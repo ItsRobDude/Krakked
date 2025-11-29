@@ -402,6 +402,40 @@ class ExecutionService:
             },
         )
 
+    def cancel_all(self) -> None:
+        """Cancel all open orders via the adapter and mark them locally."""
+
+        logger.warning("Canceling all open orders", extra={"event": "cancel_all_orders"})
+
+        self.adapter.cancel_all_orders()
+
+        # Refresh local state before marking remaining open orders as canceled.
+        self.refresh_open_orders()
+        self.reconcile_orders()
+
+        for order in list(self.open_orders.values()):
+            order.status = "canceled"
+            order.updated_at = datetime.utcnow()
+
+            if self.store:
+                self.store.update_order_status(
+                    local_id=order.local_id,
+                    status=order.status,
+                    kraken_order_id=order.kraken_order_id,
+                    event_message="Canceled via cancel_all",
+                )
+
+            logger.info(
+                "Canceled order via cancel_all",
+                extra={
+                    "event": "order_canceled",
+                    "local_id": order.local_id,
+                    "kraken_order_id": order.kraken_order_id,
+                },
+            )
+
+            self.open_orders.pop(order.local_id, None)
+
     def cancel_orders(self, orders: List[LocalOrder]) -> None:
         for order in orders:
             try:
