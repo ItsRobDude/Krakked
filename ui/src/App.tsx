@@ -18,9 +18,12 @@ import {
 } from './services/api';
 import { validateCredentials } from './services/credentials';
 
+const DEFAULT_REGION = (import.meta.env.VITE_REGION as string | undefined) ?? 'US_CA';
+
 const initialState = {
   apiKey: '',
   apiSecret: '',
+  region: DEFAULT_REGION,
 };
 
 const AUTH_STORAGE_KEY = 'krakked.authenticated';
@@ -303,14 +306,16 @@ function App() {
     setSubmission({ status: 'loading', message: 'Validating credentials…' });
 
     const response = await validateCredentials(form);
-    if (response.success) {
-      setSubmission({ status: 'success', message: response.message || 'Connected successfully.' });
+    const valid = response.data?.valid ?? false;
+
+    if (valid) {
+      setSubmission({ status: 'success', message: 'Credentials validated successfully.' });
       setIsAuthenticated(true);
       localStorage.setItem(AUTH_STORAGE_KEY, 'true');
     } else {
       setSubmission({
         status: 'error',
-        message: response.message || 'Unable to validate credentials. Please try again.',
+        message: response.error || 'Unable to validate credentials. Please try again.',
       });
     }
   };
