@@ -216,7 +216,8 @@ Returns the current risk state:
 }
 
 Implementation:
-	•	Calls StrategyRiskEngine.get_risk_status().
+        •       Calls StrategyRiskEngine.get_risk_status().
+        •       `kill_switch_active` reflects both manual triggers (via the kill switch endpoint) and automatic risk circuit breakers.
 
 ⸻
 
@@ -242,8 +243,10 @@ PATCH /api/risk/config
 POST /api/risk/kill_switch
 
 Payload: { "active": true | false }
-	•	If true, activate kill switch (block new risk).
-	•	If false, clear kill switch state (if allowed by config).
+        •       If true, activate kill switch (block new risk).
+        •       If false, clear kill switch state (if allowed by config).
+        •       When `ui.read_only` is true, treat this as a read-only endpoint and return the current kill switch state without mutation.
+        •       Manual activations are sticky until explicitly cleared; automatic triggers leave the flag raised until cleared through this endpoint.
 
 ⸻
 
@@ -633,6 +636,7 @@ Status & TODO
 - [x] API envelopes/models: Implemented in the shared response types and payload schemas (`src/kraken_bot/ui/models.py`).
 - [x] Read-only portfolio/risk/strategies/execution endpoints: GET routes are wired through FastAPI routers (`src/kraken_bot/ui/routes/portfolio.py`, `risk.py`, `strategies.py`, `execution.py`, `system.py`).
 - [x] Mutating endpoints with ui.read_only/auth: Auth middleware and read-only guards wrap POST/PATCH routes (`src/kraken_bot/ui/api.py`, `src/kraken_bot/ui/routes/*`).
+- [x] Kill switch endpoint behavior: `/api/risk/kill_switch` documents manual activation/clear semantics, read-only behavior, and response shape.
 - [x] Credential validation rules: Documented below and enforced in `/api/system/credentials/validate`.
 - [x] TUI/React integration: Trading dashboard wired to the backend (`ui/tui_dashboard.py` and `ui/src/App.tsx`).
   - Local dev env vars: `KRAKKED_API_URL` / `KRAKKED_API_TOKEN` (TUI) and `VITE_API_BASE` / `VITE_API_TOKEN` (React).
