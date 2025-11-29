@@ -30,6 +30,23 @@ def test_system_health_enveloped(client, system_context):
     assert payload["data"]["current_mode"] == "paper"
 
 
+def test_system_metrics_endpoint(client, system_context):
+    system_context.metrics.record_plan(blocked_actions=2)
+    system_context.metrics.record_plan_execution(["first error"])
+    system_context.metrics.record_error("background failure")
+
+    response = client.get("/api/system/metrics")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["error"] is None
+    assert payload["data"]["plans_generated"] == 1
+    assert payload["data"]["plans_executed"] == 1
+    assert payload["data"]["blocked_actions"] == 2
+    assert payload["data"]["execution_errors"] == 2
+    assert len(payload["data"]["recent_errors"]) == 2
+
+
 def test_config_redacts_auth_token(client, system_context):
     system_context.config.ui.auth.token = "secret"
 

@@ -8,6 +8,7 @@ from kraken_bot.connection.rest_client import KrakenRESTClient
 from kraken_bot.execution.oms import ExecutionService
 from kraken_bot.market_data.api import MarketDataAPI
 from kraken_bot.portfolio.manager import PortfolioService
+from kraken_bot.metrics import SystemMetrics
 from kraken_bot.strategy.engine import StrategyEngine
 
 
@@ -21,6 +22,7 @@ class AppContext:
     portfolio: PortfolioService
     strategy_engine: StrategyEngine
     execution_service: ExecutionService
+    metrics: SystemMetrics
 
 
 def build_app_context(allow_interactive_setup: bool = True) -> AppContext:
@@ -55,6 +57,8 @@ def build_app_context(allow_interactive_setup: bool = True) -> AppContext:
         rate_limiter=rate_limiter,
     )
 
+    metrics = SystemMetrics()
+
     return AppContext(
         config=config,
         client=client,
@@ -62,6 +66,7 @@ def build_app_context(allow_interactive_setup: bool = True) -> AppContext:
         portfolio=portfolio,
         strategy_engine=strategy_engine,
         execution_service=execution_service,
+        metrics=metrics,
     )
 
 
