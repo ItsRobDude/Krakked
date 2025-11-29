@@ -8,6 +8,7 @@ from uuid import uuid4
 from kraken_bot.strategy.models import ExecutionPlan
 
 from kraken_bot.config import ExecutionConfig
+from kraken_bot.connection.rate_limiter import RateLimiter
 from kraken_bot.market_data.api import MarketDataAPI
 from kraken_bot.connection.rest_client import KrakenRESTClient
 from .adapter import ExecutionAdapter, KrakenExecutionAdapter, get_execution_adapter
@@ -40,8 +41,11 @@ class ExecutionService:
         client: Optional[KrakenRESTClient] = None,
         config: Optional[ExecutionConfig] = None,
         market_data: Optional[MarketDataAPI] = None,
+        rate_limiter: Optional[RateLimiter] = None,
     ):
-        self.adapter = adapter or get_execution_adapter(client=client, config=config or ExecutionConfig())
+        self.adapter = adapter or get_execution_adapter(
+            client=client, config=config or ExecutionConfig(), rate_limiter=rate_limiter
+        )
         self.store = store
         self.market_data = market_data
         self.open_orders: Dict[str, LocalOrder] = {}

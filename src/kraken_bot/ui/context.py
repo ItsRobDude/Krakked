@@ -34,13 +34,14 @@ def build_app_context(allow_interactive_setup: bool = True) -> AppContext:
         A fully initialized :class:`AppContext`.
     """
 
-    client, config = bootstrap(allow_interactive_setup=allow_interactive_setup)
+    client, config, rate_limiter = bootstrap(allow_interactive_setup=allow_interactive_setup)
 
-    market_data = MarketDataAPI(config)
+    market_data = MarketDataAPI(config, rate_limiter=rate_limiter)
     market_data.refresh_universe()
 
-    portfolio = PortfolioService(config, market_data)
-    portfolio.rest_client = client
+    portfolio = PortfolioService(
+        config, market_data, rest_client=client, rate_limiter=rate_limiter
+    )
     portfolio.initialize()
 
     strategy_engine = StrategyEngine(config, market_data, portfolio)
@@ -51,6 +52,7 @@ def build_app_context(allow_interactive_setup: bool = True) -> AppContext:
         config=config.execution,
         market_data=market_data,
         store=portfolio.store,
+        rate_limiter=rate_limiter,
     )
 
     return AppContext(

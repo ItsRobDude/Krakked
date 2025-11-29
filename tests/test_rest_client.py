@@ -4,6 +4,7 @@ import pytest
 import requests
 import time
 from unittest.mock import MagicMock, patch
+from kraken_bot.connection.rate_limiter import RateLimiter
 from kraken_bot.connection.rest_client import KrakenRESTClient
 from kraken_bot.connection.exceptions import AuthError, RateLimitError, KrakenAPIError, ServiceUnavailableError
 
@@ -99,3 +100,25 @@ def test_http_rate_limit_status_maps_to_rate_limit_error(client):
 
         with pytest.raises(RateLimitError):
             client.get_public("Time")
+
+
+def test_shared_rate_limiter_enforces_combined_rate():
+    shared_limiter = RateLimiter(calls_per_second=2)
+    client_one = KrakenRESTClient(calls_per_second=100, rate_limiter=shared_limiter)
+    client_two = KrakenRESTClient(calls_per_second=100, rate_limiter=shared_limiter)
+
+    for client in (client_one, client_two):
+        response = MagicMock()
+        response.status_code = 200
+        response.json.return_value = {"error": [], "result": {"ok": True}}
+        response.raise_for_status.return_value = None
+        client.session.get = MagicMock(return_value=response)
+
+    start = time.monotonic()
+    client_one.get_public("Time")
+    client_two.get_public("Time")
+    elapsed = time.monotonic() - start
+
+    assert client_one.rate_limiter is shared_limiter
+    assert client_two.rate_limiter is shared_limiter
+    assert elapsed >= shared_limiter.interval

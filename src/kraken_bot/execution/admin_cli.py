@@ -17,12 +17,18 @@ logger = logging.getLogger(__name__)
 def _build_service(db_path: str, allow_interactive_setup: bool) -> ExecutionService:
     config = load_config()
     client = None
+    rate_limiter = None
 
     if config.execution.mode == "live" or not config.execution.validate_only:
-        client, config = bootstrap(allow_interactive_setup=allow_interactive_setup)
+        client, config, rate_limiter = bootstrap(allow_interactive_setup=allow_interactive_setup)
 
     store = SQLitePortfolioStore(db_path=db_path)
-    service = ExecutionService(client=client, config=config.execution, store=store)
+    service = ExecutionService(
+        client=client,
+        config=config.execution,
+        store=store,
+        rate_limiter=rate_limiter,
+    )
     service.load_open_orders_from_store()
     return service
 
