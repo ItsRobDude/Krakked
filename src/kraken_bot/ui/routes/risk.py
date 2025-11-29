@@ -6,7 +6,7 @@ import logging
 
 from fastapi import APIRouter, Request
 
-from kraken_bot.ui.models import ApiEnvelope, RiskConfigPayload, RiskStatusPayload
+from kraken_bot.ui.models import ApiEnvelope, KillSwitchPayload, RiskConfigPayload, RiskStatusPayload
 
 logger = logging.getLogger(__name__)
 
@@ -69,4 +69,29 @@ async def update_risk_config(request: Request) -> ApiEnvelope[RiskConfigPayload]
         return ApiEnvelope(data=RiskConfigPayload(**ctx.config.risk.__dict__), error=None)
     except Exception as exc:  # pragma: no cover - defensive
         logger.exception("Failed to update risk config")
+        return ApiEnvelope(data=None, error=str(exc))
+
+
+@router.post("/kill_switch", response_model=ApiEnvelope[RiskStatusPayload])
+async def set_kill_switch(request: Request) -> ApiEnvelope[RiskStatusPayload]:
+    ctx = _context(request)
+    if ctx.config.ui.read_only:
+        logger.warning("Kill switch update blocked: UI read-only", extra={"event": "kill_switch_blocked"})
+        return ApiEnvelope(data=None, error="UI is in read-only mode")
+
+    try:
+        payload = KillSwitchPayload(**await request.json())
+    except Exception:  # pragma: no cover - malformed body
+        return ApiEnvelope(data=None, error="Invalid JSON payload")
+
+    try:
+        ctx.strategy_engine.set_manual_kill_switch(payload.active)
+        status = ctx.strategy_engine.get_risk_status()
+        logger.info(
+            "Updated manual kill switch",
+            extra={"event": "kill_switch_updated", "active": payload.active},
+        )
+        return ApiEnvelope(data=RiskStatusPayload(**status.__dict__), error=None)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.exception("Failed to update kill switch")
         return ApiEnvelope(data=None, error=str(exc))
