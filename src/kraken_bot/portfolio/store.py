@@ -9,12 +9,15 @@ from datetime import datetime
 from typing import List, Optional, Dict, Any, TYPE_CHECKING
 from pathlib import Path
 from .models import RealizedPnLRecord, CashFlowRecord, PortfolioSnapshot, AssetValuation
+from .exceptions import PortfolioSchemaError
 
 if TYPE_CHECKING:
     from kraken_bot.strategy.models import DecisionRecord, ExecutionPlan, RiskAdjustedAction
     from kraken_bot.execution.models import LocalOrder, ExecutionResult
 
 logger = logging.getLogger(__name__)
+
+CURRENT_SCHEMA_VERSION = 5
 
 class PortfolioStore(abc.ABC):
     @abc.abstractmethod
@@ -151,25 +154,33 @@ class SQLitePortfolioStore(PortfolioStore):
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
 
-        # Schema Version
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS schema_version (
-                id INTEGER PRIMARY KEY CHECK (id = 1),
-                version INTEGER NOT NULL
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS meta (
+                key TEXT PRIMARY KEY,
+                value TEXT
             )
-        """)
+            """
+        )
 
-        cursor.execute("SELECT version FROM schema_version WHERE id = 1")
+        cursor.execute("SELECT value FROM meta WHERE key = 'schema_version'")
         row = cursor.fetchone()
 
-        # Check current version and upgrade if necessary
-        current_version = 0
-        if row is not None:
-            current_version = row[0]
+        if row is None:
+            cursor.execute(
+                "INSERT INTO meta (key, value) VALUES ('schema_version', ?)",
+                (str(CURRENT_SCHEMA_VERSION),),
+            )
         else:
-            # New DB
-            cursor.execute("INSERT INTO schema_version (id, version) VALUES (1, 5)")
-            current_version = 5
+            try:
+                stored_version = int(row[0])
+            except (TypeError, ValueError):
+                conn.close()
+                raise PortfolioSchemaError(found=row[0], expected=CURRENT_SCHEMA_VERSION)
+
+            if stored_version != CURRENT_SCHEMA_VERSION:
+                conn.close()
+                raise PortfolioSchemaError(found=stored_version, expected=CURRENT_SCHEMA_VERSION)
 
         # Trades Table
         cursor.execute("""
@@ -225,48 +236,23 @@ class SQLitePortfolioStore(PortfolioStore):
         """)
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_snapshots_timestamp ON snapshots(timestamp)")
 
-        # Upgrade for V4: Decisions Table
-        if current_version < 4:
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS decisions (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    time INTEGER NOT NULL,
-                    plan_id TEXT,
-                    strategy_name TEXT,
-                    pair TEXT,
-                    action_type TEXT,
-                    target_position_usd REAL,
-                    blocked INTEGER NOT NULL,
-                    block_reason TEXT,
-                    kill_switch_active INTEGER NOT NULL,
-                    raw_json TEXT
-                )
-            """)
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_decisions_time ON decisions(time)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_decisions_plan_id ON decisions(plan_id)")
-
-            # Update version
-            cursor.execute("UPDATE schema_version SET version = 4 WHERE id = 1")
-            current_version = 4
-        else:
-            # Ensure table exists even if version is current (for fresh installs)
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS decisions (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    time INTEGER NOT NULL,
-                    plan_id TEXT,
-                    strategy_name TEXT,
-                    pair TEXT,
-                    action_type TEXT,
-                    target_position_usd REAL,
-                    blocked INTEGER NOT NULL,
-                    block_reason TEXT,
-                    kill_switch_active INTEGER NOT NULL,
-                    raw_json TEXT
-                )
-            """)
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_decisions_time ON decisions(time)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_decisions_plan_id ON decisions(plan_id)")
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS decisions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                time INTEGER NOT NULL,
+                plan_id TEXT,
+                strategy_name TEXT,
+                pair TEXT,
+                action_type TEXT,
+                target_position_usd REAL,
+                blocked INTEGER NOT NULL,
+                block_reason TEXT,
+                kill_switch_active INTEGER NOT NULL,
+                raw_json TEXT
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_decisions_time ON decisions(time)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_decisions_plan_id ON decisions(plan_id)")
 
         # Execution Plans Table
         cursor.execute("""
@@ -281,108 +267,54 @@ class SQLitePortfolioStore(PortfolioStore):
         """)
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_execution_plans_generated_at ON execution_plans(generated_at)")
 
-        # Upgrade for V5: Execution orders and results
-        if current_version < 5:
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS execution_orders (
-                    local_id TEXT PRIMARY KEY,
-                    plan_id TEXT,
-                    strategy_id TEXT,
-                    pair TEXT NOT NULL,
-                    side TEXT NOT NULL,
-                    order_type TEXT,
-                    kraken_order_id TEXT,
-                    userref INTEGER,
-                    requested_base_size REAL,
-                    requested_price REAL,
-                    status TEXT,
-                    created_at REAL,
-                    updated_at REAL,
-                    cumulative_base_filled REAL,
-                    avg_fill_price REAL,
-                    last_error TEXT,
-                    raw_request_json TEXT,
-                    raw_response_json TEXT
-                )
-            """)
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_execution_orders_plan_id ON execution_orders(plan_id)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_execution_orders_kraken_id ON execution_orders(kraken_order_id)")
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS execution_orders (
+                local_id TEXT PRIMARY KEY,
+                plan_id TEXT,
+                strategy_id TEXT,
+                pair TEXT NOT NULL,
+                side TEXT NOT NULL,
+                order_type TEXT,
+                kraken_order_id TEXT,
+                userref INTEGER,
+                requested_base_size REAL,
+                requested_price REAL,
+                status TEXT,
+                created_at REAL,
+                updated_at REAL,
+                cumulative_base_filled REAL,
+                avg_fill_price REAL,
+                last_error TEXT,
+                raw_request_json TEXT,
+                raw_response_json TEXT
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_execution_orders_plan_id ON execution_orders(plan_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_execution_orders_kraken_id ON execution_orders(kraken_order_id)")
 
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS execution_order_events (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    local_order_id TEXT NOT NULL,
-                    plan_id TEXT,
-                    event_time REAL NOT NULL,
-                    status TEXT,
-                    message TEXT,
-                    raw_json TEXT
-                )
-            """)
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_execution_order_events_order ON execution_order_events(local_order_id)")
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS execution_order_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                local_order_id TEXT NOT NULL,
+                plan_id TEXT,
+                event_time REAL NOT NULL,
+                status TEXT,
+                message TEXT,
+                raw_json TEXT
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_execution_order_events_order ON execution_order_events(local_order_id)")
 
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS execution_results (
-                    plan_id TEXT PRIMARY KEY,
-                    started_at REAL,
-                    completed_at REAL,
-                    success INTEGER,
-                    errors_json TEXT
-                )
-            """)
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_execution_results_started_at ON execution_results(started_at)")
-
-            cursor.execute("UPDATE schema_version SET version = 5 WHERE id = 1")
-            current_version = 5
-        else:
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS execution_orders (
-                    local_id TEXT PRIMARY KEY,
-                    plan_id TEXT,
-                    strategy_id TEXT,
-                    pair TEXT NOT NULL,
-                    side TEXT NOT NULL,
-                    order_type TEXT,
-                    kraken_order_id TEXT,
-                    userref INTEGER,
-                    requested_base_size REAL,
-                    requested_price REAL,
-                    status TEXT,
-                    created_at REAL,
-                    updated_at REAL,
-                    cumulative_base_filled REAL,
-                    avg_fill_price REAL,
-                    last_error TEXT,
-                    raw_request_json TEXT,
-                    raw_response_json TEXT
-                )
-            """)
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_execution_orders_plan_id ON execution_orders(plan_id)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_execution_orders_kraken_id ON execution_orders(kraken_order_id)")
-
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS execution_order_events (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    local_order_id TEXT NOT NULL,
-                    plan_id TEXT,
-                    event_time REAL NOT NULL,
-                    status TEXT,
-                    message TEXT,
-                    raw_json TEXT
-                )
-            """)
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_execution_order_events_order ON execution_order_events(local_order_id)")
-
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS execution_results (
-                    plan_id TEXT PRIMARY KEY,
-                    started_at REAL,
-                    completed_at REAL,
-                    success INTEGER,
-                    errors_json TEXT
-                )
-            """)
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_execution_results_started_at ON execution_results(started_at)")
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS execution_results (
+                plan_id TEXT PRIMARY KEY,
+                started_at REAL,
+                completed_at REAL,
+                success INTEGER,
+                errors_json TEXT
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_execution_results_started_at ON execution_results(started_at)")
 
         conn.commit()
         conn.close()
