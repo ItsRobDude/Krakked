@@ -2,7 +2,11 @@
 name = "kraken-trader"
 version = "0.1.0"
 description = "A Kraken trading bot."
-authors = ["Jules <agent@morpheus.com>"]
+authors = ["Rob <...>"]
+
+packages = [
+  { include = "kraken_bot", from = "src" }
+]
 
 [tool.poetry.dependencies]
 python = "^3.10"
