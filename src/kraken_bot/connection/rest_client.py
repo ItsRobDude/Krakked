@@ -161,6 +161,10 @@ class KrakenRESTClient:
         """
         return self.get_private("Ledgers", params=params)
 
+    def get_open_orders(self, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Retrieves currently open orders. Endpoint: OpenOrders"""
+        return self.get_private("OpenOrders", params=params)
+
     def get_closed_orders(self, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Retrieves information about closed orders.
