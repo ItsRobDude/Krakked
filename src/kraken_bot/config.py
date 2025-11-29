@@ -43,6 +43,7 @@ class ExecutionConfig:
     time_in_force: str = "GTC"
     post_only: bool = False
     validate_only: bool = True
+    allow_live_trading: bool = False
     dead_man_switch_seconds: int = 600
     max_retries: int = 3
     retry_backoff_seconds: int = 2
@@ -319,6 +320,9 @@ def load_config(config_path: Path = None) -> AppConfig:
         time_in_force=execution_data.get("time_in_force", default_execution.time_in_force),
         post_only=execution_data.get("post_only", default_execution.post_only),
         validate_only=validate_only,
+        allow_live_trading=execution_data.get(
+            "allow_live_trading", default_execution.allow_live_trading
+        ),
         dead_man_switch_seconds=execution_data.get(
             "dead_man_switch_seconds", default_execution.dead_man_switch_seconds
         ),
