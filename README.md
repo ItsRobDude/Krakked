@@ -21,6 +21,8 @@ Phase 6 is underway with the following milestones queued:
 * **6B**: TUI HTTP wiring and safety controls.
 * **6C**: React dashboard data and controls.
 
+Credential validation semantics (required fields, bearer token enforcement, and the Kraken probe used) are described in the [Phase 6 contract](docs/phase6.md#credential-validation-rules).
+
 See [`docs/phase6.md`](docs/phase6.md) for the full contract and details.
 
 See the consolidated phase contract in [`docs/contract.md`](docs/contract.md) for the full design scope across Phases 1–7. Individual phase files remain available for historical reference.

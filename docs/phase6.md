@@ -633,5 +633,20 @@ Status & TODO
 - [x] API envelopes/models: Implemented in the shared response types and payload schemas (`src/kraken_bot/ui/models.py`).
 - [x] Read-only portfolio/risk/strategies/execution endpoints: GET routes are wired through FastAPI routers (`src/kraken_bot/ui/routes/portfolio.py`, `risk.py`, `strategies.py`, `execution.py`, `system.py`).
 - [x] Mutating endpoints with ui.read_only/auth: Auth middleware and read-only guards wrap POST/PATCH routes (`src/kraken_bot/ui/api.py`, `src/kraken_bot/ui/routes/*`).
-- [ ] Credential validation rules: TODO — document/enforce concrete validation of provided Kraken credentials and surface errors through the UI API.
+- [x] Credential validation rules: Documented below and enforced in `/api/system/credentials/validate`.
 - [ ] TUI/React integration: TODO — wire the backend API into a TUI/React frontend and add links back here as components land.
+
+Credential validation rules
+---------------------------
+
+- Endpoint: `POST /api/system/credentials/validate`.
+- Payload: `{ "apiKey": "...", "apiSecret": "...", "region": "<region code>" }` (all three fields are required; empty/whitespace-only values are rejected before probing Kraken).
+- Auth: When `ui.auth.enabled` is true, the request **must** include `Authorization: Bearer <ui.auth.token>` or the call returns `{ "data": { "valid": false }, "error": "Unauthorized" }`.
+- Kraken probe: uses a low-risk private call (`Balance`) against the standard Kraken API host to confirm key/secret signing without mutating state.
+- Success shape: `{ "data": { "valid": true }, "error": null }`.
+- Expected error envelopes:
+  - Missing fields: `{ "data": { "valid": false }, "error": "apiKey, apiSecret, and region are required." }`.
+  - Authentication failures (invalid key/secret/signature/nonce): `{ "data": { "valid": false }, "error": "Authentication failed. Please verify your API key/secret." }`.
+  - Connectivity/availability issues (network errors, 5xx, maintenance): `{ "data": { "valid": false }, "error": "Kraken is unavailable or could not be reached. Please retry." }`.
+  - Unexpected errors are logged server-side and returned as `{ "data": { "valid": false }, "error": "Unexpected error while validating credentials. Please retry or check server logs." }`.
+  - In all cases, the response adheres to the shared `{data, error}` envelope and never exposes secrets.
