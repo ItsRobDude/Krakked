@@ -78,8 +78,8 @@ def test_run_once_forces_paper_and_validation(monkeypatch: pytest.MonkeyPatch) -
     )
     captured_execution_config: dict[str, Any] = {}
 
-    def fake_bootstrap(*_: Any, **__: Any) -> tuple[object, SimpleNamespace]:
-        return object(), original_config
+    def fake_bootstrap(*_: Any, **__: Any) -> tuple[object, SimpleNamespace, object]:
+        return object(), original_config, object()
 
     class _DummyMarketData:
         def __init__(self, config: Any) -> None:

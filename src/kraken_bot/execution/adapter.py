@@ -227,9 +227,13 @@ class KrakenExecutionAdapter:
 
 
 class PaperExecutionAdapter:
-    def __init__(self, config: Optional[ExecutionConfig] = None):
+    def __init__(
+        self,
+        config: Optional[ExecutionConfig] = None,
+        rate_limiter: Optional[RateLimiter] = None,
+    ):
         self.config = config or ExecutionConfig()
-        self.client = KrakenRESTClient()
+        self.client = KrakenRESTClient(rate_limiter=rate_limiter)
 
     def submit_order(self, order: LocalOrder) -> LocalOrder:
         payload: Dict[str, Any] = build_order_payload(order, self.config)
@@ -272,10 +276,14 @@ class PaperExecutionAdapter:
         return None
 
 
-def get_execution_adapter(client: Optional[KrakenRESTClient], config: ExecutionConfig) -> ExecutionAdapter:
+def get_execution_adapter(
+    client: Optional[KrakenRESTClient],
+    config: ExecutionConfig,
+    rate_limiter: Optional[RateLimiter] = None,
+) -> ExecutionAdapter:
     if config.mode == "live":
         if client is None:
             raise ExecutionError("Live execution requires a KrakenRESTClient")
         return KrakenExecutionAdapter(client=client, config=config)
 
-    return PaperExecutionAdapter(config=config)
+    return PaperExecutionAdapter(config=config, rate_limiter=rate_limiter)

@@ -25,11 +25,12 @@ class KrakenRESTClient:
         api_url: str = KRAKEN_API_URL,
         calls_per_second: float = 0.5,
         api_key: Optional[str] = None,
-        api_secret: Optional[str] = None
+        api_secret: Optional[str] = None,
+        rate_limiter: Optional[RateLimiter] = None,
     ):
         self.api_url = api_url
         # Use the same rate limiter for both public and private calls for simplicity and safety
-        self.rate_limiter = RateLimiter(calls_per_second)
+        self.rate_limiter = rate_limiter or RateLimiter(calls_per_second)
 
         self.api_key = api_key
         self.api_secret = api_secret

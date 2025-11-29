@@ -5,6 +5,7 @@ import logging
 from pathlib import Path
 from typing import List, Dict, Optional, Any, Tuple
 from kraken_bot.config import AppConfig, PairMetadata, OHLCBar
+from kraken_bot.connection.rate_limiter import RateLimiter
 from kraken_bot.connection.rest_client import KrakenRESTClient
 from kraken_bot.market_data.universe import build_universe
 from kraken_bot.market_data.ohlc_store import OHLCStore, FileOHLCStore
@@ -19,9 +20,14 @@ class MarketDataAPI:
     """
     The main public interface for the market data module.
     """
-    def __init__(self, config: AppConfig):
+    def __init__(
+        self,
+        config: AppConfig,
+        rest_client: Optional[KrakenRESTClient] = None,
+        rate_limiter: Optional[RateLimiter] = None,
+    ):
         self._config = config
-        self._rest_client = KrakenRESTClient()
+        self._rest_client = rest_client or KrakenRESTClient(rate_limiter=rate_limiter)
         self._ohlc_store: OHLCStore = FileOHLCStore(config.market_data)
         metadata_path = (
             Path(config.market_data.metadata_path).expanduser()

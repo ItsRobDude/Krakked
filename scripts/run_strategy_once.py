@@ -63,10 +63,10 @@ def _backfill_pairs(market_data: MarketDataAPI, pairs: Iterable[str], timeframes
 def run_strategy_once() -> None:
     """Run a synchronous strategy + execution cycle in a safe, non-live mode."""
 
-    client, config = bootstrap(allow_interactive_setup=False)
+    client, config, rate_limiter = bootstrap(allow_interactive_setup=False)
     safe_config = _ensure_safe_execution(config)
 
-    market_data = MarketDataAPI(safe_config)
+    market_data = MarketDataAPI(safe_config, rate_limiter=rate_limiter)
     market_data.refresh_universe()
     _backfill_pairs(
         market_data,
@@ -77,15 +77,18 @@ def run_strategy_once() -> None:
     # Avoid spinning up the websocket loop while still satisfying connectivity checks
     market_data._ws_client = _WsStub()  # type: ignore[attr-defined]
 
-    portfolio = PortfolioService(safe_config, market_data)
-    portfolio.rest_client = client
+    portfolio = PortfolioService(
+        safe_config, market_data, rest_client=client, rate_limiter=rate_limiter
+    )
     portfolio.initialize()
 
     strategy_engine = StrategyEngine(safe_config, market_data, portfolio)
     strategy_engine.initialize()
     plan = strategy_engine.run_cycle()
 
-    execution_service = ExecutionService(client=client, config=safe_config.execution)
+    execution_service = ExecutionService(
+        client=client, config=safe_config.execution, rate_limiter=rate_limiter
+    )
     result = execution_service.execute_plan(plan)
 
     logger.info("Plan %s executed. success=%s errors=%s", plan.plan_id, result.success, result.errors)
