@@ -22,6 +22,7 @@ class CredentialPayload(BaseModel):
 
     apiKey: str
     apiSecret: str
+    region: str
 
 
 class ModeChangePayload(BaseModel):
@@ -145,28 +146,37 @@ async def set_execution_mode(
 
 
 @router.post("/credentials/validate", response_model=ApiEnvelope[dict])
-async def validate_credentials(payload: CredentialPayload) -> ApiEnvelope[dict]:
-    """Validate API credentials by pinging a private Kraken endpoint."""
+async def validate_credentials(
+    payload: CredentialPayload, request: Request
+) -> ApiEnvelope[dict]:
+    """Validate API credentials by pinging a lightweight private Kraken endpoint."""
+
+    ctx = _context(request)
+    auth_config = ctx.config.ui.auth
+    expected_auth = f"Bearer {auth_config.token}" if auth_config.token else ""
+
+    if auth_config.enabled and request.headers.get("Authorization") != expected_auth:
+        logger.warning("Unauthorized credential validation attempt")
+        return ApiEnvelope(data={"valid": False}, error="Unauthorized")
 
     client = KrakenRESTClient(api_key=payload.apiKey, api_secret=payload.apiSecret)
 
     try:
         client.get_private("Balance")
-        return ApiEnvelope(
-            data={"success": True, "message": "Credentials validated successfully."},
-            error=None,
-        )
+        return ApiEnvelope(data={"valid": True}, error=None)
     except AuthError as exc:
         logger.warning("Credential validation failed", extra={"error": str(exc)})
         return ApiEnvelope(
-            data=None,
+            data={"valid": False},
             error="Authentication failed. Please verify your API key/secret.",
         )
     except ServiceUnavailableError:
         return ApiEnvelope(
-            data=None,
-            error="Kraken service is unavailable. Try again shortly or continue with caution.",
+            data={"valid": False},
+            error=(
+                "Kraken service is unavailable. Try again shortly or continue with caution."
+            ),
         )
     except Exception as exc:  # pragma: no cover - defensive
         logger.exception("Unexpected error during credential validation")
-        return ApiEnvelope(data=None, error=str(exc))
+        return ApiEnvelope(data={"valid": False}, error=str(exc))

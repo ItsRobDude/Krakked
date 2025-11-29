@@ -1,33 +1,38 @@
 export type CredentialPayload = {
   apiKey: string;
   apiSecret: string;
+  region: string;
 };
 
 export type CredentialResponse = {
-  success: boolean;
-  message?: string;
+  data: { valid: boolean } | null;
+  error: string | null;
 };
 
 const defaultEndpoint = '/api/system/credentials/validate';
+const API_TOKEN = import.meta.env.VITE_API_TOKEN;
 
 export async function validateCredentials(payload: CredentialPayload): Promise<CredentialResponse> {
   const endpoint = import.meta.env.VITE_CREDENTIAL_ENDPOINT || defaultEndpoint;
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (API_TOKEN) headers.Authorization = `Bearer ${API_TOKEN}`;
 
   try {
     const response = await fetch(endpoint, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers,
       body: JSON.stringify(payload),
     });
 
+    const result = (await response.json()) as CredentialResponse;
     if (!response.ok) {
-      throw new Error(`Request failed: ${response.status}`);
+      throw new Error(result.error || `Request failed: ${response.status}`);
     }
 
-    const result = (await response.json()) as CredentialResponse;
-    return result;
+    return {
+      data: result.data ?? { valid: false },
+      error: result.error ?? null,
+    };
   } catch (error) {
     console.warn('Falling back to placeholder validation. Reason:', error);
   }
@@ -36,7 +41,7 @@ export async function validateCredentials(payload: CredentialPayload): Promise<C
 
   const valid = payload.apiKey.trim().length > 0 && payload.apiSecret.trim().length > 0;
   return {
-    success: valid,
-    message: valid ? 'Credentials look good. Ready to load into Kraken bot.' : 'Both fields are required.',
+    data: { valid },
+    error: valid ? null : 'Both fields are required.',
   };
 }
