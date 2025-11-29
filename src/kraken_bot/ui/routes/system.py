@@ -54,15 +54,21 @@ async def validate_credentials(payload: CredentialPayload):
 
     try:
         client.get_private("Balance")
-        return {"success": True, "message": "Credentials validated successfully."}
+        return {
+            "data": {"success": True, "message": "Credentials validated successfully."},
+            "error": None,
+        }
     except AuthError as exc:
         logger.warning("Credential validation failed", extra={"error": str(exc)})
-        return {"success": False, "message": "Authentication failed. Please verify your API key/secret."}
+        return {
+            "data": None,
+            "error": "Authentication failed. Please verify your API key/secret.",
+        }
     except ServiceUnavailableError:
         return {
-            "success": False,
-            "message": "Kraken service is unavailable. Try again shortly or continue with caution.",
+            "data": None,
+            "error": "Kraken service is unavailable. Try again shortly or continue with caution.",
         }
     except Exception as exc:  # pragma: no cover - defensive
         logger.exception("Unexpected error during credential validation")
-        return {"success": False, "message": str(exc)}
+        return {"data": None, "error": str(exc)}
