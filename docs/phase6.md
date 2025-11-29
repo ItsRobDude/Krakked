@@ -626,3 +626,12 @@ without directly calling KrakenRESTClient.
 	•	Integration with mocked Phase 3–5 services.
 
 At that point, Krakked has a real control plane: you can see everything that matters, tweak risk/strategy, execute emergency controls, and monitor the bot’s behavior — all without touching code or logs directly. Phase 7 can then focus on deployment, monitoring, and long-term ops.
+⸻
+
+Status & TODO
+
+- [x] API envelopes/models: Implemented in the shared response types and payload schemas (`src/kraken_bot/ui/models.py`).
+- [x] Read-only portfolio/risk/strategies/execution endpoints: GET routes are wired through FastAPI routers (`src/kraken_bot/ui/routes/portfolio.py`, `risk.py`, `strategies.py`, `execution.py`, `system.py`).
+- [x] Mutating endpoints with ui.read_only/auth: Auth middleware and read-only guards wrap POST/PATCH routes (`src/kraken_bot/ui/api.py`, `src/kraken_bot/ui/routes/*`).
+- [ ] Credential validation rules: TODO — document/enforce concrete validation of provided Kraken credentials and surface errors through the UI API.
+- [ ] TUI/React integration: TODO — wire the backend API into a TUI/React frontend and add links back here as components land.
