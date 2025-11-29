@@ -32,6 +32,13 @@ def _smoke_test_command(args: argparse.Namespace) -> int:
         allow_interactive_setup=args.allow_interactive_setup
     )
 
+    if credential_result.status == CredentialStatus.MISSING_PASSWORD:
+        print(
+            credential_result.validation_error
+            or "Encrypted credentials are locked; set KRAKEN_BOT_SECRET_PW to the master password."
+        )
+        return 1
+
     if credential_result.status != CredentialStatus.LOADED:
         print("Credentials not available; run `krakked setup` first.")
         return 1
