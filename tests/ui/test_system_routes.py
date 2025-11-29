@@ -31,9 +31,17 @@ def test_system_health_enveloped(client, system_context):
 
 
 def test_system_metrics_endpoint(client, system_context):
-    system_context.metrics.record_plan(blocked_actions=2)
-    system_context.metrics.record_plan_execution(["first error"])
-    system_context.metrics.record_error("background failure")
+    metrics = system_context.metrics
+    metrics.record_plan(blocked_actions=2)
+    metrics.record_plan_execution(["first error"])
+    metrics.record_error("background failure")
+    metrics.update_portfolio_state(
+        equity_usd=1000.0,
+        realized_pnl_usd=25.5,
+        unrealized_pnl_usd=-5.5,
+        open_orders_count=3,
+        open_positions_count=2,
+    )
 
     response = client.get("/api/system/metrics")
 
@@ -45,6 +53,27 @@ def test_system_metrics_endpoint(client, system_context):
     assert payload["data"]["blocked_actions"] == 2
     assert payload["data"]["execution_errors"] == 2
     assert len(payload["data"]["recent_errors"]) == 2
+    assert payload["data"]["last_equity_usd"] == 1000.0
+    assert payload["data"]["last_realized_pnl_usd"] == 25.5
+    assert payload["data"]["last_unrealized_pnl_usd"] == -5.5
+    assert payload["data"]["open_orders_count"] == 3
+    assert payload["data"]["open_positions_count"] == 2
+
+    metrics.update_portfolio_state(
+        equity_usd=2000.0,
+        realized_pnl_usd=30.0,
+        unrealized_pnl_usd=10.0,
+        open_orders_count=1,
+        open_positions_count=4,
+    )
+
+    refreshed = client.get("/api/system/metrics")
+    refreshed_payload = refreshed.json()["data"]
+    assert refreshed_payload["last_equity_usd"] == 2000.0
+    assert refreshed_payload["last_realized_pnl_usd"] == 30.0
+    assert refreshed_payload["last_unrealized_pnl_usd"] == 10.0
+    assert refreshed_payload["open_orders_count"] == 1
+    assert refreshed_payload["open_positions_count"] == 4
 
 
 def test_config_redacts_auth_token(client, system_context):
