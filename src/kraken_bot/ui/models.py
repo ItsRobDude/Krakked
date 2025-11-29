@@ -65,6 +65,10 @@ class RiskStatusPayload(BaseModel):
     per_strategy_exposure_pct: Dict[str, float]
 
 
+class KillSwitchPayload(BaseModel):
+    active: bool
+
+
 class RiskConfigPayload(BaseModel):
     max_risk_per_trade_pct: float
     max_portfolio_risk_pct: float
