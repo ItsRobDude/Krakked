@@ -176,16 +176,17 @@ def ui_read_only(request: pytest.FixtureRequest) -> bool:
 
 
 @pytest.fixture
-def app_context(ui_auth_enabled: bool, ui_auth_token: str, ui_read_only: bool) -> AppContext:
+def mock_context(ui_auth_enabled: bool, ui_auth_token: str, ui_read_only: bool) -> AppContext:
+    """Construct a mocked :class:`AppContext` for UI API tests."""
+
     return build_test_context(
         auth_enabled=ui_auth_enabled, auth_token=ui_auth_token, read_only=ui_read_only
     )
 
 
 @pytest.fixture
-def client(app_context: AppContext) -> TestClient:
+def client(mock_context: AppContext) -> TestClient:
     """A FastAPI test client wired with a mocked :class:`AppContext`."""
 
-    app = create_api(app_context)
-    with TestClient(app) as test_client:
-        yield test_client
+    app = create_api(mock_context)
+    return TestClient(app)
