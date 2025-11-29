@@ -503,4 +503,28 @@ Phase 5 is done when:
 	•	Mode switching (live, paper, dry_run),
 	•	SQLite persistence integrity.
 
+⸻
+
+12. Quickstart (dry run)
+
+        •       Run a single plan cycle safely via the CLI:
+                •       `poetry run krakked run-once`
+                •       Forces execution.mode="paper", validate_only=True, allow_live_trading=False regardless of config.
+                •       Uses the default SQLite store `portfolio.db` unless a different path is provided to the portfolio store.
+        •       Inspect artifacts in SQLite after the run:
+                •       `execution_orders` captures each LocalOrder snapshot (requested sizes, status, and any guardrail errors).
+                •       `execution_results` summarizes the plan run (success flag plus errors_json).
+
+13. Live-mode readiness checklist
+
+        •       Require explicit opt-in before routing real orders:
+                •       Set execution.mode: "live" and execution.allow_live_trading: true (default is false).
+                •       Set execution.validate_only: false so Kraken accepts live submissions (default is true for safety).
+        •       Keep safety floors in place:
+                •       min_order_notional_usd stays at ≥20.0 by default; tighten max_pair_notional_usd/max_total_notional_usd as needed.
+        •       Validate in paper first:
+                •       Run `krakked run-once` in paper/validate-only mode and review execution_orders/execution_results for sizing/tagging.
+        •       Confirm persistence/reconciliation:
+                •       Ensure portfolio.db (or your configured DB path) is writable so orders and results are stored for later reconciliation.
+
 With this, Phase 5 gives Krakked a real OMS: Phase 4 decides what to do, Phase 5 ensures it’s done safely and consistently on Kraken — and that you can always look back and understand what the bot actually tried to do.
