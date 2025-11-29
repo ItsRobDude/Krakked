@@ -50,6 +50,8 @@ class ExecutionConfig:
     retry_backoff_factor: float = 2.0
     max_concurrent_orders: int = 10
     min_order_notional_usd: float = 20.0
+    max_pair_notional_usd: Optional[float] = None
+    max_total_notional_usd: Optional[float] = None
 
 @dataclass
 class PortfolioConfig:

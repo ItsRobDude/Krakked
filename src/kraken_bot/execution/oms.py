@@ -1,6 +1,6 @@
 # src/kraken_bot/execution/oms.py
 
-from typing import Dict, List, Optional, TYPE_CHECKING
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
 from datetime import datetime
 from uuid import uuid4
 
@@ -12,6 +12,7 @@ from .models import ExecutionResult, LocalOrder
 
 if TYPE_CHECKING:
     from kraken_bot.portfolio.store import PortfolioStore
+    from kraken_bot.strategy.models import RiskAdjustedAction
 
 
 class ExecutionService:
@@ -30,6 +31,16 @@ class ExecutionService:
         Actual routing, submission, and reconciliation will be implemented in later phases.
         """
         result = ExecutionResult(plan_id=plan.plan_id, started_at=datetime.utcnow())
+
+        pair_target_notional: Dict[str, float] = {}
+        for action in plan.actions:
+            if action.blocked or action.action_type == "none":
+                continue
+            target_notional = max(action.target_notional_usd, 0.0)
+            current_target = pair_target_notional.get(action.pair, 0.0)
+            pair_target_notional[action.pair] = max(current_target, target_notional)
+
+        total_target_notional = sum(pair_target_notional.values())
 
         for action in plan.actions:
             if action.blocked or action.action_type == "none":
@@ -53,6 +64,24 @@ class ExecutionService:
                 requested_base_size=volume,
                 requested_price=plan.metadata.get("requested_price"),
             )
+
+            guardrail_reason = self._evaluate_guardrails(
+                action=action,
+                order_notional=max(action.target_notional_usd, 0.0),
+                pair_target_notional=pair_target_notional,
+                total_target_notional=total_target_notional,
+                metadata=plan.metadata,
+            )
+
+            if guardrail_reason:
+                order.status = "rejected"
+                order.last_error = guardrail_reason
+                order.updated_at = datetime.utcnow()
+                result.errors.append(guardrail_reason)
+                if self.store:
+                    self.store.save_order(order)
+                result.orders.append(order)
+                continue
 
             try:
                 order = self.adapter.submit_order(order)
@@ -205,5 +234,42 @@ class ExecutionService:
             order = self.store.get_order_by_reference(kraken_order_id=kraken_id, userref=userref)
             if order:
                 return order
+
+        return None
+
+    def _evaluate_guardrails(
+        self,
+        action: "RiskAdjustedAction",
+        order_notional: float,
+        pair_target_notional: Dict[str, float],
+        total_target_notional: float,
+        metadata: Dict[str, Any],
+    ) -> Optional[str]:
+        """Apply lightweight notional guardrails before attempting submission."""
+
+        config = getattr(self.adapter, "config", None)
+        if not config:
+            return None
+
+        pair_limit = getattr(config, "max_pair_notional_usd", None)
+        if pair_limit is not None:
+            projected_pair = pair_target_notional.get(action.pair, order_notional)
+            if projected_pair > pair_limit:
+                return (
+                    f"Projected notional ${projected_pair:,.2f} for {action.pair} "
+                    f"exceeds max_pair_notional_usd ${pair_limit:,.2f}"
+                )
+
+        total_limit = getattr(config, "max_total_notional_usd", None)
+        if total_limit is not None and total_target_notional > total_limit:
+            risk_status = metadata.get("risk_status") if isinstance(metadata, dict) else None
+            total_pct = None
+            if isinstance(risk_status, dict):
+                total_pct = risk_status.get("total_exposure_pct")
+            pct_context = f" (current total {total_pct:.2f}% of equity)" if total_pct is not None else ""
+            return (
+                f"Projected aggregate notional ${total_target_notional:,.2f} exceeds "
+                f"max_total_notional_usd ${total_limit:,.2f}{pct_context}"
+            )
 
         return None
