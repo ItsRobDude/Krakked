@@ -1,10 +1,13 @@
 # src/kraken_bot/execution/router.py
 
+import logging
 from typing import Any, Dict, Optional
 
 from kraken_bot.config import ExecutionConfig
 
 from .models import LocalOrder
+
+logger = logging.getLogger(__name__)
 
 
 def round_order_size(pair_metadata: Dict[str, Any], size: float) -> float:
@@ -40,6 +43,41 @@ def determine_order_type(order: LocalOrder, config: ExecutionConfig) -> str:
     return order.order_type or config.default_order_type
 
 
+def apply_slippage(order: LocalOrder, config: ExecutionConfig) -> Optional[float]:
+    """
+    Adjust the requested price by the configured slippage tolerance.
+
+    For buys we cap the maximum price we are willing to pay; for sells we
+    floor the minimum price we are willing to accept. Values are guarded
+    against negative prices.
+    """
+
+    if order.requested_price is None:
+        return None
+
+    slippage_fraction = max(config.max_slippage_bps, 0) / 10_000
+    if slippage_fraction == 0:
+        return order.requested_price
+
+    if order.side == "buy":
+        adjusted = order.requested_price * (1 + slippage_fraction)
+    else:
+        adjusted = order.requested_price * (1 - slippage_fraction)
+
+    adjusted_price = max(adjusted, 0.0)
+    logger.debug(
+        "Applying slippage",
+        extra={
+            "event": "apply_slippage",
+            "side": order.side,
+            "requested_price": order.requested_price,
+            "adjusted_price": adjusted_price,
+            "slippage_bps": config.max_slippage_bps,
+        },
+    )
+    return adjusted_price
+
+
 def build_order_payload(
     order: LocalOrder, config: ExecutionConfig, pair_metadata: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
@@ -56,8 +94,19 @@ def build_order_payload(
         "volume": round_order_size(pair_metadata or {}, order.requested_base_size),
     }
 
-    if order_type == "limit" and order.requested_price is not None:
-        payload["price"] = round_order_price(pair_metadata or {}, order.requested_price)
+    slippage_price = apply_slippage(order, config)
+
+    if order_type == "limit" and slippage_price is not None:
+        payload["price"] = round_order_price(pair_metadata or {}, slippage_price)
+
+    payload["timeinforce"] = config.time_in_force
+
+    flags = []
+    if config.post_only:
+        flags.append("post")
+
+    if flags:
+        payload["oflags"] = ",".join(flags)
 
     if order.userref is not None:
         payload["userref"] = order.userref
