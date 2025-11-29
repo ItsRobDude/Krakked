@@ -287,6 +287,50 @@ p {
   font-size: 0.95rem;
 }
 
+.risk-panel {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.risk-panel--readonly {
+  border-color: rgba(148, 163, 184, 0.4);
+  background: linear-gradient(180deg, rgba(148, 163, 184, 0.08), rgba(15, 23, 42, 0.8));
+}
+
+.risk-panel__controls {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.risk-panel__meta {
+  display: grid;
+  gap: 0.35rem;
+  max-width: 520px;
+}
+
+.risk-panel__label {
+  margin: 0;
+  color: var(--text-muted);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.risk-panel__status {
+  margin: 0;
+  color: #e2e8f0;
+  font-size: 1.05rem;
+  font-weight: 800;
+}
+
+.risk-panel__hint {
+  margin: 0;
+  color: var(--text-muted);
+}
+
 .placeholder-list {
   padding-left: 1.1rem;
   margin: var(--space-2) 0 0;
@@ -1065,6 +1109,12 @@ input[aria-invalid='true'] {
   color: #bbf7d0;
   background: rgba(16, 185, 129, 0.12);
   border-color: rgba(16, 185, 129, 0.4);
+}
+
+.feedback--info {
+  color: #bfdbfe;
+  background: rgba(59, 130, 246, 0.12);
+  border-color: rgba(59, 130, 246, 0.35);
 }
 
 .feedback--error {
