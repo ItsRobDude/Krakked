@@ -54,6 +54,31 @@ class ExecutionConfig:
     max_pair_notional_usd: Optional[float] = None
     max_total_notional_usd: Optional[float] = None
 
+
+@dataclass
+class UIAuthConfig:
+    enabled: bool = False
+    token: str = ""
+
+
+@dataclass
+class UIRefreshConfig:
+    dashboard_ms: int = 5000
+    orders_ms: int = 5000
+    strategies_ms: int = 10000
+
+
+@dataclass
+class UIConfig:
+    enabled: bool = True
+    host: str = "127.0.0.1"
+    port: int = 8080
+    base_path: str = "/"
+    auth: UIAuthConfig = field(default_factory=UIAuthConfig)
+    read_only: bool = False
+    refresh_intervals: UIRefreshConfig = field(default_factory=UIRefreshConfig)
+
+
 @dataclass
 class PortfolioConfig:
     base_currency: str = "USD"
@@ -102,6 +127,7 @@ class AppConfig:
     execution: ExecutionConfig = field(default_factory=ExecutionConfig)
     risk: RiskConfig = field(default_factory=RiskConfig)
     strategies: StrategiesConfig = field(default_factory=StrategiesConfig)
+    ui: UIConfig = field(default_factory=UIConfig)
 
 
 def get_config_dir() -> Path:
@@ -125,6 +151,15 @@ def load_config(config_path: Path = None) -> AppConfig:
     Loads the main application configuration from the default location or a specified path.
     """
     logger = logging.getLogger(__name__)
+
+    def _validated_int(value: Any, default: int, field_name: str, min_value: int = 1) -> int:
+        if isinstance(value, int) and value >= min_value:
+            return value
+
+        logger.warning(
+            "%s is invalid; using default", field_name, extra={"event": field_name, "config_path": str(config_path)}
+        )
+        return default
 
     if config_path is None:
         config_path = get_config_dir() / "config.yaml"
@@ -157,6 +192,7 @@ def load_config(config_path: Path = None) -> AppConfig:
         ),
         default_quote="USD",
     )
+    default_ui = UIConfig()
 
     region_data = raw_config.get("region") or {}
     if not isinstance(region_data, dict):
@@ -347,6 +383,78 @@ def load_config(config_path: Path = None) -> AppConfig:
         ),
     )
 
+    ui_data = raw_config.get("ui") or {}
+    if not isinstance(ui_data, dict):
+        logger.warning(
+            "UI config is not a mapping; using defaults",
+            extra={"event": "config_invalid_ui", "config_path": str(config_path)},
+        )
+        ui_data = {}
+
+    auth_data = ui_data.get("auth") or {}
+    if not isinstance(auth_data, dict):
+        logger.warning(
+            "UI auth config is not a mapping; using defaults",
+            extra={"event": "config_invalid_ui_auth", "config_path": str(config_path)},
+        )
+        auth_data = {}
+
+    refresh_data = ui_data.get("refresh_intervals") or {}
+    if not isinstance(refresh_data, dict):
+        logger.warning(
+            "UI refresh intervals config is not a mapping; using defaults",
+            extra={"event": "config_invalid_ui_refresh", "config_path": str(config_path)},
+        )
+        refresh_data = {}
+
+    auth_token = auth_data.get("token", default_ui.auth.token)
+    auth_config = UIAuthConfig(
+        enabled=auth_data.get("enabled", default_ui.auth.enabled),
+        token=auth_token if isinstance(auth_token, str) else default_ui.auth.token,
+    )
+
+    refresh_config = UIRefreshConfig(
+        dashboard_ms=_validated_int(
+            refresh_data.get("dashboard_ms"), default_ui.refresh_intervals.dashboard_ms, "config_ui_dashboard_ms"
+        ),
+        orders_ms=_validated_int(
+            refresh_data.get("orders_ms"), default_ui.refresh_intervals.orders_ms, "config_ui_orders_ms"
+        ),
+        strategies_ms=_validated_int(
+            refresh_data.get("strategies_ms"), default_ui.refresh_intervals.strategies_ms, "config_ui_strategies_ms"
+        ),
+    )
+
+    base_path = ui_data.get("base_path", default_ui.base_path)
+    if not isinstance(base_path, str):
+        logger.warning(
+            "UI base_path is not a string; using default",
+            extra={"event": "config_invalid_ui_base_path", "config_path": str(config_path)},
+        )
+        base_path = default_ui.base_path
+    if not base_path.startswith("/"):
+        base_path = f"/{base_path}"
+
+    ui_port = _validated_int(ui_data.get("port"), default_ui.port, "config_ui_port")
+    if ui_port > 65535:
+        logger.warning(
+            "UI port is out of valid range; using default",
+            extra={"event": "config_invalid_ui_port", "config_path": str(config_path)},
+        )
+        ui_port = default_ui.port
+
+    ui_config = UIConfig(
+        enabled=ui_data.get("enabled", default_ui.enabled),
+        host=ui_data.get("host", default_ui.host)
+        if isinstance(ui_data.get("host", default_ui.host), str)
+        else default_ui.host,
+        port=ui_port,
+        base_path=base_path,
+        auth=auth_config,
+        read_only=ui_data.get("read_only", default_ui.read_only),
+        refresh_intervals=refresh_config,
+    )
+
     return AppConfig(
         region=RegionProfile(
             code=region_data.get("code", default_region.code),
@@ -373,6 +481,7 @@ def load_config(config_path: Path = None) -> AppConfig:
         execution=execution_config,
         risk=risk_config,
         strategies=strategies_config,
+        ui=ui_config,
     )
 
 @dataclass
