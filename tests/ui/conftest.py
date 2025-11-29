@@ -189,4 +189,6 @@ def client(mock_context: AppContext) -> TestClient:
     """A FastAPI test client wired with a mocked :class:`AppContext`."""
 
     app = create_api(mock_context)
-    return TestClient(app)
+    client = TestClient(app)
+    client.context = mock_context
+    return client
