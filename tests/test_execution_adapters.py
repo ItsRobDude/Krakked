@@ -1,9 +1,15 @@
-import pytest
 from datetime import datetime
 from unittest.mock import MagicMock
 
+import pytest
+
 from kraken_bot.config import ExecutionConfig
-from kraken_bot.execution.adapter import KrakenExecutionAdapter, PaperExecutionAdapter
+from kraken_bot.execution.adapter import (
+    KrakenExecutionAdapter,
+    PaperExecutionAdapter,
+)
+from kraken_bot.execution.exceptions import ExecutionError, OrderRejectedError
+from kraken_bot.execution.models import LocalOrder
 from kraken_bot.execution.oms import ExecutionService
 from kraken_bot.strategy.models import ExecutionPlan, RiskAdjustedAction
 
@@ -64,3 +70,61 @@ def test_execution_service_uses_kraken_adapter_for_live_mode():
 
     assert result.orders[0].status in {"open", "validated"}
     client.add_order.assert_called_once()
+
+
+def _local_order(pair: str = "XBTUSD", side: str = "buy", price: float = 25.0, volume: float = 1.0):
+    return LocalOrder(
+        local_id="local",
+        plan_id="plan",
+        strategy_id="strategy",
+        pair=pair,
+        side=side,
+        order_type="limit",
+        requested_base_size=volume,
+        requested_price=price,
+        userref=99,
+    )
+
+
+def test_kraken_execution_adapter_validate_only_success():
+    client = MagicMock()
+    client.add_order.return_value = {"error": []}
+    config = ExecutionConfig(mode="live", validate_only=True)
+    adapter = KrakenExecutionAdapter(client=client, config=config)
+
+    local_order = adapter.submit_order(_local_order())
+
+    assert local_order.status == "validated"
+    client.add_order.assert_called_once()
+
+
+def test_kraken_execution_adapter_live_success_sets_txid():
+    client = MagicMock()
+    client.add_order.return_value = {"error": [], "txid": ["ABC123"]}
+    config = ExecutionConfig(mode="live", validate_only=False, allow_live_trading=True)
+    adapter = KrakenExecutionAdapter(client=client, config=config)
+
+    local_order = adapter.submit_order(_local_order(price=30.0, volume=1.0))
+
+    assert local_order.status == "open"
+    assert local_order.kraken_order_id == "ABC123"
+
+
+def test_kraken_execution_adapter_handles_kraken_errors():
+    client = MagicMock()
+    client.add_order.return_value = {"error": ["EOrder:Invalid"]}
+    config = ExecutionConfig(mode="live", validate_only=False, allow_live_trading=True)
+    adapter = KrakenExecutionAdapter(client=client, config=config)
+
+    with pytest.raises(OrderRejectedError):
+        adapter.submit_order(_local_order(price=30.0, volume=1.0))
+
+
+def test_kraken_execution_adapter_client_exception():
+    client = MagicMock()
+    client.add_order.side_effect = RuntimeError("network down")
+    config = ExecutionConfig(mode="live", validate_only=False, allow_live_trading=True)
+    adapter = KrakenExecutionAdapter(client=client, config=config)
+
+    with pytest.raises(ExecutionError):
+        adapter.submit_order(_local_order(price=30.0, volume=1.0))
