@@ -93,6 +93,9 @@ class BackendProtocol(Protocol):
     def get_risk_status(self) -> RiskStatus:
         ...
 
+    def set_kill_switch(self, active: bool) -> Optional[str]:
+        ...
+
     def sync_portfolio(self) -> None:
         ...
 
@@ -111,6 +114,9 @@ class BackendProtocol(Protocol):
 class DummyBackend:
     """Temporary stand-in for PortfolioService + RiskEngine + logs."""
 
+    def __init__(self) -> None:
+        self.kill_switch_active = True
+
     def get_summary(self) -> PortfolioSummary:
         now = datetime.now(timezone.utc).replace(microsecond=0)
         return PortfolioSummary(
@@ -120,7 +126,7 @@ class DummyBackend:
             cash_usd=4200.00,
             drift_detected=True,
             data_stale=True,
-            kill_switch_blocked=True,
+            kill_switch_blocked=self.kill_switch_active,
             positions_ok=True,
             last_update=now,
             system_mode="paper",
@@ -153,7 +159,7 @@ class DummyBackend:
 
     def get_risk_status(self) -> RiskStatus:
         return RiskStatus(
-            kill_switch_active=True,
+            kill_switch_active=self.kill_switch_active,
             daily_drawdown_pct=-3.4,
             total_exposure_pct=62.5,
             per_asset_exposure_pct={
@@ -167,6 +173,10 @@ class DummyBackend:
                 "manual": 7.5,
             },
         )
+
+    def set_kill_switch(self, active: bool) -> Optional[str]:
+        self.kill_switch_active = active
+        return None
 
     # These will be wired to real functions later
     def sync_portfolio(self) -> None:
@@ -191,9 +201,20 @@ class HttpBackend:
         if token:
             self.session.headers.update({"Authorization": f"Bearer {token}"})
 
-    def _request(self, method: str, path: str) -> dict:
+    def _extract_error_message(self, response: Optional[requests.Response]) -> Optional[str]:
+        if response is None:
+            return None
+        try:
+            payload = response.json()
+            if isinstance(payload, dict):
+                return str(payload.get("error") or payload.get("detail"))
+        except Exception:
+            pass
+        return response.text or None
+
+    def _request(self, method: str, path: str, payload: Optional[dict] = None) -> dict:
         url = f"{self.base_url}{path}"
-        response = self.session.request(method, url, timeout=2)
+        response = self.session.request(method, url, json=payload, timeout=2)
         response.raise_for_status()
         payload = response.json()
         if isinstance(payload, dict) and payload.get("error"):
@@ -203,8 +224,8 @@ class HttpBackend:
     def _get(self, path: str) -> dict:
         return self._request("GET", path)
 
-    def _post(self, path: str) -> dict:
-        return self._request("POST", path)
+    def _post(self, path: str, payload: Optional[dict] = None) -> dict:
+        return self._request("POST", path, payload)
 
     def get_summary(self) -> PortfolioSummary:
         health = self._get("/api/system/health") or {}
@@ -302,6 +323,17 @@ class HttpBackend:
             per_asset_exposure_pct=data.get("per_asset_exposure_pct", {}) or {},
             per_strategy_exposure_pct=data.get("per_strategy_exposure_pct", {}) or {},
         )
+
+    def set_kill_switch(self, active: bool) -> Optional[str]:
+        try:
+            self._post("/api/risk/kill_switch", {"active": active})
+            return None
+        except requests.HTTPError as exc:
+            return self._extract_error_message(exc.response) or str(exc)
+        except RuntimeError as exc:
+            return str(exc)
+        except Exception as exc:  # pragma: no cover - defensive
+            return str(exc)
 
     def sync_portfolio(self) -> None:
         self._post("/api/portfolio/snapshot")
@@ -512,9 +544,13 @@ class RiskSummaryPanel(Static):
     """Top block on Risk view."""
 
     risk: reactive[Optional[RiskStatus]] = reactive(None)
+    error_message: reactive[Optional[str]] = reactive(None)
 
     def update_risk(self, risk: RiskStatus) -> None:
         self.risk = risk
+
+    def set_error(self, error: Optional[str]) -> None:
+        self.error_message = error
 
     def render(self) -> str:
         r = self.risk
@@ -527,11 +563,16 @@ class RiskSummaryPanel(Static):
         dd_color = "red" if r.daily_drawdown_pct < 0 else "green"
         exp_color = "yellow" if r.total_exposure_pct > 80 else "white"
 
-        return (
-            f"[b]KILL SWITCH:[/] [{ks_style}]{ks_label}[/]\n"
-            f"[b]Daily Drawdown:[/] [{dd_color}]{r.daily_drawdown_pct:+.2f}%[/]\n"
-            f"[b]Total Exposure:[/] [{exp_color}]{r.total_exposure_pct:.2f}%[/]"
-        )
+        lines = [
+            f"[b]KILL SWITCH:[/] [{ks_style}]{ks_label}[/]",
+            f"[b]Daily Drawdown:[/] [{dd_color}]{r.daily_drawdown_pct:+.2f}%[/]",
+            f"[b]Total Exposure:[/] [{exp_color}]{r.total_exposure_pct:.2f}%[/]",
+        ]
+
+        if self.error_message:
+            lines.append(f"[red]Kill switch update failed:[/] {self.error_message}")
+
+        return "\n".join(lines)
 
 
 class RiskExposureTable(DataTable):
@@ -563,6 +604,7 @@ class KrakkedDashboard(App):
         ("s", "sync_portfolio", "Sync Portfolio"),
         ("h", "halt_strategies", "Halt Strategies"),
         ("e", "emergency_stop", "Emergency Stop"),
+        ("k", "toggle_kill_switch", "Toggle Kill Switch"),
         ("1", "view_dashboard", "Dashboard"),
         ("2", "view_risk", "Risk"),
     ]
@@ -686,6 +728,39 @@ class KrakkedDashboard(App):
         self.backend.emergency_stop()
         self.refresh_all()
 
+    def action_toggle_kill_switch(self) -> None:
+        risk = self.risk_summary_panel.risk
+        if risk is None:
+            logger.info("Toggle kill switch skipped: risk status not loaded")
+            return
+
+        summary = self.status_panel.summary
+        if summary and summary.ui_read_only:
+            message = "Kill switch toggle blocked: UI is read-only"
+            logger.warning(message)
+            self.risk_summary_panel.set_error(message)
+            return
+
+        target_state = not risk.kill_switch_active
+        prompt = "Activate kill switch? (y/N): " if target_state else "Deactivate kill switch? (y/N): "
+        try:
+            response = (self.console.input(prompt) if hasattr(self, "console") else input(prompt)).strip().lower()
+        except Exception:
+            response = ""
+
+        if response not in {"y", "yes"}:
+            logger.info("Kill switch toggle cancelled by user")
+            return
+
+        error = self.backend.set_kill_switch(target_state)
+        if error:
+            logger.error("Kill switch toggle failed: %s", error)
+            self.risk_summary_panel.set_error(error)
+        else:
+            self.risk_summary_panel.set_error(None)
+
+        self.refresh_risk_view()
+
     # ------------------------------------------------------------------
     # Data refresh
     # ------------------------------------------------------------------
@@ -695,7 +770,6 @@ class KrakkedDashboard(App):
         positions = self.backend.get_positions()
         assets = self.backend.get_assets()
         logs = self.backend.get_logs()
-        risk_status = self.backend.get_risk_status()
 
         # Dashboard
         self.status_panel.update_summary(summary)
@@ -704,7 +778,10 @@ class KrakkedDashboard(App):
         self.asset_table.populate(assets)
         self.log_panel.update_logs(logs)
 
-        # Risk view
+        self.refresh_risk_view()
+
+    def refresh_risk_view(self) -> None:
+        risk_status = self.backend.get_risk_status()
         self.risk_summary_panel.update_risk(risk_status)
         self.risk_asset_table.populate_from_dict(
             risk_status.per_asset_exposure_pct, "ASSET"
