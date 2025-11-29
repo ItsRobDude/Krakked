@@ -25,3 +25,80 @@ async def get_strategies(request: Request):
     except Exception as exc:  # pragma: no cover - defensive
         logger.exception("Failed to fetch strategies")
         return {"data": None, "error": str(exc)}
+
+
+@router.patch("/{strategy_id}/enabled")
+async def set_strategy_enabled(strategy_id: str, request: Request):
+    ctx = _context(request)
+    if ctx.config.ui.read_only:
+        logger.warning(
+            "Strategy enable toggle blocked: UI read-only",
+            extra={"event": "strategy_toggle_blocked", "strategy_id": strategy_id},
+        )
+        return {"data": None, "error": "UI is in read-only mode"}
+
+    try:
+        payload = await request.json()
+    except Exception:  # pragma: no cover - malformed body
+        return {"data": None, "error": "Invalid JSON payload"}
+
+    enabled = payload.get("enabled")
+    if enabled is None:
+        return {"data": None, "error": "'enabled' field is required"}
+
+    try:
+        if strategy_id in ctx.strategy_engine.strategy_states:
+            ctx.strategy_engine.strategy_states[strategy_id].enabled = bool(enabled)
+        if strategy_id in ctx.config.strategies.enabled and not enabled:
+            ctx.config.strategies.enabled.remove(strategy_id)
+        elif enabled and strategy_id not in ctx.config.strategies.enabled:
+            ctx.config.strategies.enabled.append(strategy_id)
+
+        logger.info(
+            "Strategy enable state updated",
+            extra={"event": "strategy_enabled_updated", "strategy_id": strategy_id, "enabled": bool(enabled)},
+        )
+        return {"data": {"strategy_id": strategy_id, "enabled": bool(enabled)}, "error": None}
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.exception("Failed to update strategy enabled state")
+        return {"data": None, "error": str(exc)}
+
+
+@router.patch("/{strategy_id}/config")
+async def update_strategy_config(strategy_id: str, request: Request):
+    ctx = _context(request)
+    if ctx.config.ui.read_only:
+        logger.warning(
+            "Strategy config update blocked: UI read-only",
+            extra={"event": "strategy_config_blocked", "strategy_id": strategy_id},
+        )
+        return {"data": None, "error": "UI is in read-only mode"}
+
+    try:
+        payload = await request.json()
+    except Exception:  # pragma: no cover - malformed body
+        return {"data": None, "error": "Invalid JSON payload"}
+
+    try:
+        strat_cfg = ctx.config.strategies.configs.get(strategy_id)
+        if not strat_cfg:
+            return {"data": None, "error": "Strategy not found"}
+
+        updated_fields = {}
+        for field, value in payload.items():
+            if field == "params" and isinstance(value, dict):
+                strat_cfg.params.update(value)
+                updated_fields[field] = value
+            elif hasattr(strat_cfg, field) and field not in {"name", "type"}:
+                setattr(strat_cfg, field, value)
+                updated_fields[field] = value
+
+        logger.info(
+            "Strategy config updated",
+            extra={"event": "strategy_config_updated", "strategy_id": strategy_id, "fields": updated_fields},
+        )
+
+        return {"data": asdict(strat_cfg), "error": None}
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.exception("Failed to update strategy config")
+        return {"data": None, "error": str(exc)}

@@ -99,3 +99,60 @@ async def get_exposure(request: Request):
     except Exception as exc:  # pragma: no cover - defensive
         logger.exception("Failed to fetch exposure")
         return {"data": None, "error": str(exc)}
+
+
+@router.get("/trades")
+async def get_trades(request: Request):
+    ctx = _context(request)
+    params = request.query_params
+
+    pair = params.get("pair")
+    strategy_id = params.get("strategy_id")
+    try:
+        limit = int(params.get("limit", 100))
+    except (TypeError, ValueError):
+        limit = 100
+
+    def _parse_int(value: str | None) -> int | None:
+        try:
+            return int(value) if value is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    since = _parse_int(params.get("since"))
+    until = _parse_int(params.get("until"))
+
+    try:
+        trades = ctx.portfolio.get_trade_history(
+            pair=pair, limit=limit, since=since, until=until, ascending=False
+        )
+        if strategy_id:
+            trades = [t for t in trades if t.get("strategy_tag") == strategy_id]
+
+        return {"data": trades, "error": None}
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.exception("Failed to fetch trades")
+        return {"data": None, "error": str(exc)}
+
+
+@router.post("/snapshot")
+async def create_snapshot(request: Request):
+    ctx = _context(request)
+    if ctx.config.ui.read_only:
+        logger.warning("Snapshot blocked: UI in read-only mode", extra={"event": "snapshot_blocked"})
+        return {"data": None, "error": "UI is in read-only mode"}
+
+    try:
+        snapshot = ctx.portfolio.create_snapshot()
+        logger.info("Created manual snapshot", extra={"event": "snapshot_created", "timestamp": snapshot.timestamp})
+        data = {
+            "timestamp": snapshot.timestamp,
+            "equity_usd": snapshot.equity_base,
+            "cash_usd": snapshot.cash_base,
+            "realized_pnl_usd": snapshot.realized_pnl_base_total,
+            "unrealized_pnl_usd": snapshot.unrealized_pnl_base_total,
+        }
+        return {"data": data, "error": None}
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.exception("Failed to create portfolio snapshot")
+        return {"data": None, "error": str(exc)}
