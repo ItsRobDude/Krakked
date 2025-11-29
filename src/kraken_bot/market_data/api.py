@@ -3,8 +3,9 @@
 import time
 import logging
 from pathlib import Path
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional, Any, Tuple
 from kraken_bot.config import AppConfig, PairMetadata, OHLCBar
+from kraken_bot.connection.rate_limiter import RateLimiter
 from kraken_bot.connection.rest_client import KrakenRESTClient
 from kraken_bot.market_data.universe import build_universe
 from kraken_bot.market_data.ohlc_store import OHLCStore, FileOHLCStore
@@ -19,9 +20,14 @@ class MarketDataAPI:
     """
     The main public interface for the market data module.
     """
-    def __init__(self, config: AppConfig):
+    def __init__(
+        self,
+        config: AppConfig,
+        rest_client: Optional[KrakenRESTClient] = None,
+        rate_limiter: Optional[RateLimiter] = None,
+    ):
         self._config = config
-        self._rest_client = KrakenRESTClient()
+        self._rest_client = rest_client or KrakenRESTClient(rate_limiter=rate_limiter)
         self._ohlc_store: OHLCStore = FileOHLCStore(config.market_data)
         metadata_path = (
             Path(config.market_data.metadata_path).expanduser()
@@ -130,16 +136,28 @@ class MarketDataAPI:
             store=self._ohlc_store
         )
 
-    def _check_ticker_staleness(self, pair: str):
+    def _ticker_freshness(self, pair: str) -> Tuple[bool, float]:
+        """
+        Returns whether ticker data for the pair is fresh alongside the current
+        staleness value (monotonic seconds since last update). A missing client
+        or missing update yields a staleness of -1.
+        """
         if not self._ws_client:
-            raise DataStaleError(pair, -1, self._ws_stale_tolerance) # No client running
+            return False, -1
 
         last_update = self._ws_client.last_ticker_update_ts.get(pair)
         if not last_update:
-            raise DataStaleError(pair, -1, self._ws_stale_tolerance) # No updates yet
+            return False, -1
 
         stale_time = time.monotonic() - last_update
         if stale_time > self._ws_stale_tolerance:
+            return False, stale_time
+
+        return True, stale_time
+
+    def _check_ticker_staleness(self, pair: str):
+        is_fresh, stale_time = self._ticker_freshness(pair)
+        if not is_fresh:
             raise DataStaleError(pair, stale_time, self._ws_stale_tolerance)
 
     def _check_ohlc_staleness(self, pair: str, timeframe: str):
@@ -154,13 +172,69 @@ class MarketDataAPI:
         if stale_time > self._ws_stale_tolerance:
             raise DataStaleError(pair, stale_time, self._ws_stale_tolerance)
 
-    def get_latest_price(self, pair: str) -> Optional[float]:
-        self._check_ticker_staleness(pair)
-        ticker = self._ws_client.ticker_cache.get(pair)
-        if ticker:
-            # Return mid-price (avg of best bid and ask)
-            return (float(ticker["bid"]) + float(ticker["ask"])) / 2
+    def _get_fallback_timeframes(self) -> List[str]:
+        """Combines configured timeframes for fallback lookups without duplicates."""
+        timeframes: List[str] = []
+        seen = set()
+        for tf in self._config.market_data.ws_timeframes + self._config.market_data.backfill_timeframes:
+            if tf not in seen:
+                seen.add(tf)
+                timeframes.append(tf)
+        return timeframes
+
+    def _get_cached_price_from_store(self, pair: str) -> Optional[float]:
+        for timeframe in self._get_fallback_timeframes():
+            bars = self._ohlc_store.get_bars(pair, timeframe, 1)
+            if bars:
+                return bars[-1].close
         return None
+
+    def _get_rest_ticker_price(self, pair: str) -> Optional[float]:
+        try:
+            result = self._rest_client.get_public("Ticker", params={"pair": pair})
+        except Exception as exc:
+            logger.warning("REST ticker fallback failed for %s: %s", pair, exc)
+            return None
+
+        if not result:
+            return None
+
+        ticker_values = next(iter(result.values()), None)
+        if not ticker_values:
+            return None
+
+        bid = ticker_values.get("b", [None])[0] if isinstance(ticker_values.get("b"), list) else None
+        ask = ticker_values.get("a", [None])[0] if isinstance(ticker_values.get("a"), list) else None
+        last_trade = ticker_values.get("c", [None])[0] if isinstance(ticker_values.get("c"), list) else None
+
+        try:
+            if bid is not None and ask is not None:
+                return (float(bid) + float(ask)) / 2
+            if last_trade is not None:
+                return float(last_trade)
+        except (TypeError, ValueError):
+            logger.warning("Unexpected ticker payload for %s: %s", pair, ticker_values)
+            return None
+
+        return None
+
+    def get_latest_price(self, pair: str) -> Optional[float]:
+        is_fresh, stale_time = self._ticker_freshness(pair)
+
+        if is_fresh:
+            ticker = self._ws_client.ticker_cache.get(pair)
+            if ticker:
+                # Return mid-price (avg of best bid and ask)
+                return (float(ticker["bid"]) + float(ticker["ask"])) / 2
+
+        fallback_price = self._get_cached_price_from_store(pair)
+        if fallback_price is None:
+            fallback_price = self._get_rest_ticker_price(pair)
+
+        if fallback_price is not None:
+            return fallback_price
+
+        raise DataStaleError(pair, stale_time, self._ws_stale_tolerance)
 
     def get_best_bid_ask(self, pair: str) -> Optional[Dict[str, float]]:
         self._check_ticker_staleness(pair)

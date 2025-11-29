@@ -21,13 +21,20 @@ It does not:
 	•	Perform UI logic – that’s Phase 6.
 
 Assumptions:
-	•	Region profile US_CA – spot only, no margin/futures, no shorting.
-	•	KrakenRESTClient (Phase 1) now supports:
-	•	Public endpoints (Ticker, AssetPairs, OHLC).
-	•	Private endpoints:
-	•	AddOrder, CancelOrder, CancelAll, OpenOrders, ClosedOrders.
-	•	Phase 3 portfolio already ingests trades & closed orders and rebuilds positions.
-	•	Phase 4 Strategy/Risk Engine outputs ExecutionPlans containing RiskAdjustedActions, not raw orders.
+        •       Region profile US_CA – spot only, no margin/futures, no shorting.
+        •       KrakenRESTClient (Phase 1) now supports:
+        •       Public endpoints (Ticker, AssetPairs, OHLC).
+        •       Private endpoints:
+        •       AddOrder, CancelOrder, CancelAll, OpenOrders, ClosedOrders.
+        •       Phase 3 portfolio already ingests trades & closed orders and rebuilds positions.
+        •       Phase 4 Strategy/Risk Engine outputs ExecutionPlans containing RiskAdjustedActions, not raw orders.
+
+Implementation status (Phase 5.03 snapshot):
+        •       OMS is implemented for paper/validate by default with an explicit allow_live_trading gate for live submission.
+        •       Orders are built from plan deltas using MarketDataAPI bid/ask midpoints, slippage caps, and rounding helpers.
+        •       KrakenExecutionAdapter applies retries/backoff for transient failures and honors dead_man_switch_seconds via expiretm/heartbeat when in live mode.
+        •       Persistence is active for execution_orders and execution_results; panic cancel refreshes state and reconciles cancellations back to SQLite and in-memory tracking.
+        •       Admin CLI exposes list-open, recent-executions, cancel, and panic subcommands; run-once CLI stays paper/validate-only regardless of config.
 
 ⸻
 
@@ -502,5 +509,30 @@ Phase 5 is done when:
 	•	Retry/error behavior,
 	•	Mode switching (live, paper, dry_run),
 	•	SQLite persistence integrity.
+
+⸻
+
+12. Quickstart (dry run)
+
+        •       Run a single plan cycle safely via the CLI:
+                •       `poetry run krakked run-once`
+                •       Forces execution.mode="paper", validate_only=True, allow_live_trading=False regardless of config.
+                •       Uses the default SQLite store `portfolio.db` unless a different path is provided to the portfolio store.
+                •       Orders are priced from current bid/ask (mid) with slippage caps and written to SQLite for audit/review.
+        •       Inspect artifacts in SQLite after the run:
+                •       `execution_orders` captures each LocalOrder snapshot (requested sizes, status, and any guardrail errors).
+                •       `execution_results` summarizes the plan run (success flag plus errors_json).
+
+13. Live-mode readiness checklist
+
+        •       Require explicit opt-in before routing real orders:
+                •       Set execution.mode: "live" and execution.allow_live_trading: true (default is false).
+                •       Set execution.validate_only: false so Kraken accepts live submissions (default is true for safety).
+        •       Keep safety floors in place:
+                •       min_order_notional_usd stays at ≥20.0 by default; tighten max_pair_notional_usd/max_total_notional_usd as needed.
+        •       Validate in paper first:
+                •       Run `krakked run-once` in paper/validate-only mode and review execution_orders/execution_results for sizing/tagging.
+        •       Confirm persistence/reconciliation:
+                •       Ensure portfolio.db (or your configured DB path) is writable so orders and results are stored for later reconciliation.
 
 With this, Phase 5 gives Krakked a real OMS: Phase 4 decides what to do, Phase 5 ensures it’s done safely and consistently on Kraken — and that you can always look back and understand what the bot actually tried to do.

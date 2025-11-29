@@ -1,13 +1,20 @@
 from __future__ import annotations
 
+import logging
+import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Protocol
 
+import requests
 from textual.app import App, ComposeResult
+
 from textual.containers import Horizontal, Vertical
 from textual.reactive import reactive
 from textual.widgets import Static, DataTable, Footer
+
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -45,6 +52,8 @@ class PortfolioSummary:
     kill_switch_blocked: bool
     positions_ok: bool
     last_update: datetime
+    system_mode: str = "unknown"
+    ui_read_only: bool = False
 
 
 @dataclass
@@ -61,6 +70,37 @@ class RiskStatus:
     total_exposure_pct: float
     per_asset_exposure_pct: Dict[str, float]
     per_strategy_exposure_pct: Dict[str, float]
+
+
+# ---------------------------------------------------------------------------
+# Backend protocol
+# ---------------------------------------------------------------------------
+
+
+class BackendProtocol(Protocol):
+    def get_summary(self) -> PortfolioSummary:
+        ...
+
+    def get_positions(self) -> List[PositionRow]:
+        ...
+
+    def get_assets(self) -> List[AssetRow]:
+        ...
+
+    def get_logs(self) -> List[LogEntry]:
+        ...
+
+    def get_risk_status(self) -> RiskStatus:
+        ...
+
+    def sync_portfolio(self) -> None:
+        ...
+
+    def halt_strategies(self) -> None:
+        ...
+
+    def emergency_stop(self) -> None:
+        ...
 
 
 # ---------------------------------------------------------------------------
@@ -83,6 +123,8 @@ class DummyBackend:
             kill_switch_blocked=True,
             positions_ok=True,
             last_update=now,
+            system_mode="paper",
+            ui_read_only=False,
         )
 
     def get_positions(self) -> List[PositionRow]:
@@ -137,6 +179,140 @@ class DummyBackend:
         pass
 
 
+class HttpBackend:
+    """HTTP-backed implementation that talks to the Krakked API."""
+
+    def __init__(self, base_url: Optional[str] = None) -> None:
+        self.base_url = (base_url or os.environ.get("KRAKKED_API_URL") or "http://localhost:8000").rstrip(
+            "/"
+        )
+        self.session = requests.Session()
+        token = os.environ.get("KRAKKED_API_TOKEN")
+        if token:
+            self.session.headers.update({"Authorization": f"Bearer {token}"})
+
+    def _request(self, method: str, path: str) -> dict:
+        url = f"{self.base_url}{path}"
+        response = self.session.request(method, url, timeout=2)
+        response.raise_for_status()
+        payload = response.json()
+        if isinstance(payload, dict) and payload.get("error"):
+            raise RuntimeError(str(payload["error"]))
+        return payload.get("data") if isinstance(payload, dict) else payload
+
+    def _get(self, path: str) -> dict:
+        return self._request("GET", path)
+
+    def _post(self, path: str) -> dict:
+        return self._request("POST", path)
+
+    def get_summary(self) -> PortfolioSummary:
+        health = self._get("/api/system/health") or {}
+        data = self._get("/api/portfolio/summary") or {}
+        last_snapshot = data.get("last_snapshot_ts")
+        if isinstance(last_snapshot, str):
+            try:
+                last_dt = datetime.fromisoformat(last_snapshot.replace("Z", "+00:00"))
+            except ValueError:
+                last_dt = datetime.now(timezone.utc)
+        else:
+            last_dt = datetime.now(timezone.utc)
+
+        drift_flag = bool(data.get("drift_flag", False))
+
+        return PortfolioSummary(
+            total_equity=float(data.get("equity_usd", 0.0)),
+            unrealized_pnl=float(data.get("unrealized_pnl_usd", 0.0)),
+            session_realized_pnl=float(data.get("realized_pnl_usd", 0.0)),
+            cash_usd=float(data.get("cash_usd", 0.0)),
+            drift_detected=drift_flag,
+            data_stale=last_snapshot is None,
+            kill_switch_blocked=False,
+            positions_ok=not drift_flag,
+            last_update=last_dt,
+            system_mode=str(health.get("current_mode") or "unknown"),
+            ui_read_only=bool(health.get("ui_read_only", False)),
+        )
+
+    def get_positions(self) -> List[PositionRow]:
+        data = self._get("/api/portfolio/positions") or []
+        positions: List[PositionRow] = []
+        for item in data:
+            size = float(item.get("base_size", 0.0))
+            entry = float(item.get("avg_entry_price", 0.0))
+            mark = float(item.get("current_price", entry or 0.0))
+            pnl = item.get("unrealized_pnl_usd")
+            if pnl is None:
+                pnl = (mark - entry) * size
+            positions.append(
+                PositionRow(
+                    pair=str(item.get("pair") or ""),
+                    size=size,
+                    entry=entry,
+                    mark=mark,
+                    pnl_usd=float(pnl),
+                    has_warning=bool(item.get("strategy_tag")),
+                )
+            )
+        return positions
+
+    def get_assets(self) -> List[AssetRow]:
+        exposure = self._get("/api/portfolio/exposure") or {}
+        assets: List[AssetRow] = []
+        for row in exposure.get("by_asset", []) or []:
+            value = float(row.get("value_usd", 0.0))
+            assets.append(
+                AssetRow(
+                    asset=str(row.get("asset") or ""),
+                    local=value,
+                    exchange=value,
+                    value_usd=value,
+                    integrity="ok",
+                )
+            )
+        return assets
+
+    def get_logs(self) -> List[LogEntry]:
+        logs: List[LogEntry] = []
+        data = self._get("/api/execution/recent_executions") or []
+        for item in data:
+            ts_raw = item.get("completed_at") or item.get("started_at")
+            try:
+                ts = datetime.fromisoformat(str(ts_raw).replace("Z", "+00:00"))
+            except Exception:
+                ts = datetime.now(timezone.utc)
+
+            level = "INFO" if item.get("success") else "ERROR"
+            if item.get("errors"):
+                level = "ERROR"
+            elif item.get("warnings"):
+                level = "WARN"
+
+            message = f"{item.get('plan_id') or 'plan'} ({len(item.get('orders') or [])} orders)"
+            logs.append(LogEntry(ts=ts, level=level, message=message))
+
+        return logs
+
+    def get_risk_status(self) -> RiskStatus:
+        data = self._get("/api/risk/status") or {}
+        return RiskStatus(
+            kill_switch_active=bool(data.get("kill_switch_active", False)),
+            daily_drawdown_pct=float(data.get("daily_drawdown_pct", 0.0)),
+            total_exposure_pct=float(data.get("total_exposure_pct", 0.0)),
+            per_asset_exposure_pct=data.get("per_asset_exposure_pct", {}) or {},
+            per_strategy_exposure_pct=data.get("per_strategy_exposure_pct", {}) or {},
+        )
+
+    def sync_portfolio(self) -> None:
+        self._post("/api/portfolio/snapshot")
+
+    def halt_strategies(self) -> None:
+        self._post("/api/execution/cancel_all")
+
+    def emergency_stop(self) -> None:
+        self._post("/api/execution/flatten_all")
+
+
 # ---------------------------------------------------------------------------
 # Widgets
 # ---------------------------------------------------------------------------
@@ -165,6 +341,9 @@ class StatusPanel(Static):
         lines.append("[bold]SYSTEM STATUS[/bold]")
         lines.append("")
         lines.append(f"  [green]● ONLINE[/green]")
+        lines.append(f"  Mode: [bold]{s.system_mode.upper()}[/bold]")
+        if s.ui_read_only:
+            lines.append("  [yellow]READ-ONLY[/]")
 
         lines.append("")
         lines.append("[bold]INTEGRITY[/bold]")
@@ -182,9 +361,19 @@ class StatusPanel(Static):
 
         lines.append("")
         lines.append("[bold]ACTIONS[/bold]")
-        lines.append("  [cyan]Sync Portfolio[/]   [dim](s)[/]")
-        lines.append("  [cyan]Halt Strategies[/]  [dim](h)[/]")
-        lines.append("  [red]Emergency Stop[/]    [dim](e)[/]")
+        disabled_note = " [yellow](read-only)[/]" if s.ui_read_only else ""
+        live_gate = s.system_mode.lower() != "live"
+        unavailable_note = " [dim](paper mode)[/]" if live_gate else ""
+        control_style = "dim" if (s.ui_read_only or live_gate) else "cyan"
+        lines.append(
+            f"  [{control_style}]Sync Portfolio[/]   [dim](s)[/]{disabled_note or unavailable_note}"
+        )
+        lines.append(
+            f"  [{control_style}]Halt Strategies[/]  [dim](h)[/]{disabled_note or unavailable_note}"
+        )
+        lines.append(
+            f"  [red]{'Emergency Stop' if not (s.ui_read_only or live_gate) else '[dim]Emergency Stop[/]'}    [dim](e)[/]{disabled_note or unavailable_note}"
+        )
 
         lines.append("")
         lines.append("[bold]MENU[/bold]")
@@ -378,10 +567,21 @@ class KrakkedDashboard(App):
         ("2", "view_risk", "Risk"),
     ]
 
-    def __init__(self, backend: Optional[DummyBackend] = None) -> None:
+    def __init__(self, backend: Optional[BackendProtocol] = None) -> None:
         super().__init__()
-        self.backend = backend or DummyBackend()
+        self.backend: BackendProtocol = backend or self._init_backend()
         self.current_view: str = "dashboard"
+
+    def _init_backend(self) -> BackendProtocol:
+        try:
+            live_backend = HttpBackend()
+            # Probe the API to confirm availability; fall back if it fails.
+            live_backend.get_summary()
+            logger.info("Using HttpBackend for dashboard data", extra={"base_url": live_backend.base_url})
+            return live_backend
+        except Exception as exc:  # pragma: no cover - defensive fallback
+            logger.info("Falling back to DummyBackend: %s", exc)
+            return DummyBackend()
 
     def compose(self) -> ComposeResult:
         # Top-level: sidebar + right side (dashboard/risk)
@@ -435,6 +635,10 @@ class KrakkedDashboard(App):
         self.set_view("dashboard")
         self.refresh_all()
 
+    def _controls_enabled(self) -> bool:
+        summary = self.status_panel.summary
+        return bool(summary and not summary.ui_read_only and summary.system_mode.lower() == "live")
+
     # ------------------------------------------------------------------
     # View switching
     # ------------------------------------------------------------------
@@ -462,14 +666,23 @@ class KrakkedDashboard(App):
     # ------------------------------------------------------------------
 
     def action_sync_portfolio(self) -> None:
+        if not self._controls_enabled():
+            logger.info("Sync blocked: controls disabled (read-only or non-live mode)")
+            return
         self.backend.sync_portfolio()
         self.refresh_all()
 
     def action_halt_strategies(self) -> None:
+        if not self._controls_enabled():
+            logger.info("Halt strategies blocked: controls disabled (read-only or non-live mode)")
+            return
         self.backend.halt_strategies()
         self.refresh_all()
 
     def action_emergency_stop(self) -> None:
+        if not self._controls_enabled():
+            logger.info("Emergency stop blocked: controls disabled (read-only or non-live mode)")
+            return
         self.backend.emergency_stop()
         self.refresh_all()
 

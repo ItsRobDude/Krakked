@@ -2,8 +2,9 @@
 
 import time
 import logging
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from kraken_bot.config import OHLCBar, PairMetadata
+from kraken_bot.connection.rate_limiter import RateLimiter
 from kraken_bot.connection.rest_client import KrakenRESTClient
 from kraken_bot.market_data.ohlc_store import OHLCStore
 
@@ -46,6 +47,7 @@ def backfill_ohlc(
     timeframe: str,
     since: int = None,
     client: KrakenRESTClient = None,
+    rate_limiter: Optional[RateLimiter] = None,
     store: OHLCStore = None,
 ) -> int:
     """
@@ -60,7 +62,7 @@ def backfill_ohlc(
         raise ValueError(f"Unsupported timeframe: {timeframe}. Supported: {list(TIMEFRAME_MAP.keys())}")
 
     if client is None:
-        client = KrakenRESTClient()
+        client = KrakenRESTClient(rate_limiter=rate_limiter)
 
     logger.info(f"Backfilling OHLC for {pair_metadata.canonical} ({timeframe}), since timestamp {since}")
 

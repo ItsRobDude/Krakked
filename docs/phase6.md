@@ -216,7 +216,8 @@ Returns the current risk state:
 }
 
 Implementation:
-	•	Calls StrategyRiskEngine.get_risk_status().
+        •       Calls StrategyRiskEngine.get_risk_status().
+        •       `kill_switch_active` reflects both manual triggers (via the kill switch endpoint) and automatic risk circuit breakers.
 
 ⸻
 
@@ -242,8 +243,10 @@ PATCH /api/risk/config
 POST /api/risk/kill_switch
 
 Payload: { "active": true | false }
-	•	If true, activate kill switch (block new risk).
-	•	If false, clear kill switch state (if allowed by config).
+        •       If true, activate kill switch (block new risk).
+        •       If false, clear kill switch state (if allowed by config).
+        •       When `ui.read_only` is true, treat this as a read-only endpoint and return the current kill switch state without mutation.
+        •       Manual activations are sticky until explicitly cleared; automatic triggers leave the flag raised until cleared through this endpoint.
 
 ⸻
 
@@ -626,3 +629,29 @@ without directly calling KrakenRESTClient.
 	•	Integration with mocked Phase 3–5 services.
 
 At that point, Krakked has a real control plane: you can see everything that matters, tweak risk/strategy, execute emergency controls, and monitor the bot’s behavior — all without touching code or logs directly. Phase 7 can then focus on deployment, monitoring, and long-term ops.
+⸻
+
+Status & TODO
+
+- [x] API envelopes/models: Implemented in the shared response types and payload schemas (`src/kraken_bot/ui/models.py`).
+- [x] Read-only portfolio/risk/strategies/execution endpoints: GET routes are wired through FastAPI routers (`src/kraken_bot/ui/routes/portfolio.py`, `risk.py`, `strategies.py`, `execution.py`, `system.py`).
+- [x] Mutating endpoints with ui.read_only/auth: Auth middleware and read-only guards wrap POST/PATCH routes (`src/kraken_bot/ui/api.py`, `src/kraken_bot/ui/routes/*`).
+- [x] Kill switch endpoint behavior: `/api/risk/kill_switch` documents manual activation/clear semantics, read-only behavior, and response shape.
+- [x] Credential validation rules: Documented below and enforced in `/api/system/credentials/validate`.
+- [x] TUI/React integration: Trading dashboard wired to the backend (`ui/tui_dashboard.py` and `ui/src/App.tsx`).
+  - Local dev env vars: `KRAKKED_API_URL` / `KRAKKED_API_TOKEN` (TUI) and `VITE_API_BASE` / `VITE_API_TOKEN` (React).
+
+Credential validation rules
+---------------------------
+
+- Endpoint: `POST /api/system/credentials/validate`.
+- Payload: `{ "apiKey": "...", "apiSecret": "...", "region": "<region code>" }` (all three fields are required; empty/whitespace-only values are rejected before probing Kraken).
+- Auth: When `ui.auth.enabled` is true, the request **must** include `Authorization: Bearer <ui.auth.token>` or the call returns `{ "data": { "valid": false }, "error": "Unauthorized" }`.
+- Kraken probe: uses a low-risk private call (`Balance`) against the standard Kraken API host to confirm key/secret signing without mutating state.
+- Success shape: `{ "data": { "valid": true }, "error": null }`.
+- Expected error envelopes:
+  - Missing fields: `{ "data": { "valid": false }, "error": "apiKey, apiSecret, and region are required." }`.
+  - Authentication failures (invalid key/secret/signature/nonce): `{ "data": { "valid": false }, "error": "Authentication failed. Please verify your API key/secret." }`.
+  - Connectivity/availability issues (network errors, 5xx, maintenance): `{ "data": { "valid": false }, "error": "Kraken is unavailable or could not be reached. Please retry." }`.
+  - Unexpected errors are logged server-side and returned as `{ "data": { "valid": false }, "error": "Unexpected error while validating credentials. Please retry or check server logs." }`.
+  - In all cases, the response adheres to the shared `{data, error}` envelope and never exposes secrets.

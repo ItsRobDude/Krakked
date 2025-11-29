@@ -4,6 +4,7 @@ import logging
 from typing import Tuple
 
 from kraken_bot.config import AppConfig, load_config
+from kraken_bot.connection.rate_limiter import RateLimiter
 from kraken_bot.connection.rest_client import KrakenRESTClient
 from kraken_bot.secrets import CredentialResult, CredentialStatus, load_api_keys
 
@@ -44,7 +45,7 @@ def _validate_credentials(result: CredentialResult) -> Tuple[str, str]:
 
 def bootstrap(
     allow_interactive_setup: bool = True,
-) -> Tuple[KrakenRESTClient, AppConfig]:
+) -> Tuple[KrakenRESTClient, AppConfig, RateLimiter]:
     """Load configuration, fetch credentials, and return a ready REST client.
 
     Args:
@@ -52,7 +53,7 @@ def bootstrap(
             to perform the interactive secrets flow when no credentials exist.
 
     Returns:
-        A tuple of ``(KrakenRESTClient, AppConfig)`` ready for use.
+        A tuple of ``(KrakenRESTClient, AppConfig, RateLimiter)`` ready for use.
 
     Raises:
         CredentialBootstrapError: If credentials cannot be loaded or are invalid.
@@ -62,8 +63,17 @@ def bootstrap(
     credential_result = load_api_keys(allow_interactive_setup=allow_interactive_setup)
     api_key, api_secret = _validate_credentials(credential_result)
 
-    client = KrakenRESTClient(api_key=api_key, api_secret=api_secret)
-    return client, config
+    rate_limiter = RateLimiter(calls_per_second=0.5)
+    client = KrakenRESTClient(
+        api_key=api_key, api_secret=api_secret, rate_limiter=rate_limiter
+    )
+    return client, config, rate_limiter
 
 
-__all__ = ["bootstrap", "CredentialBootstrapError", "AppConfig", "KrakenRESTClient"]
+__all__ = [
+    "bootstrap",
+    "CredentialBootstrapError",
+    "AppConfig",
+    "KrakenRESTClient",
+    "RateLimiter",
+]

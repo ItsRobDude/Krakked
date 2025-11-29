@@ -25,11 +25,12 @@ class KrakenRESTClient:
         api_url: str = KRAKEN_API_URL,
         calls_per_second: float = 0.5,
         api_key: Optional[str] = None,
-        api_secret: Optional[str] = None
+        api_secret: Optional[str] = None,
+        rate_limiter: Optional[RateLimiter] = None,
     ):
         self.api_url = api_url
         # Use the same rate limiter for both public and private calls for simplicity and safety
-        self.rate_limiter = RateLimiter(calls_per_second)
+        self.rate_limiter = rate_limiter or RateLimiter(calls_per_second)
 
         self.api_key = api_key
         self.api_secret = api_secret
@@ -145,12 +146,28 @@ class KrakenRESTClient:
         """
         return self._request("post", endpoint, params=params, private=True)
 
+    def add_order(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        return self.get_private("AddOrder", params=params)
+
+    def cancel_order(self, txid: str) -> Dict[str, Any]:
+        return self.get_private("CancelOrder", {"txid": txid})
+
+    def cancel_all_orders(self) -> Dict[str, Any]:
+        return self.get_private("CancelAll")
+
+    def cancel_all_orders_after(self, timeout_seconds: int) -> Dict[str, Any]:
+        return self.get_private("CancelAllOrdersAfter", {"timeout": timeout_seconds})
+
     def get_ledgers(self, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Retrieves information about ledger entries.
         Endpoint: Ledgers
         """
         return self.get_private("Ledgers", params=params)
+
+    def get_open_orders(self, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Retrieves currently open orders. Endpoint: OpenOrders"""
+        return self.get_private("OpenOrders", params=params)
 
     def get_closed_orders(self, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """

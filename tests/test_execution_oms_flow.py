@@ -1,0 +1,281 @@
+from datetime import datetime
+from unittest.mock import MagicMock, call
+
+import pytest
+
+from kraken_bot.config import ExecutionConfig
+from kraken_bot.execution.adapter import PaperExecutionAdapter
+from kraken_bot.execution.models import LocalOrder
+from kraken_bot.execution.oms import ExecutionService
+from kraken_bot.strategy.models import ExecutionPlan, RiskAdjustedAction
+
+
+def _action(**overrides) -> RiskAdjustedAction:
+    base = dict(
+        pair="XBTUSD",
+        strategy_id="strat",
+        action_type="open",
+        target_base_size=1.0,
+        target_notional_usd=50.0,
+        current_base_size=0.0,
+        reason="",
+        blocked=False,
+        blocked_reasons=[],
+        strategy_tag="tag",
+        userref=99,
+        risk_limits_snapshot={},
+    )
+    base.update(overrides)
+    return RiskAdjustedAction(**base)
+
+
+def _plan(actions):
+    return ExecutionPlan(
+        plan_id="plan",
+        generated_at=datetime.utcnow(),
+        actions=list(actions),
+        metadata={"order_type": "limit"},
+    )
+
+
+def _market_data(mid_price: float = 25.0) -> MagicMock:
+    market_data = MagicMock()
+    market_data.get_best_bid_ask.return_value = {"bid": mid_price - 0.5, "ask": mid_price + 0.5}
+    return market_data
+
+
+def test_execute_plan_skips_blocked_and_none_actions():
+    adapter = MagicMock()
+    adapter.config = ExecutionConfig(validate_only=True)
+    service = ExecutionService(adapter=adapter)
+
+    actions = [
+        _action(blocked=True),
+        _action(action_type="none"),
+    ]
+    plan = _plan(actions)
+
+    result = service.execute_plan(plan)
+
+    assert result.orders == []
+    adapter.submit_order.assert_not_called()
+
+
+def test_execute_plan_builds_buy_and_sell_from_deltas():
+    adapter = MagicMock()
+    adapter.config = ExecutionConfig(validate_only=True)
+    adapter.submit_order.side_effect = lambda order: order
+    service = ExecutionService(adapter=adapter, market_data=_market_data())
+
+    actions = [
+        _action(target_base_size=2.0, current_base_size=1.0),  # buy 1
+        _action(target_base_size=1.0, current_base_size=3.0),  # sell 2
+    ]
+    plan = _plan(actions)
+
+    result = service.execute_plan(plan)
+
+    assert len(result.orders) == 2
+    buy_order, sell_order = result.orders
+    assert buy_order.side == "buy"
+    assert buy_order.requested_base_size == pytest.approx(1.0)
+    assert sell_order.side == "sell"
+    assert sell_order.requested_base_size == pytest.approx(2.0)
+    assert adapter.submit_order.call_count == 2
+
+
+def test_execute_plan_guardrail_blocks_order():
+    adapter = MagicMock()
+    adapter.config = ExecutionConfig(max_pair_notional_usd=10.0)
+    service = ExecutionService(adapter=adapter, market_data=_market_data())
+
+    plan = _plan([_action(target_notional_usd=100.0)])
+
+    result = service.execute_plan(plan)
+
+    assert len(result.orders) == 1
+    assert result.orders[0].status == "rejected"
+    assert "max_pair_notional_usd" in (result.orders[0].last_error or "")
+    adapter.submit_order.assert_not_called()
+
+
+def test_execute_plan_truncates_to_max_concurrent_orders_and_rejects_extra():
+    adapter = MagicMock()
+    adapter.config = ExecutionConfig(max_concurrent_orders=2, validate_only=True)
+    adapter.submit_order.side_effect = lambda order: order
+    store = MagicMock()
+    service = ExecutionService(adapter=adapter, store=store, market_data=_market_data())
+
+    actions = [
+        _action(target_base_size=1.0, current_base_size=0.0),
+        _action(target_base_size=2.0, current_base_size=0.0),
+        _action(target_base_size=3.0, current_base_size=0.0),
+    ]
+    plan = _plan(actions)
+
+    result = service.execute_plan(plan)
+
+    assert adapter.submit_order.call_count == 2
+    assert len(result.orders) == 3
+
+    rejected = [order for order in result.orders if order.status == "rejected"]
+    assert len(rejected) == 1
+    assert "concurrency limit" in (rejected[0].last_error or "").lower()
+    assert rejected[0].requested_base_size == pytest.approx(3.0)
+    assert rejected[0].pair == actions[-1].pair
+
+    assert rejected[0].last_error in result.errors
+    assert any(call.args[0] == rejected[0] for call in store.save_order.call_args_list)
+
+
+def test_refresh_open_orders_updates_tracked_orders():
+    client = MagicMock()
+    adapter = PaperExecutionAdapter()
+    adapter.client = client
+    service = ExecutionService(adapter=adapter)
+
+    order = LocalOrder(
+        local_id="1",
+        plan_id="plan",
+        strategy_id="strategy",
+        pair="ETHUSD",
+        side="buy",
+        order_type="limit",
+        userref=7,
+        requested_base_size=1.0,
+        requested_price=20.0,
+    )
+    service.register_order(order)
+
+    client.get_open_orders.return_value = {
+        "open": {
+            "OID123": {"userref": 7, "status": "open", "vol_exec": "0.5", "price": "21.0"}
+        }
+    }
+
+    service.refresh_open_orders()
+
+    assert order.kraken_order_id == "OID123"
+    assert order.status == "open"
+    assert order.cumulative_base_filled == pytest.approx(0.5)
+    assert order.avg_fill_price == pytest.approx(21.0)
+
+
+def test_reconcile_orders_closes_and_updates_local_order():
+    client = MagicMock()
+    adapter = PaperExecutionAdapter()
+    adapter.client = client
+    service = ExecutionService(adapter=adapter)
+
+    order = LocalOrder(
+        local_id="2",
+        plan_id="plan",
+        strategy_id="strategy",
+        pair="ETHUSD",
+        side="buy",
+        order_type="limit",
+        userref=8,
+        kraken_order_id="OIDCLOSE",
+        requested_base_size=1.0,
+        requested_price=20.0,
+    )
+    service.register_order(order)
+
+    client.get_closed_orders.return_value = {
+        "closed": {
+            "OIDCLOSE": {"userref": 8, "status": "closed", "vol_exec": "1.0", "price_avg": "22.0"}
+        }
+    }
+
+    service.reconcile_orders()
+
+    assert order.status == "closed"
+    assert order.cumulative_base_filled == pytest.approx(1.0)
+    assert order.avg_fill_price == pytest.approx(22.0)
+    assert order.local_id not in service.open_orders
+
+
+def test_cancel_all_requests_adapter_and_marks_orders():
+    class _FakeAdapter:
+        def __init__(self):
+            self.config = ExecutionConfig(validate_only=True)
+            self.client = MagicMock()
+            self.client.get_open_orders.return_value = {"open": {}}
+            self.client.get_closed_orders.return_value = {"closed": {}}
+            self.cancel_all_called = False
+
+        def submit_order(self, order: LocalOrder) -> LocalOrder:  # pragma: no cover - unused
+            return order
+
+        def cancel_order(self, order: LocalOrder) -> None:  # pragma: no cover - unused
+            return None
+
+        def cancel_all_orders(self) -> None:
+            self.cancel_all_called = True
+
+    adapter = _FakeAdapter()
+    store = MagicMock()
+    service = ExecutionService(adapter=adapter, store=store)
+
+    order = LocalOrder(
+        local_id="3",
+        plan_id="plan",
+        strategy_id="strategy",
+        pair="ETHUSD",
+        side="buy",
+        order_type="limit",
+        userref=9,
+        requested_base_size=1.0,
+        requested_price=20.0,
+        kraken_order_id="OIDOPEN",
+        status="open",
+    )
+    service.register_order(order)
+
+    service.cancel_all()
+
+    assert adapter.cancel_all_called is True
+    assert order.status == "canceled"
+    assert order.local_id not in service.open_orders
+    store.update_order_status.assert_called_once_with(
+        local_id=order.local_id,
+        status="canceled",
+        kraken_order_id=order.kraken_order_id,
+        event_message="Canceled via cancel_all",
+    )
+
+
+def test_execute_plan_applies_slippage_from_market_data_for_buy_and_sell():
+    config = ExecutionConfig(max_slippage_bps=100, validate_only=True)
+    adapter = PaperExecutionAdapter(config=config)
+    market_data = _market_data(mid_price=100.0)
+    service = ExecutionService(adapter=adapter, market_data=market_data)
+
+    actions = [
+        _action(target_base_size=2.0, current_base_size=1.0),  # buy 1
+        _action(target_base_size=0.0, current_base_size=1.0),  # sell 1
+    ]
+    plan = _plan(actions)
+
+    result = service.execute_plan(plan)
+
+    assert market_data.get_best_bid_ask.call_count == len(actions)
+    buy_order, sell_order = result.orders
+
+    assert buy_order.raw_request["price"] == pytest.approx(101.0)
+    assert sell_order.raw_request["price"] == pytest.approx(99.0)
+
+
+def test_execute_plan_records_warning_when_market_data_missing():
+    adapter = PaperExecutionAdapter(config=ExecutionConfig(validate_only=True))
+    market_data = MagicMock()
+    market_data.get_best_bid_ask.return_value = None
+    service = ExecutionService(adapter=adapter, market_data=market_data)
+
+    plan = _plan([_action()])
+
+    result = service.execute_plan(plan)
+
+    assert result.orders == []
+    assert result.warnings
+    market_data.get_best_bid_ask.assert_called_once()

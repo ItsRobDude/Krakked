@@ -1,8 +1,10 @@
 # tests/test_portfolio_store.py
 
-import pytest
 import os
 from datetime import datetime
+
+import pytest
+from kraken_bot.execution.models import ExecutionResult, LocalOrder
 from kraken_bot.portfolio.store import SQLitePortfolioStore
 from kraken_bot.portfolio.models import CashFlowRecord, PortfolioSnapshot, AssetValuation
 from kraken_bot.strategy.models import DecisionRecord, ExecutionPlan, RiskAdjustedAction
@@ -189,3 +191,72 @@ def test_decision_and_execution_plan_retrieval(store):
 
     recent = store.get_execution_plans(since=1699999999, limit=1)
     assert len(recent) == 1
+
+
+def test_save_and_load_local_order(store):
+    created_at = datetime(2024, 1, 1, 12, 0, 0)
+    order = LocalOrder(
+        local_id="LOCAL-1",
+        plan_id="PLAN-LOCAL",
+        strategy_id="strat-1",
+        pair="XBTUSD",
+        side="buy",
+        order_type="limit",
+        kraken_order_id="KRAKEN-1",
+        userref=42,
+        requested_base_size=0.25,
+        requested_price=25000.5,
+        status="submitted",
+        created_at=created_at,
+        updated_at=created_at,
+        cumulative_base_filled=0.05,
+        avg_fill_price=24950.1,
+        last_error="temporary glitch",
+        raw_request={"price": "25000.5", "volume": "0.25", "validate": True},
+        raw_response={"descr": {"order": "buy 0.25 XBTUSD @ limit 25000.5"}, "txid": ["KRAKEN-1"]},
+    )
+
+    store.save_order(order)
+
+    open_orders = store.get_open_orders()
+    assert len(open_orders) == 1
+
+    loaded = open_orders[0]
+    assert loaded.status == "submitted"
+    assert loaded.requested_price == 25000.5
+    assert loaded.avg_fill_price == 24950.1
+    assert loaded.raw_request == {"price": "25000.5", "volume": "0.25", "validate": True}
+    assert loaded.raw_response == {"descr": {"order": "buy 0.25 XBTUSD @ limit 25000.5"}, "txid": ["KRAKEN-1"]}
+    assert loaded.last_error == "temporary glitch"
+
+    by_reference = store.get_order_by_reference(kraken_order_id="KRAKEN-1")
+    assert by_reference is not None
+    assert by_reference.userref == 42
+    assert by_reference.raw_request == loaded.raw_request
+    assert by_reference.raw_response == loaded.raw_response
+
+
+def test_save_and_load_execution_result(store):
+    started_at = datetime(2024, 1, 2, 15, 30, 0)
+    completed_at = datetime(2024, 1, 2, 15, 45, 0)
+    result = ExecutionResult(
+        plan_id="PLAN-RESULT",
+        started_at=started_at,
+        completed_at=completed_at,
+        success=False,
+        orders=[],
+        errors=["order failed", "insufficient funds"],
+        warnings=["retry later"],
+    )
+
+    store.save_execution_result(result)
+
+    loaded_results = store.get_execution_results(limit=1)
+    assert len(loaded_results) == 1
+
+    loaded = loaded_results[0]
+    assert loaded.plan_id == "PLAN-RESULT"
+    assert loaded.success is False
+    assert loaded.started_at == started_at
+    assert loaded.completed_at == completed_at
+    assert loaded.errors == ["order failed", "insufficient funds"]

@@ -4,6 +4,7 @@ import logging
 from typing import TYPE_CHECKING, Dict, List, Optional
 
 from kraken_bot.config import AppConfig
+from kraken_bot.connection.rate_limiter import RateLimiter
 from kraken_bot.market_data.api import MarketDataAPI
 from kraken_bot.connection.rest_client import KrakenRESTClient
 from .portfolio import Portfolio
@@ -17,12 +18,21 @@ logger = logging.getLogger(__name__)
 
 
 class PortfolioService:
-    def __init__(self, config: AppConfig, market_data: MarketDataAPI, db_path: str = "portfolio.db"):
+    def __init__(
+        self,
+        config: AppConfig,
+        market_data: MarketDataAPI,
+        db_path: str = "portfolio.db",
+        rest_client: Optional[KrakenRESTClient] = None,
+        rate_limiter: Optional[RateLimiter] = None,
+    ):
         self.config = config.portfolio
         self.app_config = config  # Keep full config if needed
         self.market_data = market_data
         self.store: PortfolioStore = SQLitePortfolioStore(db_path=db_path)
-        self.rest_client = KrakenRESTClient()  # Used for balance checks and ledger/trades fetching if not passed in
+        self.rest_client = rest_client or KrakenRESTClient(
+            rate_limiter=rate_limiter
+        )  # Used for balance checks and ledger/trades fetching if not passed in
 
         self.portfolio = Portfolio(self.config, self.market_data, self.store)
         self._bootstrapped = False

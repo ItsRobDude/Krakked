@@ -125,6 +125,12 @@ class StrategyEngine:
                     )
 
         risk_actions = self.risk_engine.process_intents(all_intents)
+
+        for action in risk_actions:
+            strat_cfg = self.config.strategies.configs.get(action.strategy_id)
+            if strat_cfg and strat_cfg.userref is not None:
+                action.userref = strat_cfg.userref
+
         self._persist_actions(plan_id, now, risk_actions)
 
         plan = ExecutionPlan(
@@ -135,6 +141,15 @@ class StrategyEngine:
         )
 
         self._persist_plan(plan)
+        logger.info(
+            "Execution plan created",
+            extra={
+                "event": "plan_created",
+                "plan_id": plan_id,
+                "action_count": len(plan.actions),
+                "blocked_actions": len([a for a in plan.actions if a.blocked]),
+            },
+        )
         return plan
 
     def _data_ready(self) -> bool:

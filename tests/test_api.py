@@ -3,7 +3,7 @@
 import pytest
 import time
 from unittest.mock import MagicMock, patch, PropertyMock
-from kraken_bot.config import AppConfig, UniverseConfig, MarketDataConfig, ConnectionStatus, PortfolioConfig
+from kraken_bot.config import AppConfig, UniverseConfig, MarketDataConfig, ConnectionStatus, PortfolioConfig, OHLCBar
 from kraken_bot.market_data.api import MarketDataAPI
 from kraken_bot.market_data.exceptions import DataStaleError
 
@@ -153,3 +153,63 @@ def test_ohlc_staleness_independent_from_ticker(mock_config):
     ohlc_bar = api.get_live_ohlc("XBTUSD", "1m")
     assert ohlc_bar is not None
     assert ohlc_bar.close == 1.5
+
+
+def test_get_latest_price_uses_store_when_ws_missing(mock_config):
+    mock_config.market_data.backfill_timeframes = ["1m"]
+
+    api = MarketDataAPI(mock_config)
+    api._universe_map = {"XBTUSD": MagicMock()}
+    api._ws_client = None
+    api._ohlc_store = MagicMock()
+    api._ohlc_store.get_bars.return_value = [
+        OHLCBar(timestamp=1, open=100.0, high=110.0, low=90.0, close=105.5, volume=10.0)
+    ]
+
+    price = api.get_latest_price("XBTUSD")
+
+    assert price == 105.5
+    api._ohlc_store.get_bars.assert_called_with("XBTUSD", "1m", 1)
+
+
+def test_get_latest_price_falls_back_to_rest_when_ws_stale(mock_config):
+    mock_config.market_data.ws_timeframes = ["1m"]
+
+    api = MarketDataAPI(mock_config)
+    api._universe_map = {"XBTUSD": MagicMock()}
+
+    mock_ws = MagicMock()
+    mock_ws.last_ticker_update_ts = {"XBTUSD": time.monotonic() - 120}
+    mock_ws.ticker_cache = {"XBTUSD": {"bid": "1.0", "ask": "3.0"}}
+    api._ws_client = mock_ws
+
+    api._rest_client = MagicMock()
+    api._rest_client.get_public.return_value = {
+        "XXBTZUSD": {"a": ["10", "1", "1"], "b": ["8", "1", "1"], "c": ["9", "1"]}
+    }
+
+    price = api.get_latest_price("XBTUSD")
+
+    assert price == 9.0
+    api._rest_client.get_public.assert_called_once()
+
+
+def test_get_latest_price_raises_when_all_sources_stale(mock_config):
+    mock_config.market_data.ws_timeframes = ["1m"]
+
+    api = MarketDataAPI(mock_config)
+    api._universe_map = {"XBTUSD": MagicMock()}
+
+    mock_ws = MagicMock()
+    mock_ws.last_ticker_update_ts = {"XBTUSD": time.monotonic() - 120}
+    mock_ws.ticker_cache = {"XBTUSD": {"bid": "1.0", "ask": "3.0"}}
+    api._ws_client = mock_ws
+
+    api._ohlc_store = MagicMock()
+    api._ohlc_store.get_bars.return_value = []
+
+    api._rest_client = MagicMock()
+    api._rest_client.get_public.return_value = {}
+
+    with pytest.raises(DataStaleError):
+        api.get_latest_price("XBTUSD")

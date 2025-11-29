@@ -175,12 +175,14 @@ class KrakenWSClientV2:
     async def _connect_and_listen(self):
         """Manages the connection and listens for messages."""
         backoff_delay = 1
+        max_backoff = 60
         while self._running:
             try:
                 async with websockets.connect(self._url) as ws:
                     self._websocket = ws
                     logger.info("WebSocket connection established.")
                     backoff_delay = 1 # Reset backoff on successful connection
+                    self.subscription_status.clear()
                     await self._subscribe()
 
                     while self._running:
@@ -199,8 +201,13 @@ class KrakenWSClientV2:
                             break
 
             except Exception as e:
-                logger.error(f"WebSocket client error: {e}. Reconnecting in {backoff_delay}s...")
-                await asyncio.sleep(backoff_delay)
-                backoff_delay = min(backoff_delay * 2, 60) # Exponential backoff up to 60s
+                logger.error(f"WebSocket client error: {e}.")
+
+            if not self._running:
+                break
+
+            logger.info(f"Reconnecting in {backoff_delay}s...")
+            await asyncio.sleep(backoff_delay)
+            backoff_delay = min(backoff_delay * 2, max_backoff) # Exponential backoff up to max_backoff
 
         logger.info("WebSocket run loop terminated.")

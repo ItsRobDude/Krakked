@@ -32,9 +32,9 @@ def test_bootstrap_returns_client_and_config():
         client_instance = object()
         mock_client.return_value = client_instance
 
-        client, config = bootstrap()
+        client, config, rate_limiter = bootstrap()
 
-    mock_client.assert_called_once_with(api_key="k", api_secret="s")
+    mock_client.assert_called_once_with(api_key="k", api_secret="s", rate_limiter=rate_limiter)
     assert client is client_instance
     assert config.region.code == "US"
 

@@ -100,7 +100,7 @@ def test_load_api_keys_requires_password_env_when_non_interactive(mock_config_di
         result = load_api_keys()
 
     mock_getpass.assert_not_called()
-    assert result.status == CredentialStatus.AUTH_ERROR
+    assert result.status == CredentialStatus.NOT_FOUND
     assert result.api_key is None
     assert result.api_secret is None
     assert result.source == "secrets_file"

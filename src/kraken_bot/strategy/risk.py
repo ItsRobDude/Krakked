@@ -72,6 +72,13 @@ class RiskEngine:
         self.strategy_userrefs = strategy_userrefs or {}
         self.strategy_tags = strategy_tags or {}
         self._kill_switch_active = False
+        self._manual_kill_switch_active = False
+
+    def set_manual_kill_switch(self, active: bool) -> None:
+        self._manual_kill_switch_active = active
+
+    def clear_manual_kill_switch(self) -> None:
+        self._manual_kill_switch_active = False
 
     def build_risk_context(self) -> RiskContext:
         include_manual_for_strategies = self.config.include_manual_positions
@@ -138,10 +145,15 @@ class RiskEngine:
     def process_intents(self, intents: List[StrategyIntent]) -> List[RiskAdjustedAction]:
         ctx = self.build_risk_context()
 
+        kill_switch_reasons: List[str] = []
+        kill_switch_active = self._manual_kill_switch_active
+        if self._manual_kill_switch_active:
+            kill_switch_reasons.append("Manual Kill Switch")
+
         if self.config.kill_switch_on_drift and ctx.drift_flag:
             logger.warning("Kill switch active due to portfolio drift.")
-            self._kill_switch_active = True
-            return self._block_all_opens(intents, ctx, "Portfolio Drift Detected")
+            kill_switch_active = True
+            kill_switch_reasons.append("Portfolio Drift Detected")
 
         if ctx.daily_drawdown_pct > self.config.max_daily_drawdown_pct:
             logger.warning(
@@ -149,10 +161,15 @@ class RiskEngine:
                 ctx.daily_drawdown_pct,
                 self.config.max_daily_drawdown_pct,
             )
-            self._kill_switch_active = True
-            return self._block_all_opens(intents, ctx, f"Max Daily Drawdown Exceeded ({ctx.daily_drawdown_pct:.2f}%)")
+            kill_switch_active = True
+            kill_switch_reasons.append(
+                f"Max Daily Drawdown Exceeded ({ctx.daily_drawdown_pct:.2f}%)"
+            )
 
-        self._kill_switch_active = False
+        self._kill_switch_active = kill_switch_active
+        if kill_switch_active:
+            reason = "; ".join(kill_switch_reasons) if kill_switch_reasons else "Kill Switch Active"
+            return self._block_all_opens(intents, ctx, reason)
 
         intents_by_pair: Dict[str, List[StrategyIntent]] = {}
         for intent in intents:
@@ -450,7 +467,7 @@ class RiskEngine:
             per_asset[exp.asset] = exp.percentage_of_equity * 100
 
         return RiskStatus(
-            kill_switch_active=self._kill_switch_active,
+            kill_switch_active=self._kill_switch_active or self._manual_kill_switch_active,
             daily_drawdown_pct=ctx.daily_drawdown_pct,
             drift_flag=ctx.drift_flag,
             total_exposure_pct=ctx.total_exposure_pct,

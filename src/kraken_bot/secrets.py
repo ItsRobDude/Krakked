@@ -336,13 +336,17 @@ def load_api_keys(allow_interactive_setup: bool = False) -> CredentialResult:
     if secrets_path.exists():
         env_password = os.getenv("KRAKEN_BOT_SECRET_PW")
         if not env_password and not allow_interactive_setup:
-            print("KRAKEN_BOT_SECRET_PW is required to decrypt secrets non-interactively.")
+            message = (
+                "Encrypted credentials found but KRAKEN_BOT_SECRET_PW is not set; "
+                "credentials are unavailable in non-interactive mode."
+            )
+            print(message)
             return CredentialResult(
                 None,
                 None,
-                CredentialStatus.AUTH_ERROR,
+                CredentialStatus.NOT_FOUND,
                 source="secrets_file",
-                validation_error="Missing KRAKEN_BOT_SECRET_PW environment variable.",
+                validation_error=message,
             )
 
         password = env_password or getpass.getpass("Enter master password to decrypt API keys: ")

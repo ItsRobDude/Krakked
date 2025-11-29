@@ -4,7 +4,7 @@ A modular, robust Kraken trading bot designed for spot trading (CA/USA) with a f
 
 ## 🚀 Current Status
 
-This repository includes working, test-covered implementations for the early phases, but it is still a backend-only project. Phase 1 connection and credential handling are fully implemented; execution wiring and any user interface remain pending. Phase 4 now runs multi-timeframe scheduling, per-strategy/portfolio caps, liquidity gating, and stale-data handling in the strategy/risk engine.
+This repository includes working, test-covered implementations for the early phases, and the execution layer is now wired for paper/validate-only usage. Phase 1 connection and credential handling are fully implemented; Phase 4 runs multi-timeframe scheduling, per-strategy/portfolio caps, liquidity gating, and stale-data handling in the strategy/risk engine; Phase 5 introduces an OMS with market-data-driven routing, retry/backoff, panic cancel, and SQLite persistence while keeping live trading disabled by default.
 
 | Module | Status | Notes |
 | :--- | :--- | :--- |
@@ -12,8 +12,18 @@ This repository includes working, test-covered implementations for the early pha
 | **Phase 2: Market Data** | ✅ Implemented | Pair-universe discovery, OHLC backfill to a pluggable store, and WebSocket v2 streaming with staleness checks. |
 | **Phase 3: Portfolio** | ✅ Implemented | Portfolio service with SQLite persistence, weighted-average cost PnL, fee tracking, and cashflow detection. |
 | **Phase 4: Strategy & Risk** | ✅ Implemented with known follow-ups | Strategy loader with multi-timeframe scheduling, per-strategy/portfolio caps, liquidity gating, and staleness handling; order tagging/OMS wiring will land in Phase 5. |
-| **Phase 5: Execution** | ⏳ Not started | Order Management System (OMS), trade execution, order lifecycle management. |
-| **Phase 6: UI/Control** | ⏳ Not started | CLI/web interface for monitoring and manual control. |
+| **Phase 5: Execution** | 🚧 In progress | OMS with market-data-driven routing, retries/backoff, dead-man switch hooks, panic cancel, and SQLite persistence; paper/validate-only defaults with explicit allow_live_trading gate for live submission. |
+| **Phase 6: UI/Control** | 🚧 In progress (UI/control plane) | CLI/web interface for monitoring and manual control. |
+
+Phase 6 is underway with the following milestones queued:
+
+* **6A**: FastAPI endpoints (read-only + mutating with `read_only` guard and auth).
+* **6B**: TUI HTTP wiring and safety controls.
+* **6C**: React dashboard data and controls.
+
+Credential validation semantics (required fields, bearer token enforcement, and the Kraken probe used) are described in the [Phase 6 contract](docs/phase6.md#credential-validation-rules).
+
+See [`docs/phase6.md`](docs/phase6.md) for the full contract and details.
 
 See the consolidated phase contract in [`docs/contract.md`](docs/contract.md) for the full design scope across Phases 1–7. Individual phase files remain available for historical reference.
 
@@ -132,13 +142,89 @@ To run the implemented Phase 4 features, set these keys in `config.yaml`:
 *   **Liquidity gating**: Set `risk.min_liquidity_24h_usd` to block new exposure when recent volume is too low. 【F:src/kraken_bot/config.py†L60-L72】【F:src/kraken_bot/strategy/risk.py†L203-L249】
 *   **Staleness handling**: Market data staleness and connection checks are enforced before intent generation; strategies surface `DataStaleError` to skip a timeframe when needed. 【F:src/kraken_bot/strategy/engine.py†L33-L120】
 
-### Phase 5 handoffs
+### Phase 5 execution wiring
 
-Phase 4 produces risk-adjusted actions but still relies on Phase 5 to wire order tagging and OMS submission. Execution hooks and tag propagation will arrive with the Phase 5 implementation.
+Phase 4 produces risk-adjusted actions that now flow through an OMS capable of paper/validate routing by default. Orders are built from plan deltas, priced off mid/bid/ask via `MarketDataAPI`, and constrained by `ExecutionConfig` guardrails (slippage bands, min notional, max concurrency). Submissions use retries/backoff for transient errors, apply a dead-man switch heartbeat when enabled, and persist to SQLite (`execution_orders` / `execution_results`) alongside in-memory tracking. The admin CLI provides listing, reconciliation, targeted cancels, and a panic cancel-all path that refreshes state after cancelation.
 
 #### Strategy ID propagation and tagging
 
-`strategy_id` is carried end-to-end: strategies emit `StrategyIntent`, the risk engine normalizes that into `RiskAdjustedAction`, and the resulting `DecisionRecord` snapshots the same identifier for audit/history. Each strategy config supports an optional `userref` field in `StrategyConfig` to give the strategy a stable numeric tag; configure it now so Phase 5’s OMS can reuse it for Kraken order tagging and PnL attribution. OMS/userref plumbing itself is intentionally deferred to Phase 5, but providing `userref` early guarantees consistent attribution once execution wiring lands.
+`strategy_id` remains carried end-to-end: strategies emit `StrategyIntent`, the risk engine normalizes that into `RiskAdjustedAction`, and the resulting `DecisionRecord` snapshots the same identifier for audit/history. Each strategy config supports an optional `userref` field in `StrategyConfig` to give the strategy a stable numeric tag that is forwarded into Kraken orders for attribution.
+
+### 🧪 Paper / Validate Quickstart
+
+`krakked run-once` is pinned to the safest defaults: `execution.mode="paper"`, `validate_only=True`, and `allow_live_trading=False`, even if your config requests otherwise. Orders are priced from mid/bid/ask snapshots with slippage caps and written to SQLite for inspection.
+
+To run a single synchronous cycle:
+
+```bash
+poetry run krakked run-once
+```
+
+After the run, inspect orders/results in the default SQLite store (`portfolio.db` unless overridden) or via the admin helper:
+
+```bash
+# Review open/pending orders and execution summaries
+poetry run python -m kraken_bot.execution.admin_cli list-open
+poetry run python -m kraken_bot.execution.admin_cli recent-executions
+
+# Targeted or global cancels (remains safe in paper/validate-only mode)
+poetry run python -m kraken_bot.execution.admin_cli cancel --plan-id <id>
+poetry run python -m kraken_bot.execution.admin_cli panic
+```
+
+To query SQLite directly:
+
+```bash
+sqlite3 portfolio.db \
+  "SELECT plan_id, local_id, kraken_order_id, status, volume, price FROM execution_orders ORDER BY created_at DESC LIMIT 5;"
+sqlite3 portfolio.db \
+  "SELECT id, started_at, completed_at, status, summary FROM execution_results ORDER BY started_at DESC LIMIT 3;"
+```
+
+Key tables to review are `execution_orders` (every `LocalOrder` snapshot), `execution_order_events` (state transitions), and `execution_results` (per-plan outcome summaries). The admin CLI mirrors that data without requiring SQL and performs a reconciliation pass after panic cancel-all.
+
+### ✅ Enabling Live Trading (Advanced)
+
+Live routing is guarded by multiple gates that must all be opened:
+
+* **Set live mode**: `execution.mode: "live"`.
+* **Disable validation-only**: `execution.validate_only: false` so Kraken will accept orders.
+* **Affirm live intent**: `execution.allow_live_trading: true`; this defaults to `false` as a last-ditch safety catch.
+* **Environment gates**: No additional env flag is required today—config values alone control live behavior.
+
+Only adapters that submit orders honor live mode (`ExecutionAdapter`/`KrakenExecutionAdapter` and any CLI that boots the OMS with a REST client). The `krakked run-once` helper always forces paper/validate-only regardless of config so it cannot transmit live orders.
+
+Before enabling live trading, run at least one paper `krakked run-once` cycle and review orders/results (via SQLite or the admin CLI) to validate sizing, tags, and guardrails.
+
+### ↩️ Disabling Live Trading
+
+To return to paper-only safety:
+
+1. Set `execution.mode: "paper"` (or `"dry_run"`).
+2. Set `execution.validate_only: true`.
+3. Set `execution.allow_live_trading: false`.
+4. Unset any future environment gate if added (none exist currently).
+
+These changes immediately block live submission; adapters will reject non-validated live attempts when any gate is closed.
+
+### 🛑 Panic Cancel / Operational Controls
+
+The execution admin CLI exposes operational levers that work against the SQLite store and in-memory OMS state:
+
+* `list-open`: Show persisted and in-memory open/pending orders to confirm exposure.
+* `recent-executions`: Inspect recent plan runs and their success/error summaries.
+* `cancel`: Cancel by plan, strategy, Kraken order id, local id, or `--all` (with optional filters) to target specific risk.
+* `panic`: Refresh/reconcile state, then cancel **all** open orders—useful for fast stop-the-bleed responses.
+
+Invoke via `poetry run python -m kraken_bot.execution.admin_cli <subcommand>`; pass `--db-path` to point at a non-default portfolio database or `--allow-interactive-setup` if credential prompts are acceptable.
+
+### ✅ Live Readiness Checklist
+
+* Paper mode: At least one full `krakked run-once` paper cycle completed without errors.
+* Data review: SQLite `execution_orders` / `execution_results` inspected (or equivalent admin CLI checks) to verify sizing, tagging, and guardrails.
+* Config gates: `execution.mode="live"`, `execution.validate_only=false`, and `execution.allow_live_trading=true` intentionally set for production; revert any gate to disable.
+* Risk reviewed: Portfolio and per-strategy risk limits rechecked for live exposure tolerance.
+* Operator drills: Team knows how to invoke `panic` and targeted `cancel` via `execution.admin_cli` for immediate kill-switch behavior.
 
 ## 🧪 Testing
 
