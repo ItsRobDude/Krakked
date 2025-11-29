@@ -160,6 +160,14 @@ To run a single synchronous cycle:
 poetry run krakked run-once
 ```
 
+To start the full orchestrator (market data WebSocket loop, portfolio sync scheduler, strategy cycles with execution, and the FastAPI UI in the same process):
+
+```bash
+poetry run krakked run
+```
+
+The runner bootstraps configuration/credentials, initializes market data + portfolio + strategy services, and hosts the UI on `config.ui.host:config.ui.port` when enabled. It listens for `SIGINT`/`SIGTERM` to stop scheduler loops, cancel any open orders, and shut down the WebSocket feed cleanly.
+
 After the run, inspect orders/results in the default SQLite store (`portfolio.db` unless overridden) or via the admin helper:
 
 ```bash
