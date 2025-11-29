@@ -140,33 +140,64 @@ Phase 4 produces risk-adjusted actions but still relies on Phase 5 to wire order
 
 `strategy_id` is carried end-to-end: strategies emit `StrategyIntent`, the risk engine normalizes that into `RiskAdjustedAction`, and the resulting `DecisionRecord` snapshots the same identifier for audit/history. Each strategy config supports an optional `userref` field in `StrategyConfig` to give the strategy a stable numeric tag; configure it now so Phase 5’s OMS can reuse it for Kraken order tagging and PnL attribution. OMS/userref plumbing itself is intentionally deferred to Phase 5, but providing `userref` early guarantees consistent attribution once execution wiring lands.
 
-### 🧪 Dry-run quickstart (`krakked run-once`)
+### 🧪 Paper / Validate Quickstart
 
-Use the CLI to execute a single, synchronous cycle in the safest mode available:
+`krakked run-once` is pinned to the safest defaults: `execution.mode="paper"`, `validate_only=True`, and `allow_live_trading=False`, even if your config requests otherwise. That means Kraken only validates orders without touching funds.
+
+To run a single synchronous cycle:
 
 ```bash
 poetry run krakked run-once
 ```
 
-The helper forces `execution.mode="paper"`, `validate_only=True`, and `allow_live_trading=False` even if your config says otherwise, ensuring Kraken only validates orders and no funds are touched. After the run, inspect the default SQLite store (`portfolio.db` unless you pass a different path to the portfolio store) to review what would have been submitted:
+After the run, inspect orders/results in the default SQLite store (`portfolio.db` unless overridden) or via the admin helper:
 
 ```bash
-sqlite3 portfolio.db \
-  "SELECT local_id, pair, side, requested_base_size, status, last_error FROM execution_orders;"
-sqlite3 portfolio.db "SELECT plan_id, success, errors_json FROM execution_results;"
+# Review open/pending orders and execution summaries
+poetry run python -m kraken_bot.execution.admin_cli list-open
+poetry run python -m kraken_bot.execution.admin_cli recent-executions
+
+# Targeted or global cancels (remains safe in paper/validate-only mode)
+poetry run python -m kraken_bot.execution.admin_cli cancel --plan-id <id>
+poetry run python -m kraken_bot.execution.admin_cli panic
 ```
 
-The `execution_orders` table captures every LocalOrder snapshot, while `execution_results` summarizes each plan run.
+The `execution_orders` table captures every `LocalOrder` snapshot, while `execution_results` summarizes each plan run. The admin CLI mirrors that data without requiring SQL.
 
-### ✅ Live-mode readiness checklist
+### ✅ Enabling Live Trading (Advanced)
 
-Live routing is guarded by conservative defaults. Before flipping the switch, ensure:
+Live routing is guarded by multiple gates that must all be opened:
 
-* **Explicitly enable live mode**: set `execution.mode: "live"` *and* `execution.allow_live_trading: true`. The latter defaults to `false` as a safety catch.
-* **Disable validation-only**: set `execution.validate_only: false` so Kraken will accept live orders (defaults to `true`).
-* **Sanity-check order floors**: leave `execution.min_order_notional_usd` at the default `20.0` or raise it; keep or tighten `max_pair_notional_usd`/`max_total_notional_usd` as desired.
-* **Complete paper validation**: run at least one `krakked run-once` cycle in paper/validate-only mode and review `execution_orders`/`execution_results` for the intended sizing and tagging.
-* **Confirm persistence/reconciliation**: ensure `portfolio.db` (or your configured DB) is writable so orders/results can be stored and reconciled in subsequent sessions.
+* **Set live mode**: `execution.mode: "live"`.
+* **Disable validation-only**: `execution.validate_only: false` so Kraken will accept orders.
+* **Affirm live intent**: `execution.allow_live_trading: true`; this defaults to `false` as a last-ditch safety catch.
+* **Environment gates**: No additional env flag is required today—config values alone control live behavior.
+
+Only adapters that submit orders honor live mode (`ExecutionAdapter`/`KrakenExecutionAdapter` and any CLI that boots the OMS with a REST client). The `krakked run-once` helper always forces paper/validate-only regardless of config so it cannot transmit live orders.
+
+Before enabling live trading, run at least one paper `krakked run-once` cycle and review orders/results (via SQLite or the admin CLI) to validate sizing, tags, and guardrails.
+
+### ↩️ Disabling Live Trading
+
+To return to paper-only safety:
+
+1. Set `execution.mode: "paper"` (or `"dry_run"`).
+2. Set `execution.validate_only: true`.
+3. Set `execution.allow_live_trading: false`.
+4. Unset any future environment gate if added (none exist currently).
+
+These changes immediately block live submission; adapters will reject non-validated live attempts when any gate is closed.
+
+### 🛑 Panic Cancel / Operational Controls
+
+The execution admin CLI exposes operational levers that work against the SQLite store and in-memory OMS state:
+
+* `list-open`: Show persisted and in-memory open/pending orders to confirm exposure.
+* `recent-executions`: Inspect recent plan runs and their success/error summaries.
+* `cancel`: Cancel by plan, strategy, Kraken order id, local id, or `--all` (with optional filters) to target specific risk.
+* `panic`: Refresh/reconcile state, then cancel **all** open orders—useful for fast stop-the-bleed responses.
+
+Invoke via `poetry run python -m kraken_bot.execution.admin_cli <subcommand>`; pass `--db-path` to point at a non-default portfolio database or `--allow-interactive-setup` if credential prompts are acceptable.
 
 ## 🧪 Testing
 
