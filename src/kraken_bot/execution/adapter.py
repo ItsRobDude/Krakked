@@ -1,9 +1,11 @@
 # src/kraken_bot/execution/adapter.py
 
 import logging
+import time
 from typing import Any, Dict, Optional, Protocol
 
 from kraken_bot.config import ExecutionConfig
+from kraken_bot.connection.exceptions import RateLimitError, ServiceUnavailableError
 from kraken_bot.connection.rest_client import KrakenRESTClient
 
 from .exceptions import ExecutionError, OrderCancelError, OrderRejectedError
@@ -82,16 +84,47 @@ class KrakenExecutionAdapter:
             )
             return order
 
-        try:
-            resp = self.client.add_order(payload)
-            order.raw_response = resp
-        except Exception as exc:  # pragma: no cover - passthrough for client errors
-            order.status = "error"
-            order.last_error = str(exc)
-            logger.error(
-                "Order submission error", extra={"event": "order_submit_error", "error": order.last_error}
-            )
-            raise ExecutionError(f"Failed to submit order: {exc}") from exc
+        attempts = 0
+        backoff_seconds = self.config.retry_backoff_seconds
+        while True:
+            try:
+                resp = self.client.add_order(payload)
+                order.raw_response = resp
+                break
+            except (RateLimitError, ServiceUnavailableError) as exc:
+                attempts += 1
+                if attempts > self.config.max_retries:
+                    order.status = "error"
+                    order.last_error = str(exc)
+                    logger.error(
+                        "Order submission retries exhausted",
+                        extra={
+                            "event": "order_retry_exhausted",
+                            "retries": attempts - 1,
+                            "error": order.last_error,
+                        },
+                    )
+                    raise ExecutionError(f"Failed to submit order: {exc}") from exc
+
+                sleep_seconds = backoff_seconds * (self.config.retry_backoff_factor ** (attempts - 1))
+                logger.warning(
+                    "Transient error submitting order; retrying",
+                    extra={
+                        "event": "order_retry",
+                        "attempt": attempts,
+                        "sleep_seconds": sleep_seconds,
+                        "error": str(exc),
+                    },
+                )
+                time.sleep(sleep_seconds)
+            except Exception as exc:  # pragma: no cover - passthrough for client errors
+                order.status = "error"
+                order.last_error = str(exc)
+                logger.error(
+                    "Order submission error",
+                    extra={"event": "order_submit_error", "error": order.last_error},
+                )
+                raise ExecutionError(f"Failed to submit order: {exc}") from exc
 
         errors = resp.get("error") or []
         if errors:
