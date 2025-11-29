@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { FooterHotkeys } from './components/FooterHotkeys';
 import { KpiGrid, Kpi } from './components/KpiGrid';
 import { Layout } from './components/Layout';
+import { RiskPanel } from './components/RiskPanel';
 import { LogEntry, LogPanel } from './components/LogPanel';
 import { PositionRow, PositionsTable } from './components/PositionsTable';
 import { Sidebar } from './components/Sidebar';
@@ -12,11 +13,14 @@ import {
   fetchPositions,
   fetchRecentExecutions,
   fetchSystemHealth,
+  getRiskStatus,
   ExposureBreakdown,
   PortfolioSummary,
   PositionPayload,
+  RiskStatus,
   RecentExecution,
   SystemHealth,
+  setKillSwitch,
 } from './services/api';
 import { validateCredentials } from './services/credentials';
 
@@ -112,6 +116,9 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [connectionState, setConnectionState] = useState<'connected' | 'degraded'>('degraded');
   const [health, setHealth] = useState<SystemHealth | null>(null);
+  const [risk, setRisk] = useState<RiskStatus | null>(null);
+  const [riskBusy, setRiskBusy] = useState(false);
+  const [riskFeedback, setRiskFeedback] = useState<{ tone: 'info' | 'error' | 'success'; message: string } | null>(null);
 
   const sidebarItems = [
     { label: 'Overview', description: 'KPIs & positions', active: true, badge: 'Live' },
@@ -131,10 +138,11 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
     let cancelled = false;
 
     const loadDashboard = async () => {
-      const [summary, exposure, systemHealth] = await Promise.all([
+      const [summary, exposure, systemHealth, riskStatus] = await Promise.all([
         fetchPortfolioSummary(),
         fetchExposure(),
         fetchSystemHealth(),
+        getRiskStatus(),
       ]);
       if (cancelled) return;
 
@@ -146,6 +154,10 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
         setHealth(systemHealth);
         const healthy = systemHealth.market_data_ok && systemHealth.execution_ok;
         setConnectionState(healthy ? 'connected' : 'degraded');
+      }
+
+      if (riskStatus) {
+        setRisk(riskStatus);
       }
 
       if (exposure) {
@@ -179,6 +191,49 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
       clearInterval(interval);
     };
   }, []);
+
+  useEffect(() => {
+    if (health?.ui_read_only) {
+      setRiskFeedback({ tone: 'info', message: 'Backend is read-only. Kill switch changes are disabled.' });
+    } else {
+      setRiskFeedback((current) => (current?.tone === 'info' ? null : current));
+    }
+  }, [health?.ui_read_only]);
+
+  const handleToggleKillSwitch = async () => {
+    if (!risk) {
+      setRiskFeedback({ tone: 'error', message: 'Risk status unavailable. Please wait for the next refresh.' });
+      return;
+    }
+
+    if (health?.ui_read_only) {
+      setRiskFeedback({ tone: 'error', message: 'Backend is in read-only mode. Risk controls are locked.' });
+      return;
+    }
+
+    const nextState = !risk.kill_switch_active;
+    if (!nextState) {
+      const confirmed = window.confirm('Disable the kill switch and allow trading to resume?');
+      if (!confirmed) return;
+    }
+
+    setRiskBusy(true);
+    const previous = risk;
+    const updated = await setKillSwitch(nextState);
+
+    if (updated) {
+      setRisk(updated);
+      setRiskFeedback({
+        tone: 'success',
+        message: updated.kill_switch_active ? 'Kill switch enabled. Execution halted.' : 'Kill switch disabled. Execution may resume.',
+      });
+    } else {
+      setRisk(previous);
+      setRiskFeedback({ tone: 'error', message: 'Unable to update kill switch. Restored prior state.' });
+    }
+
+    setRiskBusy(false);
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -231,6 +286,8 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
           ) : null}
         </ul>
       </section>
+
+      <RiskPanel status={risk} readOnly={Boolean(health?.ui_read_only)} busy={riskBusy} onToggle={handleToggleKillSwitch} feedback={riskFeedback} />
 
       <KpiGrid items={kpis} />
 
