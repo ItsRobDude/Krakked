@@ -38,14 +38,7 @@ export async function validateCredentials(payload: CredentialPayload): Promise<C
       error: result.error ?? null,
     };
   } catch (error) {
-    console.warn('Falling back to placeholder validation. Reason:', error);
+    const message = error instanceof Error ? error.message : 'Unexpected validation error';
+    return { data: { valid: false }, error: message };
   }
-
-  await new Promise((resolve) => setTimeout(resolve, 600));
-
-  const valid = payload.apiKey.trim().length > 0 && payload.apiSecret.trim().length > 0;
-  return {
-    data: { valid },
-    error: valid ? null : 'Both fields are required.',
-  };
 }

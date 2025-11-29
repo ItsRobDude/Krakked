@@ -45,6 +45,18 @@ export type RecentExecution = {
   warnings: string[];
 };
 
+export type SystemHealth = {
+  rest_api_reachable: boolean;
+  websocket_connected: boolean;
+  streaming_pairs: number;
+  stale_pairs: number;
+  subscription_errors: number;
+  market_data_ok: boolean;
+  execution_ok: boolean;
+  current_mode: string;
+  ui_read_only: boolean;
+};
+
 const API_BASE = import.meta.env.VITE_API_BASE || '/api';
 const API_TOKEN = import.meta.env.VITE_API_TOKEN;
 
@@ -84,4 +96,8 @@ export async function fetchExposure(): Promise<ExposureBreakdown | null> {
 
 export async function fetchRecentExecutions(): Promise<RecentExecution[] | null> {
   return fetchJson<RecentExecution[]>('/execution/recent_executions');
+}
+
+export async function fetchSystemHealth(): Promise<SystemHealth | null> {
+  return fetchJson<SystemHealth>('/system/health');
 }
