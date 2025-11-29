@@ -6,7 +6,7 @@ import logging
 from typing import Callable
 from uuid import uuid4
 
-from fastapi import FastAPI, Request
+from fastapi import APIRouter, FastAPI, Request
 from fastapi.middleware import Middleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -63,9 +63,12 @@ def create_api(context: AppContext) -> FastAPI:
     async def healthcheck():
         return {"data": {"status": "ok"}, "error": None}
 
-    app.add_api_route(
+    health_router = APIRouter()
+    health_router.add_api_route(
         f"{base_path}/api/health", healthcheck, methods=["GET"], name="healthcheck"
     )
+
+    app.include_router(health_router)
 
     logger.info(
         "UI API initialized",
