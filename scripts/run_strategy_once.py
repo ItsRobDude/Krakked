@@ -17,7 +17,6 @@ from typing import Iterable
 
 from kraken_bot.bootstrap import bootstrap
 from kraken_bot.config import AppConfig
-from kraken_bot.execution.adapter import KrakenExecutionAdapter
 from kraken_bot.execution.oms import ExecutionService
 from kraken_bot.market_data.api import MarketDataAPI
 from kraken_bot.portfolio.manager import PortfolioService
@@ -79,8 +78,7 @@ def run_strategy_once() -> None:
     strategy_engine.initialize()
     plan = strategy_engine.run_cycle()
 
-    adapter = KrakenExecutionAdapter(client=client, config=config.execution)
-    execution_service = ExecutionService(adapter=adapter)
+    execution_service = ExecutionService(client=client, config=config.execution)
     result = execution_service.execute_plan(plan)
 
     logger.info("Plan %s executed. success=%s errors=%s", plan.plan_id, result.success, result.errors)
