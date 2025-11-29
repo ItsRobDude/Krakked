@@ -57,11 +57,16 @@ jobs:
         with:
           node-version: '20'
 
+      - name: Install UI dependencies
+        if: matrix.check == 'pyright'
+        working-directory: ui
+        run: npm ci
+
       - name: Static type checking
         run: |
           if [ "${{ matrix.check }}" = "mypy" ]; then
             poetry run mypy src tests
           else
             npm install -g pyright
-            pyright src
+            pyright src ui
           fi
