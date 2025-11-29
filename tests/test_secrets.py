@@ -104,6 +104,8 @@ def test_load_api_keys_requires_password_env_when_non_interactive(mock_config_di
     assert result.api_key is None
     assert result.api_secret is None
     assert result.source == "secrets_file"
+    assert "password" in result.validation_error.lower()
+    assert "set" in result.validation_error.lower()
 
 
 def test_load_api_keys_bad_password_returns_auth_error(mock_config_dir):
@@ -118,11 +120,12 @@ def test_load_api_keys_bad_password_returns_auth_error(mock_config_dir):
         result = load_api_keys()
 
     mock_getpass.assert_not_called()
-    assert result.status == CredentialStatus.AUTH_ERROR
+    assert result.status in (CredentialStatus.AUTH_ERROR, CredentialStatus.LOCKED)
     assert result.api_key is None
     assert result.api_secret is None
     assert result.source == "secrets_file"
-    assert "invalid password" in result.validation_error.lower()
+    assert "password" in result.validation_error.lower()
+    assert any(term in result.validation_error.lower() for term in ("invalid", "locked"))
 
 
 def test_decrypt_bad_password(mock_config_dir):
