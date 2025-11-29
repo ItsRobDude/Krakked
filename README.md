@@ -13,7 +13,15 @@ This repository includes working, test-covered implementations for the early pha
 | **Phase 3: Portfolio** | ✅ Implemented | Portfolio service with SQLite persistence, weighted-average cost PnL, fee tracking, and cashflow detection. |
 | **Phase 4: Strategy & Risk** | ✅ Implemented with known follow-ups | Strategy loader with multi-timeframe scheduling, per-strategy/portfolio caps, liquidity gating, and staleness handling; order tagging/OMS wiring will land in Phase 5. |
 | **Phase 5: Execution** | 🚧 In progress | OMS with market-data-driven routing, retries/backoff, dead-man switch hooks, panic cancel, and SQLite persistence; paper/validate-only defaults with explicit allow_live_trading gate for live submission. |
-| **Phase 6: UI/Control** | ⏳ Not started | CLI/web interface for monitoring and manual control. |
+| **Phase 6: UI/Control** | 🚧 In progress (UI/control plane) | CLI/web interface for monitoring and manual control. |
+
+Phase 6 is underway with the following milestones queued:
+
+* **6A**: FastAPI endpoints (read-only + mutating with `read_only` guard and auth).
+* **6B**: TUI HTTP wiring and safety controls.
+* **6C**: React dashboard data and controls.
+
+See [`docs/phase6.md`](docs/phase6.md) for the full contract and details.
 
 See the consolidated phase contract in [`docs/contract.md`](docs/contract.md) for the full design scope across Phases 1–7. Individual phase files remain available for historical reference.
 
