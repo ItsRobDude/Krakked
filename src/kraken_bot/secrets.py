@@ -32,6 +32,8 @@ class CredentialStatus(Enum):
 
     LOADED = "loaded"
     NOT_FOUND = "not_found"
+    MISSING_PASSWORD = "missing_password"
+    LOCKED = "locked"
     AUTH_ERROR = "auth_error"
     SERVICE_ERROR = "service_error"
     DECRYPTION_FAILED = "decryption_failed"
@@ -39,6 +41,22 @@ class CredentialStatus(Enum):
 
 @dataclass
 class CredentialResult:
+    """Structured result for credential operations.
+
+    The `status` field uses :class:`CredentialStatus` to summarize the outcome:
+
+    * ``LOADED`` – credentials are available and ready for use.
+    * ``NOT_FOUND`` – no credentials were discovered anywhere.
+    * ``MISSING_PASSWORD`` – an encrypted secrets file exists but no password
+      was supplied in a non-interactive context.
+    * ``LOCKED`` – secrets exist but could not be unlocked (e.g., bad password
+      or failed decryption/authentication).
+    * ``AUTH_ERROR`` – credentials were supplied but failed authentication.
+    * ``SERVICE_ERROR`` – an external or unexpected service issue occurred.
+    * ``DECRYPTION_FAILED`` – decryption failed unexpectedly (legacy value;
+      ``LOCKED`` is preferred for wrong-password scenarios).
+    """
+
     api_key: str | None
     api_secret: str | None
     status: CredentialStatus
@@ -344,7 +362,7 @@ def load_api_keys(allow_interactive_setup: bool = False) -> CredentialResult:
             return CredentialResult(
                 None,
                 None,
-                CredentialStatus.NOT_FOUND,
+                CredentialStatus.MISSING_PASSWORD,
                 source="secrets_file",
                 validation_error=message,
             )
@@ -363,7 +381,14 @@ def load_api_keys(allow_interactive_setup: bool = False) -> CredentialResult:
             )
         except SecretsDecryptionError as e:
             print("Failed to decrypt secrets file with provided password.")
-            return CredentialResult(None, None, CredentialStatus.DECRYPTION_FAILED, source="secrets_file", error=e)
+            return CredentialResult(
+                None,
+                None,
+                CredentialStatus.LOCKED,
+                source="secrets_file",
+                validation_error=str(e),
+                error=e,
+            )
         except Exception as e:
             print(f"Error loading secrets: {e}")
             return CredentialResult(None, None, CredentialStatus.SERVICE_ERROR, source="secrets_file", error=e)
