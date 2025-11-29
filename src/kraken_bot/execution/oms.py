@@ -8,10 +8,12 @@ from uuid import uuid4
 from kraken_bot.strategy.models import ExecutionPlan
 
 from kraken_bot.config import ExecutionConfig
+from kraken_bot.market_data.api import MarketDataAPI
 from kraken_bot.connection.rest_client import KrakenRESTClient
 from .adapter import ExecutionAdapter, KrakenExecutionAdapter, get_execution_adapter
 from .exceptions import ExecutionError
 from .models import ExecutionResult, LocalOrder
+from .router import build_order_from_plan_action
 
 logger = logging.getLogger(__name__)
 
@@ -37,9 +39,11 @@ class ExecutionService:
         store: Optional["PortfolioStore"] = None,
         client: Optional[KrakenRESTClient] = None,
         config: Optional[ExecutionConfig] = None,
+        market_data: Optional[MarketDataAPI] = None,
     ):
         self.adapter = adapter or get_execution_adapter(client=client, config=config or ExecutionConfig())
         self.store = store
+        self.market_data = market_data
         self.open_orders: Dict[str, LocalOrder] = {}
         self.recent_executions: List[ExecutionResult] = []
         self.kraken_to_local: Dict[str, str] = {}
@@ -103,22 +107,26 @@ class ExecutionService:
         total_target_notional = sum(pair_target_notional.values())
 
         for action in actions_to_process:
-            delta = action.target_base_size - action.current_base_size
-
-            side = "buy" if delta > 0 else "sell"
-            volume = abs(delta)
-
-            order = LocalOrder(
-                local_id=str(uuid4()),
-                plan_id=plan.plan_id,
-                strategy_id=action.strategy_id,
-                pair=action.pair,
-                side=side,
-                order_type=plan.metadata.get("order_type", ""),
-                userref=action.userref,
-                requested_base_size=volume,
-                requested_price=plan.metadata.get("requested_price"),
+            order, routing_warning = build_order_from_plan_action(
+                action=action,
+                plan=plan,
+                market_data=self.market_data,
+                config=self.adapter.config,
             )
+
+            if routing_warning:
+                result.warnings.append(routing_warning)
+                logger.warning(
+                    "Order routing failed",
+                    extra={
+                        "event": "order_routing_failed",
+                        "plan_id": plan.plan_id,
+                        "strategy_id": action.strategy_id,
+                        "pair": action.pair,
+                        "reason": routing_warning,
+                    },
+                )
+                continue
 
             guardrail_reason = self._evaluate_guardrails(
                 action=action,
@@ -156,8 +164,8 @@ class ExecutionService:
                         "plan_id": plan.plan_id,
                         "strategy_id": action.strategy_id,
                         "pair": action.pair,
-                        "side": side,
-                        "volume": volume,
+                        "side": order.side,
+                        "volume": order.requested_base_size,
                     },
                 )
                 order = self.adapter.submit_order(order)
