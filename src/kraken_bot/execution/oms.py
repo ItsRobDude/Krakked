@@ -126,3 +126,84 @@ class ExecutionService:
                 last_error=order.last_error,
                 raw_response=order.raw_response,
             )
+
+    def refresh_open_orders(self) -> None:
+        """Pull open orders from Kraken and reconcile with local state."""
+        userrefs = {o.userref for o in self.open_orders.values() if o.userref is not None}
+        params = {"userref": ",".join(str(u) for u in userrefs)} if userrefs else None
+
+        try:
+            remote = self.adapter.client.get_open_orders(params=params)
+        except Exception:
+            return
+
+        for kraken_id, payload in (remote.get("open") or {}).items():
+            self._sync_remote_order(kraken_id, payload, is_closed=False)
+
+    def reconcile_orders(self) -> None:
+        """Pull closed orders from Kraken and mark any matching local orders finalized."""
+        try:
+            remote = self.adapter.client.get_closed_orders()
+        except Exception:
+            return
+
+        for kraken_id, payload in (remote.get("closed") or {}).items():
+            self._sync_remote_order(kraken_id, payload, is_closed=True)
+
+    def _sync_remote_order(self, kraken_id: str, payload: dict, is_closed: bool) -> None:
+        """Update a local order based on Kraken order payload."""
+        userref = payload.get("userref")
+        order = self._resolve_local_order(kraken_id, userref)
+        if not order:
+            return
+
+        self.register_order(order)
+        order.kraken_order_id = kraken_id
+        order.status = payload.get("status") or ("closed" if is_closed else "open")
+        order.updated_at = datetime.utcnow()
+        order.raw_response = payload
+
+        vol_exec = payload.get("vol_exec")
+        try:
+            order.cumulative_base_filled = float(vol_exec) if vol_exec is not None else order.cumulative_base_filled
+        except (TypeError, ValueError):
+            pass
+
+        price = payload.get("price") or payload.get("price_avg")
+        try:
+            order.avg_fill_price = float(price) if price is not None else order.avg_fill_price
+        except (TypeError, ValueError):
+            pass
+
+        if is_closed or order.status in {"canceled", "closed", "expired", "rejected", "filled"}:
+            self.open_orders.pop(order.local_id, None)
+
+        if self.store:
+            self.store.update_order_status(
+                local_id=order.local_id,
+                status=order.status,
+                kraken_order_id=kraken_id,
+                cumulative_base_filled=order.cumulative_base_filled,
+                avg_fill_price=order.avg_fill_price,
+                last_error=order.last_error,
+                raw_response=order.raw_response,
+            )
+
+    def _resolve_local_order(self, kraken_id: str, userref: Optional[int]) -> Optional[LocalOrder]:
+        """Find or reload a LocalOrder using known references."""
+        local_id = self.kraken_to_local.get(kraken_id)
+        if local_id and local_id in self.open_orders:
+            return self.open_orders[local_id]
+
+        if userref is not None:
+            for order in self.open_orders.values():
+                if order.userref == userref:
+                    self.kraken_to_local[kraken_id] = order.local_id
+                    return order
+
+        if self.store and hasattr(self.store, "get_order_by_reference"):
+            order = self.store.get_order_by_reference(kraken_order_id=kraken_id, userref=userref)
+            if order:
+                return order
+
+        return None

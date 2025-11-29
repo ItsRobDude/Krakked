@@ -63,6 +63,9 @@ class InMemoryStore(PortfolioStore):
     def get_execution_plan(self, plan_id):
         return None
 
+    def get_order_by_reference(self, kraken_order_id=None, userref=None):
+        return None
+
 
 @pytest.fixture
 def market_data_mock():

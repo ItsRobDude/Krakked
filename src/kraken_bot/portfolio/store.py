@@ -109,6 +109,15 @@ class PortfolioStore(abc.ABC):
         pass
 
     @abc.abstractmethod
+    def get_order_by_reference(
+        self,
+        kraken_order_id: Optional[str] = None,
+        userref: Optional[int] = None,
+    ) -> Optional["LocalOrder"]:
+        """Lookup a stored order by Kraken id or user reference."""
+        pass
+
+    @abc.abstractmethod
     def get_execution_plans(
         self, plan_id: Optional[str] = None, since: Optional[int] = None, limit: Optional[int] = None
     ) -> List["ExecutionPlan"]:
@@ -819,6 +828,77 @@ class SQLitePortfolioStore(PortfolioStore):
 
         conn.commit()
         conn.close()
+
+    def get_order_by_reference(
+        self,
+        kraken_order_id: Optional[str] = None,
+        userref: Optional[int] = None,
+    ) -> Optional["LocalOrder"]:
+        from kraken_bot.execution.models import LocalOrder
+
+        if not kraken_order_id and userref is None:
+            return None
+
+        conn = self._get_conn()
+        cursor = conn.cursor()
+
+        conditions = []
+        params: List[Any] = []
+
+        if kraken_order_id:
+            conditions.append("kraken_order_id = ?")
+            params.append(kraken_order_id)
+        if userref is not None:
+            conditions.append("userref = ?")
+            params.append(userref)
+
+        where_clause = " OR ".join(conditions)
+        cursor.execute(
+            f"""
+            SELECT
+                local_id, plan_id, strategy_id, pair, side, order_type, kraken_order_id, userref,
+                requested_base_size, requested_price, status, created_at, updated_at,
+                cumulative_base_filled, avg_fill_price, last_error, raw_request_json, raw_response_json
+            FROM execution_orders
+            WHERE {where_clause}
+            ORDER BY updated_at DESC
+            LIMIT 1
+            """,
+            params,
+        )
+
+        row = cursor.fetchone()
+        conn.close()
+
+        if not row:
+            return None
+
+        created_at = datetime.fromtimestamp(row[11]) if row[11] else datetime.utcnow()
+        updated_at = datetime.fromtimestamp(row[12]) if row[12] else created_at
+
+        raw_request = json.loads(row[16]) if row[16] else {}
+        raw_response = json.loads(row[17]) if row[17] else None
+
+        return LocalOrder(
+            local_id=row[0],
+            plan_id=row[1],
+            strategy_id=row[2],
+            pair=row[3],
+            side=row[4],
+            order_type=row[5],
+            kraken_order_id=row[6],
+            userref=row[7],
+            requested_base_size=row[8] or 0.0,
+            requested_price=row[9],
+            status=row[10] or "pending",
+            created_at=created_at,
+            updated_at=updated_at,
+            cumulative_base_filled=row[13] or 0.0,
+            avg_fill_price=row[14],
+            last_error=row[15],
+            raw_request=raw_request,
+            raw_response=raw_response,
+        )
 
     def get_decisions(
         self, plan_id: Optional[str] = None, since: Optional[int] = None, limit: Optional[int] = None, strategy_name: Optional[str] = None
