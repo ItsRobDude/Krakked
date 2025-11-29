@@ -129,6 +129,18 @@ class PortfolioStore(abc.ABC):
         """Fetch a specific execution plan by id."""
         pass
 
+    @abc.abstractmethod
+    def get_open_orders(
+        self, plan_id: Optional[str] = None, strategy_id: Optional[str] = None
+    ) -> List["LocalOrder"]:
+        """Fetch open/pending orders with optional filtering."""
+        pass
+
+    @abc.abstractmethod
+    def get_execution_results(self, limit: int = 10) -> List["ExecutionResult"]:
+        """Return recent execution results."""
+        pass
+
 
 class SQLitePortfolioStore(PortfolioStore):
     def __init__(self, db_path: str = "portfolio.db"):
@@ -1006,3 +1018,110 @@ class SQLitePortfolioStore(PortfolioStore):
     def get_execution_plan(self, plan_id: str) -> Optional["ExecutionPlan"]:
         plans = self.get_execution_plans(plan_id=plan_id, limit=1)
         return plans[0] if plans else None
+
+    def get_open_orders(
+        self, plan_id: Optional[str] = None, strategy_id: Optional[str] = None
+    ) -> List["LocalOrder"]:
+        from kraken_bot.execution.models import LocalOrder
+
+        conn = self._get_conn()
+        cursor = conn.cursor()
+
+        exclusions = ("filled", "canceled", "closed", "expired", "rejected", "error")
+        query = """
+            SELECT
+                local_id, plan_id, strategy_id, pair, side, order_type, kraken_order_id, userref,
+                requested_base_size, requested_price, status, created_at, updated_at,
+                cumulative_base_filled, avg_fill_price, last_error, raw_request_json, raw_response_json
+            FROM execution_orders
+            WHERE 1=1
+        """
+        params: List[Any] = []
+
+        if exclusions:
+            placeholders = ",".join(["?"] * len(exclusions))
+            query += f" AND (status IS NULL OR status NOT IN ({placeholders}))"
+            params.extend(exclusions)
+
+        if plan_id:
+            query += " AND plan_id = ?"
+            params.append(plan_id)
+
+        if strategy_id:
+            query += " AND strategy_id = ?"
+            params.append(strategy_id)
+
+        query += " ORDER BY updated_at DESC"
+
+        cursor.execute(query, params)
+        rows = cursor.fetchall()
+        conn.close()
+
+        orders: List[LocalOrder] = []
+        for row in rows:
+            created_at = datetime.fromtimestamp(row[11]) if row[11] else datetime.utcnow()
+            updated_at = datetime.fromtimestamp(row[12]) if row[12] else created_at
+            raw_request = json.loads(row[16]) if row[16] else {}
+            raw_response = json.loads(row[17]) if row[17] else None
+
+            orders.append(
+                LocalOrder(
+                    local_id=row[0],
+                    plan_id=row[1],
+                    strategy_id=row[2],
+                    pair=row[3],
+                    side=row[4],
+                    order_type=row[5],
+                    kraken_order_id=row[6],
+                    userref=row[7],
+                    requested_base_size=row[8] or 0.0,
+                    requested_price=row[9],
+                    status=row[10] or "pending",
+                    created_at=created_at,
+                    updated_at=updated_at,
+                    cumulative_base_filled=row[13] or 0.0,
+                    avg_fill_price=row[14],
+                    last_error=row[15],
+                    raw_request=raw_request,
+                    raw_response=raw_response,
+                )
+            )
+
+        return orders
+
+    def get_execution_results(self, limit: int = 10) -> List["ExecutionResult"]:
+        from kraken_bot.execution.models import ExecutionResult
+
+        conn = self._get_conn()
+        cursor = conn.cursor()
+
+        query = "SELECT plan_id, started_at, completed_at, success, errors_json FROM execution_results"
+        query += " ORDER BY started_at DESC"
+        params: List[Any] = []
+
+        if limit:
+            query += " LIMIT ?"
+            params.append(limit)
+
+        cursor.execute(query, params)
+        rows = cursor.fetchall()
+        conn.close()
+
+        results: List[ExecutionResult] = []
+        for row in rows:
+            started_at = datetime.fromtimestamp(row[1]) if row[1] else None
+            completed_at = datetime.fromtimestamp(row[2]) if row[2] else None
+            errors = json.loads(row[4]) if row[4] else []
+
+            results.append(
+                ExecutionResult(
+                    plan_id=row[0],
+                    started_at=started_at or datetime.utcnow(),
+                    completed_at=completed_at,
+                    success=bool(row[3]),
+                    orders=[],
+                    errors=errors,
+                )
+            )
+
+        return results

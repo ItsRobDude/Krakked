@@ -1,5 +1,6 @@
 # src/kraken_bot/execution/oms.py
 
+import logging
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 from datetime import datetime
 from uuid import uuid4
@@ -11,6 +12,8 @@ from kraken_bot.connection.rest_client import KrakenRESTClient
 from .adapter import ExecutionAdapter, KrakenExecutionAdapter, get_execution_adapter
 from .exceptions import ExecutionError
 from .models import ExecutionResult, LocalOrder
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from kraken_bot.portfolio.store import PortfolioStore
@@ -32,6 +35,9 @@ class ExecutionService:
         self.open_orders: Dict[str, LocalOrder] = {}
         self.recent_executions: List[ExecutionResult] = []
         self.kraken_to_local: Dict[str, str] = {}
+
+        if self.adapter.config.mode == "live":
+            self._emit_live_readiness_checklist()
 
     def execute_plan(self, plan: ExecutionPlan) -> ExecutionResult:
         """
@@ -88,14 +94,45 @@ class ExecutionService:
                 result.errors.append(guardrail_reason)
                 if self.store:
                     self.store.save_order(order)
+                logger.warning(
+                    "Order blocked by guardrail",
+                    extra={
+                        "event": "order_guardrail_reject",
+                        "plan_id": plan.plan_id,
+                        "strategy_id": action.strategy_id,
+                        "pair": action.pair,
+                        "reason": guardrail_reason,
+                    },
+                )
                 result.orders.append(order)
                 continue
 
             try:
+                logger.info(
+                    "Submitting order",
+                    extra={
+                        "event": "order_submit",
+                        "plan_id": plan.plan_id,
+                        "strategy_id": action.strategy_id,
+                        "pair": action.pair,
+                        "side": side,
+                        "volume": volume,
+                    },
+                )
                 order = self.adapter.submit_order(order)
                 self.register_order(order)
                 if self.store:
                     self.store.save_order(order)
+                logger.info(
+                    "Order submission result",
+                    extra={
+                        "event": "order_status",
+                        "plan_id": plan.plan_id,
+                        "local_id": order.local_id,
+                        "kraken_order_id": order.kraken_order_id,
+                        "status": order.status,
+                    },
+                )
             except ExecutionError as exc:
                 message = str(exc)
                 order.last_error = message
@@ -105,6 +142,16 @@ class ExecutionService:
 
                 if self.store:
                     self.store.save_order(order)
+
+                logger.error(
+                    "Order submission failed",
+                    extra={
+                        "event": "order_error",
+                        "plan_id": plan.plan_id,
+                        "local_id": order.local_id,
+                        "error": message,
+                    },
+                )
 
             result.orders.append(order)
 
@@ -120,6 +167,29 @@ class ExecutionService:
         self.open_orders[order.local_id] = order
         if order.kraken_order_id:
             self.kraken_to_local[order.kraken_order_id] = order.local_id
+
+    def load_open_orders_from_store(
+        self, plan_id: Optional[str] = None, strategy_id: Optional[str] = None
+    ) -> List[LocalOrder]:
+        """Seed in-memory tracking with persisted open orders."""
+
+        if not self.store or not hasattr(self.store, "get_open_orders"):
+            return []
+
+        orders = self.store.get_open_orders(plan_id=plan_id, strategy_id=strategy_id)
+        for order in orders:
+            self.register_order(order)
+
+        logger.info(
+            "Loaded persisted open orders",
+            extra={
+                "event": "open_orders_loaded",
+                "count": len(orders),
+                "plan_id": plan_id,
+                "strategy_id": strategy_id,
+            },
+        )
+        return orders
 
     def get_open_orders(self) -> List[LocalOrder]:
         """Return a snapshot list of currently open or pending local orders."""
@@ -215,6 +285,17 @@ class ExecutionService:
         if is_closed or order.status in {"canceled", "closed", "expired", "rejected", "filled"}:
             self.open_orders.pop(order.local_id, None)
 
+        logger.info(
+            "Reconciled order state",
+            extra={
+                "event": "order_reconciled",
+                "kraken_order_id": kraken_id,
+                "local_id": order.local_id,
+                "status": order.status,
+                "is_closed_feed": is_closed,
+            },
+        )
+
         if self.store:
             self.store.update_order_status(
                 local_id=order.local_id,
@@ -244,6 +325,66 @@ class ExecutionService:
                 return order
 
         return None
+
+    def cancel_order(self, order: LocalOrder) -> None:
+        """Cancel a single order and persist the status update."""
+
+        self.adapter.cancel_order(order)
+        order.status = "canceled"
+        order.updated_at = datetime.utcnow()
+        self.open_orders.pop(order.local_id, None)
+
+        if self.store:
+            self.store.update_order_status(
+                local_id=order.local_id,
+                status=order.status,
+                kraken_order_id=order.kraken_order_id,
+                event_message="Canceled via OMS",
+            )
+
+        logger.info(
+            "Canceled order",
+            extra={
+                "event": "order_canceled",
+                "local_id": order.local_id,
+                "kraken_order_id": order.kraken_order_id,
+            },
+        )
+
+    def cancel_orders(self, orders: List[LocalOrder]) -> None:
+        for order in orders:
+            try:
+                self.cancel_order(order)
+            except ExecutionError as exc:
+                logger.error(
+                    "Failed to cancel order",
+                    extra={
+                        "event": "order_cancel_error",
+                        "local_id": order.local_id,
+                        "kraken_order_id": order.kraken_order_id,
+                        "error": str(exc),
+                    },
+                )
+
+    def _emit_live_readiness_checklist(self) -> None:
+        """Surface a readiness checklist before enabling live trading."""
+
+        config = self.adapter.config
+        config_sane = bool(config.min_order_notional_usd and config.min_order_notional_usd > 0)
+        reconciliation_available = self.store is not None
+
+        logger.warning(
+            "Live readiness checklist",
+            extra={
+                "event": "live_readiness",
+                "mode": config.mode,
+                "validate_only": config.validate_only,
+                "allow_live_trading": getattr(config, "allow_live_trading", False),
+                "config_sane": config_sane,
+                "paper_tests_completed": getattr(config, "paper_tests_completed", False),
+                "reconciliation_available": reconciliation_available,
+            },
+        )
 
     def _evaluate_guardrails(
         self,

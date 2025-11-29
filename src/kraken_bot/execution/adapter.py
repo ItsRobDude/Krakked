@@ -88,22 +88,38 @@ class KrakenExecutionAdapter:
         except Exception as exc:  # pragma: no cover - passthrough for client errors
             order.status = "error"
             order.last_error = str(exc)
+            logger.error(
+                "Order submission error", extra={"event": "order_submit_error", "error": order.last_error}
+            )
             raise ExecutionError(f"Failed to submit order: {exc}") from exc
 
         errors = resp.get("error") or []
         if errors:
             order.status = "rejected"
             order.last_error = "; ".join(errors)
+            logger.error(
+                "Order rejected by Kraken",
+                extra={"event": "order_rejected", "errors": errors, "order_type": order.order_type},
+            )
             raise OrderRejectedError(order.last_error)
 
         if self.config.validate_only or self.config.mode != "live":
             order.status = "validated"
+            logger.info(
+                "Order validated only", extra={"event": "order_validated", "mode": self.config.mode}
+            )
             return order
 
         txids = resp.get("txid") or []
         if txids:
             order.kraken_order_id = txids[0]
             order.status = "open"
+            logger.info(
+                "Order accepted by Kraken",
+                extra={
+                    "event": "order_submitted", "kraken_order_id": order.kraken_order_id, "mode": self.config.mode
+                },
+            )
             return order
 
         order.status = "error"
