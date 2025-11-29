@@ -13,7 +13,7 @@ from kraken_bot.connection.exceptions import (
     KrakenAPIError,
     ServiceUnavailableError,
 )
-from kraken_bot.connection.rest_client import KrakenRESTClient
+from kraken_bot.connection import rest_client
 from kraken_bot.ui.logging import build_request_log_extra
 from kraken_bot.ui.models import ApiEnvelope, SystemHealthPayload, SystemMetricsPayload
 
@@ -208,7 +208,7 @@ async def validate_credentials(
             error="apiKey, apiSecret, and region are required.",
         )
 
-    client = KrakenRESTClient(
+    client = rest_client.KrakenRESTClient(
         api_key=payload.apiKey.strip(), api_secret=payload.apiSecret.strip()
     )
 
