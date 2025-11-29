@@ -44,3 +44,8 @@ exclude = ["build", "dist"]
 
 [tool.poetry.scripts]
 krakked = "kraken_bot.cli:main"
+
+[dependency-groups]
+dev = [
+    "httpx (>=0.28.1,<0.29.0)"
+]
