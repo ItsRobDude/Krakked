@@ -1,5 +1,5 @@
 from datetime import datetime
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, call
 
 import pytest
 
@@ -91,6 +91,35 @@ def test_execute_plan_guardrail_blocks_order():
     assert result.orders[0].status == "rejected"
     assert "max_pair_notional_usd" in (result.orders[0].last_error or "")
     adapter.submit_order.assert_not_called()
+
+
+def test_execute_plan_truncates_to_max_concurrent_orders_and_rejects_extra():
+    adapter = MagicMock()
+    adapter.config = ExecutionConfig(max_concurrent_orders=2, validate_only=True)
+    adapter.submit_order.side_effect = lambda order: order
+    store = MagicMock()
+    service = ExecutionService(adapter=adapter, store=store)
+
+    actions = [
+        _action(target_base_size=1.0, current_base_size=0.0),
+        _action(target_base_size=2.0, current_base_size=0.0),
+        _action(target_base_size=3.0, current_base_size=0.0),
+    ]
+    plan = _plan(actions)
+
+    result = service.execute_plan(plan)
+
+    assert adapter.submit_order.call_count == 2
+    assert len(result.orders) == 3
+
+    rejected = [order for order in result.orders if order.status == "rejected"]
+    assert len(rejected) == 1
+    assert "concurrency limit" in (rejected[0].last_error or "").lower()
+    assert rejected[0].requested_base_size == pytest.approx(3.0)
+    assert rejected[0].pair == actions[-1].pair
+
+    assert rejected[0].last_error in result.errors
+    assert any(call.args[0] == rejected[0] for call in store.save_order.call_args_list)
 
 
 def test_refresh_open_orders_updates_tracked_orders():
