@@ -12,8 +12,8 @@ This repository includes working, test-covered implementations for the early pha
 | **Phase 2: Market Data** | ✅ Implemented | Pair-universe discovery, OHLC backfill to a pluggable store, and WebSocket v2 streaming with staleness checks. |
 | **Phase 3: Portfolio** | ✅ Implemented | Portfolio service with SQLite persistence, weighted-average cost PnL, fee tracking, and cashflow detection. |
 | **Phase 4: Strategy & Risk** | ✅ Implemented with known follow-ups | Strategy loader with multi-timeframe scheduling, per-strategy/portfolio caps, liquidity gating, and staleness handling; order tagging/OMS wiring will land in Phase 5. |
-| **Phase 5: Execution** | 🚧 In progress | OMS with market-data-driven routing, retries/backoff, dead-man switch hooks, panic cancel, and SQLite persistence; paper/validate-only defaults with explicit allow_live_trading gate for live submission. |
-| **Phase 6: UI/Control** | 🚧 In progress (UI/control plane) | CLI/web interface for monitoring and manual control. |
+| **Phase 5: Execution** | ✅ Implemented | OMS with market-data-driven routing, retries/backoff, dead-man switch hooks, panic cancel, and SQLite persistence; paper/validate-only defaults with explicit allow_live_trading gate for live submission. |
+| **Phase 6: UI/Control** | ✅ Implemented | CLI/web interface for monitoring and manual control. See [status/TODO](docs/phase6.md#status--todo) for remaining punchlist items. |
 
 Phase 6 is underway with the following milestones queued:
 
@@ -171,6 +171,12 @@ To run a single synchronous cycle:
 ```bash
 poetry run krakked run-once
 ```
+
+### ▶️ Running the bot
+
+* **Full orchestrator**: `poetry run krakked run` starts the WebSocket loop, scheduler, strategies, execution, and FastAPI UI.
+* **Non-interactive setup**: add `--allow-interactive-setup false` to block credential prompts in CI/servers while still booting the orchestrator.
+* **Execution knobs**: `execution.mode` selects `paper` vs. `live`, `execution.allow_live_trading` is the final gate for live submissions, and dead-man/kill switches remain available via the configured cancel-all hooks.
 
 To start the full orchestrator (market data WebSocket loop, portfolio sync scheduler, strategy cycles with execution, and the FastAPI UI in the same process):
 
