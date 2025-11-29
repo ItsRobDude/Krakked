@@ -28,6 +28,16 @@ export type ExposureBreakdown = {
   by_strategy: Array<{ strategy_id: string; value_usd: number | null; pct_of_equity: number | null }>;
 };
 
+export type RiskStatus = {
+  kill_switch_active: boolean;
+  daily_drawdown_pct: number;
+  drift_flag: boolean;
+  total_exposure_pct: number;
+  manual_exposure_pct: number;
+  per_asset_exposure_pct: Record<string, number>;
+  per_strategy_exposure_pct: Record<string, number>;
+};
+
 export type RecentExecution = {
   plan_id: string;
   started_at: string;
@@ -60,12 +70,13 @@ export type SystemHealth = {
 const API_BASE = import.meta.env.VITE_API_BASE || '/api';
 const API_TOKEN = import.meta.env.VITE_API_TOKEN;
 
-async function fetchJson<T>(path: string): Promise<T | null> {
+async function fetchJson<T>(path: string, options: RequestInit = {}): Promise<T | null> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (API_TOKEN) headers.Authorization = `Bearer ${API_TOKEN}`;
+  if (options.headers) Object.assign(headers, options.headers as Record<string, string>);
 
   try {
-    const response = await fetch(`${API_BASE}${path}`, { headers });
+    const response = await fetch(`${API_BASE}${path}`, { ...options, headers });
     if (!response.ok) {
       throw new Error(`Request failed: ${response.status}`);
     }
@@ -100,4 +111,15 @@ export async function fetchRecentExecutions(): Promise<RecentExecution[] | null>
 
 export async function fetchSystemHealth(): Promise<SystemHealth | null> {
   return fetchJson<SystemHealth>('/system/health');
+}
+
+export async function getRiskStatus(): Promise<RiskStatus | null> {
+  return fetchJson<RiskStatus>('/risk/status');
+}
+
+export async function setKillSwitch(active: boolean): Promise<RiskStatus | null> {
+  return fetchJson<RiskStatus>('/risk/kill_switch', {
+    method: 'POST',
+    body: JSON.stringify({ active }),
+  });
 }
