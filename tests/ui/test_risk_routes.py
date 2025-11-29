@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 
 import pytest
-from fastapi.testclient import TestClient
+from starlette.testclient import TestClient
 
 
 @pytest.fixture

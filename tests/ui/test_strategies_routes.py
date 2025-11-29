@@ -2,7 +2,7 @@ from datetime import datetime
 from types import SimpleNamespace
 
 import pytest
-from fastapi.testclient import TestClient
+from starlette.testclient import TestClient
 
 from kraken_bot.config import StrategyConfig
 from kraken_bot.strategy.models import StrategyState
