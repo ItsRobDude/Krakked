@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
-from starlette.testclient import TestClient
+from fastapi.testclient import TestClient
 
 from kraken_bot.config import (
     AppConfig,

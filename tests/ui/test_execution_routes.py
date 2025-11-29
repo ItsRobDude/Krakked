@@ -1,7 +1,7 @@
 from datetime import datetime
 
 import pytest
-from starlette.testclient import TestClient
+from fastapi.testclient import TestClient
 
 from kraken_bot.execution.models import ExecutionResult, LocalOrder
 from kraken_bot.portfolio.models import SpotPosition
