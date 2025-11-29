@@ -51,7 +51,8 @@ def test_positions_shape_matches_payload(client, portfolio_context):
     data = response.json()["data"]
     assert data[0]["pair"] == "BTC/USD"
     assert data[0]["value_usd"] == pytest.approx(1.25)
-    assert data[0]["unrealized_pnl_usd"] == pytest.approx(-4999.375)
+    # Phase 3 PnL formula: (current_price - avg_entry_price) * base_size
+    assert data[0]["unrealized_pnl_usd"] == pytest.approx(-4998.75)
 
 
 def test_exposure_breakdown_enveloped(client, portfolio_context):
