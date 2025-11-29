@@ -26,6 +26,10 @@ jobs:
       - name: Install dependencies
         run: poetry install --no-interaction --no-ansi --with dev
 
+      - name: Install Pyright in Poetry environment
+        if: matrix.check == 'pyright'
+        run: poetry run pip install pyright
+
       - name: Run tests
         env:
           KRAKEN_LIVE_TESTS: '0'
@@ -72,7 +76,6 @@ jobs:
           if [ "${{ matrix.check }}" = "mypy" ]; then
             poetry run mypy src tests
           else
-            npm install -g pyright
             poetry run pyright src ui
           fi
 
