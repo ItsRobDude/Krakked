@@ -75,6 +75,47 @@ class KrakenExecutionAdapter:
             and getattr(self.config, "allow_live_trading", False)
         )
 
+        if self.config.dead_man_switch_seconds > 0:
+            if live_trading_allowed:
+                payload["expiretm"] = f"+{self.config.dead_man_switch_seconds}"
+                if hasattr(self.client, "cancel_all_orders_after"):
+                    try:
+                        self.client.cancel_all_orders_after(self.config.dead_man_switch_seconds)
+                        logger.info(
+                            "Dead man switch heartbeat set",
+                            extra={
+                                "event": "dead_man_switch_set",
+                                "timeout_seconds": self.config.dead_man_switch_seconds,
+                            },
+                        )
+                    except Exception as exc:  # pragma: no cover - passthrough for client errors
+                        logger.warning(
+                            "Failed to refresh dead man switch heartbeat",
+                            extra={
+                                "event": "dead_man_switch_error",
+                                "timeout_seconds": self.config.dead_man_switch_seconds,
+                                "error": str(exc),
+                            },
+                        )
+                else:
+                    logger.warning(
+                        "Dead man switch configured but client does not support cancel_all_orders_after",
+                        extra={
+                            "event": "dead_man_switch_unavailable",
+                            "timeout_seconds": self.config.dead_man_switch_seconds,
+                        },
+                    )
+            else:
+                logger.info(
+                    "Dead man switch configured but live trading is disabled; skipping",
+                    extra={
+                        "event": "dead_man_switch_skipped",
+                        "mode": self.config.mode,
+                        "validate_only": self.config.validate_only,
+                        "allow_live_trading": getattr(self.config, "allow_live_trading", False),
+                    },
+                )
+
         if not should_validate and not live_trading_allowed:
             order.status = "rejected"
             order.last_error = "Live trading disabled by configuration"

@@ -24,7 +24,7 @@ def sample_order():
 
 
 def test_build_order_payload_validate_and_userref(sample_order):
-    config = ExecutionConfig(validate_only=True, mode="paper")
+    config = ExecutionConfig(validate_only=True, mode="paper", max_slippage_bps=0)
 
     payload = build_order_payload(sample_order, config)
 
@@ -59,7 +59,9 @@ def test_submit_order_validate_only_sets_validated_status(sample_order):
 def test_submit_order_live_success_sets_txid(sample_order):
     client = MagicMock()
     client.add_order.return_value = {"error": [], "txid": ["ABC123"]}
-    adapter = KrakenExecutionAdapter(client, ExecutionConfig(mode="live", validate_only=False))
+    adapter = KrakenExecutionAdapter(
+        client, ExecutionConfig(mode="live", validate_only=False, allow_live_trading=True)
+    )
 
     order = adapter.submit_order(sample_order)
 
@@ -68,10 +70,50 @@ def test_submit_order_live_success_sets_txid(sample_order):
     assert order.raw_response["txid"] == ["ABC123"]
 
 
+def test_submit_order_sets_dead_man_switch(sample_order):
+    client = MagicMock()
+    client.add_order.return_value = {"error": [], "txid": ["ABC123"]}
+    adapter = KrakenExecutionAdapter(
+        client,
+        ExecutionConfig(
+            mode="live",
+            validate_only=False,
+            allow_live_trading=True,
+            dead_man_switch_seconds=15,
+        ),
+    )
+
+    order = adapter.submit_order(sample_order)
+
+    assert order.raw_request["expiretm"] == "+15"
+    client.cancel_all_orders_after.assert_called_once_with(15)
+
+
+def test_submit_order_with_zero_dead_man_switch_leaves_payload(sample_order):
+    client = MagicMock()
+    client.add_order.return_value = {"error": [], "txid": ["ABC123"]}
+    adapter = KrakenExecutionAdapter(
+        client,
+        ExecutionConfig(
+            mode="live",
+            validate_only=False,
+            allow_live_trading=True,
+            dead_man_switch_seconds=0,
+        ),
+    )
+
+    order = adapter.submit_order(sample_order)
+
+    assert "expiretm" not in order.raw_request
+    client.cancel_all_orders_after.assert_not_called()
+
+
 def test_submit_order_rejected_raises(sample_order):
     client = MagicMock()
     client.add_order.return_value = {"error": ["EGeneral:failure"]}
-    adapter = KrakenExecutionAdapter(client, ExecutionConfig(mode="live", validate_only=False))
+    adapter = KrakenExecutionAdapter(
+        client, ExecutionConfig(mode="live", validate_only=False, allow_live_trading=True)
+    )
 
     with pytest.raises(OrderRejectedError, match="EGeneral:failure"):
         adapter.submit_order(sample_order)

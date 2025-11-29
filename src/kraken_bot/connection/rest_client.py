@@ -154,6 +154,9 @@ class KrakenRESTClient:
     def cancel_all_orders(self) -> Dict[str, Any]:
         return self.get_private("CancelAll")
 
+    def cancel_all_orders_after(self, timeout_seconds: int) -> Dict[str, Any]:
+        return self.get_private("CancelAllOrdersAfter", {"timeout": timeout_seconds})
+
     def get_ledgers(self, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Retrieves information about ledger entries.
