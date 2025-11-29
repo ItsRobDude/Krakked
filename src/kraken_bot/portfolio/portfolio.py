@@ -11,7 +11,7 @@ from __future__ import annotations
 import time
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Dict, Iterable, List, Optional
+from typing import Dict, Iterable, List, Optional, Tuple
 
 from kraken_bot.config import PortfolioConfig
 from kraken_bot.market_data.api import MarketDataAPI
@@ -214,6 +214,7 @@ class Portfolio:
         equity = 0.0
         cash = 0.0
         unrealized = 0.0
+        price_drift = False
         unvalued_assets: List[str] = []
 
         for asset, balance in self.balances.items():
@@ -228,9 +229,14 @@ class Portfolio:
         for position in self.positions.values():
             if not include_manual and self._is_manual_tag(position.strategy_tag):
                 continue
-            current_price = self.market_data.get_latest_price(position.pair)
+            current_price, used_fallback = self._get_position_price(position.pair)
             if current_price is None:
-                continue
+                # No available pricing; fall back to cost basis but flag drift
+                price_drift = True
+                current_price = position.avg_entry_price
+            elif used_fallback:
+                price_drift = True
+
             current_val = position.base_size * current_price
             cost_basis = position.base_size * position.avg_entry_price
             position.current_value_base = current_val
@@ -244,7 +250,7 @@ class Portfolio:
             cash_base=cash,
             realized_pnl_base_total=sum(realized_by_pair.values()),
             unrealized_pnl_base_total=unrealized,
-            drift_flag=self.drift_flag,
+            drift_flag=self.drift_flag or price_drift,
             unvalued_assets=unvalued_assets,
         )
 
@@ -328,6 +334,64 @@ class Portfolio:
         if self.config.exclude_assets and asset in self.config.exclude_assets:
             return False
         return True
+
+    def _get_position_price(self, pair: str) -> Tuple[Optional[float], bool]:
+        """Return latest or fallback price and whether a fallback was used."""
+
+        try:
+            live_price = self.market_data.get_latest_price(pair)
+        except Exception:
+            live_price = None
+
+        if live_price is not None:
+            return float(live_price), False
+
+        fallback_price = self._get_fallback_price(pair)
+        return (fallback_price, True) if fallback_price is not None else (None, True)
+
+    def _get_fallback_price(self, pair: str) -> Optional[float]:
+        """Attempt to retrieve a non-live price from stored OHLC bars or REST."""
+
+        cached_fn = getattr(self.market_data, "_get_cached_price_from_store", None)
+        if callable(cached_fn):
+            try:
+                cached_price = cached_fn(pair)
+                if cached_price is not None:
+                    return float(cached_price)
+            except Exception:
+                pass
+
+        rest_fn = getattr(self.market_data, "_get_rest_ticker_price", None)
+        if callable(rest_fn):
+            try:
+                rest_price = rest_fn(pair)
+                if rest_price is not None:
+                    return float(rest_price)
+            except Exception:
+                pass
+
+        cfg = getattr(self.market_data, "_config", None)
+        timeframes: List[str] = []
+        if cfg and getattr(cfg, "market_data", None):
+            timeframes.extend(getattr(cfg.market_data, "ws_timeframes", []))
+            timeframes.extend(getattr(cfg.market_data, "backfill_timeframes", []))
+
+        if not timeframes:
+            timeframes = ["1m", "5m", "15m"]
+
+        get_ohlc = getattr(self.market_data, "get_ohlc", None)
+        if callable(get_ohlc):
+            for timeframe in dict.fromkeys(timeframes):
+                try:
+                    bars = get_ohlc(pair, timeframe, 1)
+                except Exception:
+                    continue
+                if bars:
+                    close = getattr(bars[-1], "close", None)
+                    if close is not None:
+                        return float(close)
+
+        return None
 
     def _convert_to_base_currency(self, amount: float, asset: str) -> ConversionResult:
         if amount == 0 or not asset:
