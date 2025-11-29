@@ -162,7 +162,16 @@ poetry run python -m kraken_bot.execution.admin_cli cancel --plan-id <id>
 poetry run python -m kraken_bot.execution.admin_cli panic
 ```
 
-The `execution_orders` table captures every `LocalOrder` snapshot, while `execution_results` summarizes each plan run. The admin CLI mirrors that data without requiring SQL.
+To query SQLite directly:
+
+```bash
+sqlite3 portfolio.db \
+  "SELECT plan_id, local_id, kraken_order_id, status, volume, price FROM execution_orders ORDER BY created_at DESC LIMIT 5;"
+sqlite3 portfolio.db \
+  "SELECT id, started_at, completed_at, status, summary FROM execution_results ORDER BY started_at DESC LIMIT 3;"
+```
+
+Key tables to review are `execution_orders` (every `LocalOrder` snapshot), `execution_order_events` (state transitions), and `execution_results` (per-plan outcome summaries). The admin CLI mirrors that data without requiring SQL.
 
 ### ✅ Enabling Live Trading (Advanced)
 
@@ -198,6 +207,14 @@ The execution admin CLI exposes operational levers that work against the SQLite 
 * `panic`: Refresh/reconcile state, then cancel **all** open orders—useful for fast stop-the-bleed responses.
 
 Invoke via `poetry run python -m kraken_bot.execution.admin_cli <subcommand>`; pass `--db-path` to point at a non-default portfolio database or `--allow-interactive-setup` if credential prompts are acceptable.
+
+### ✅ Live Readiness Checklist
+
+* Paper mode: At least one full `krakked run-once` paper cycle completed without errors.
+* Data review: SQLite `execution_orders` / `execution_results` inspected (or equivalent admin CLI checks) to verify sizing, tagging, and guardrails.
+* Config gates: `execution.mode="live"`, `execution.validate_only=false`, and `execution.allow_live_trading=true` intentionally set for production; revert any gate to disable.
+* Risk reviewed: Portfolio and per-strategy risk limits rechecked for live exposure tolerance.
+* Operator drills: Team knows how to invoke `panic` and targeted `cancel` via `execution.admin_cli` for immediate kill-switch behavior.
 
 ## 🧪 Testing
 
