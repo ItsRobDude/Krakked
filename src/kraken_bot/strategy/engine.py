@@ -141,6 +141,15 @@ class StrategyEngine:
         )
 
         self._persist_plan(plan)
+        logger.info(
+            "Execution plan created",
+            extra={
+                "event": "plan_created",
+                "plan_id": plan_id,
+                "action_count": len(plan.actions),
+                "blocked_actions": len([a for a in plan.actions if a.blocked]),
+            },
+        )
         return plan
 
     def _data_ready(self) -> bool:

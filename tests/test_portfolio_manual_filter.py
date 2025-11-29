@@ -66,6 +66,12 @@ class InMemoryStore(PortfolioStore):
     def get_order_by_reference(self, kraken_order_id=None, userref=None):
         return None
 
+    def get_open_orders(self, plan_id=None, strategy_id=None):
+        return getattr(self, "orders", [])
+
+    def get_execution_results(self, limit: int = 10):
+        return getattr(self, "execution_results", [])[:limit]
+
 
 @pytest.fixture
 def market_data_mock():

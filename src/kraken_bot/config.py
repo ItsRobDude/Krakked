@@ -44,6 +44,7 @@ class ExecutionConfig:
     post_only: bool = False
     validate_only: bool = True
     allow_live_trading: bool = False
+    paper_tests_completed: bool = False
     dead_man_switch_seconds: int = 600
     max_retries: int = 3
     retry_backoff_seconds: int = 2
@@ -324,6 +325,9 @@ def load_config(config_path: Path = None) -> AppConfig:
         validate_only=validate_only,
         allow_live_trading=execution_data.get(
             "allow_live_trading", default_execution.allow_live_trading
+        ),
+        paper_tests_completed=execution_data.get(
+            "paper_tests_completed", default_execution.paper_tests_completed
         ),
         dead_man_switch_seconds=execution_data.get(
             "dead_man_switch_seconds", default_execution.dead_man_switch_seconds
