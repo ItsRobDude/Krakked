@@ -35,7 +35,7 @@ pythonpath = [
 
 [tool.mypy]
 python_version = "3.11"
-mypy_path = ["src"]
+mypy_path = ["src", "typings"]
 exclude = ["build", "dist"]
 
 [tool.poetry.scripts]
