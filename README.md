@@ -234,6 +234,8 @@ Invoke via `poetry run python -m kraken_bot.execution.admin_cli <subcommand>`; p
 * Risk reviewed: Portfolio and per-strategy risk limits rechecked for live exposure tolerance.
 * Operator drills: Team knows how to invoke `panic` and targeted `cancel` via `execution.admin_cli` for immediate kill-switch behavior.
 
+Today the portfolio layer derives `strategy_tag` straight from trade metadata (userref/comments on fills). Tags that do not map to configured strategies are surfaced as unknown buckets in exposure views, while missing/blank tags are treated as manual positions so you can decide whether they should count toward budgets. A later phase will normalize tags against configured strategies and treat any unrecognized tag as manual to avoid dangling unknown buckets once OMS tagging is wired through.
+
 ## 🧪 Testing
 
 To run the test suite:
