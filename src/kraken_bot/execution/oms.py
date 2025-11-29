@@ -6,7 +6,9 @@ from uuid import uuid4
 
 from kraken_bot.strategy.models import ExecutionPlan
 
-from .adapter import KrakenExecutionAdapter
+from kraken_bot.config import ExecutionConfig
+from kraken_bot.connection.rest_client import KrakenRESTClient
+from .adapter import ExecutionAdapter, KrakenExecutionAdapter, get_execution_adapter
 from .exceptions import ExecutionError
 from .models import ExecutionResult, LocalOrder
 
@@ -18,8 +20,14 @@ if TYPE_CHECKING:
 class ExecutionService:
     """Lightweight OMS façade for coordinating plan execution and order tracking."""
 
-    def __init__(self, adapter: KrakenExecutionAdapter, store: Optional["PortfolioStore"] = None):
-        self.adapter = adapter
+    def __init__(
+        self,
+        adapter: Optional[ExecutionAdapter] = None,
+        store: Optional["PortfolioStore"] = None,
+        client: Optional[KrakenRESTClient] = None,
+        config: Optional[ExecutionConfig] = None,
+    ):
+        self.adapter = adapter or get_execution_adapter(client=client, config=config or ExecutionConfig())
         self.store = store
         self.open_orders: Dict[str, LocalOrder] = {}
         self.recent_executions: List[ExecutionResult] = []

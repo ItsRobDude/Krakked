@@ -1,7 +1,7 @@
 # src/kraken_bot/execution/adapter.py
 
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Protocol
 
 from kraken_bot.config import ExecutionConfig
 from kraken_bot.connection.rest_client import KrakenRESTClient
@@ -11,6 +11,20 @@ from .models import LocalOrder
 from .router import build_order_payload
 
 logger = logging.getLogger(__name__)
+
+
+class ExecutionAdapter(Protocol):
+    client: KrakenRESTClient
+    config: ExecutionConfig
+
+    def submit_order(self, order: LocalOrder) -> LocalOrder:
+        ...
+
+    def cancel_order(self, order: LocalOrder) -> None:
+        ...
+
+    def cancel_all_orders(self) -> None:
+        ...
 
 
 class KrakenExecutionAdapter:
@@ -120,3 +134,58 @@ class KrakenExecutionAdapter:
         errors = resp.get("error") or []
         if errors:
             raise OrderCancelError("; ".join(errors))
+
+
+class PaperExecutionAdapter:
+    def __init__(self, config: Optional[ExecutionConfig] = None):
+        self.config = config or ExecutionConfig()
+        self.client = KrakenRESTClient()
+
+    def submit_order(self, order: LocalOrder) -> LocalOrder:
+        payload: Dict[str, Any] = build_order_payload(order, self.config)
+        order.raw_request = payload
+
+        price_for_notional = payload.get("price") or order.requested_price
+        if price_for_notional is not None:
+            notional = float(payload["volume"]) * float(price_for_notional)
+            if notional < self.config.min_order_notional_usd:
+                order.status = "rejected"
+                order.last_error = (
+                    f"Order notional ${notional:.2f} below minimum ${self.config.min_order_notional_usd:.2f}"
+                )
+                logger.error(
+                    order.last_error,
+                    extra={"event": "order_rejected_min_notional", "notional": notional},
+                )
+                return order
+
+        if self.config.validate_only:
+            order.status = "validated"
+            return order
+
+        order.kraken_order_id = order.kraken_order_id or f"paper-{order.local_id}"
+        order.status = "filled"
+        order.cumulative_base_filled = order.requested_base_size
+        order.avg_fill_price = price_for_notional
+        order.raw_response = {
+            "result": "success",
+            "txid": [order.kraken_order_id],
+            "filled": order.cumulative_base_filled,
+            "avg_fill_price": order.avg_fill_price,
+        }
+        return order
+
+    def cancel_order(self, order: LocalOrder) -> None:
+        order.status = "canceled"
+
+    def cancel_all_orders(self) -> None:
+        return None
+
+
+def get_execution_adapter(client: Optional[KrakenRESTClient], config: ExecutionConfig) -> ExecutionAdapter:
+    if config.mode == "live":
+        if client is None:
+            raise ExecutionError("Live execution requires a KrakenRESTClient")
+        return KrakenExecutionAdapter(client=client, config=config)
+
+    return PaperExecutionAdapter(config=config)
