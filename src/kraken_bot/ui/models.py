@@ -139,3 +139,7 @@ class SystemHealthPayload(BaseModel):
     streaming_pairs: int
     stale_pairs: int
     subscription_errors: int
+    market_data_ok: bool
+    execution_ok: bool
+    current_mode: str
+    ui_read_only: bool
