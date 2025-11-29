@@ -1,13 +1,20 @@
 from __future__ import annotations
 
+import logging
+import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Protocol
 
+import requests
 from textual.app import App, ComposeResult
+
 from textual.containers import Horizontal, Vertical
 from textual.reactive import reactive
 from textual.widgets import Static, DataTable, Footer
+
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -61,6 +68,37 @@ class RiskStatus:
     total_exposure_pct: float
     per_asset_exposure_pct: Dict[str, float]
     per_strategy_exposure_pct: Dict[str, float]
+
+
+# ---------------------------------------------------------------------------
+# Backend protocol
+# ---------------------------------------------------------------------------
+
+
+class BackendProtocol(Protocol):
+    def get_summary(self) -> PortfolioSummary:
+        ...
+
+    def get_positions(self) -> List[PositionRow]:
+        ...
+
+    def get_assets(self) -> List[AssetRow]:
+        ...
+
+    def get_logs(self) -> List[LogEntry]:
+        ...
+
+    def get_risk_status(self) -> RiskStatus:
+        ...
+
+    def sync_portfolio(self) -> None:
+        ...
+
+    def halt_strategies(self) -> None:
+        ...
+
+    def emergency_stop(self) -> None:
+        ...
 
 
 # ---------------------------------------------------------------------------
@@ -127,6 +165,110 @@ class DummyBackend:
         )
 
     # These will be wired to real functions later
+    def sync_portfolio(self) -> None:
+        pass
+
+    def halt_strategies(self) -> None:
+        pass
+
+    def emergency_stop(self) -> None:
+        pass
+
+
+class HttpBackend:
+    """HTTP-backed implementation that talks to the Krakked API."""
+
+    def __init__(self, base_url: Optional[str] = None) -> None:
+        self.base_url = (base_url or os.environ.get("KRAKKED_API_URL") or "http://localhost:8000").rstrip(
+            "/"
+        )
+        self.session = requests.Session()
+
+    def _get(self, path: str) -> dict:
+        url = f"{self.base_url}{path}"
+        response = self.session.get(url, timeout=2)
+        response.raise_for_status()
+        payload = response.json()
+        if isinstance(payload, dict) and payload.get("error"):
+            raise RuntimeError(str(payload["error"]))
+        return payload.get("data") if isinstance(payload, dict) else payload
+
+    def get_summary(self) -> PortfolioSummary:
+        data = self._get("/api/portfolio/summary") or {}
+        last_snapshot = data.get("last_snapshot_ts")
+        if isinstance(last_snapshot, str):
+            try:
+                last_dt = datetime.fromisoformat(last_snapshot.replace("Z", "+00:00"))
+            except ValueError:
+                last_dt = datetime.now(timezone.utc)
+        else:
+            last_dt = datetime.now(timezone.utc)
+
+        drift_flag = bool(data.get("drift_flag", False))
+
+        return PortfolioSummary(
+            total_equity=float(data.get("equity_usd", 0.0)),
+            unrealized_pnl=float(data.get("unrealized_pnl_usd", 0.0)),
+            session_realized_pnl=float(data.get("realized_pnl_usd", 0.0)),
+            cash_usd=float(data.get("cash_usd", 0.0)),
+            drift_detected=drift_flag,
+            data_stale=last_snapshot is None,
+            kill_switch_blocked=False,
+            positions_ok=not drift_flag,
+            last_update=last_dt,
+        )
+
+    def get_positions(self) -> List[PositionRow]:
+        data = self._get("/api/portfolio/positions") or []
+        positions: List[PositionRow] = []
+        for item in data:
+            size = float(item.get("base_size", 0.0))
+            entry = float(item.get("avg_entry_price", 0.0))
+            mark = float(item.get("current_price", entry or 0.0))
+            pnl = item.get("unrealized_pnl_usd")
+            if pnl is None:
+                pnl = (mark - entry) * size
+            positions.append(
+                PositionRow(
+                    pair=str(item.get("pair") or ""),
+                    size=size,
+                    entry=entry,
+                    mark=mark,
+                    pnl_usd=float(pnl),
+                    has_warning=bool(item.get("strategy_tag")),
+                )
+            )
+        return positions
+
+    def get_assets(self) -> List[AssetRow]:
+        exposure = self._get("/api/portfolio/exposure") or {}
+        assets: List[AssetRow] = []
+        for row in exposure.get("by_asset", []) or []:
+            value = float(row.get("value_usd", 0.0))
+            assets.append(
+                AssetRow(
+                    asset=str(row.get("asset") or ""),
+                    local=value,
+                    exchange=value,
+                    value_usd=value,
+                    integrity="ok",
+                )
+            )
+        return assets
+
+    def get_logs(self) -> List[LogEntry]:
+        return []
+
+    def get_risk_status(self) -> RiskStatus:
+        data = self._get("/api/risk/status") or {}
+        return RiskStatus(
+            kill_switch_active=bool(data.get("kill_switch_active", False)),
+            daily_drawdown_pct=float(data.get("daily_drawdown_pct", 0.0)),
+            total_exposure_pct=float(data.get("total_exposure_pct", 0.0)),
+            per_asset_exposure_pct=data.get("per_asset_exposure_pct", {}) or {},
+            per_strategy_exposure_pct=data.get("per_strategy_exposure_pct", {}) or {},
+        )
+
     def sync_portfolio(self) -> None:
         pass
 
@@ -378,10 +520,21 @@ class KrakkedDashboard(App):
         ("2", "view_risk", "Risk"),
     ]
 
-    def __init__(self, backend: Optional[DummyBackend] = None) -> None:
+    def __init__(self, backend: Optional[BackendProtocol] = None) -> None:
         super().__init__()
-        self.backend = backend or DummyBackend()
+        self.backend: BackendProtocol = backend or self._init_backend()
         self.current_view: str = "dashboard"
+
+    def _init_backend(self) -> BackendProtocol:
+        try:
+            live_backend = HttpBackend()
+            # Probe the API to confirm availability; fall back if it fails.
+            live_backend.get_summary()
+            logger.info("Using HttpBackend for dashboard data", extra={"base_url": live_backend.base_url})
+            return live_backend
+        except Exception as exc:  # pragma: no cover - defensive fallback
+            logger.info("Falling back to DummyBackend: %s", exc)
+            return DummyBackend()
 
     def compose(self) -> ComposeResult:
         # Top-level: sidebar + right side (dashboard/risk)
