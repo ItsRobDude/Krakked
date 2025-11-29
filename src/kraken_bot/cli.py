@@ -14,6 +14,7 @@ from kraken_bot.connection.exceptions import (
     ServiceUnavailableError,
 )
 from kraken_bot.connection.rest_client import KrakenRESTClient
+from kraken_bot.main import run as run_orchestrator
 from kraken_bot.secrets import CredentialResult, CredentialStatus
 from scripts import run_strategy_once
 
@@ -64,6 +65,12 @@ def _run_once_command(_: argparse.Namespace) -> int:
     return 0
 
 
+def _run_command(args: argparse.Namespace) -> int:
+    """Start the long-running orchestrator with UI and scheduler loops."""
+
+    return run_orchestrator(allow_interactive_setup=args.allow_interactive_setup)
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="krakked", description="Kraken bot utilities")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -86,6 +93,17 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Run a single strategy cycle with paper trading and validation guardrails",
     )
     run_once_parser.set_defaults(func=_run_once_command)
+
+    run_parser = subparsers.add_parser(
+        "run",
+        help="Start the orchestrator with market data, scheduler, execution, and UI",
+    )
+    run_parser.add_argument(
+        "--allow-interactive-setup",
+        action="store_true",
+        help="Prompt for credentials if they are not already configured",
+    )
+    run_parser.set_defaults(func=_run_command)
 
     return parser
 
