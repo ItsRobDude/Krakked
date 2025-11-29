@@ -35,3 +35,4 @@ class ExecutionResult:
     success: bool = False
     orders: List[LocalOrder] = field(default_factory=list)
     errors: List[str] = field(default_factory=list)
+    warnings: List[str] = field(default_factory=list)

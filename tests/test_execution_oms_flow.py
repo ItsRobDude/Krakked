@@ -34,8 +34,14 @@ def _plan(actions):
         plan_id="plan",
         generated_at=datetime.utcnow(),
         actions=list(actions),
-        metadata={"order_type": "limit", "requested_price": 25.0},
+        metadata={"order_type": "limit"},
     )
+
+
+def _market_data(mid_price: float = 25.0) -> MagicMock:
+    market_data = MagicMock()
+    market_data.get_best_bid_ask.return_value = {"bid": mid_price - 0.5, "ask": mid_price + 0.5}
+    return market_data
 
 
 def test_execute_plan_skips_blocked_and_none_actions():
@@ -59,7 +65,7 @@ def test_execute_plan_builds_buy_and_sell_from_deltas():
     adapter = MagicMock()
     adapter.config = ExecutionConfig(validate_only=True)
     adapter.submit_order.side_effect = lambda order: order
-    service = ExecutionService(adapter=adapter)
+    service = ExecutionService(adapter=adapter, market_data=_market_data())
 
     actions = [
         _action(target_base_size=2.0, current_base_size=1.0),  # buy 1
@@ -81,7 +87,7 @@ def test_execute_plan_builds_buy_and_sell_from_deltas():
 def test_execute_plan_guardrail_blocks_order():
     adapter = MagicMock()
     adapter.config = ExecutionConfig(max_pair_notional_usd=10.0)
-    service = ExecutionService(adapter=adapter)
+    service = ExecutionService(adapter=adapter, market_data=_market_data())
 
     plan = _plan([_action(target_notional_usd=100.0)])
 
@@ -98,7 +104,7 @@ def test_execute_plan_truncates_to_max_concurrent_orders_and_rejects_extra():
     adapter.config = ExecutionConfig(max_concurrent_orders=2, validate_only=True)
     adapter.submit_order.side_effect = lambda order: order
     store = MagicMock()
-    service = ExecutionService(adapter=adapter, store=store)
+    service = ExecutionService(adapter=adapter, store=store, market_data=_market_data())
 
     actions = [
         _action(target_base_size=1.0, current_base_size=0.0),
@@ -237,3 +243,39 @@ def test_cancel_all_requests_adapter_and_marks_orders():
         kraken_order_id=order.kraken_order_id,
         event_message="Canceled via cancel_all",
     )
+
+
+def test_execute_plan_applies_slippage_from_market_data_for_buy_and_sell():
+    config = ExecutionConfig(max_slippage_bps=100, validate_only=True)
+    adapter = PaperExecutionAdapter(config=config)
+    market_data = _market_data(mid_price=100.0)
+    service = ExecutionService(adapter=adapter, market_data=market_data)
+
+    actions = [
+        _action(target_base_size=2.0, current_base_size=1.0),  # buy 1
+        _action(target_base_size=0.0, current_base_size=1.0),  # sell 1
+    ]
+    plan = _plan(actions)
+
+    result = service.execute_plan(plan)
+
+    assert market_data.get_best_bid_ask.call_count == len(actions)
+    buy_order, sell_order = result.orders
+
+    assert buy_order.raw_request["price"] == pytest.approx(101.0)
+    assert sell_order.raw_request["price"] == pytest.approx(99.0)
+
+
+def test_execute_plan_records_warning_when_market_data_missing():
+    adapter = PaperExecutionAdapter(config=ExecutionConfig(validate_only=True))
+    market_data = MagicMock()
+    market_data.get_best_bid_ask.return_value = None
+    service = ExecutionService(adapter=adapter, market_data=market_data)
+
+    plan = _plan([_action()])
+
+    result = service.execute_plan(plan)
+
+    assert result.orders == []
+    assert result.warnings
+    market_data.get_best_bid_ask.assert_called_once()

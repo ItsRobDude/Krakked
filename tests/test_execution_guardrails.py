@@ -35,7 +35,10 @@ def test_pair_notional_guardrail_blocks_submission():
         metadata={"risk_status": {"total_exposure_pct": 10.0}},
     )
 
-    service = ExecutionService(adapter)
+    market_data = MagicMock()
+    market_data.get_best_bid_ask.return_value = {"bid": 10.0, "ask": 11.0}
+
+    service = ExecutionService(adapter, market_data=market_data)
     result = service.execute_plan(plan)
 
     assert len(result.orders) == 1
@@ -58,7 +61,10 @@ def test_total_notional_guardrail_blocks_submission():
         metadata={"risk_status": {"total_exposure_pct": 15.0}},
     )
 
-    service = ExecutionService(adapter)
+    market_data = MagicMock()
+    market_data.get_best_bid_ask.return_value = {"bid": 10.0, "ask": 11.0}
+
+    service = ExecutionService(adapter, market_data=market_data)
     result = service.execute_plan(plan)
 
     assert len(result.orders) == 2

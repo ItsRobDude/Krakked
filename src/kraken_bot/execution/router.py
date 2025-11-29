@@ -1,11 +1,16 @@
 # src/kraken_bot/execution/router.py
 
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple, TYPE_CHECKING
+from uuid import uuid4
 
 from kraken_bot.config import ExecutionConfig
 
 from .models import LocalOrder
+
+if TYPE_CHECKING:
+    from kraken_bot.market_data.api import MarketDataAPI
+    from kraken_bot.strategy.models import ExecutionPlan, RiskAdjustedAction
 
 logger = logging.getLogger(__name__)
 
@@ -115,3 +120,60 @@ def build_order_payload(
         payload["validate"] = 1
 
     return payload
+
+
+def build_order_from_plan_action(
+    action: "RiskAdjustedAction",
+    plan: "ExecutionPlan",
+    market_data: Optional["MarketDataAPI"],
+    config: ExecutionConfig,
+) -> Tuple[Optional[LocalOrder], Optional[str]]:
+    """
+    Build a :class:`LocalOrder` from a plan action using live market data.
+
+    Returns a tuple of (order, warning). When market data is unavailable for a
+    required limit price, the order will be ``None`` and the warning will
+    describe the failure.
+    """
+
+    delta = action.target_base_size - action.current_base_size
+    side = "buy" if delta > 0 else "sell"
+    volume = abs(delta)
+
+    order_type = plan.metadata.get("order_type") or config.default_order_type
+
+    requested_price: Optional[float] = plan.metadata.get("requested_price")
+    bid_ask = None
+    if market_data:
+        try:
+            bid_ask = market_data.get_best_bid_ask(action.pair)
+        except Exception as exc:  # pragma: no cover - passthrough for data errors
+            warning = f"Failed to fetch market data for {action.pair}: {exc}"
+            return None, warning
+
+    if bid_ask:
+        try:
+            bid = float(bid_ask.get("bid"))
+            ask = float(bid_ask.get("ask"))
+            requested_price = (bid + ask) / 2
+        except (TypeError, ValueError):
+            warning = f"Invalid bid/ask data for {action.pair}: {bid_ask}"
+            return None, warning
+
+    if order_type == "limit" and requested_price is None:
+        warning = f"Missing market data for limit order on {action.pair}"
+        return None, warning
+
+    order = LocalOrder(
+        local_id=str(uuid4()),
+        plan_id=plan.plan_id,
+        strategy_id=action.strategy_id,
+        pair=action.pair,
+        side=side,
+        order_type=order_type,
+        userref=action.userref,
+        requested_base_size=volume,
+        requested_price=requested_price,
+    )
+
+    return order, None
