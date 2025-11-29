@@ -1,14 +1,14 @@
 from datetime import datetime
-from types import SimpleNamespace
 
 import pytest
+from starlette.testclient import TestClient
 
 from kraken_bot.execution.models import ExecutionResult, LocalOrder
 from kraken_bot.portfolio.models import SpotPosition
 
 
 @pytest.fixture
-def exec_context(client):
+def exec_context(client: TestClient):
     return client.app.state.context
 
 
