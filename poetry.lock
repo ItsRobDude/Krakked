@@ -1912,9 +1912,9 @@ files = [
 ]
 
 [extras]
-tui = ["textual"]
+tui = ["textual (>=0.57,<3.0)"]
 
 [metadata]
 lock-version = "2.1"
-python-versions = "^3.10"
-content-hash = "a7050f28e63b2326163f3b9f530d8d41c0ae54beee2ddad6a3581b5e98e7f7c7"
+python-versions = ">=3.10,<4.0"
+content-hash = "23b8d1c686f70742e29226a8aa3bfeb0c267b336e958a83ca2bab121b6d8f26e"
