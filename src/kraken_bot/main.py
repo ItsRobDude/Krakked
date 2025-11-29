@@ -141,6 +141,21 @@ def run(allow_interactive_setup: bool = True) -> int:
     last_strategy_cycle = datetime.now(timezone.utc) - timedelta(seconds=strategy_interval)
     last_portfolio_sync = datetime.now(timezone.utc) - timedelta(seconds=portfolio_interval)
 
+    def _refresh_metrics_state() -> None:
+        try:
+            equity = portfolio.get_equity()
+            positions = portfolio.get_positions()
+            open_orders = execution_service.get_open_orders()
+            metrics.update_portfolio_state(
+                equity_usd=equity.equity_base,
+                realized_pnl_usd=equity.realized_pnl_base_total,
+                unrealized_pnl_usd=equity.unrealized_pnl_base_total,
+                open_orders_count=len(open_orders),
+                open_positions_count=len(positions),
+            )
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logger.error("Failed to refresh metrics state: %s", exc)
+
     def _signal_handler(signum, _frame) -> None:  # pragma: no cover - signal driven
         logger.info("Received signal %s; shutting down", signum, extra=structured_log_extra(event="shutdown_signal"))
         _shutdown(context, stop_event, ui_server, ui_thread)
@@ -156,6 +171,7 @@ def run(allow_interactive_setup: bool = True) -> int:
                 try:
                     portfolio.sync()
                     last_portfolio_sync = now
+                    _refresh_metrics_state()
                 except Exception as exc:  # pragma: no cover - defensive logging
                     logger.error("Portfolio sync failed: %s", exc)
                     metrics.record_error(f"Portfolio sync failed: {exc}")
@@ -178,6 +194,8 @@ def run(allow_interactive_setup: bool = True) -> int:
                 except Exception as exc:  # pragma: no cover - defensive logging
                     logger.error("Strategy cycle failed: %s", exc)
                     metrics.record_error(f"Strategy cycle failed: {exc}")
+                else:
+                    _refresh_metrics_state()
 
             stop_event.wait(loop_interval)
     finally:

@@ -18,6 +18,11 @@ class SystemMetrics:
         self.plans_executed = 0
         self.blocked_actions = 0
         self.execution_errors = 0
+        self.last_equity_usd: Optional[float] = None
+        self.last_realized_pnl_usd: Optional[float] = None
+        self.last_unrealized_pnl_usd: Optional[float] = None
+        self.open_orders_count = 0
+        self.open_positions_count = 0
 
     def record_plan(self, blocked_actions: int = 0) -> None:
         """Increment plan generation metrics."""
@@ -43,6 +48,24 @@ class SystemMetrics:
             self.execution_errors += 1
             self._recent_errors.appendleft(self._format_error(message))
 
+    def update_portfolio_state(
+        self,
+        *,
+        equity_usd: Optional[float],
+        realized_pnl_usd: Optional[float],
+        unrealized_pnl_usd: Optional[float],
+        open_orders_count: int,
+        open_positions_count: int,
+    ) -> None:
+        """Update portfolio-related metrics atomically."""
+
+        with self._lock:
+            self.last_equity_usd = equity_usd
+            self.last_realized_pnl_usd = realized_pnl_usd
+            self.last_unrealized_pnl_usd = unrealized_pnl_usd
+            self.open_orders_count = open_orders_count
+            self.open_positions_count = open_positions_count
+
     def snapshot(self) -> Dict[str, object]:
         """Return a read-only snapshot of current counters."""
 
@@ -53,6 +76,11 @@ class SystemMetrics:
                 "blocked_actions": self.blocked_actions,
                 "execution_errors": self.execution_errors,
                 "recent_errors": list(self._recent_errors),
+                "last_equity_usd": self.last_equity_usd,
+                "last_realized_pnl_usd": self.last_realized_pnl_usd,
+                "last_unrealized_pnl_usd": self.last_unrealized_pnl_usd,
+                "open_orders_count": self.open_orders_count,
+                "open_positions_count": self.open_positions_count,
             }
 
     @staticmethod

@@ -160,3 +160,8 @@ class SystemMetricsPayload(BaseModel):
     blocked_actions: int
     execution_errors: int
     recent_errors: List[ErrorRecord]
+    last_equity_usd: Optional[float]
+    last_realized_pnl_usd: Optional[float]
+    last_unrealized_pnl_usd: Optional[float]
+    open_orders_count: int
+    open_positions_count: int
