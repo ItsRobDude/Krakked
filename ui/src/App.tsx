@@ -11,10 +11,12 @@ import {
   fetchPortfolioSummary,
   fetchPositions,
   fetchRecentExecutions,
+  fetchSystemHealth,
   ExposureBreakdown,
   PortfolioSummary,
   PositionPayload,
   RecentExecution,
+  SystemHealth,
 } from './services/api';
 import { validateCredentials } from './services/credentials';
 
@@ -48,33 +50,6 @@ const formatTimestamp = (timestamp: string | null) => {
   if (Number.isNaN(parsed.getTime())) return 'Unknown';
   return parsed.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
 };
-
-const fallbackKpis: Kpi[] = [
-  { label: '24h PnL', value: '+2.94%', change: '+0.40%', hint: 'Vs prior period' },
-  { label: 'Open Exposure', value: '$14,200', change: '3 positions', hint: 'Auto-hedged' },
-  { label: 'Funding Used', value: '38%', change: 'Low risk', hint: 'Configurable' },
-  { label: 'Latency', value: '220ms', change: 'OK', hint: 'Order routing' },
-];
-
-const fallbackPositions: PositionRow[] = [
-  { pair: 'ETH/USD', side: 'long', size: '1.35 ETH', entry: '$3,048.00', mark: '$3,065.44', pnl: '+$23.45', status: 'Trailing' },
-  { pair: 'BTC/USD', side: 'short', size: '0.08 BTC', entry: '$65,220.00', mark: '$64,880.12', pnl: '+$27.19', status: 'Monitoring' },
-  { pair: 'SOL/USD', side: 'long', size: '120 SOL', entry: '$148.10', mark: '$145.92', pnl: '-$261.60', status: 'Stop nearby' },
-];
-
-const fallbackBalances: WalletRow[] = [
-  { asset: 'ETH', total: '1.4200', available: '0.6700', valueUsd: '$4,120.50' },
-  { asset: 'BTC', total: '0.0780', available: '0.0500', valueUsd: '$5,140.20' },
-  { asset: 'USDT', total: '6,500', available: '6,500', valueUsd: '$6,500.00' },
-  { asset: 'SOL', total: '250', available: '110', valueUsd: '$36,480.00' },
-];
-
-const fallbackLogs: LogEntry[] = [
-  { level: 'info', message: 'Balance sync finished. 5 assets refreshed.', timestamp: 'Just now', source: 'balances' },
-  { level: 'warning', message: 'Order book latency above threshold on ETH/USD.', timestamp: '2m ago', source: 'market-data' },
-  { level: 'info', message: 'Strategy backfill loaded 24h of trades.', timestamp: '15m ago', source: 'strategy' },
-  { level: 'error', message: 'Websocket reconnect triggered for auth feed.', timestamp: '28m ago', source: 'connectivity' },
-];
 
 const buildKpis = (summary: PortfolioSummary) => [
   {
@@ -131,11 +106,12 @@ type SubmissionState = {
 };
 
 function DashboardShell({ onLogout }: { onLogout: () => void }) {
-  const [kpis, setKpis] = useState(fallbackKpis);
-  const [positions, setPositions] = useState(fallbackPositions);
-  const [balances, setBalances] = useState(fallbackBalances);
-  const [logs, setLogs] = useState(fallbackLogs);
-  const [connectionState, setConnectionState] = useState<'connected' | 'degraded'>('connected');
+  const [kpis, setKpis] = useState<Kpi[]>([]);
+  const [positions, setPositions] = useState<PositionRow[]>([]);
+  const [balances, setBalances] = useState<WalletRow[]>([]);
+  const [logs, setLogs] = useState<LogEntry[]>([]);
+  const [connectionState, setConnectionState] = useState<'connected' | 'degraded'>('degraded');
+  const [health, setHealth] = useState<SystemHealth | null>(null);
 
   const sidebarItems = [
     { label: 'Overview', description: 'KPIs & positions', active: true, badge: 'Live' },
@@ -155,14 +131,21 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
     let cancelled = false;
 
     const loadDashboard = async () => {
-      const [summary, exposure] = await Promise.all([fetchPortfolioSummary(), fetchExposure()]);
+      const [summary, exposure, systemHealth] = await Promise.all([
+        fetchPortfolioSummary(),
+        fetchExposure(),
+        fetchSystemHealth(),
+      ]);
       if (cancelled) return;
 
       if (summary) {
         setKpis(buildKpis(summary));
-        setConnectionState('connected');
-      } else {
-        setConnectionState('degraded');
+      }
+
+      if (systemHealth) {
+        setHealth(systemHealth);
+        const healthy = systemHealth.market_data_ok && systemHealth.execution_ok;
+        setConnectionState(healthy ? 'connected' : 'degraded');
       }
 
       if (exposure) {
@@ -235,12 +218,17 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
           </span>
         </div>
         <p className="panel__description">
-          Data refreshes automatically every {Math.round(DASHBOARD_REFRESH_MS / 1000)}s. Existing placeholders remain visible if the API is unavailable.
+          Data refreshes automatically every {Math.round(DASHBOARD_REFRESH_MS / 1000)}s. Controls respect read-only mode and execution mode reported by the backend.
         </p>
         <ul className="placeholder-list">
           <li>KPIs and balances poll the portfolio endpoints.</li>
           <li>Recent executions stream into the log panel.</li>
           <li>Sidebar session badge reflects the latest fetch outcome.</li>
+          {health ? (
+            <li>
+              Mode: <strong>{health.current_mode}</strong> · {health.ui_read_only ? 'Read-only' : 'Mutable'}
+            </li>
+          ) : null}
         </ul>
       </section>
 

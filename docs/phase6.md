@@ -634,7 +634,8 @@ Status & TODO
 - [x] Read-only portfolio/risk/strategies/execution endpoints: GET routes are wired through FastAPI routers (`src/kraken_bot/ui/routes/portfolio.py`, `risk.py`, `strategies.py`, `execution.py`, `system.py`).
 - [x] Mutating endpoints with ui.read_only/auth: Auth middleware and read-only guards wrap POST/PATCH routes (`src/kraken_bot/ui/api.py`, `src/kraken_bot/ui/routes/*`).
 - [x] Credential validation rules: Documented below and enforced in `/api/system/credentials/validate`.
-- [ ] TUI/React integration: TODO — wire the backend API into a TUI/React frontend and add links back here as components land.
+- [x] TUI/React integration: Trading dashboard wired to the backend (`ui/tui_dashboard.py` and `ui/src/App.tsx`).
+  - Local dev env vars: `KRAKKED_API_URL` / `KRAKKED_API_TOKEN` (TUI) and `VITE_API_BASE` / `VITE_API_TOKEN` (React).
 
 Credential validation rules
 ---------------------------
