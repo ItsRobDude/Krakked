@@ -5,10 +5,21 @@ from __future__ import annotations
 import logging
 
 from fastapi import APIRouter, Request
+from pydantic import BaseModel
+
+from kraken_bot.connection.exceptions import AuthError, ServiceUnavailableError
+from kraken_bot.connection.rest_client import KrakenRESTClient
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+class CredentialPayload(BaseModel):
+    """Payload expected from the UI when validating credentials."""
+
+    apiKey: str
+    apiSecret: str
 
 
 def _context(request: Request):
@@ -33,3 +44,25 @@ async def system_health(request: Request):
     except Exception as exc:  # pragma: no cover - defensive
         logger.exception("Failed to fetch system health")
         return {"data": None, "error": str(exc)}
+
+
+@router.post("/credentials/validate")
+async def validate_credentials(payload: CredentialPayload):
+    """Validate API credentials by pinging a private Kraken endpoint."""
+
+    client = KrakenRESTClient(api_key=payload.apiKey, api_secret=payload.apiSecret)
+
+    try:
+        client.get_private("Balance")
+        return {"success": True, "message": "Credentials validated successfully."}
+    except AuthError as exc:
+        logger.warning("Credential validation failed", extra={"error": str(exc)})
+        return {"success": False, "message": "Authentication failed. Please verify your API key/secret."}
+    except ServiceUnavailableError:
+        return {
+            "success": False,
+            "message": "Kraken service is unavailable. Try again shortly or continue with caution.",
+        }
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.exception("Unexpected error during credential validation")
+        return {"success": False, "message": str(exc)}
