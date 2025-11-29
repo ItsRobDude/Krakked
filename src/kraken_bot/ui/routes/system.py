@@ -15,7 +15,7 @@ from kraken_bot.connection.exceptions import (
 )
 from kraken_bot.connection.rest_client import KrakenRESTClient
 from kraken_bot.ui.logging import build_request_log_extra
-from kraken_bot.ui.models import ApiEnvelope, SystemHealthPayload
+from kraken_bot.ui.models import ApiEnvelope, SystemHealthPayload, SystemMetricsPayload
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +82,19 @@ async def system_health(request: Request) -> ApiEnvelope[SystemHealthPayload]:
         logger.exception(
             "Failed to fetch system health",
             extra=build_request_log_extra(request, event="system_health_failed"),
+        )
+        return ApiEnvelope(data=None, error=str(exc))
+
+
+@router.get("/metrics", response_model=ApiEnvelope[SystemMetricsPayload])
+async def system_metrics(request: Request) -> ApiEnvelope[SystemMetricsPayload]:
+    try:
+        snapshot = _context(request).metrics.snapshot()
+        return ApiEnvelope(data=SystemMetricsPayload(**snapshot), error=None)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.exception(
+            "Failed to fetch system metrics",
+            extra=build_request_log_extra(request, event="system_metrics_failed"),
         )
         return ApiEnvelope(data=None, error=str(exc))
 

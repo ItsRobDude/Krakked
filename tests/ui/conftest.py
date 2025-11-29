@@ -22,6 +22,7 @@ from kraken_bot.config import (
     UIRefreshConfig,
     UniverseConfig,
 )
+from kraken_bot.metrics import SystemMetrics
 from kraken_bot.ui.api import create_api
 from kraken_bot.ui.context import AppContext
 
@@ -140,6 +141,8 @@ def build_test_context(*, auth_enabled: bool, auth_token: str, read_only: bool) 
     execution_service.adapter = MagicMock()
     execution_service.adapter.config = config.execution
 
+    metrics = SystemMetrics()
+
     return AppContext(
         config=config,
         client=rest_client,
@@ -147,6 +150,7 @@ def build_test_context(*, auth_enabled: bool, auth_token: str, read_only: bool) 
         portfolio=portfolio,
         strategy_engine=strategy_engine,
         execution_service=execution_service,
+        metrics=metrics,
     )
 
 

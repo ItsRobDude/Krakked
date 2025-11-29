@@ -14,6 +14,7 @@ from kraken_bot.bootstrap import bootstrap
 from kraken_bot.execution.oms import ExecutionService
 from kraken_bot.logging_config import configure_logging, structured_log_extra
 from kraken_bot.market_data.api import MarketDataAPI
+from kraken_bot.metrics import SystemMetrics
 from kraken_bot.portfolio.manager import PortfolioService
 from kraken_bot.ui.api import create_api
 from kraken_bot.ui.context import AppContext
@@ -112,6 +113,8 @@ def run(allow_interactive_setup: bool = True) -> int:
         rate_limiter=rate_limiter,
     )
 
+    metrics = SystemMetrics()
+
     context = AppContext(
         config=config,
         client=client,
@@ -119,6 +122,7 @@ def run(allow_interactive_setup: bool = True) -> int:
         portfolio=portfolio,
         strategy_engine=strategy_engine,
         execution_service=execution_service,
+        metrics=metrics,
     )
 
     ui_server, ui_thread = _start_ui_server(context)
@@ -149,13 +153,17 @@ def run(allow_interactive_setup: bool = True) -> int:
                     last_portfolio_sync = now
                 except Exception as exc:  # pragma: no cover - defensive logging
                     logger.error("Portfolio sync failed: %s", exc)
+                    metrics.record_error(f"Portfolio sync failed: {exc}")
 
             if (now - last_strategy_cycle).total_seconds() >= strategy_interval:
                 try:
                     plan = strategy_engine.run_cycle(now)
+                    blocked_actions = len([a for a in plan.actions if getattr(a, "blocked", False)])
+                    metrics.record_plan(blocked_actions)
                     last_strategy_cycle = now
                     if plan.actions:
-                        execution_service.execute_plan(plan)
+                        result = execution_service.execute_plan(plan)
+                        metrics.record_plan_execution(result.errors)
                     else:
                         logger.info(
                             "No actions generated for plan %s; skipping execution",
@@ -164,6 +172,7 @@ def run(allow_interactive_setup: bool = True) -> int:
                         )
                 except Exception as exc:  # pragma: no cover - defensive logging
                     logger.error("Strategy cycle failed: %s", exc)
+                    metrics.record_error(f"Strategy cycle failed: {exc}")
 
             stop_event.wait(loop_interval)
     finally:

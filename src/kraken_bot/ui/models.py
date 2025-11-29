@@ -147,3 +147,16 @@ class SystemHealthPayload(BaseModel):
     execution_ok: bool
     current_mode: str
     ui_read_only: bool
+
+
+class ErrorRecord(BaseModel):
+    at: datetime
+    message: str
+
+
+class SystemMetricsPayload(BaseModel):
+    plans_generated: int
+    plans_executed: int
+    blocked_actions: int
+    execution_errors: int
+    recent_errors: List[ErrorRecord]
