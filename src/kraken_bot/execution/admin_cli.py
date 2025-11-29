@@ -106,6 +106,18 @@ def cancel_orders(args: argparse.Namespace) -> int:
     return 0
 
 
+def panic(args: argparse.Namespace) -> int:
+    logger.error("PANIC: canceling all orders", extra={"event": "execution_panic"})
+
+    service = _build_service(args.db_path, args.allow_interactive_setup)
+    service.refresh_open_orders()
+    service.reconcile_orders()
+    service.cancel_all()
+
+    print("Panic cancel-all issued.")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Execution admin helpers")
     parser.add_argument("--db-path", default="portfolio.db", help="Path to the SQLite portfolio store")
@@ -131,6 +143,9 @@ def build_parser() -> argparse.ArgumentParser:
     cancel_parser.add_argument("--local-id", help="Cancel a specific local order id")
     cancel_parser.add_argument("--all", action="store_true", help="Cancel all open orders that match filters")
     cancel_parser.set_defaults(func=cancel_orders)
+
+    panic_parser = sub.add_parser("panic", help="Cancel all open orders after refreshing state")
+    panic_parser.set_defaults(func=panic)
 
     return parser
 
