@@ -4,6 +4,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from kraken_bot.config import ExecutionConfig
+from kraken_bot.connection.exceptions import RateLimitError, ServiceUnavailableError
 from kraken_bot.execution.adapter import (
     KrakenExecutionAdapter,
     PaperExecutionAdapter,
@@ -128,3 +129,53 @@ def test_kraken_execution_adapter_client_exception():
 
     with pytest.raises(ExecutionError):
         adapter.submit_order(_local_order(price=30.0, volume=1.0))
+
+
+def test_kraken_execution_adapter_retries_on_transient_error_then_succeeds(monkeypatch):
+    client = MagicMock()
+    client.add_order.side_effect = [
+        RateLimitError("throttle"),
+        {"error": [], "txid": ["ABC123"]},
+    ]
+    config = ExecutionConfig(
+        mode="live",
+        validate_only=False,
+        allow_live_trading=True,
+        max_retries=2,
+        retry_backoff_seconds=0,
+        retry_backoff_factor=2.0,
+    )
+    adapter = KrakenExecutionAdapter(client=client, config=config)
+
+    monkeypatch.setattr("time.sleep", lambda _: None)
+
+    order = adapter.submit_order(_local_order(price=30.0, volume=1.0))
+
+    assert order.status == "open"
+    assert order.kraken_order_id == "ABC123"
+    assert client.add_order.call_count == 2
+
+
+def test_kraken_execution_adapter_retries_exhausted_sets_error(monkeypatch):
+    client = MagicMock()
+    client.add_order.side_effect = ServiceUnavailableError("down")
+    config = ExecutionConfig(
+        mode="live",
+        validate_only=False,
+        allow_live_trading=True,
+        max_retries=1,
+        retry_backoff_seconds=0,
+        retry_backoff_factor=2.0,
+    )
+    adapter = KrakenExecutionAdapter(client=client, config=config)
+
+    monkeypatch.setattr("time.sleep", lambda _: None)
+
+    order = _local_order(price=30.0, volume=1.0)
+
+    with pytest.raises(ExecutionError):
+        adapter.submit_order(order)
+
+    assert client.add_order.call_count == 2
+    assert order.status == "error"
+    assert order.last_error == "down"
