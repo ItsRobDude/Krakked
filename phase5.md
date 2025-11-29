@@ -21,13 +21,20 @@ It does not:
 	•	Perform UI logic – that’s Phase 6.
 
 Assumptions:
-	•	Region profile US_CA – spot only, no margin/futures, no shorting.
-	•	KrakenRESTClient (Phase 1) now supports:
-	•	Public endpoints (Ticker, AssetPairs, OHLC).
-	•	Private endpoints:
-	•	AddOrder, CancelOrder, CancelAll, OpenOrders, ClosedOrders.
-	•	Phase 3 portfolio already ingests trades & closed orders and rebuilds positions.
-	•	Phase 4 Strategy/Risk Engine outputs ExecutionPlans containing RiskAdjustedActions, not raw orders.
+        •       Region profile US_CA – spot only, no margin/futures, no shorting.
+        •       KrakenRESTClient (Phase 1) now supports:
+        •       Public endpoints (Ticker, AssetPairs, OHLC).
+        •       Private endpoints:
+        •       AddOrder, CancelOrder, CancelAll, OpenOrders, ClosedOrders.
+        •       Phase 3 portfolio already ingests trades & closed orders and rebuilds positions.
+        •       Phase 4 Strategy/Risk Engine outputs ExecutionPlans containing RiskAdjustedActions, not raw orders.
+
+Implementation status (Phase 5.03 snapshot):
+        •       OMS is implemented for paper/validate by default with an explicit allow_live_trading gate for live submission.
+        •       Orders are built from plan deltas using MarketDataAPI bid/ask midpoints, slippage caps, and rounding helpers.
+        •       KrakenExecutionAdapter applies retries/backoff for transient failures and honors dead_man_switch_seconds via expiretm/heartbeat when in live mode.
+        •       Persistence is active for execution_orders and execution_results; panic cancel refreshes state and reconciles cancellations back to SQLite and in-memory tracking.
+        •       Admin CLI exposes list-open, recent-executions, cancel, and panic subcommands; run-once CLI stays paper/validate-only regardless of config.
 
 ⸻
 
@@ -511,6 +518,7 @@ Phase 5 is done when:
                 •       `poetry run krakked run-once`
                 •       Forces execution.mode="paper", validate_only=True, allow_live_trading=False regardless of config.
                 •       Uses the default SQLite store `portfolio.db` unless a different path is provided to the portfolio store.
+                •       Orders are priced from current bid/ask (mid) with slippage caps and written to SQLite for audit/review.
         •       Inspect artifacts in SQLite after the run:
                 •       `execution_orders` captures each LocalOrder snapshot (requested sizes, status, and any guardrail errors).
                 •       `execution_results` summarizes the plan run (success flag plus errors_json).
