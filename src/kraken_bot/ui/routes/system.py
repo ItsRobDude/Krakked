@@ -9,6 +9,7 @@ from pydantic import BaseModel
 
 from kraken_bot.connection.exceptions import AuthError, ServiceUnavailableError
 from kraken_bot.connection.rest_client import KrakenRESTClient
+from kraken_bot.ui.models import ApiEnvelope, SystemHealthPayload
 
 logger = logging.getLogger(__name__)
 
@@ -26,49 +27,49 @@ def _context(request: Request):
     return request.app.state.context
 
 
-@router.get("/health")
-async def system_health(request: Request):
+@router.get("/health", response_model=ApiEnvelope[SystemHealthPayload])
+async def system_health(request: Request) -> ApiEnvelope[SystemHealthPayload]:
     try:
         ctx = _context(request)
         data_status = ctx.market_data.get_data_status()
-        return {
-            "data": {
-                "rest_api_reachable": data_status.rest_api_reachable,
-                "websocket_connected": data_status.websocket_connected,
-                "streaming_pairs": data_status.streaming_pairs,
-                "stale_pairs": data_status.stale_pairs,
-                "subscription_errors": data_status.subscription_errors,
-            },
-            "error": None,
-        }
+        return ApiEnvelope(
+            data=SystemHealthPayload(
+                rest_api_reachable=data_status.rest_api_reachable,
+                websocket_connected=data_status.websocket_connected,
+                streaming_pairs=data_status.streaming_pairs,
+                stale_pairs=data_status.stale_pairs,
+                subscription_errors=data_status.subscription_errors,
+            ),
+            error=None,
+        )
     except Exception as exc:  # pragma: no cover - defensive
         logger.exception("Failed to fetch system health")
-        return {"data": None, "error": str(exc)}
+        return ApiEnvelope(data=None, error=str(exc))
 
 
-@router.post("/credentials/validate")
-async def validate_credentials(payload: CredentialPayload):
+@router.post("/credentials/validate", response_model=ApiEnvelope[dict])
+async def validate_credentials(payload: CredentialPayload) -> ApiEnvelope[dict]:
     """Validate API credentials by pinging a private Kraken endpoint."""
 
     client = KrakenRESTClient(api_key=payload.apiKey, api_secret=payload.apiSecret)
 
     try:
         client.get_private("Balance")
-        return {
-            "data": {"success": True, "message": "Credentials validated successfully."},
-            "error": None,
-        }
+        return ApiEnvelope(
+            data={"success": True, "message": "Credentials validated successfully."},
+            error=None,
+        )
     except AuthError as exc:
         logger.warning("Credential validation failed", extra={"error": str(exc)})
-        return {
-            "data": None,
-            "error": "Authentication failed. Please verify your API key/secret.",
-        }
+        return ApiEnvelope(
+            data=None,
+            error="Authentication failed. Please verify your API key/secret.",
+        )
     except ServiceUnavailableError:
-        return {
-            "data": None,
-            "error": "Kraken service is unavailable. Try again shortly or continue with caution.",
-        }
+        return ApiEnvelope(
+            data=None,
+            error="Kraken service is unavailable. Try again shortly or continue with caution.",
+        )
     except Exception as exc:  # pragma: no cover - defensive
         logger.exception("Unexpected error during credential validation")
-        return {"data": None, "error": str(exc)}
+        return ApiEnvelope(data=None, error=str(exc))

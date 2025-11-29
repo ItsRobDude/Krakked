@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import asdict
 
 from fastapi import APIRouter, Request
+
+from kraken_bot.ui.models import ApiEnvelope, StrategyStatePayload
 
 logger = logging.getLogger(__name__)
 
@@ -16,35 +17,35 @@ def _context(request: Request):
     return request.app.state.context
 
 
-@router.get("/")
-async def get_strategies(request: Request):
+@router.get("/", response_model=ApiEnvelope[list[StrategyStatePayload]])
+async def get_strategies(request: Request) -> ApiEnvelope[list[StrategyStatePayload]]:
     ctx = _context(request)
     try:
-        strategies = [asdict(state) for state in ctx.strategy_engine.get_strategy_state()]
-        return {"data": strategies, "error": None}
+        strategies = [StrategyStatePayload(**state.__dict__) for state in ctx.strategy_engine.get_strategy_state()]
+        return ApiEnvelope(data=strategies, error=None)
     except Exception as exc:  # pragma: no cover - defensive
         logger.exception("Failed to fetch strategies")
-        return {"data": None, "error": str(exc)}
+        return ApiEnvelope(data=None, error=str(exc))
 
 
-@router.patch("/{strategy_id}/enabled")
-async def set_strategy_enabled(strategy_id: str, request: Request):
+@router.patch("/{strategy_id}/enabled", response_model=ApiEnvelope[dict])
+async def set_strategy_enabled(strategy_id: str, request: Request) -> ApiEnvelope[dict]:
     ctx = _context(request)
     if ctx.config.ui.read_only:
         logger.warning(
             "Strategy enable toggle blocked: UI read-only",
             extra={"event": "strategy_toggle_blocked", "strategy_id": strategy_id},
         )
-        return {"data": None, "error": "UI is in read-only mode"}
+        return ApiEnvelope(data=None, error="UI is in read-only mode")
 
     try:
         payload = await request.json()
     except Exception:  # pragma: no cover - malformed body
-        return {"data": None, "error": "Invalid JSON payload"}
+        return ApiEnvelope(data=None, error="Invalid JSON payload")
 
     enabled = payload.get("enabled")
     if enabled is None:
-        return {"data": None, "error": "'enabled' field is required"}
+        return ApiEnvelope(data=None, error="'enabled' field is required")
 
     try:
         if strategy_id in ctx.strategy_engine.strategy_states:
@@ -58,31 +59,31 @@ async def set_strategy_enabled(strategy_id: str, request: Request):
             "Strategy enable state updated",
             extra={"event": "strategy_enabled_updated", "strategy_id": strategy_id, "enabled": bool(enabled)},
         )
-        return {"data": {"strategy_id": strategy_id, "enabled": bool(enabled)}, "error": None}
+        return ApiEnvelope(data={"strategy_id": strategy_id, "enabled": bool(enabled)}, error=None)
     except Exception as exc:  # pragma: no cover - defensive
         logger.exception("Failed to update strategy enabled state")
-        return {"data": None, "error": str(exc)}
+        return ApiEnvelope(data=None, error=str(exc))
 
 
-@router.patch("/{strategy_id}/config")
-async def update_strategy_config(strategy_id: str, request: Request):
+@router.patch("/{strategy_id}/config", response_model=ApiEnvelope[dict])
+async def update_strategy_config(strategy_id: str, request: Request) -> ApiEnvelope[dict]:
     ctx = _context(request)
     if ctx.config.ui.read_only:
         logger.warning(
             "Strategy config update blocked: UI read-only",
             extra={"event": "strategy_config_blocked", "strategy_id": strategy_id},
         )
-        return {"data": None, "error": "UI is in read-only mode"}
+        return ApiEnvelope(data=None, error="UI is in read-only mode")
 
     try:
         payload = await request.json()
     except Exception:  # pragma: no cover - malformed body
-        return {"data": None, "error": "Invalid JSON payload"}
+        return ApiEnvelope(data=None, error="Invalid JSON payload")
 
     try:
         strat_cfg = ctx.config.strategies.configs.get(strategy_id)
         if not strat_cfg:
-            return {"data": None, "error": "Strategy not found"}
+            return ApiEnvelope(data=None, error="Strategy not found")
 
         updated_fields = {}
         for field, value in payload.items():
@@ -98,7 +99,7 @@ async def update_strategy_config(strategy_id: str, request: Request):
             extra={"event": "strategy_config_updated", "strategy_id": strategy_id, "fields": updated_fields},
         )
 
-        return {"data": asdict(strat_cfg), "error": None}
+        return ApiEnvelope(data=strat_cfg.__dict__, error=None)
     except Exception as exc:  # pragma: no cover - defensive
         logger.exception("Failed to update strategy config")
-        return {"data": None, "error": str(exc)}
+        return ApiEnvelope(data=None, error=str(exc))

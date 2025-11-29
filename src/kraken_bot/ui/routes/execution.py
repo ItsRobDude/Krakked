@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import asdict
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 from fastapi import APIRouter, Request
 
 from kraken_bot.execution.models import ExecutionResult, LocalOrder
+from kraken_bot.ui.models import ApiEnvelope, ExecutionResultPayload, OpenOrderPayload
 
 logger = logging.getLogger(__name__)
 
@@ -19,79 +19,95 @@ def _context(request: Request):
     return request.app.state.context
 
 
-def _serialize_order(order: LocalOrder) -> Dict[str, Any]:
-    data = asdict(order)
-    data["created_at"] = order.created_at.isoformat()
-    data["updated_at"] = order.updated_at.isoformat()
-    return data
+def _serialize_order(order: LocalOrder) -> OpenOrderPayload:
+    return OpenOrderPayload(
+        local_id=order.local_id,
+        plan_id=order.plan_id,
+        strategy_id=order.strategy_id,
+        pair=order.pair,
+        side=order.side,
+        order_type=order.order_type,
+        kraken_order_id=order.kraken_order_id,
+        userref=order.userref,
+        requested_base_size=order.requested_base_size,
+        requested_price=order.requested_price,
+        status=order.status,
+        created_at=order.created_at,
+        updated_at=order.updated_at,
+        cumulative_base_filled=order.cumulative_base_filled,
+        avg_fill_price=order.avg_fill_price,
+        last_error=order.last_error,
+        raw_request=order.raw_request,
+        raw_response=order.raw_response,
+    )
 
 
-def _serialize_execution_result(result: ExecutionResult) -> Dict[str, Any]:
-    return {
-        "plan_id": result.plan_id,
-        "started_at": result.started_at.isoformat(),
-        "completed_at": result.completed_at.isoformat() if result.completed_at else None,
-        "success": result.success,
-        "orders": [_serialize_order(order) for order in result.orders],
-        "errors": result.errors,
-        "warnings": result.warnings,
-    }
+def _serialize_execution_result(result: ExecutionResult) -> ExecutionResultPayload:
+    return ExecutionResultPayload(
+        plan_id=result.plan_id,
+        started_at=result.started_at,
+        completed_at=result.completed_at,
+        success=result.success,
+        orders=[_serialize_order(order) for order in result.orders],
+        errors=result.errors,
+        warnings=result.warnings,
+    )
 
 
-@router.get("/open_orders")
-async def get_open_orders(request: Request):
+@router.get("/open_orders", response_model=ApiEnvelope[List[OpenOrderPayload]])
+async def get_open_orders(request: Request) -> ApiEnvelope[List[OpenOrderPayload]]:
     ctx = _context(request)
     try:
-        open_orders = [asdict(order) for order in ctx.execution_service.get_open_orders()]
-        return {"data": open_orders, "error": None}
+        open_orders = [_serialize_order(order) for order in ctx.execution_service.get_open_orders()]
+        return ApiEnvelope(data=open_orders, error=None)
     except Exception as exc:  # pragma: no cover - defensive
         logger.exception("Failed to fetch open orders")
-        return {"data": None, "error": str(exc)}
+        return ApiEnvelope(data=None, error=str(exc))
 
 
-@router.get("/recent_executions")
-async def get_recent_executions(request: Request):
+@router.get("/recent_executions", response_model=ApiEnvelope[List[ExecutionResultPayload]])
+async def get_recent_executions(request: Request) -> ApiEnvelope[List[ExecutionResultPayload]]:
     ctx = _context(request)
     try:
         executions = [
             _serialize_execution_result(result)
             for result in ctx.execution_service.get_recent_executions()
         ]
-        return {"data": executions, "error": None}
+        return ApiEnvelope(data=executions, error=None)
     except Exception as exc:  # pragma: no cover - defensive
         logger.exception("Failed to fetch recent executions")
-        return {"data": None, "error": str(exc)}
+        return ApiEnvelope(data=None, error=str(exc))
 
 
-@router.post("/cancel_all")
-async def cancel_all_orders(request: Request):
+@router.post("/cancel_all", response_model=ApiEnvelope[bool])
+async def cancel_all_orders(request: Request) -> ApiEnvelope[bool]:
     ctx = _context(request)
     if ctx.config.ui.read_only:
         logger.warning("Cancel all blocked: UI read-only", extra={"event": "cancel_all_blocked"})
-        return {"data": None, "error": "UI is in read-only mode"}
+        return ApiEnvelope(data=None, error="UI is in read-only mode")
 
     try:
         ctx.execution_service.cancel_all()
         logger.info("All orders canceled via API", extra={"event": "cancel_all_triggered"})
-        return {"data": True, "error": None}
+        return ApiEnvelope(data=True, error=None)
     except Exception as exc:  # pragma: no cover - defensive
         logger.exception("Failed to cancel all orders")
-        return {"data": None, "error": str(exc)}
+        return ApiEnvelope(data=None, error=str(exc))
 
 
-@router.post("/cancel/{local_id}")
-async def cancel_order(local_id: str, request: Request):
+@router.post("/cancel/{local_id}", response_model=ApiEnvelope[bool])
+async def cancel_order(local_id: str, request: Request) -> ApiEnvelope[bool]:
     ctx = _context(request)
     if ctx.config.ui.read_only:
         logger.warning(
             "Cancel order blocked: UI read-only",
             extra={"event": "cancel_order_blocked", "local_id": local_id},
         )
-        return {"data": None, "error": "UI is in read-only mode"}
+        return ApiEnvelope(data=None, error="UI is in read-only mode")
 
     order = ctx.execution_service.open_orders.get(local_id)
     if not order:
-        return {"data": None, "error": "Order not found"}
+        return ApiEnvelope(data=None, error="Order not found")
 
     try:
         ctx.execution_service.cancel_order(order)
@@ -99,18 +115,18 @@ async def cancel_order(local_id: str, request: Request):
             "Order canceled via API",
             extra={"event": "cancel_order_triggered", "local_id": local_id},
         )
-        return {"data": True, "error": None}
+        return ApiEnvelope(data=True, error=None)
     except Exception as exc:  # pragma: no cover - defensive
         logger.exception("Failed to cancel order", extra={"local_id": local_id})
-        return {"data": None, "error": str(exc)}
+        return ApiEnvelope(data=None, error=str(exc))
 
 
-@router.post("/flatten_all")
-async def flatten_all_positions(request: Request):
+@router.post("/flatten_all", response_model=ApiEnvelope[ExecutionResultPayload])
+async def flatten_all_positions(request: Request) -> ApiEnvelope[ExecutionResultPayload]:
     ctx = _context(request)
     if ctx.config.ui.read_only:
         logger.warning("Flatten all blocked: UI read-only", extra={"event": "flatten_all_blocked"})
-        return {"data": None, "error": "UI is in read-only mode"}
+        return ApiEnvelope(data=None, error="UI is in read-only mode")
 
     try:
         actions = []
@@ -157,7 +173,7 @@ async def flatten_all_positions(request: Request):
             "Flatten all triggered via API",
             extra={"event": "flatten_all_triggered", "actions": len(plan.actions)},
         )
-        return {"data": _serialize_execution_result(result), "error": None}
+        return ApiEnvelope(data=_serialize_execution_result(result), error=None)
     except Exception as exc:  # pragma: no cover - defensive
         logger.exception("Failed to flatten all positions")
-        return {"data": None, "error": str(exc)}
+        return ApiEnvelope(data=None, error=str(exc))
