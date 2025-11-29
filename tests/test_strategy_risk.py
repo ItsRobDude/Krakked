@@ -138,6 +138,78 @@ def test_kill_switch_drawdown():
     assert "Kill Switch" in str(actions[0].reason)
     assert engine.get_status().kill_switch_active
 
+
+def test_manual_kill_switch_blocks_opens_allows_reductions():
+    config = RiskConfig()
+    market = MagicMock(spec=MarketDataAPI)
+    portfolio = MagicMock(spec=PortfolioService)
+
+    market.get_latest_price.return_value = 100.0
+    market.get_pair_metadata.return_value = MagicMock(liquidity_24h_usd=1_000_000.0)
+
+    portfolio.get_equity.return_value = EquityView(
+        equity_base=10000.0,
+        cash_base=10000.0,
+        realized_pnl_base_total=0,
+        unrealized_pnl_base_total=0,
+        drift_flag=False,
+    )
+    portfolio.get_positions.return_value = []
+    portfolio.get_asset_exposure.return_value = []
+    portfolio.store = MagicMock()
+    portfolio.store.get_snapshots.return_value = []
+
+    engine = RiskEngine(config, market, portfolio)
+    engine.set_manual_kill_switch(True)
+
+    intents = [
+        StrategyIntent("test", "XBTUSD", "long", "enter", 1000.0, 1.0, "1h", datetime.now(timezone.utc)),
+        StrategyIntent("test", "XBTUSD", "flat", "exit", None, 1.0, "1h", datetime.now(timezone.utc)),
+    ]
+
+    actions = engine.process_intents(intents)
+
+    assert actions[0].blocked
+    assert actions[0].action_type == "none"
+    assert "Manual Kill Switch" in actions[0].reason
+
+    assert not actions[1].blocked
+    assert actions[1].action_type == "close"
+    assert "Manual Kill Switch" in actions[1].reason
+    assert engine.get_status().kill_switch_active
+
+
+def test_kill_switch_reasons_are_additive():
+    config = RiskConfig(kill_switch_on_drift=True)
+    market = MagicMock(spec=MarketDataAPI)
+    portfolio = MagicMock(spec=PortfolioService)
+
+    market.get_latest_price.return_value = 100.0
+    market.get_pair_metadata.return_value = MagicMock(liquidity_24h_usd=1_000_000.0)
+
+    portfolio.get_equity.return_value = EquityView(
+        equity_base=10000.0,
+        cash_base=10000.0,
+        realized_pnl_base_total=0,
+        unrealized_pnl_base_total=0,
+        drift_flag=True,
+    )
+    portfolio.get_positions.return_value = []
+    portfolio.get_asset_exposure.return_value = []
+    portfolio.store = MagicMock()
+    portfolio.store.get_snapshots.return_value = []
+
+    engine = RiskEngine(config, market, portfolio)
+    engine.set_manual_kill_switch(True)
+
+    intent = StrategyIntent("test", "XBTUSD", "long", "enter", 1000.0, 1.0, "1h", datetime.now(timezone.utc))
+    action = engine.process_intents([intent])[0]
+
+    assert action.blocked
+    assert "Manual Kill Switch" in action.reason
+    assert "Portfolio Drift Detected" in action.reason
+    assert engine.get_status().kill_switch_active
+
 def test_max_per_asset():
     config = RiskConfig(max_per_asset_pct=10.0) # 10% max
     market = MagicMock(spec=MarketDataAPI)
