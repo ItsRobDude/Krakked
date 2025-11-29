@@ -12,6 +12,7 @@ import uvicorn
 
 from kraken_bot.bootstrap import bootstrap
 from kraken_bot.execution.oms import ExecutionService
+from kraken_bot.logging_config import configure_logging, structured_log_extra
 from kraken_bot.market_data.api import MarketDataAPI
 from kraken_bot.portfolio.manager import PortfolioService
 from kraken_bot.ui.api import create_api
@@ -35,18 +36,22 @@ def _start_ui_server(context: AppContext) -> Tuple[Optional[uvicorn.Server], Opt
     """Launch the FastAPI UI server in a background thread when enabled."""
 
     if not context.config.ui.enabled:
-        logger.info("UI disabled by configuration; skipping API startup")
+        logger.info("UI disabled by configuration; skipping API startup", extra=structured_log_extra(event="ui_disabled"))
         return None, None
 
     app = create_api(context)
-    config = uvicorn.Config(app, host=context.config.ui.host, port=context.config.ui.port, log_level="info")
+    config = uvicorn.Config(app, host=context.config.ui.host, port=context.config.ui.port, log_level="info", log_config=None)
     server = uvicorn.Server(config)
 
     thread = threading.Thread(target=server.run, daemon=True)
     thread.start()
     logger.info(
         "UI server started",
-        extra={"event": "ui_started", "host": context.config.ui.host, "port": context.config.ui.port},
+        extra=structured_log_extra(
+            event="ui_started",
+            host=context.config.ui.host,
+            port=context.config.ui.port,
+        ),
     )
     return server, thread
 
@@ -85,7 +90,7 @@ def _shutdown(
 def run(allow_interactive_setup: bool = True) -> int:
     """Bootstrap services, run scheduler loops, and host the UI API."""
 
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s - %(message)s")
+    configure_logging(level=logging.INFO)
     stop_event = threading.Event()
 
     client, config, rate_limiter = bootstrap(allow_interactive_setup=allow_interactive_setup)
@@ -128,7 +133,7 @@ def run(allow_interactive_setup: bool = True) -> int:
     last_portfolio_sync = datetime.now(timezone.utc) - timedelta(seconds=portfolio_interval)
 
     def _signal_handler(signum, _frame) -> None:  # pragma: no cover - signal driven
-        logger.info("Received signal %s; shutting down", signum)
+        logger.info("Received signal %s; shutting down", signum, extra=structured_log_extra(event="shutdown_signal"))
         _shutdown(context, stop_event, ui_server, ui_thread)
 
     signal.signal(signal.SIGINT, _signal_handler)
@@ -152,7 +157,11 @@ def run(allow_interactive_setup: bool = True) -> int:
                     if plan.actions:
                         execution_service.execute_plan(plan)
                     else:
-                        logger.info("No actions generated for plan %s; skipping execution", plan.plan_id)
+                        logger.info(
+                            "No actions generated for plan %s; skipping execution",
+                            plan.plan_id,
+                            extra=structured_log_extra(event="plan_skipped", plan_id=plan.plan_id),
+                        )
                 except Exception as exc:  # pragma: no cover - defensive logging
                     logger.error("Strategy cycle failed: %s", exc)
 

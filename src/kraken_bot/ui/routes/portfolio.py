@@ -8,6 +8,7 @@ from typing import Any, Dict, List
 from fastapi import APIRouter, Request
 
 from kraken_bot.portfolio.models import SpotPosition
+from kraken_bot.ui.logging import build_request_log_extra
 from kraken_bot.ui.models import (
     ApiEnvelope,
     ExposureBreakdown,
@@ -58,7 +59,10 @@ async def get_portfolio_summary(request: Request) -> ApiEnvelope[PortfolioSummar
         )
         return ApiEnvelope(data=data, error=None)
     except Exception as exc:  # pragma: no cover - defensive
-        logger.exception("Failed to fetch portfolio summary")
+        logger.exception(
+            "Failed to fetch portfolio summary",
+            extra=build_request_log_extra(request, event="portfolio_summary_failed"),
+        )
         return ApiEnvelope(data=None, error=str(exc))
 
 
@@ -72,12 +76,18 @@ async def get_positions(request: Request) -> ApiEnvelope[List[PositionPayload]]:
             try:
                 price = ctx.market_data.get_latest_price(position.pair)
             except Exception:
-                logger.debug("Price lookup failed", extra={"pair": position.pair})
+                logger.debug(
+                    "Price lookup failed",
+                    extra=build_request_log_extra(request, event="price_lookup_failed", pair=position.pair),
+                )
             positions.append(_build_position_payload(position, price))
 
         return ApiEnvelope(data=positions, error=None)
     except Exception as exc:  # pragma: no cover - defensive
-        logger.exception("Failed to fetch positions")
+        logger.exception(
+            "Failed to fetch positions",
+            extra=build_request_log_extra(request, event="positions_fetch_failed"),
+        )
         return ApiEnvelope(data=None, error=str(exc))
 
 
@@ -103,7 +113,10 @@ async def get_exposure(request: Request) -> ApiEnvelope[ExposureBreakdown]:
         data = ExposureBreakdown(by_asset=by_asset, by_strategy=exposure_by_strategy)
         return ApiEnvelope(data=data, error=None)
     except Exception as exc:  # pragma: no cover - defensive
-        logger.exception("Failed to fetch exposure")
+        logger.exception(
+            "Failed to fetch exposure",
+            extra=build_request_log_extra(request, event="exposure_fetch_failed"),
+        )
         return ApiEnvelope(data=None, error=str(exc))
 
 
@@ -137,7 +150,10 @@ async def get_trades(request: Request) -> ApiEnvelope[List[Dict[str, Any]]]:
 
         return ApiEnvelope(data=trades, error=None)
     except Exception as exc:  # pragma: no cover - defensive
-        logger.exception("Failed to fetch trades")
+        logger.exception(
+            "Failed to fetch trades",
+            extra=build_request_log_extra(request, event="trades_fetch_failed"),
+        )
         return ApiEnvelope(data=None, error=str(exc))
 
 
@@ -145,12 +161,18 @@ async def get_trades(request: Request) -> ApiEnvelope[List[Dict[str, Any]]]:
 async def create_snapshot(request: Request) -> ApiEnvelope[Dict[str, Any]]:
     ctx = _context(request)
     if ctx.config.ui.read_only:
-        logger.warning("Snapshot blocked: UI in read-only mode", extra={"event": "snapshot_blocked"})
+        logger.warning(
+            "Snapshot blocked: UI in read-only mode",
+            extra=build_request_log_extra(request, event="snapshot_blocked"),
+        )
         return ApiEnvelope(data=None, error="UI is in read-only mode")
 
     try:
         snapshot = ctx.portfolio.create_snapshot()
-        logger.info("Created manual snapshot", extra={"event": "snapshot_created", "timestamp": snapshot.timestamp})
+        logger.info(
+            "Created manual snapshot",
+            extra=build_request_log_extra(request, event="snapshot_created", timestamp=snapshot.timestamp),
+        )
         data = {
             "timestamp": snapshot.timestamp,
             "equity_usd": snapshot.equity_base,
@@ -160,5 +182,8 @@ async def create_snapshot(request: Request) -> ApiEnvelope[Dict[str, Any]]:
         }
         return ApiEnvelope(data=data, error=None)
     except Exception as exc:  # pragma: no cover - defensive
-        logger.exception("Failed to create portfolio snapshot")
+        logger.exception(
+            "Failed to create portfolio snapshot",
+            extra=build_request_log_extra(request, event="snapshot_failed"),
+        )
         return ApiEnvelope(data=None, error=str(exc))
