@@ -9,7 +9,7 @@ from kraken_bot.portfolio.models import SpotPosition
 
 @pytest.fixture
 def exec_context(client: TestClient):
-    return client.app.state.context
+    return client.context
 
 
 def _sample_order(local_id: str) -> LocalOrder:
