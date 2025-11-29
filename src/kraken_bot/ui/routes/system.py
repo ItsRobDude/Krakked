@@ -8,7 +8,11 @@ from dataclasses import asdict
 from fastapi import APIRouter, Request
 from pydantic import BaseModel
 
-from kraken_bot.connection.exceptions import AuthError, ServiceUnavailableError
+from kraken_bot.connection.exceptions import (
+    AuthError,
+    KrakenAPIError,
+    ServiceUnavailableError,
+)
 from kraken_bot.connection.rest_client import KrakenRESTClient
 from kraken_bot.ui.models import ApiEnvelope, SystemHealthPayload
 
@@ -154,29 +158,72 @@ async def validate_credentials(
     ctx = _context(request)
     auth_config = ctx.config.ui.auth
     expected_auth = f"Bearer {auth_config.token}" if auth_config.token else ""
+    auth_header = request.headers.get("Authorization", "")
 
-    if auth_config.enabled and request.headers.get("Authorization") != expected_auth:
-        logger.warning("Unauthorized credential validation attempt")
+    if auth_config.enabled and auth_header != expected_auth:
+        logger.warning(
+            "Unauthorized credential validation attempt",
+            extra={"event": "credential_validation_unauthorized"},
+        )
         return ApiEnvelope(data={"valid": False}, error="Unauthorized")
 
-    client = KrakenRESTClient(api_key=payload.apiKey, api_secret=payload.apiSecret)
+    missing = [
+        field_name
+        for field_name, value in (
+            ("apiKey", payload.apiKey),
+            ("apiSecret", payload.apiSecret),
+            ("region", payload.region),
+        )
+        if not value or not value.strip()
+    ]
+
+    if missing:
+        return ApiEnvelope(
+            data={"valid": False},
+            error="apiKey, apiSecret, and region are required.",
+        )
+
+    client = KrakenRESTClient(
+        api_key=payload.apiKey.strip(), api_secret=payload.apiSecret.strip()
+    )
 
     try:
+        # Balance is a safe, read-only private endpoint that verifies signing without
+        # mutating user state.
         client.get_private("Balance")
         return ApiEnvelope(data={"valid": True}, error=None)
     except AuthError as exc:
-        logger.warning("Credential validation failed", extra={"error": str(exc)})
+        logger.warning(
+            "Credential validation failed",
+            extra={"error": str(exc), "event": "credential_validation_auth_error"},
+        )
         return ApiEnvelope(
             data={"valid": False},
             error="Authentication failed. Please verify your API key/secret.",
         )
-    except ServiceUnavailableError:
+    except ServiceUnavailableError as exc:
+        logger.warning(
+            "Credential validation unavailable",
+            extra={"error": str(exc), "event": "credential_validation_unavailable"},
+        )
         return ApiEnvelope(
             data={"valid": False},
-            error=(
-                "Kraken service is unavailable. Try again shortly or continue with caution."
-            ),
+            error=("Kraken is unavailable or could not be reached. Please retry."),
+        )
+    except KrakenAPIError as exc:
+        logger.warning(
+            "Credential validation failed with API error",
+            extra={"error": str(exc), "event": "credential_validation_api_error"},
+        )
+        return ApiEnvelope(
+            data={"valid": False},
+            error="Authentication failed. Please verify your API key/secret.",
         )
     except Exception as exc:  # pragma: no cover - defensive
         logger.exception("Unexpected error during credential validation")
-        return ApiEnvelope(data={"valid": False}, error=str(exc))
+        return ApiEnvelope(
+            data={"valid": False},
+            error=(
+                "Unexpected error while validating credentials. Please retry or check server logs."
+            ),
+        )
