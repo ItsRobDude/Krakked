@@ -140,6 +140,34 @@ Phase 4 produces risk-adjusted actions but still relies on Phase 5 to wire order
 
 `strategy_id` is carried end-to-end: strategies emit `StrategyIntent`, the risk engine normalizes that into `RiskAdjustedAction`, and the resulting `DecisionRecord` snapshots the same identifier for audit/history. Each strategy config supports an optional `userref` field in `StrategyConfig` to give the strategy a stable numeric tag; configure it now so Phase 5’s OMS can reuse it for Kraken order tagging and PnL attribution. OMS/userref plumbing itself is intentionally deferred to Phase 5, but providing `userref` early guarantees consistent attribution once execution wiring lands.
 
+### 🧪 Dry-run quickstart (`krakked run-once`)
+
+Use the CLI to execute a single, synchronous cycle in the safest mode available:
+
+```bash
+poetry run krakked run-once
+```
+
+The helper forces `execution.mode="paper"`, `validate_only=True`, and `allow_live_trading=False` even if your config says otherwise, ensuring Kraken only validates orders and no funds are touched. After the run, inspect the default SQLite store (`portfolio.db` unless you pass a different path to the portfolio store) to review what would have been submitted:
+
+```bash
+sqlite3 portfolio.db \
+  "SELECT local_id, pair, side, requested_base_size, status, last_error FROM execution_orders;"
+sqlite3 portfolio.db "SELECT plan_id, success, errors_json FROM execution_results;"
+```
+
+The `execution_orders` table captures every LocalOrder snapshot, while `execution_results` summarizes each plan run.
+
+### ✅ Live-mode readiness checklist
+
+Live routing is guarded by conservative defaults. Before flipping the switch, ensure:
+
+* **Explicitly enable live mode**: set `execution.mode: "live"` *and* `execution.allow_live_trading: true`. The latter defaults to `false` as a safety catch.
+* **Disable validation-only**: set `execution.validate_only: false` so Kraken will accept live orders (defaults to `true`).
+* **Sanity-check order floors**: leave `execution.min_order_notional_usd` at the default `20.0` or raise it; keep or tighten `max_pair_notional_usd`/`max_total_notional_usd` as desired.
+* **Complete paper validation**: run at least one `krakked run-once` cycle in paper/validate-only mode and review `execution_orders`/`execution_results` for the intended sizing and tagging.
+* **Confirm persistence/reconciliation**: ensure `portfolio.db` (or your configured DB) is writable so orders/results can be stored and reconciled in subsequent sessions.
+
 ## 🧪 Testing
 
 To run the test suite:

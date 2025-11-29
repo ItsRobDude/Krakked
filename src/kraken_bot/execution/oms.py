@@ -21,7 +21,15 @@ if TYPE_CHECKING:
 
 
 class ExecutionService:
-    """Lightweight OMS façade for coordinating plan execution and order tracking."""
+    """Coordinate execution routing, persistence, and reconciliation for a plan.
+
+    The service builds :class:`LocalOrder` objects from risk-adjusted actions,
+    applies lightweight notional guardrails, and delegates submission to the
+    configured :class:`ExecutionAdapter`. Orders are tracked in-memory, mapped to
+    Kraken IDs when available, persisted via the optional :class:`PortfolioStore`,
+    and reconciled against Kraken open/closed order feeds. When running in live
+    mode, a readiness checklist is emitted to the logs before any submission.
+    """
 
     def __init__(
         self,
@@ -41,8 +49,18 @@ class ExecutionService:
 
     def execute_plan(self, plan: ExecutionPlan) -> ExecutionResult:
         """
-        Execute all risk-adjusted actions in the provided plan and return a summary result.
-        Actual routing, submission, and reconciliation will be implemented in later phases.
+        Execute a plan by building orders, enforcing guardrails, and routing submissions.
+
+        * Skips blocked/"none" actions and no-op deltas.
+        * Enforces max_concurrent_orders, marking extra actions as rejected.
+        * Applies notional guardrails before any submission attempt.
+        * Submits eligible orders through the adapter; any :class:`ExecutionError`
+          is captured and persisted on the associated :class:`LocalOrder`.
+        * Persists orders and the aggregate :class:`ExecutionResult` when a store
+          is configured.
+        * Records an in-memory execution result and registers each order for
+          later reconciliation via :meth:`refresh_open_orders` or
+          :meth:`reconcile_orders`.
         """
         result = ExecutionResult(plan_id=plan.plan_id, started_at=datetime.utcnow())
 
