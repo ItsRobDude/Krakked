@@ -1,12 +1,13 @@
 from types import SimpleNamespace
 
 import pytest
+from starlette.testclient import TestClient
 
 from kraken_bot.portfolio.models import AssetExposure, EquityView, SpotPosition
 
 
 @pytest.fixture
-def portfolio_context(client):
+def portfolio_context(client: TestClient):
     return client.app.state.context
 
 

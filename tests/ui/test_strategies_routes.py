@@ -2,13 +2,14 @@ from datetime import datetime
 from types import SimpleNamespace
 
 import pytest
+from starlette.testclient import TestClient
 
 from kraken_bot.config import StrategyConfig
 from kraken_bot.strategy.models import StrategyState
 
 
 @pytest.fixture
-def strategy_context(client):
+def strategy_context(client: TestClient):
     return client.app.state.context
 
 

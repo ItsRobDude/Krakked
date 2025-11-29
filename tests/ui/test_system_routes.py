@@ -1,13 +1,14 @@
 from types import SimpleNamespace
 
 import pytest
+from starlette.testclient import TestClient
 
 from kraken_bot.connection.exceptions import AuthError, KrakenAPIError, ServiceUnavailableError
 from kraken_bot.connection import rest_client
 
 
 @pytest.fixture
-def system_context(client):
+def system_context(client: TestClient):
     return client.app.state.context
 
 

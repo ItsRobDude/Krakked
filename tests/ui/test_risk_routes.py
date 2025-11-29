@@ -1,10 +1,11 @@
 from types import SimpleNamespace
 
 import pytest
+from starlette.testclient import TestClient
 
 
 @pytest.fixture
-def risk_context(client):
+def risk_context(client: TestClient):
     return client.app.state.context
 
 
