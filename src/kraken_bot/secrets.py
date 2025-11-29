@@ -380,13 +380,14 @@ def load_api_keys(allow_interactive_setup: bool = False) -> CredentialResult:
                 validation_error=secrets.get("validation_error"),
             )
         except SecretsDecryptionError as e:
+            message = str(e)
             print("Failed to decrypt secrets file with provided password.")
             return CredentialResult(
                 None,
                 None,
-                CredentialStatus.LOCKED,
+                CredentialStatus.AUTH_ERROR,
                 source="secrets_file",
-                validation_error=str(e),
+                validation_error=message,
                 error=e,
             )
         except Exception as e:
