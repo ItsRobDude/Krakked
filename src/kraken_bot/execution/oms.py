@@ -435,9 +435,22 @@ class ExecutionService:
 
         self.adapter.cancel_all_orders()
 
+        open_before_refresh = len(self.open_orders)
+
         # Refresh local state before marking remaining open orders as canceled.
         self.refresh_open_orders()
+        open_after_refresh = len(self.open_orders)
         self.reconcile_orders()
+
+        logger.info(
+            "Reconciled orders after cancel_all",
+            extra={
+                "event": "cancel_all_reconcile",
+                "open_orders_before_refresh": open_before_refresh,
+                "open_orders_after_refresh": open_after_refresh,
+                "open_orders_remaining": len(self.open_orders),
+            },
+        )
 
         for order in list(self.open_orders.values()):
             order.status = "canceled"
