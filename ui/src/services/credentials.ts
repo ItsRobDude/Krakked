@@ -8,7 +8,7 @@ export type CredentialResponse = {
   message?: string;
 };
 
-const defaultEndpoint = '/api/credentials/validate';
+const defaultEndpoint = '/api/system/credentials/validate';
 
 export async function validateCredentials(payload: CredentialPayload): Promise<CredentialResponse> {
   const endpoint = import.meta.env.VITE_CREDENTIAL_ENDPOINT || defaultEndpoint;

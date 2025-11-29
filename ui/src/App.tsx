@@ -1,11 +1,21 @@
-import { FormEvent, useMemo, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { FooterHotkeys } from './components/FooterHotkeys';
-import { KpiGrid } from './components/KpiGrid';
+import { KpiGrid, Kpi } from './components/KpiGrid';
 import { Layout } from './components/Layout';
-import { LogPanel } from './components/LogPanel';
-import { PositionsTable } from './components/PositionsTable';
+import { LogEntry, LogPanel } from './components/LogPanel';
+import { PositionRow, PositionsTable } from './components/PositionsTable';
 import { Sidebar } from './components/Sidebar';
-import { WalletTable } from './components/WalletTable';
+import { WalletRow, WalletTable } from './components/WalletTable';
+import {
+  fetchExposure,
+  fetchPortfolioSummary,
+  fetchPositions,
+  fetchRecentExecutions,
+  ExposureBreakdown,
+  PortfolioSummary,
+  PositionPayload,
+  RecentExecution,
+} from './services/api';
 import { validateCredentials } from './services/credentials';
 
 const initialState = {
@@ -15,6 +25,101 @@ const initialState = {
 
 const AUTH_STORAGE_KEY = 'krakked.authenticated';
 
+const DASHBOARD_REFRESH_MS = Number(import.meta.env.VITE_REFRESH_DASHBOARD_MS ?? 5000) || 5000;
+const ORDERS_REFRESH_MS = Number(import.meta.env.VITE_REFRESH_ORDERS_MS ?? 5000) || 5000;
+
+const formatCurrency = (value: number | null | undefined) => {
+  const formatter = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 });
+  if (typeof value !== 'number' || Number.isNaN(value)) return formatter.format(0);
+  return formatter.format(value);
+};
+
+const formatPercent = (value: number | null | undefined) => {
+  if (typeof value !== 'number' || Number.isNaN(value)) return '0.00%';
+  return `${value.toFixed(2)}%`;
+};
+
+const formatTimestamp = (timestamp: string | null) => {
+  if (!timestamp) return 'Unknown';
+  const parsed = new Date(timestamp);
+  if (Number.isNaN(parsed.getTime())) return 'Unknown';
+  return parsed.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+};
+
+const fallbackKpis: Kpi[] = [
+  { label: '24h PnL', value: '+2.94%', change: '+0.40%', hint: 'Vs prior period' },
+  { label: 'Open Exposure', value: '$14,200', change: '3 positions', hint: 'Auto-hedged' },
+  { label: 'Funding Used', value: '38%', change: 'Low risk', hint: 'Configurable' },
+  { label: 'Latency', value: '220ms', change: 'OK', hint: 'Order routing' },
+];
+
+const fallbackPositions: PositionRow[] = [
+  { pair: 'ETH/USD', side: 'long', size: '1.35 ETH', entry: '$3,048.00', mark: '$3,065.44', pnl: '+$23.45', status: 'Trailing' },
+  { pair: 'BTC/USD', side: 'short', size: '0.08 BTC', entry: '$65,220.00', mark: '$64,880.12', pnl: '+$27.19', status: 'Monitoring' },
+  { pair: 'SOL/USD', side: 'long', size: '120 SOL', entry: '$148.10', mark: '$145.92', pnl: '-$261.60', status: 'Stop nearby' },
+];
+
+const fallbackBalances: WalletRow[] = [
+  { asset: 'ETH', total: '1.4200', available: '0.6700', valueUsd: '$4,120.50' },
+  { asset: 'BTC', total: '0.0780', available: '0.0500', valueUsd: '$5,140.20' },
+  { asset: 'USDT', total: '6,500', available: '6,500', valueUsd: '$6,500.00' },
+  { asset: 'SOL', total: '250', available: '110', valueUsd: '$36,480.00' },
+];
+
+const fallbackLogs: LogEntry[] = [
+  { level: 'info', message: 'Balance sync finished. 5 assets refreshed.', timestamp: 'Just now', source: 'balances' },
+  { level: 'warning', message: 'Order book latency above threshold on ETH/USD.', timestamp: '2m ago', source: 'market-data' },
+  { level: 'info', message: 'Strategy backfill loaded 24h of trades.', timestamp: '15m ago', source: 'strategy' },
+  { level: 'error', message: 'Websocket reconnect triggered for auth feed.', timestamp: '28m ago', source: 'connectivity' },
+];
+
+const buildKpis = (summary: PortfolioSummary) => [
+  {
+    label: 'Equity',
+    value: formatCurrency(summary.equity_usd),
+    hint: summary.last_snapshot_ts ? `Last snapshot ${formatTimestamp(summary.last_snapshot_ts)}` : 'Snapshot pending',
+  },
+  { label: 'Cash', value: formatCurrency(summary.cash_usd), hint: 'Usable collateral' },
+  { label: 'Realized PnL', value: formatCurrency(summary.realized_pnl_usd), hint: 'Total' },
+  { label: 'Unrealized PnL', value: formatCurrency(summary.unrealized_pnl_usd), hint: summary.drift_flag ? 'Rebalance suggested' : 'In bounds' },
+];
+
+const transformPositions = (payload: PositionPayload[]) =>
+  payload.map((position) => {
+    const side: PositionRow['side'] = position.base_size < 0 ? 'short' : 'long';
+    const size = `${Math.abs(position.base_size).toFixed(4)} ${position.base_asset}`;
+    const entry = position.avg_entry_price ? formatCurrency(position.avg_entry_price) : '—';
+    const mark = position.current_price ? formatCurrency(position.current_price) : '—';
+    const pnlValue = position.unrealized_pnl_usd ?? 0;
+    const pnl = pnlValue === 0 ? '$0.00' : formatCurrency(pnlValue);
+    const status = position.strategy_tag || 'Tracking';
+
+    return { pair: position.pair, side, size, entry, mark, pnl, status };
+  });
+
+const transformBalances = (exposure: ExposureBreakdown) =>
+  exposure.by_asset.map((asset) => ({
+    asset: asset.asset,
+    total: formatPercent(asset.pct_of_equity || 0),
+    available: '—',
+    valueUsd: formatCurrency(asset.value_usd || 0),
+  }));
+
+const transformLogs = (executions: RecentExecution[]) =>
+  executions.map((execution) => {
+    const source = execution.errors[0] || execution.warnings[0] || 'Execution summary';
+    const timestamp = formatTimestamp(execution.completed_at || execution.started_at);
+    const message = `${execution.plan_id} ${execution.success ? 'succeeded' : 'failed'} (${execution.orders.length} orders)`;
+    const level: LogEntry['level'] = execution.success ? 'info' : 'error';
+
+    return {
+      level,
+      message,
+      timestamp,
+      source,
+    };
+  });
+
 type ValidationErrors = Partial<typeof initialState>;
 
 type SubmissionState = {
@@ -23,38 +128,17 @@ type SubmissionState = {
 };
 
 function DashboardShell({ onLogout }: { onLogout: () => void }) {
+  const [kpis, setKpis] = useState(fallbackKpis);
+  const [positions, setPositions] = useState(fallbackPositions);
+  const [balances, setBalances] = useState(fallbackBalances);
+  const [logs, setLogs] = useState(fallbackLogs);
+  const [connectionState, setConnectionState] = useState<'connected' | 'degraded'>('connected');
+
   const sidebarItems = [
     { label: 'Overview', description: 'KPIs & positions', active: true, badge: 'Live' },
     { label: 'Signals', description: 'Strategy stream', badge: 'Soon' },
     { label: 'Backtests', description: 'Historical runs' },
     { label: 'Settings', description: 'API keys & risk' },
-  ];
-
-  const kpis = [
-    { label: '24h PnL', value: '+2.94%', change: '+0.40%', hint: 'Vs prior period' },
-    { label: 'Open Exposure', value: '$14,200', change: '3 positions', hint: 'Auto-hedged' },
-    { label: 'Funding Used', value: '38%', change: 'Low risk', hint: 'Configurable' },
-    { label: 'Latency', value: '220ms', change: 'OK', hint: 'Order routing' },
-  ];
-
-  const positions = [
-    { pair: 'ETH/USD', side: 'long', size: '1.35 ETH', entry: '$3,048.00', mark: '$3,065.44', pnl: '+$23.45', status: 'Trailing' },
-    { pair: 'BTC/USD', side: 'short', size: '0.08 BTC', entry: '$65,220.00', mark: '$64,880.12', pnl: '+$27.19', status: 'Monitoring' },
-    { pair: 'SOL/USD', side: 'long', size: '120 SOL', entry: '$148.10', mark: '$145.92', pnl: '-$261.60', status: 'Stop nearby' },
-  ];
-
-  const balances = [
-    { asset: 'ETH', total: '1.4200', available: '0.6700', valueUsd: '$4,120.50' },
-    { asset: 'BTC', total: '0.0780', available: '0.0500', valueUsd: '$5,140.20' },
-    { asset: 'USDT', total: '6,500', available: '6,500', valueUsd: '$6,500.00' },
-    { asset: 'SOL', total: '250', available: '110', valueUsd: '$36,480.00' },
-  ];
-
-  const logs = [
-    { level: 'info', message: 'Balance sync finished. 5 assets refreshed.', timestamp: 'Just now', source: 'balances' },
-    { level: 'warning', message: 'Order book latency above threshold on ETH/USD.', timestamp: '2m ago', source: 'market-data' },
-    { level: 'info', message: 'Strategy backfill loaded 24h of trades.', timestamp: '15m ago', source: 'strategy' },
-    { level: 'error', message: 'Websocket reconnect triggered for auth feed.', timestamp: '28m ago', source: 'connectivity' },
   ];
 
   const hotkeys = [
@@ -64,11 +148,75 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
     { keys: 'G', description: 'Refresh balances and positions' },
   ];
 
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadDashboard = async () => {
+      const [summary, exposure] = await Promise.all([fetchPortfolioSummary(), fetchExposure()]);
+      if (cancelled) return;
+
+      if (summary) {
+        setKpis(buildKpis(summary));
+        setConnectionState('connected');
+      } else {
+        setConnectionState('degraded');
+      }
+
+      if (exposure) {
+        setBalances(transformBalances(exposure));
+      }
+    };
+
+    loadDashboard();
+    const interval = setInterval(loadDashboard, DASHBOARD_REFRESH_MS);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadPositions = async () => {
+      const data = await fetchPositions();
+      if (cancelled) return;
+      if (data) setPositions(transformPositions(data));
+    };
+
+    loadPositions();
+    const interval = setInterval(loadPositions, DASHBOARD_REFRESH_MS);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadExecutions = async () => {
+      const data = await fetchRecentExecutions();
+      if (cancelled) return;
+      if (data) setLogs(transformLogs(data));
+    };
+
+    loadExecutions();
+    const interval = setInterval(loadExecutions, ORDERS_REFRESH_MS);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, []);
+
   return (
     <Layout
       title="Trading Overview"
-      subtitle="Composable blocks ready for streaming data."
-      sidebar={<Sidebar items={sidebarItems} footer={{ label: 'Session', value: 'Connected' }} />}
+      subtitle="Live data with automatic refresh."
+      sidebar={<Sidebar items={sidebarItems} footer={{ label: 'Session', value: connectionState === 'connected' ? 'Connected' : 'Degraded' }} />}
       actions={
         <button type="button" className="ghost-button" onClick={onLogout}>
           Log out
@@ -79,15 +227,17 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
       <section className="panel">
         <div className="panel__header">
           <h2>Connection</h2>
-          <span className="status-pill" data-status="connected">
-            Connected
+          <span className="status-pill" data-status={connectionState}>
+            {connectionState === 'connected' ? 'Connected' : 'Degraded'}
           </span>
         </div>
-        <p className="panel__description">Panels below are wired to accept streamed props.</p>
+        <p className="panel__description">
+          Data refreshes automatically every {Math.round(DASHBOARD_REFRESH_MS / 1000)}s. Existing placeholders remain visible if the API is unavailable.
+        </p>
         <ul className="placeholder-list">
-          <li>Swap in websocket payloads for KPIs, balances, and logs.</li>
-          <li>Use the sidebar badges to reflect live system status.</li>
-          <li>Footer hotkeys can be hooked into command handlers.</li>
+          <li>KPIs and balances poll the portfolio endpoints.</li>
+          <li>Recent executions stream into the log panel.</li>
+          <li>Sidebar session badge reflects the latest fetch outcome.</li>
         </ul>
       </section>
 
