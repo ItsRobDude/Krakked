@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import binascii
 import logging
 from dataclasses import asdict
 
@@ -244,6 +245,17 @@ async def validate_credentials(
             "Credential validation failed with API error",
             extra=build_request_log_extra(
                 request, event="credential_validation_api_error", error=str(exc)
+            ),
+        )
+        return ApiEnvelope(
+            data={"valid": False},
+            error="Authentication failed. Please verify your API key/secret.",
+        )
+    except binascii.Error as exc:
+        logger.warning(
+            "Credential validation failed",
+            extra=build_request_log_extra(
+                request, event="credential_validation_auth_error", error=str(exc)
             ),
         )
         return ApiEnvelope(
