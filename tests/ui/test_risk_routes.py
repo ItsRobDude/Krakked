@@ -6,7 +6,7 @@ from starlette.testclient import TestClient
 
 @pytest.fixture
 def risk_context(client: TestClient):
-    return client.app.state.context
+    return client.context
 
 
 def test_get_risk_status_enveloped(client, risk_context):

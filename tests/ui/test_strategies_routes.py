@@ -10,7 +10,7 @@ from kraken_bot.strategy.models import StrategyState
 
 @pytest.fixture
 def strategy_context(client: TestClient):
-    return client.app.state.context
+    return client.context
 
 
 def test_get_strategies_enveloped(client, strategy_context):
