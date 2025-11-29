@@ -46,16 +46,7 @@ class ExecutionService:
         """
         result = ExecutionResult(plan_id=plan.plan_id, started_at=datetime.utcnow())
 
-        pair_target_notional: Dict[str, float] = {}
-        for action in plan.actions:
-            if action.blocked or action.action_type == "none":
-                continue
-            target_notional = max(action.target_notional_usd, 0.0)
-            current_target = pair_target_notional.get(action.pair, 0.0)
-            pair_target_notional[action.pair] = max(current_target, target_notional)
-
-        total_target_notional = sum(pair_target_notional.values())
-
+        eligible_actions = []
         for action in plan.actions:
             if action.blocked or action.action_type == "none":
                 continue
@@ -63,6 +54,38 @@ class ExecutionService:
             delta = action.target_base_size - action.current_base_size
             if delta == 0:
                 continue
+
+            eligible_actions.append(action)
+
+        max_concurrent = getattr(self.adapter, "config", None)
+        max_concurrent = getattr(max_concurrent, "max_concurrent_orders", None)
+        actions_to_process = eligible_actions
+        truncated_actions: List["RiskAdjustedAction"] = []
+        if max_concurrent and max_concurrent > 0 and len(eligible_actions) > max_concurrent:
+            actions_to_process = eligible_actions[:max_concurrent]
+            truncated_actions = eligible_actions[max_concurrent:]
+
+            logger.warning(
+                "Execution concurrency limit reached; truncating actions",
+                extra={
+                    "event": "execution_concurrency_truncated",
+                    "plan_id": plan.plan_id,
+                    "max_concurrent_orders": max_concurrent,
+                    "eligible_actions": len(eligible_actions),
+                    "skipped_actions": len(truncated_actions),
+                },
+            )
+
+        pair_target_notional: Dict[str, float] = {}
+        for action in actions_to_process:
+            target_notional = max(action.target_notional_usd, 0.0)
+            current_target = pair_target_notional.get(action.pair, 0.0)
+            pair_target_notional[action.pair] = max(current_target, target_notional)
+
+        total_target_notional = sum(pair_target_notional.values())
+
+        for action in actions_to_process:
+            delta = action.target_base_size - action.current_base_size
 
             side = "buy" if delta > 0 else "sell"
             volume = abs(delta)
@@ -153,6 +176,34 @@ class ExecutionService:
                     },
                 )
 
+            result.orders.append(order)
+
+        for action in truncated_actions:
+            delta = action.target_base_size - action.current_base_size
+            side = "buy" if delta > 0 else "sell"
+            volume = abs(delta)
+
+            order = LocalOrder(
+                local_id=str(uuid4()),
+                plan_id=plan.plan_id,
+                strategy_id=action.strategy_id,
+                pair=action.pair,
+                side=side,
+                order_type=plan.metadata.get("order_type", ""),
+                userref=action.userref,
+                requested_base_size=volume,
+                requested_price=plan.metadata.get("requested_price"),
+                status="rejected",
+                last_error=(
+                    f"Execution concurrency limit {max_concurrent} reached; "
+                    f"skipping additional action for {action.pair}"
+                ),
+            )
+
+            if self.store:
+                self.store.save_order(order)
+
+            result.errors.append(order.last_error)
             result.orders.append(order)
 
         result.completed_at = datetime.utcnow()
