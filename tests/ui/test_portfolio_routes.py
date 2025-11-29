@@ -31,19 +31,20 @@ def test_portfolio_summary_enveloped(client, portfolio_context):
 
 
 def test_positions_shape_matches_payload(client, portfolio_context):
-    portfolio_context.market_data.get_latest_price.return_value = 2.5
-    portfolio_context.portfolio.get_positions.return_value = [
-        SpotPosition(
-            pair="BTC/USD",
-            base_asset="BTC",
-            quote_asset="USD",
-            base_size=0.5,
-            avg_entry_price=10000.0,
-            realized_pnl_base=0.0,
-            fees_paid_base=0.0,
-            strategy_tag="alpha",
-        )
-    ]
+    price = 2.5
+    position = SpotPosition(
+        pair="BTC/USD",
+        base_asset="BTC",
+        quote_asset="USD",
+        base_size=0.5,
+        avg_entry_price=10000.0,
+        realized_pnl_base=0.0,
+        fees_paid_base=0.0,
+        strategy_tag="alpha",
+    )
+
+    portfolio_context.market_data.get_latest_price.return_value = price
+    portfolio_context.portfolio.get_positions.return_value = [position]
 
     response = client.get("/api/portfolio/positions")
 
@@ -52,7 +53,8 @@ def test_positions_shape_matches_payload(client, portfolio_context):
     assert data[0]["pair"] == "BTC/USD"
     assert data[0]["value_usd"] == pytest.approx(1.25)
     # Phase 3 PnL formula: (current_price - avg_entry_price) * base_size
-    assert data[0]["unrealized_pnl_usd"] == pytest.approx(-4998.75)
+    expected_unrealized = (price - position.avg_entry_price) * position.base_size
+    assert data[0]["unrealized_pnl_usd"] == pytest.approx(expected_unrealized)
 
 
 def test_exposure_breakdown_enveloped(client, portfolio_context):
