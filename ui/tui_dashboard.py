@@ -2,16 +2,29 @@ from __future__ import annotations
 
 import logging
 import os
+import importlib.util
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Protocol
 
 import requests
-from textual.app import App, ComposeResult
 
-from textual.containers import Horizontal, Vertical
-from textual.reactive import reactive
-from textual.widgets import Static, DataTable, Footer
+TEXTUAL_AVAILABLE = importlib.util.find_spec("textual") is not None
+
+if TEXTUAL_AVAILABLE:
+    from textual.app import App, ComposeResult
+    from textual.containers import Horizontal, Vertical
+    from textual.reactive import reactive
+    from textual.widgets import Static, DataTable, Footer
+
+if not TEXTUAL_AVAILABLE:
+    _TEXTUAL_MESSAGE = (
+        "The Textual dependency is required for the TUI. Install the 'tui' extra via "
+        "`poetry install -E tui` and re-run the dashboard."
+    )
+    if __name__ == "__main__":
+        raise SystemExit(_TEXTUAL_MESSAGE)
+    raise ImportError(_TEXTUAL_MESSAGE)
 
 
 logger = logging.getLogger(__name__)

@@ -76,6 +76,18 @@ The bot is organized into distinct modules:
     poetry install
     ```
 
+### 🎛️ Optional: Textual TUI dashboard
+
+The core engine and FastAPI API can run without any UI dependencies installed. To use the Textual-based terminal dashboard, add
+the optional extra:
+
+```bash
+poetry install -E tui
+```
+
+After installing the extra, launch the dashboard with `python ui/tui_dashboard.py` once your API is reachable. The base engine
+remains lightweight when the TUI extra is omitted.
+
 ## ⚙️ Configuration
 
 The bot uses two configuration files stored in your OS-specific user configuration directory (handled via `appdirs`).
