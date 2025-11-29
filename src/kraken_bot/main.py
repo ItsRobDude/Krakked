@@ -6,7 +6,7 @@ import logging
 import signal
 import threading
 from datetime import datetime, timedelta, timezone
-from typing import Optional, Tuple
+from typing import Callable, Optional, Tuple
 
 import uvicorn
 
@@ -89,6 +89,75 @@ def _shutdown(
     logger.info("Shutdown complete")
 
 
+def _refresh_metrics_state(
+    portfolio: PortfolioService, execution_service: ExecutionService, metrics: SystemMetrics
+) -> None:
+    try:
+        equity = portfolio.get_equity()
+        positions = portfolio.get_positions()
+        open_orders = execution_service.get_open_orders()
+        metrics.update_portfolio_state(
+            equity_usd=equity.equity_base,
+            realized_pnl_usd=equity.realized_pnl_base_total,
+            unrealized_pnl_usd=equity.unrealized_pnl_base_total,
+            open_orders_count=len(open_orders),
+            open_positions_count=len(positions),
+        )
+    except Exception as exc:  # pragma: no cover - defensive logging
+        logger.error("Failed to refresh metrics state: %s", exc)
+
+
+def _run_loop_iteration(
+    *,
+    now: datetime,
+    strategy_interval: int,
+    portfolio_interval: int,
+    last_strategy_cycle: datetime,
+    last_portfolio_sync: datetime,
+    portfolio: PortfolioService,
+    strategy_engine: StrategyEngine,
+    execution_service: ExecutionService,
+    metrics: SystemMetrics,
+    refresh_metrics_state: Callable[[], None],
+) -> Tuple[datetime, datetime]:
+    """Execute a single scheduling iteration and return updated timestamps."""
+
+    updated_portfolio_sync = last_portfolio_sync
+    updated_strategy_cycle = last_strategy_cycle
+
+    if (now - last_portfolio_sync).total_seconds() >= portfolio_interval:
+        try:
+            portfolio.sync()
+            updated_portfolio_sync = now
+            refresh_metrics_state()
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logger.error("Portfolio sync failed: %s", exc)
+            metrics.record_error(f"Portfolio sync failed: {exc}")
+
+    if (now - last_strategy_cycle).total_seconds() >= strategy_interval:
+        try:
+            plan = strategy_engine.run_cycle(now)
+            blocked_actions = len([a for a in plan.actions if getattr(a, "blocked", False)])
+            metrics.record_plan(blocked_actions)
+            updated_strategy_cycle = now
+            if plan.actions:
+                result = execution_service.execute_plan(plan)
+                metrics.record_plan_execution(result.errors)
+            else:
+                logger.info(
+                    "No actions generated for plan %s; skipping execution",
+                    plan.plan_id,
+                    extra=structured_log_extra(event="plan_skipped", plan_id=plan.plan_id),
+                )
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logger.error("Strategy cycle failed: %s", exc)
+            metrics.record_error(f"Strategy cycle failed: {exc}")
+        else:
+            refresh_metrics_state()
+
+    return updated_portfolio_sync, updated_strategy_cycle
+
+
 def run(allow_interactive_setup: bool = True) -> int:
     """Bootstrap services, run scheduler loops, and host the UI API."""
 
@@ -138,23 +207,10 @@ def run(allow_interactive_setup: bool = True) -> int:
     )
     loop_interval = min(strategy_interval, portfolio_interval, 5)
 
+    refresh_metrics_state = lambda: _refresh_metrics_state(portfolio, execution_service, metrics)
+
     last_strategy_cycle = datetime.now(timezone.utc) - timedelta(seconds=strategy_interval)
     last_portfolio_sync = datetime.now(timezone.utc) - timedelta(seconds=portfolio_interval)
-
-    def _refresh_metrics_state() -> None:
-        try:
-            equity = portfolio.get_equity()
-            positions = portfolio.get_positions()
-            open_orders = execution_service.get_open_orders()
-            metrics.update_portfolio_state(
-                equity_usd=equity.equity_base,
-                realized_pnl_usd=equity.realized_pnl_base_total,
-                unrealized_pnl_usd=equity.unrealized_pnl_base_total,
-                open_orders_count=len(open_orders),
-                open_positions_count=len(positions),
-            )
-        except Exception as exc:  # pragma: no cover - defensive logging
-            logger.error("Failed to refresh metrics state: %s", exc)
 
     def _signal_handler(signum, _frame) -> None:  # pragma: no cover - signal driven
         logger.info("Received signal %s; shutting down", signum, extra=structured_log_extra(event="shutdown_signal"))
@@ -167,35 +223,18 @@ def run(allow_interactive_setup: bool = True) -> int:
         while not stop_event.is_set():
             now = datetime.now(timezone.utc)
 
-            if (now - last_portfolio_sync).total_seconds() >= portfolio_interval:
-                try:
-                    portfolio.sync()
-                    last_portfolio_sync = now
-                    _refresh_metrics_state()
-                except Exception as exc:  # pragma: no cover - defensive logging
-                    logger.error("Portfolio sync failed: %s", exc)
-                    metrics.record_error(f"Portfolio sync failed: {exc}")
-
-            if (now - last_strategy_cycle).total_seconds() >= strategy_interval:
-                try:
-                    plan = strategy_engine.run_cycle(now)
-                    blocked_actions = len([a for a in plan.actions if getattr(a, "blocked", False)])
-                    metrics.record_plan(blocked_actions)
-                    last_strategy_cycle = now
-                    if plan.actions:
-                        result = execution_service.execute_plan(plan)
-                        metrics.record_plan_execution(result.errors)
-                    else:
-                        logger.info(
-                            "No actions generated for plan %s; skipping execution",
-                            plan.plan_id,
-                            extra=structured_log_extra(event="plan_skipped", plan_id=plan.plan_id),
-                        )
-                except Exception as exc:  # pragma: no cover - defensive logging
-                    logger.error("Strategy cycle failed: %s", exc)
-                    metrics.record_error(f"Strategy cycle failed: {exc}")
-                else:
-                    _refresh_metrics_state()
+            last_portfolio_sync, last_strategy_cycle = _run_loop_iteration(
+                now=now,
+                strategy_interval=strategy_interval,
+                portfolio_interval=portfolio_interval,
+                last_strategy_cycle=last_strategy_cycle,
+                last_portfolio_sync=last_portfolio_sync,
+                portfolio=portfolio,
+                strategy_engine=strategy_engine,
+                execution_service=execution_service,
+                metrics=metrics,
+                refresh_metrics_state=refresh_metrics_state,
+            )
 
             stop_event.wait(loop_interval)
     finally:
