@@ -19,3 +19,12 @@ class ReconciliationError(PortfolioError):
 class ValuationError(PortfolioError):
     """Raised when an asset cannot be valued."""
     pass
+
+
+class PortfolioSchemaError(PortfolioError):
+    """Raised when the stored portfolio schema version is unsupported."""
+
+    def __init__(self, found: int, expected: int):
+        super().__init__(f"Unsupported portfolio schema version {found}; expected {expected}")
+        self.found = found
+        self.expected = expected

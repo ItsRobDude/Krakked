@@ -6,6 +6,7 @@ from typing import Any, Dict, Optional, Protocol
 
 from kraken_bot.config import ExecutionConfig
 from kraken_bot.connection.exceptions import RateLimitError, ServiceUnavailableError
+from kraken_bot.connection.rate_limiter import RateLimiter
 from kraken_bot.connection.rest_client import KrakenRESTClient
 
 from .exceptions import ExecutionError, OrderCancelError, OrderRejectedError

@@ -16,6 +16,7 @@ from kraken_bot.logging_config import configure_logging, structured_log_extra
 from kraken_bot.market_data.api import MarketDataAPI
 from kraken_bot.metrics import SystemMetrics
 from kraken_bot.portfolio.manager import PortfolioService
+from kraken_bot.portfolio.exceptions import PortfolioSchemaError
 from kraken_bot.ui.api import create_api
 from kraken_bot.ui.context import AppContext
 from kraken_bot.strategy.engine import StrategyEngine
@@ -94,36 +95,40 @@ def run(allow_interactive_setup: bool = True) -> int:
     configure_logging(level=logging.INFO)
     stop_event = threading.Event()
 
-    client, config, rate_limiter = bootstrap(allow_interactive_setup=allow_interactive_setup)
+    try:
+        client, config, rate_limiter = bootstrap(allow_interactive_setup=allow_interactive_setup)
 
-    market_data = MarketDataAPI(config, rest_client=client, rate_limiter=rate_limiter)
-    market_data.initialize()
+        market_data = MarketDataAPI(config, rest_client=client, rate_limiter=rate_limiter)
+        market_data.initialize()
 
-    portfolio = PortfolioService(config, market_data, rest_client=client, rate_limiter=rate_limiter)
-    portfolio.initialize()
+        portfolio = PortfolioService(config, market_data, rest_client=client, rate_limiter=rate_limiter)
+        portfolio.initialize()
 
-    strategy_engine = StrategyEngine(config, market_data, portfolio)
-    strategy_engine.initialize()
+        strategy_engine = StrategyEngine(config, market_data, portfolio)
+        strategy_engine.initialize()
 
-    execution_service = ExecutionService(
-        client=client,
-        config=config.execution,
-        market_data=market_data,
-        store=portfolio.store,
-        rate_limiter=rate_limiter,
-    )
+        execution_service = ExecutionService(
+            client=client,
+            config=config.execution,
+            market_data=market_data,
+            store=portfolio.store,
+            rate_limiter=rate_limiter,
+        )
 
-    metrics = SystemMetrics()
+        metrics = SystemMetrics()
 
-    context = AppContext(
-        config=config,
-        client=client,
-        market_data=market_data,
-        portfolio=portfolio,
-        strategy_engine=strategy_engine,
-        execution_service=execution_service,
-        metrics=metrics,
-    )
+        context = AppContext(
+            config=config,
+            client=client,
+            market_data=market_data,
+            portfolio=portfolio,
+            strategy_engine=strategy_engine,
+            execution_service=execution_service,
+            metrics=metrics,
+        )
+    except PortfolioSchemaError as exc:
+        logger.error("Portfolio store schema mismatch: %s", exc)
+        return 1
 
     ui_server, ui_thread = _start_ui_server(context)
 

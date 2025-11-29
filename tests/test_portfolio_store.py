@@ -1,18 +1,42 @@
 # tests/test_portfolio_store.py
 
 import os
+import sqlite3
 from datetime import datetime
 
 import pytest
 from kraken_bot.execution.models import ExecutionResult, LocalOrder
-from kraken_bot.portfolio.store import SQLitePortfolioStore
+from kraken_bot.portfolio.store import CURRENT_SCHEMA_VERSION, SQLitePortfolioStore
 from kraken_bot.portfolio.models import CashFlowRecord, PortfolioSnapshot, AssetValuation
+from kraken_bot.portfolio.exceptions import PortfolioSchemaError
 from kraken_bot.strategy.models import DecisionRecord, ExecutionPlan, RiskAdjustedAction
 
 @pytest.fixture
 def store(tmp_path):
     db_path = tmp_path / "test_portfolio.db"
     return SQLitePortfolioStore(str(db_path))
+
+
+def test_schema_version_initialized(tmp_path):
+    db_path = tmp_path / "schema_init.db"
+    SQLitePortfolioStore(str(db_path))
+
+    with sqlite3.connect(db_path) as conn:
+        row = conn.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()
+
+    assert row is not None
+    assert int(row[0]) == CURRENT_SCHEMA_VERSION
+
+
+def test_schema_version_mismatch_raises(tmp_path):
+    db_path = tmp_path / "schema_mismatch.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)")
+        conn.execute("INSERT INTO meta (key, value) VALUES ('schema_version', '1')")
+        conn.commit()
+
+    with pytest.raises(PortfolioSchemaError):
+        SQLitePortfolioStore(str(db_path))
 
 def test_save_and_get_trades(store):
     trades = [
