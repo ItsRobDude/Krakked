@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 
 import pytest
-from starlette.testclient import TestClient
+from fastapi.testclient import TestClient
 
 from kraken_bot.connection.exceptions import AuthError, KrakenAPIError, ServiceUnavailableError
 from kraken_bot.connection import rest_client

@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 
 import pytest
-from starlette.testclient import TestClient
+from fastapi.testclient import TestClient
 
 from kraken_bot.portfolio.models import AssetExposure, EquityView, SpotPosition
 
