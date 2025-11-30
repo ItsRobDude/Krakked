@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import UTC, datetime
 from unittest.mock import MagicMock
 
 import pytest
@@ -45,7 +45,12 @@ def make_action(target: float, current: float, blocked: bool = False, action_typ
 
 
 def make_plan(actions, metadata):
-    return ExecutionPlan(plan_id="plan-123", generated_at=datetime.utcnow(), actions=actions, metadata=metadata)
+    return ExecutionPlan(
+        plan_id="plan-123",
+        generated_at=datetime.now(UTC),
+        actions=actions,
+        metadata=metadata,
+    )
 
 
 def test_execute_plan_skips_blocked_noop_and_zero_delta(plan_metadata):

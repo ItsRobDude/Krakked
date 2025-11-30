@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import UTC, datetime
 from unittest.mock import MagicMock
 
 import pytest
@@ -34,7 +34,7 @@ def _action(pair: str, base_size: float = 1.0, price: float = 30.0) -> RiskAdjus
 def _plan(action: RiskAdjustedAction) -> ExecutionPlan:
     return ExecutionPlan(
         plan_id="plan",
-        generated_at=datetime.utcnow(),
+        generated_at=datetime.now(UTC),
         actions=[action],
         metadata={"order_type": "limit", "requested_price": 30.0},
     )

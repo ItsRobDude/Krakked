@@ -1,5 +1,5 @@
 import pytest
-from datetime import datetime
+from datetime import UTC, datetime
 from unittest.mock import MagicMock
 
 from kraken_bot.config import ExecutionConfig
@@ -30,7 +30,7 @@ def test_pair_notional_guardrail_blocks_submission():
 
     plan = ExecutionPlan(
         plan_id="plan_pair_limit",
-        generated_at=datetime.utcnow(),
+        generated_at=datetime.now(UTC),
         actions=[_build_action("XBTUSD", 1000.0)],
         metadata={"risk_status": {"total_exposure_pct": 10.0}},
     )
@@ -56,7 +56,7 @@ def test_total_notional_guardrail_blocks_submission():
     actions = [_build_action("XBTUSD", 600.0), _build_action("ETHUSD", 700.0)]
     plan = ExecutionPlan(
         plan_id="plan_total_limit",
-        generated_at=datetime.utcnow(),
+        generated_at=datetime.now(UTC),
         actions=actions,
         metadata={"risk_status": {"total_exposure_pct": 15.0}},
     )

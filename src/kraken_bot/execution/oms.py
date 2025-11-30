@@ -2,7 +2,7 @@
 
 import logging
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
-from datetime import datetime
+from datetime import UTC, datetime
 from uuid import uuid4
 
 from kraken_bot.strategy.models import ExecutionPlan
@@ -71,7 +71,9 @@ class ExecutionService:
           later reconciliation via :meth:`refresh_open_orders` or
           :meth:`reconcile_orders`.
         """
-        result = ExecutionResult(plan_id=plan.plan_id, started_at=datetime.utcnow())
+        result = ExecutionResult(
+            plan_id=plan.plan_id, started_at=datetime.now(UTC)
+        )
 
         adapter_config = getattr(self.adapter, "config", None)
         if adapter_config is None:
@@ -165,7 +167,7 @@ class ExecutionService:
             if guardrail_reason:
                 order.status = "rejected"
                 order.last_error = guardrail_reason
-                order.updated_at = datetime.utcnow()
+                order.updated_at = datetime.now(UTC)
                 result.errors.append(guardrail_reason)
                 if self.store:
                     self.store.save_order(order)
@@ -212,7 +214,7 @@ class ExecutionService:
                 message = str(exc)
                 order.last_error = message
                 order.status = "error"
-                order.updated_at = datetime.utcnow()
+                order.updated_at = datetime.now(UTC)
                 result.errors.append(message)
 
                 if self.store:
@@ -258,7 +260,7 @@ class ExecutionService:
             result.errors.append(order.last_error or "execution concurrency limit reached")
             result.orders.append(order)
 
-        result.completed_at = datetime.utcnow()
+        result.completed_at = datetime.now(UTC)
         result.success = not result.errors
         self.record_execution_result(result)
         if self.store:
@@ -317,7 +319,7 @@ class ExecutionService:
             return
 
         order.status = status
-        order.updated_at = datetime.utcnow()
+        order.updated_at = datetime.now(UTC)
 
         if kraken_order_id:
             order.kraken_order_id = kraken_order_id
@@ -370,7 +372,7 @@ class ExecutionService:
         self.register_order(order)
         order.kraken_order_id = kraken_id
         order.status = payload.get("status") or ("closed" if is_closed else "open")
-        order.updated_at = datetime.utcnow()
+        order.updated_at = datetime.now(UTC)
         order.raw_response = payload
 
         vol_exec = payload.get("vol_exec")
@@ -434,7 +436,7 @@ class ExecutionService:
 
         self.adapter.cancel_order(order)
         order.status = "canceled"
-        order.updated_at = datetime.utcnow()
+        order.updated_at = datetime.now(UTC)
         self.open_orders.pop(order.local_id, None)
 
         if self.store:
@@ -480,7 +482,7 @@ class ExecutionService:
 
         for order in list(self.open_orders.values()):
             order.status = "canceled"
-            order.updated_at = datetime.utcnow()
+            order.updated_at = datetime.now(UTC)
 
             if self.store:
                 self.store.update_order_status(

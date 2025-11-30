@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
@@ -14,7 +14,7 @@ def strategy_context(client: TestClient):
 
 
 def test_get_strategies_enveloped(client, strategy_context):
-    now = datetime.utcnow()
+    now = datetime.now(UTC)
     strategy_context.strategy_engine.get_strategy_state.return_value = [
         StrategyState(
             strategy_id="alpha",

@@ -5,7 +5,7 @@ import sqlite3
 import json
 import logging
 from dataclasses import asdict
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import List, Optional, Dict, Any, TYPE_CHECKING
 from pathlib import Path
 from .models import RealizedPnLRecord, CashFlowRecord, PortfolioSnapshot, AssetValuation
@@ -682,7 +682,7 @@ class SQLitePortfolioStore(PortfolioStore):
             (
                 order.local_id,
                 order.plan_id,
-                updated_ts or created_ts or datetime.utcnow().timestamp(),
+                updated_ts or created_ts or datetime.now(UTC).timestamp(),
                 order.status,
                 order.last_error,
                 json.dumps(order.raw_response, default=str) if order.raw_response else None,
@@ -709,7 +709,7 @@ class SQLitePortfolioStore(PortfolioStore):
         cursor.execute("SELECT plan_id FROM execution_orders WHERE local_id = ?", (local_id,))
         order_row = cursor.fetchone()
 
-        now_ts = datetime.utcnow().timestamp()
+        now_ts = datetime.now(UTC).timestamp()
         updates: Dict[str, Any] = {
             "status": status,
             "updated_at": now_ts,
@@ -817,7 +817,7 @@ class SQLitePortfolioStore(PortfolioStore):
         if not row:
             return None
 
-        created_at = datetime.fromtimestamp(row[11]) if row[11] else datetime.utcnow()
+        created_at = datetime.fromtimestamp(row[11]) if row[11] else datetime.now(UTC)
         updated_at = datetime.fromtimestamp(row[12]) if row[12] else created_at
 
         raw_request = json.loads(row[16]) if row[16] else {}
@@ -991,7 +991,7 @@ class SQLitePortfolioStore(PortfolioStore):
 
         orders: List[LocalOrder] = []
         for row in rows:
-            created_at = datetime.fromtimestamp(row[11]) if row[11] else datetime.utcnow()
+            created_at = datetime.fromtimestamp(row[11]) if row[11] else datetime.now(UTC)
             updated_at = datetime.fromtimestamp(row[12]) if row[12] else created_at
             raw_request = json.loads(row[16]) if row[16] else {}
             raw_response = json.loads(row[17]) if row[17] else None
@@ -1048,7 +1048,7 @@ class SQLitePortfolioStore(PortfolioStore):
             results.append(
                 ExecutionResult(
                     plan_id=row[0],
-                    started_at=started_at or datetime.utcnow(),
+                    started_at=started_at or datetime.now(UTC),
                     completed_at=completed_at,
                     success=bool(row[3]),
                     orders=[],

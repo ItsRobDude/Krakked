@@ -1,7 +1,7 @@
 # src/kraken_bot/execution/models.py
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, Dict, List, Optional
 
 
@@ -18,8 +18,8 @@ class LocalOrder:
     requested_base_size: float = 0.0
     requested_price: Optional[float] = None
     status: str = "pending"
-    created_at: datetime = field(default_factory=datetime.utcnow)
-    updated_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    updated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     cumulative_base_filled: float = 0.0
     avg_fill_price: Optional[float] = None
     last_error: Optional[str] = None
