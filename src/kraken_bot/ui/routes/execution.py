@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Request
 
@@ -160,6 +160,7 @@ async def flatten_all_positions(request: Request) -> ApiEnvelope[ExecutionResult
         )
         return ApiEnvelope(data=None, error="UI is in read-only mode")
 
+    plan: Optional[ExecutionPlan] = None
     try:
         actions = []
         positions = ctx.portfolio.get_positions()
@@ -200,6 +201,9 @@ async def flatten_all_positions(request: Request) -> ApiEnvelope[ExecutionResult
             ]
             plan = ExecutionPlan(plan_id=f"flatten_{int(now.timestamp())}", generated_at=now, actions=risk_actions)
 
+        if plan is None:
+            raise ValueError("No execution plan generated")
+
         result = ctx.execution_service.execute_plan(plan)
         logger.info(
             "Flatten all triggered via API",
@@ -214,6 +218,10 @@ async def flatten_all_positions(request: Request) -> ApiEnvelope[ExecutionResult
     except Exception as exc:  # pragma: no cover - defensive
         logger.exception(
             "Failed to flatten all positions",
-            extra=build_request_log_extra(request, event="flatten_all_failed", plan_id=plan.plan_id),
+            extra=build_request_log_extra(
+                request,
+                event="flatten_all_failed",
+                plan_id=plan.plan_id if plan else None,
+            ),
         )
         return ApiEnvelope(data=None, error=str(exc))
