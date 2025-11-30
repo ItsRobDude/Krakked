@@ -125,6 +125,7 @@ def test_equity_uses_fallback_price(service):
     service.positions["XBTUSD"] = pos
     service.balances = {}
 
+    service.market_data.get_latest_price.side_effect = None
     service.market_data.get_latest_price.return_value = None
     service.market_data._get_cached_price_from_store = MagicMock(return_value=120.0)
 
@@ -141,9 +142,11 @@ def test_equity_sets_drift_when_no_price(service):
     service.positions["XBTUSD"] = pos
     service.balances = {}
 
+    service.market_data.get_latest_price.side_effect = None
     service.market_data.get_latest_price.return_value = None
     service.market_data._get_cached_price_from_store = MagicMock(return_value=None)
     service.market_data._get_rest_ticker_price = MagicMock(return_value=None)
+    service.market_data.get_ohlc = MagicMock(return_value=[])
 
     equity = service.get_equity()
 
