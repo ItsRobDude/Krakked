@@ -10,7 +10,7 @@ from kraken_bot.strategy.models import StrategyState
 
 @pytest.fixture
 def strategy_context(client: TestClient):
-    return client.context
+    return client.context  # type: ignore[attr-defined]
 
 
 def test_get_strategies_enveloped(client, strategy_context):
