@@ -5,9 +5,12 @@ import json
 import logging
 import threading
 import time
-from typing import List, Dict, Any, Optional
 from collections import defaultdict
-import websockets
+from typing import Any, Dict, List, Optional
+
+from websockets.exceptions import ConnectionClosed
+from websockets.legacy.client import WebSocketClientProtocol, connect
+
 from kraken_bot.config import PairMetadata
 
 logger = logging.getLogger(__name__)
@@ -26,7 +29,7 @@ class KrakenWSClientV2:
         self._timeframes = timeframes
         self._running = False
         self._thread: Optional[threading.Thread] = None
-        self._websocket: Optional[Any] = None
+        self._websocket: Optional[WebSocketClientProtocol] = None
 
         # In-memory cache
         self.last_ticker_update_ts: Dict[str, float] = defaultdict(float)
@@ -178,7 +181,7 @@ class KrakenWSClientV2:
         max_backoff = 60
         while self._running:
             try:
-                async with websockets.connect(self._url) as ws:
+                async with connect(self._url) as ws:
                     self._websocket = ws
                     logger.info("WebSocket connection established.")
                     backoff_delay = 1 # Reset backoff on successful connection
@@ -188,6 +191,8 @@ class KrakenWSClientV2:
                     while self._running:
                         try:
                             message = await asyncio.wait_for(ws.recv(), timeout=15)
+                            if isinstance(message, bytes):
+                                message = message.decode("utf-8")
                             await self._handle_message(message)
                         except asyncio.TimeoutError:
                             # No message received, send a ping to keep connection alive
@@ -196,7 +201,7 @@ class KrakenWSClientV2:
                             except Exception:
                                 logger.warning("WebSocket ping failed. Reconnecting.")
                                 break
-                        except websockets.exceptions.ConnectionClosed:
+                        except ConnectionClosed:
                             logger.warning("WebSocket connection closed unexpectedly.")
                             break
 

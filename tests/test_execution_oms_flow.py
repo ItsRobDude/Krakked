@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Any, Dict
 from unittest.mock import MagicMock, call
 
 import pytest
@@ -11,7 +12,7 @@ from kraken_bot.strategy.models import ExecutionPlan, RiskAdjustedAction
 
 
 def _action(**overrides) -> RiskAdjustedAction:
-    base = dict(
+    base: Dict[str, Any] = dict(
         pair="XBTUSD",
         strategy_id="strat",
         action_type="open",

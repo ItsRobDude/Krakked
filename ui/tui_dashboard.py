@@ -5,7 +5,7 @@ import os
 import importlib.util
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Dict, List, Optional, Protocol
+from typing import Any, Dict, List, Optional, Protocol, TYPE_CHECKING
 
 import requests
 
@@ -225,7 +225,7 @@ class HttpBackend:
             pass
         return response.text or None
 
-    def _request(self, method: str, path: str, payload: Optional[dict] = None) -> dict:
+    def _request(self, method: str, path: str, payload: Optional[dict] = None) -> Any:
         url = f"{self.base_url}{path}"
         response = self.session.request(method, url, json=payload, timeout=2)
         response.raise_for_status()
@@ -234,10 +234,10 @@ class HttpBackend:
             raise RuntimeError(str(payload["error"]))
         return payload.get("data") if isinstance(payload, dict) else payload
 
-    def _get(self, path: str) -> dict:
+    def _get(self, path: str) -> Any:
         return self._request("GET", path)
 
-    def _post(self, path: str, payload: Optional[dict] = None) -> dict:
+    def _post(self, path: str, payload: Optional[dict] = None) -> Any:
         return self._request("POST", path, payload)
 
     def get_summary(self) -> PortfolioSummary:
