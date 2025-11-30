@@ -88,6 +88,20 @@ poetry install -E tui
 After installing the extra, launch the dashboard with `python ui/tui_dashboard.py` once your API is reachable. The base engine
 remains lightweight when the TUI extra is omitted.
 
+### 🛠️ Editable / dev installs
+
+Poetry remains the preferred workflow. The CI pipeline installs dependencies with the dev group and the TUI extra enabled; mirror that locally for parity:
+
+```bash
+poetry install --with dev --extras tui
+```
+
+If you are working outside Poetry, you can still get an editable install from the repo root:
+
+```bash
+pip install -e .[tui]
+```
+
 ## ⚙️ Configuration
 
 The bot uses two configuration files stored in your OS-specific user configuration directory (handled via `appdirs`).
@@ -178,6 +192,8 @@ poetry run krakked run-once
 * **Non-interactive setup**: add `--allow-interactive-setup false` to block credential prompts in CI/servers while still booting the orchestrator.
 * **Execution knobs**: `execution.mode` selects `paper` vs. `live`, `execution.allow_live_trading` is the final gate for live submissions, and dead-man/kill switches remain available via the configured cancel-all hooks.
 
+Execution defaults stay conservative until you explicitly opt-in: `mode="paper"`, `validate_only=True`, and `allow_live_trading=False`, keeping all `krakked` entry points in paper/validate-only mode out of the box.【F:src/kraken_bot/config.py†L29-L36】
+
 To start the full orchestrator (market data WebSocket loop, portfolio sync scheduler, strategy cycles with execution, and the FastAPI UI in the same process):
 
 ```bash
@@ -186,7 +202,7 @@ poetry run krakked run
 
 The runner bootstraps configuration/credentials, initializes market data + portfolio + strategy services, and hosts the UI on `config.ui.host:config.ui.port` when enabled. It listens for `SIGINT`/`SIGTERM` to stop scheduler loops, cancel any open orders, and shut down the WebSocket feed cleanly.
 
-After the run, inspect orders/results in the default SQLite store (`portfolio.db` unless overridden) or via the admin helper:
+CLI helpers default to the local `portfolio.db` SQLite file; pass `--db-path` to point at an alternate location when needed.【F:src/kraken_bot/cli.py†L20-L33】 After the run, inspect orders/results in the default SQLite store (`portfolio.db` unless overridden) or via the admin helper:
 
 ```bash
 # Review open/pending orders and execution summaries
@@ -208,6 +224,18 @@ sqlite3 portfolio.db \
 ```
 
 Key tables to review are `execution_orders` (every `LocalOrder` snapshot), `execution_order_events` (state transitions), and `execution_results` (per-plan outcome summaries). The admin CLI mirrors that data without requiring SQL and performs a reconciliation pass after panic cancel-all.
+
+### 🚦 Console entry points
+
+Use the packaged console script for the common workflows:
+
+* `poetry run krakked run` — long-lived orchestrator with scheduler, OMS, and UI enabled.
+* `poetry run krakked run-once` — single paper/validate-only cycle for quick safety checks.
+* `poetry run krakked migrate-db --db-path <path>` — create or migrate the SQLite portfolio store (defaults to `portfolio.db`).
+* `poetry run krakked schema-version --db-path <path>` — inspect the current schema version recorded in the store.
+* `poetry run krakked setup` / `poetry run krakked smoke-test` — interactive credential bootstrap and a basic authenticated probe.
+
+See the `--help` output of `poetry run krakked` for the full command list; all subcommands honor `--allow-interactive-setup` and `--db-path` where applicable.
 
 ### ✅ Enabling Live Trading (Advanced)
 
@@ -252,13 +280,31 @@ Invoke via `poetry run python -m kraken_bot.execution.admin_cli <subcommand>`; p
 * Risk reviewed: Portfolio and per-strategy risk limits rechecked for live exposure tolerance.
 * Operator drills: Team knows how to invoke `panic` and targeted `cancel` via `execution.admin_cli` for immediate kill-switch behavior.
 
-## 🧪 Testing
+## 🧭 Development workflow & CI
 
-To run the test suite:
+The CI workflow is the source of truth for what must pass before packaging/deployment; see [`.github/workflows/ci.yml`](.github/workflows/ci.yml) for the definitive steps.【F:.github/workflows/ci.yml†L1-L102】 Mirror those commands locally:
+
+* **Install (dev mode)**: `poetry install --with dev --extras tui` to match CI, or `pip install -e .[tui]` if you are not using Poetry.
+* **Tests**: `poetry run pytest` from the repo root; set `KRAKEN_LIVE_TESTS=1` to opt into Kraken-backed integration tests (requires valid credentials).
+* **Lint**: `poetry run flake8 src tests` (same scope as CI).
+* **Static typing**: `poetry run mypy src tests` and `poetry run pyright src ui` (run `npm ci` in `ui/` first so Pyright picks up the built UI types, as in CI).【F:.github/workflows/ci.yml†L60-L95】
+* **Packaging sanity**: `poetry build` if you need to mirror the release artifact validation done in CI.
+
+## 🐳 Docker
+
+Build and run the containerized bot when you need an isolated runtime or a deployable image:
 
 ```bash
-poetry run pytest
+docker build -t krakked .
+
+docker run --rm \
+  -p 8080:8080 \
+  -e KRAKEN_API_KEY=... \
+  -e KRAKEN_API_SECRET=... \
+  -e KRAKEN_BOT_SECRET_PW=... \
+  -v $(pwd)/config.yaml:/app/config.yaml \
+  -v $(pwd)/portfolio.db:/app/portfolio.db \
+  krakked
 ```
 
-*   **Live Tests**: Integration tests that hit the real Kraken API are skipped by default. To run them, set the environment variable `KRAKEN_LIVE_TESTS=1`.
-    *   *Note*: Requires valid credentials configured.
+The runtime image exposes the FastAPI/UI service on port `8080` by default and ships with the `krakked run --allow-interactive-setup false` entrypoint, so it will honor your mounted config/secrets and the default SQLite store path.

@@ -21,6 +21,8 @@ It does not:
 
 Instead, Phase 7 wraps everything into something you can actually operate.
 
+Ops quickstart: follow the CI gates in [`.github/workflows/ci.yml`](.github/workflows/ci.yml) (pytest, flake8, mypy, pyright, wheel build) before promoting any change, and prefer the documented `poetry install --with dev --extras tui` / `poetry run krakked ...` flows for local verification. Container builds stay reproducible via `docker build -t krakked .` and `docker run -p 8080:8080 krakked` to mirror production wiring.
+
 ⸻
 
 2. Environments & Deployment Targets
