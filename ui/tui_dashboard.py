@@ -11,7 +11,12 @@ import requests
 
 TEXTUAL_AVAILABLE = importlib.util.find_spec("textual") is not None
 
-if TYPE_CHECKING or TEXTUAL_AVAILABLE:
+if TYPE_CHECKING:
+    from textual.app import App, ComposeResult
+    from textual.containers import Horizontal, Vertical
+    from textual.widgets import Static, DataTable, Footer
+    from textual.reactive import Reactive, reactive
+elif TEXTUAL_AVAILABLE:
     from textual.app import App, ComposeResult
     from textual.containers import Horizontal, Vertical
     from textual.widgets import Static, DataTable, Footer
