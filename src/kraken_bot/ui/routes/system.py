@@ -5,17 +5,18 @@ from __future__ import annotations
 import binascii
 import logging
 from dataclasses import asdict
-from importlib.metadata import PackageNotFoundError, version
 
 from fastapi import APIRouter, Request
 from pydantic import BaseModel
 
+from kraken_bot import APP_VERSION
 from kraken_bot.connection.exceptions import (
     AuthError,
     KrakenAPIError,
     ServiceUnavailableError,
 )
 from kraken_bot.connection import rest_client
+from kraken_bot.market_data.api import MarketDataStatus
 from kraken_bot.ui.logging import build_request_log_extra
 from kraken_bot.ui.models import ApiEnvelope, SystemHealthPayload, SystemMetricsPayload
 
@@ -57,59 +58,83 @@ async def system_health(request: Request) -> ApiEnvelope[SystemHealthPayload]:
         ctx = _context(request)
         data_status = ctx.market_data.get_data_status()
         metrics_snapshot = ctx.metrics.snapshot()
-        execution_config = ctx.execution_service.adapter.config
-        app_version = None
+        execution_config = ctx.config.execution
+        market_data_health = ctx.market_data.get_health_status()
+        if not isinstance(market_data_health, MarketDataStatus):
+            market_data_health = None
 
-        try:
-            app_version = version("kraken-trader")
-        except PackageNotFoundError:
-            app_version = None
+        market_data_ok = None
+        market_data_stale = None
+        market_data_reason = None
+        market_data_max_staleness = None
 
-        market_data_ok = bool(metrics_snapshot.get("market_data_ok"))
-        market_data_stale = bool(metrics_snapshot.get("market_data_stale"))
-        market_data_reason = metrics_snapshot.get("market_data_reason")
-        market_data_max_staleness = metrics_snapshot.get("market_data_max_staleness")
+        if market_data_health:
+            market_data_ok = getattr(market_data_health, "health", "") == "healthy"
+            market_data_stale = getattr(market_data_health, "health", "") == "stale"
+            market_data_reason = getattr(market_data_health, "reason", None)
+            market_data_max_staleness = getattr(market_data_health, "max_staleness", None)
 
-        if not market_data_ok and not market_data_stale and market_data_reason is None and market_data_max_staleness is None:
+        if market_data_ok is None:
             market_data_ok = (
                 data_status.rest_api_reachable
                 and data_status.websocket_connected
                 and data_status.subscription_errors == 0
                 and data_status.stale_pairs == 0
             )
+        if market_data_stale is None:
             market_data_stale = data_status.stale_pairs > 0
-            market_data_reason = None if market_data_ok else ("data_stale" if market_data_stale else "connection_issue")
+        if market_data_reason is None:
+            market_data_reason = None if market_data_ok else (
+                "data_stale" if market_data_stale else "connection_issue"
+            )
+
+        metrics_market_data_ok = metrics_snapshot.get("market_data_ok")
+        metrics_market_data_stale = metrics_snapshot.get("market_data_stale")
+        metrics_market_data_reason = metrics_snapshot.get("market_data_reason")
+        metrics_market_data_max_staleness = metrics_snapshot.get("market_data_max_staleness")
+
+        metrics_has_update = bool(
+            metrics_market_data_reason is not None
+            or metrics_market_data_max_staleness is not None
+            or metrics_market_data_ok
+            or metrics_market_data_stale
+        )
+
+        if metrics_has_update:
+            market_data_ok = bool(metrics_market_data_ok)
+            market_data_stale = bool(metrics_market_data_stale)
+            market_data_reason = metrics_market_data_reason
+            market_data_max_staleness = metrics_market_data_max_staleness
 
         market_data_status = "healthy"
         if not market_data_ok:
             market_data_status = "stale" if market_data_stale else "unavailable"
+
         execution_ok = execution_config.mode != "live" or bool(
             getattr(execution_config, "allow_live_trading", False)
         )
         risk_status = ctx.strategy_engine.get_risk_status()
-        return ApiEnvelope(
-            data=SystemHealthPayload(
-                app_version=app_version,
-                execution_mode=getattr(execution_config, "mode", None),
-                rest_api_reachable=data_status.rest_api_reachable,
-                websocket_connected=data_status.websocket_connected,
-                streaming_pairs=data_status.streaming_pairs,
-                stale_pairs=data_status.stale_pairs,
-                subscription_errors=data_status.subscription_errors,
-                market_data_ok=market_data_ok,
-                market_data_status=market_data_status,
-                market_data_reason=market_data_reason,
-                market_data_stale=market_data_stale,
-                market_data_max_staleness=market_data_max_staleness,
-                execution_ok=execution_ok,
-                current_mode=execution_config.mode,
-                ui_read_only=ctx.config.ui.read_only,
-                kill_switch_active=getattr(risk_status, "kill_switch_active", None),
-                drift_detected=bool(metrics_snapshot.get("drift_detected")),
-                drift_reason=metrics_snapshot.get("drift_reason"),
-            ),
-            error=None,
+        health_payload = SystemHealthPayload(
+            app_version=APP_VERSION,
+            execution_mode=getattr(execution_config, "mode", None),
+            rest_api_reachable=data_status.rest_api_reachable,
+            websocket_connected=data_status.websocket_connected,
+            streaming_pairs=data_status.streaming_pairs,
+            stale_pairs=data_status.stale_pairs,
+            subscription_errors=data_status.subscription_errors,
+            market_data_ok=bool(market_data_ok),
+            market_data_status=market_data_status,
+            market_data_reason=market_data_reason,
+            market_data_stale=market_data_stale,
+            market_data_max_staleness=market_data_max_staleness,
+            execution_ok=execution_ok,
+            current_mode=execution_config.mode,
+            ui_read_only=ctx.config.ui.read_only,
+            kill_switch_active=getattr(risk_status, "kill_switch_active", None),
+            drift_detected=bool(metrics_snapshot.get("drift_detected")),
+            drift_reason=metrics_snapshot.get("drift_reason"),
         )
+        return ApiEnvelope(data=health_payload, error=None)
     except Exception as exc:  # pragma: no cover - defensive
         logger.exception(
             "Failed to fetch system health",
