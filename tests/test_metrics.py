@@ -1,6 +1,7 @@
 import pytest
 
 from kraken_bot.metrics import SystemMetrics
+from kraken_bot.ui.models import SystemMetricsPayload
 
 
 @pytest.fixture
@@ -151,3 +152,36 @@ def test_snapshot_keys_match_payload(metrics: SystemMetrics):
     }
 
     assert keys == expected
+
+
+def test_system_metrics_payload_accepts_snapshot(metrics: SystemMetrics):
+    metrics.record_plan(blocked_actions=1)
+    metrics.record_plan_execution(["execution error"])
+    metrics.record_error("adhoc error")
+    metrics.record_market_data_error("stale_data")
+    metrics.update_portfolio_state(
+        equity_usd=1234.5,
+        realized_pnl_usd=10.0,
+        unrealized_pnl_usd=-2.5,
+        open_orders_count=2,
+        open_positions_count=1,
+    )
+    metrics.record_drift(True, "Portfolio drift detected")
+    metrics.update_market_data_status(
+        ok=False, stale=True, reason="stale_data", max_staleness=5.5
+    )
+
+    snapshot = metrics.snapshot()
+
+    payload = SystemMetricsPayload(**snapshot)
+
+    assert payload.plans_generated == 1
+    assert payload.blocked_actions == 1
+    assert payload.execution_errors == 2
+    assert payload.market_data_errors == 1
+    assert payload.last_equity_usd == 1234.5
+    assert payload.drift_detected is True
+    assert payload.market_data_stale is True
+    assert payload.market_data_reason == "stale_data"
+    assert payload.market_data_max_staleness == 5.5
+    assert payload.recent_errors[0].message in {"stale_data", "Portfolio drift detected"}
