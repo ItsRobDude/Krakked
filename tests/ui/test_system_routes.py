@@ -5,6 +5,8 @@ from starlette.testclient import TestClient
 
 from kraken_bot.connection.exceptions import AuthError, KrakenAPIError, ServiceUnavailableError
 from kraken_bot.connection import rest_client
+from kraken_bot.market_data.api import MarketDataStatus
+from kraken_bot.metrics import SystemMetrics
 
 
 @pytest.fixture
@@ -29,6 +31,53 @@ def test_system_health_enveloped(client, system_context):
     assert payload["error"] is None
     assert payload["data"]["market_data_ok"] is True
     assert payload["data"]["current_mode"] == "paper"
+
+
+def test_system_health_reports_config_and_risk_flags(client, system_context):
+    metrics = SystemMetrics()
+    metrics.update_market_data_status(
+        ok=False, stale=True, reason="stream delay", max_staleness=12.5
+    )
+    system_context.metrics = metrics
+
+    system_context.config.execution.mode = "paper"
+    system_context.config.ui.read_only = True
+
+    system_context.market_data.get_data_status.return_value = SimpleNamespace(
+        rest_api_reachable=False,
+        websocket_connected=True,
+        streaming_pairs=2,
+        stale_pairs=1,
+        subscription_errors=0,
+    )
+    system_context.market_data.get_health_status.return_value = MarketDataStatus(
+        health="stale", max_staleness=12.5, reason="stream delay"
+    )
+    system_context.strategy_engine.get_risk_status.return_value = SimpleNamespace(
+        kill_switch_active=True
+    )
+
+    response = client.get("/api/system/health")
+
+    assert response.status_code == 200
+    payload = response.json()["data"]
+
+    assert payload["app_version"]
+    assert payload["execution_mode"] == "paper"
+    assert payload["current_mode"] == "paper"
+    assert payload["ui_read_only"] is True
+    assert payload["market_data_status"] == "stale"
+    assert payload["market_data_reason"] == "stream delay"
+    assert payload["market_data_ok"] is False
+    assert payload["market_data_stale"] is True
+    assert payload["kill_switch_active"] is True
+
+    assert isinstance(payload["rest_api_reachable"], bool)
+    assert isinstance(payload["websocket_connected"], bool)
+    assert isinstance(payload["streaming_pairs"], int)
+    assert isinstance(payload["stale_pairs"], int)
+    assert isinstance(payload["subscription_errors"], int)
+    assert isinstance(payload["drift_detected"], bool)
 
 
 def test_system_metrics_endpoint(client, system_context):
@@ -76,6 +125,70 @@ def test_system_metrics_endpoint(client, system_context):
     assert refreshed_payload["last_unrealized_pnl_usd"] == 10.0
     assert refreshed_payload["open_orders_count"] == 1
     assert refreshed_payload["open_positions_count"] == 4
+
+
+def test_system_metrics_reports_snapshot_payload(client, system_context):
+    metrics = SystemMetrics()
+    metrics.record_plan(blocked_actions=3)
+    metrics.record_plan_execution(["exec failed"])
+    metrics.record_market_data_error("md error")
+    metrics.update_portfolio_state(
+        equity_usd=1234.5,
+        realized_pnl_usd=10.0,
+        unrealized_pnl_usd=-2.5,
+        open_orders_count=7,
+        open_positions_count=1,
+    )
+    metrics.record_drift(True, "drift detected")
+    metrics.update_market_data_status(
+        ok=True, stale=False, reason=None, max_staleness=1.25
+    )
+
+    system_context.metrics = metrics
+
+    response = client.get("/api/system/metrics")
+
+    assert response.status_code == 200
+    payload = response.json()["data"]
+
+    expected_keys = {
+        "plans_generated",
+        "plans_executed",
+        "blocked_actions",
+        "execution_errors",
+        "market_data_errors",
+        "recent_errors",
+        "last_equity_usd",
+        "last_realized_pnl_usd",
+        "last_unrealized_pnl_usd",
+        "open_orders_count",
+        "open_positions_count",
+        "drift_detected",
+        "drift_reason",
+        "market_data_ok",
+        "market_data_stale",
+        "market_data_reason",
+        "market_data_max_staleness",
+    }
+    assert expected_keys.issubset(payload.keys())
+
+    assert payload["plans_generated"] == 1
+    assert payload["plans_executed"] == 1
+    assert payload["blocked_actions"] == 3
+    assert payload["execution_errors"] == 1
+    assert payload["market_data_errors"] == 1
+    assert len(payload["recent_errors"]) == 3
+    assert payload["last_equity_usd"] == 1234.5
+    assert payload["last_realized_pnl_usd"] == 10.0
+    assert payload["last_unrealized_pnl_usd"] == -2.5
+    assert payload["open_orders_count"] == 7
+    assert payload["open_positions_count"] == 1
+    assert payload["drift_detected"] is True
+    assert payload["drift_reason"] == "drift detected"
+    assert payload["market_data_ok"] is True
+    assert payload["market_data_stale"] is False
+    assert payload["market_data_reason"] is None
+    assert payload["market_data_max_staleness"] == 1.25
 
 
 def test_config_redacts_auth_token(client, system_context):
