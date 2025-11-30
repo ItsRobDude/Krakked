@@ -3,8 +3,8 @@
 import time
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
-from kraken_bot.config import AppConfig, PairMetadata, OHLCBar
+from typing import Any, Dict, List, Optional, Tuple
+from kraken_bot.config import AppConfig, ConnectionStatus, PairMetadata, OHLCBar
 from kraken_bot.connection.rate_limiter import RateLimiter
 from kraken_bot.connection.rest_client import KrakenRESTClient
 from kraken_bot.market_data.universe import build_universe
@@ -13,9 +13,6 @@ from kraken_bot.market_data.ohlc_fetcher import backfill_ohlc
 from kraken_bot.market_data.ws_client import KrakenWSClientV2
 from kraken_bot.market_data.metadata_store import PairMetadataStore
 from kraken_bot.market_data.exceptions import PairNotFoundError, DataStaleError
-
-if TYPE_CHECKING:  # pragma: no cover
-    from kraken_bot.config import ConnectionStatus
 
 logger = logging.getLogger(__name__)
 

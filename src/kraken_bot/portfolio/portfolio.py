@@ -11,9 +11,9 @@ from __future__ import annotations
 import time
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import DefaultDict, Dict, Iterable, List, Optional, Tuple, Union
+from typing import Any, Callable, DefaultDict, Dict, Iterable, List, Optional, Sequence, Tuple, Union, cast
 
-from kraken_bot.config import PortfolioConfig
+from kraken_bot.config import OHLCBar, PortfolioConfig
 from kraken_bot.market_data.api import MarketDataAPI
 from kraken_bot.portfolio.models import (
     AssetBalance,
@@ -352,8 +352,12 @@ class Portfolio:
     def _get_fallback_price(self, pair: str) -> Optional[float]:
         """Attempt to retrieve a non-live price from stored OHLC bars or REST."""
 
-        cached_fn = getattr(self.market_data, "_get_cached_price_from_store", None)
-        if callable(cached_fn):
+        cached_fn_raw = getattr(self.market_data, "_get_cached_price_from_store", None)
+        cached_fn = cast(
+            Optional[Callable[[str], Optional[float]]],
+            cached_fn_raw if callable(cached_fn_raw) else None,
+        )
+        if cached_fn is not None:
             try:
                 cached_price = cached_fn(pair)
                 if cached_price is not None:
@@ -361,8 +365,12 @@ class Portfolio:
             except Exception:
                 pass
 
-        rest_fn = getattr(self.market_data, "_get_rest_ticker_price", None)
-        if callable(rest_fn):
+        rest_fn_raw = getattr(self.market_data, "_get_rest_ticker_price", None)
+        rest_fn = cast(
+            Optional[Callable[[str], Optional[float]]],
+            rest_fn_raw if callable(rest_fn_raw) else None,
+        )
+        if rest_fn is not None:
             try:
                 rest_price = rest_fn(pair)
                 if rest_price is not None:
@@ -379,17 +387,20 @@ class Portfolio:
         if not timeframes:
             timeframes = ["1m", "5m", "15m"]
 
-        get_ohlc = getattr(self.market_data, "get_ohlc", None)
-        if callable(get_ohlc):
+        get_ohlc_raw = getattr(self.market_data, "get_ohlc", None)
+        get_ohlc = cast(
+            Optional[Callable[[str, str, int], Sequence[OHLCBar]]],
+            get_ohlc_raw if callable(get_ohlc_raw) else None,
+        )
+        if get_ohlc is not None:
             for timeframe in dict.fromkeys(timeframes):
                 try:
                     bars = get_ohlc(pair, timeframe, 1)
                 except Exception:
                     continue
                 if bars:
-                    close = getattr(bars[-1], "close", None)
-                    if close is not None:
-                        return float(close)
+                    last_bar = bars[-1]
+                    return float(last_bar.close)
 
         return None
 
