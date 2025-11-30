@@ -107,6 +107,7 @@ def _refresh_metrics_state(
         )
     except Exception as exc:  # pragma: no cover - defensive logging
         logger.error("Failed to refresh metrics state: %s", exc)
+        metrics.record_error(f"Failed to refresh metrics state: {exc}")
 
 
 def _get_portfolio_drift(portfolio: PortfolioService) -> Optional[DriftStatus]:
@@ -147,6 +148,7 @@ def _run_loop_iteration(
         data_status = market_data.get_health_status()
     except Exception as exc:  # pragma: no cover - defensive logging
         logger.error("Failed to evaluate market data health: %s", exc)
+        metrics.record_market_data_error(f"Failed to evaluate market data health: {exc}")
         data_status = None
 
     market_data_ok = bool(data_status and getattr(data_status, "health", "") == "healthy")
