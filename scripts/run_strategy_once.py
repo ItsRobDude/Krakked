@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import copy
 import logging
+from inspect import signature
 from typing import Iterable
 
 from kraken_bot.bootstrap import bootstrap
@@ -66,7 +67,14 @@ def run_strategy_once() -> None:
     client, config, rate_limiter = bootstrap(allow_interactive_setup=False)
     safe_config = _ensure_safe_execution(config)
 
-    market_data = MarketDataAPI(safe_config, rate_limiter=rate_limiter)
+    try:
+        market_data_sig = signature(MarketDataAPI)
+        if "rate_limiter" in market_data_sig.parameters:
+            market_data = MarketDataAPI(safe_config, rate_limiter=rate_limiter)
+        else:
+            market_data = MarketDataAPI(safe_config)
+    except (ValueError, TypeError):
+        market_data = MarketDataAPI(safe_config)
     market_data.refresh_universe()
     _backfill_pairs(
         market_data,
