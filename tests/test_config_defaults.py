@@ -1,6 +1,6 @@
 # tests/test_config_defaults.py
 
-import appdirs
+import appdirs  # type: ignore[import-untyped]
 from pathlib import Path
 from kraken_bot.config import load_config
 

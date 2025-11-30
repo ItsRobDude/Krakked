@@ -26,7 +26,7 @@ class KrakenWSClientV2:
         self._timeframes = timeframes
         self._running = False
         self._thread: Optional[threading.Thread] = None
-        self._websocket: Optional[websockets.WebSocketClientProtocol] = None
+        self._websocket: Optional[Any] = None
 
         # In-memory cache
         self.last_ticker_update_ts: Dict[str, float] = defaultdict(float)
