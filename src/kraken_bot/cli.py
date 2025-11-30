@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sqlite3
 import sys
 from typing import Callable
@@ -192,6 +193,74 @@ def _schema_version_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _db_info_command(args: argparse.Namespace) -> int:
+    """Display information about the portfolio database at --db-path."""
+
+    resolved_path = os.path.abspath(args.db_path)
+
+    if not os.path.exists(resolved_path):
+        print(f"DB file not found: {resolved_path}")
+        return 1
+
+    try:
+        schema_version = _get_schema_version(resolved_path)
+    except PortfolioSchemaError as exc:
+        print(
+            "Failed to read schema version: "
+            f"stored value {exc.found} is incompatible with expected {exc.expected}."
+        )
+        return 1
+    except sqlite3.OperationalError as exc:
+        print(f"Failed to read schema version: {exc}")
+        return 1
+    except Exception as exc:  # noqa: BLE001
+        print(f"Failed to read schema version: {exc}")
+        return 1
+
+    tables = [
+        "meta",
+        "trades",
+        "cash_flows",
+        "snapshots",
+        "decisions",
+        "execution_plans",
+        "execution_orders",
+        "execution_order_events",
+        "execution_results",
+    ]
+
+    try:
+        with sqlite3.connect(resolved_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            existing_tables = {row[0] for row in cursor.fetchall()}
+
+            version_text = schema_version if schema_version is not None else "unknown"
+            print(f"DB path: {resolved_path}")
+            print(f"Schema version: {version_text}")
+
+            for table in tables:
+                if table not in existing_tables:
+                    print(f"{table}: (missing)")
+                    continue
+
+                try:
+                    cursor.execute(f"SELECT COUNT(*) FROM {table}")
+                    count = cursor.fetchone()[0]
+                    print(f"{table}: {count} rows")
+                except sqlite3.OperationalError as exc:
+                    print(f"{table}: error reading rows ({exc})")
+                    return 1
+
+        return 0
+    except sqlite3.OperationalError as exc:
+        print(f"Failed to read DB info: {exc}")
+        return 1
+    except Exception as exc:  # noqa: BLE001
+        print(f"Failed to read DB info: {exc}")
+        return 1
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="krakked", description="Kraken bot utilities")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -247,6 +316,17 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Path to the SQLite portfolio store (defaults to portfolio.db)",
     )
     version_parser.set_defaults(func=_schema_version_command)
+
+    db_info_parser = subparsers.add_parser(
+        "db-info",
+        help="Show schema version and row counts for the SQLite portfolio DB",
+    )
+    db_info_parser.add_argument(
+        "--db-path",
+        default="portfolio.db",
+        help="Path to the SQLite portfolio store (defaults to portfolio.db)",
+    )
+    db_info_parser.set_defaults(func=_db_info_command)
 
     return parser
 
