@@ -173,7 +173,19 @@ class KrakenWSClientV2:
         """The main run loop with reconnection logic."""
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        loop.run_until_complete(self._connect_and_listen())
+        try:
+            loop.run_until_complete(self._connect_and_listen())
+        except RuntimeError as exc:
+            error_message = str(exc)
+            is_loop_shutdown = (
+                "Event loop is closed" in error_message
+                or "cannot schedule new futures after shutdown" in error_message
+            )
+
+            if is_loop_shutdown and not self._running:
+                logger.debug("Event loop shut down after stop request; exiting run loop quietly.")
+            else:
+                logger.error("WebSocket run loop error: %s", exc)
 
     async def _connect_and_listen(self):
         """Manages the connection and listens for messages."""
@@ -206,7 +218,10 @@ class KrakenWSClientV2:
                             break
 
             except Exception as e:
-                logger.error(f"WebSocket client error: {e}.")
+                if self._running:
+                    logger.error(f"WebSocket client error: {e}.")
+                else:
+                    break
 
             if not self._running:
                 break
