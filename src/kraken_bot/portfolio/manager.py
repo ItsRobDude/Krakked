@@ -204,6 +204,9 @@ class PortfolioService:
     def get_positions(self):
         return self.portfolio.get_positions()
 
+    def get_drift_status(self):
+        return self.portfolio.get_drift_status()
+
     def get_position(self, pair: str):
         return self.portfolio.get_position(pair)
 

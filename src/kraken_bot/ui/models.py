@@ -166,3 +166,4 @@ class SystemMetricsPayload(BaseModel):
     last_unrealized_pnl_usd: Optional[float]
     open_orders_count: int
     open_positions_count: int
+    drift_detected: bool

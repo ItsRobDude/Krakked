@@ -24,6 +24,7 @@ class SystemMetrics:
         self.last_unrealized_pnl_usd: Optional[float] = None
         self.open_orders_count = 0
         self.open_positions_count = 0
+        self.drift_detected = False
 
     def record_plan(self, blocked_actions: int = 0) -> None:
         """Increment plan generation metrics."""
@@ -83,6 +84,14 @@ class SystemMetrics:
             self.open_orders_count = open_orders_count
             self.open_positions_count = open_positions_count
 
+    def record_drift(self, drift_flag: bool, message: Optional[str] = None) -> None:
+        """Track the latest portfolio drift state."""
+
+        with self._lock:
+            self.drift_detected = drift_flag
+            if drift_flag and message:
+                self._recent_errors.appendleft(self._format_error(message))
+
     def snapshot(self) -> Dict[str, object]:
         """Return a read-only snapshot of current counters."""
 
@@ -99,6 +108,7 @@ class SystemMetrics:
                 "last_unrealized_pnl_usd": self.last_unrealized_pnl_usd,
                 "open_orders_count": self.open_orders_count,
                 "open_positions_count": self.open_positions_count,
+                "drift_detected": self.drift_detected,
             }
 
     @staticmethod
