@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import UTC, datetime
 
 import pytest
 from starlette.testclient import TestClient
@@ -25,8 +25,8 @@ def _sample_order(local_id: str) -> LocalOrder:
         requested_base_size=0.1,
         requested_price=100.0,
         status="open",
-        created_at=datetime.utcnow(),
-        updated_at=datetime.utcnow(),
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
         cumulative_base_filled=0.0,
         avg_fill_price=None,
         last_error=None,
@@ -49,7 +49,12 @@ def test_get_open_orders_enveloped(client, exec_context):
 
 def test_get_recent_executions_enveloped(client, exec_context):
     exec_context.execution_service.get_recent_executions.return_value = [
-        ExecutionResult(plan_id="p1", started_at=datetime.utcnow(), orders=[_sample_order("2")], success=True)
+        ExecutionResult(
+            plan_id="p1",
+            started_at=datetime.now(UTC),
+            orders=[_sample_order("2")],
+            success=True,
+        )
     ]
 
     response = client.get("/api/execution/recent_executions")
@@ -119,7 +124,7 @@ def test_flatten_all_executes_plan(client, exec_context):
         )
     ]
     exec_context.execution_service.execute_plan.return_value = ExecutionResult(
-        plan_id="flatten_1", started_at=datetime.utcnow(), success=True
+        plan_id="flatten_1", started_at=datetime.now(UTC), success=True
     )
 
     response = client.post("/api/execution/flatten_all")

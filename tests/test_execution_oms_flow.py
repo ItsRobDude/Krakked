@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, Dict
 from unittest.mock import MagicMock, call
 
@@ -33,7 +33,7 @@ def _action(**overrides) -> RiskAdjustedAction:
 def _plan(actions):
     return ExecutionPlan(
         plan_id="plan",
-        generated_at=datetime.utcnow(),
+        generated_at=datetime.now(UTC),
         actions=list(actions),
         metadata={"order_type": "limit"},
     )
