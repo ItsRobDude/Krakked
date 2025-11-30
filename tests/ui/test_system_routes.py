@@ -9,7 +9,7 @@ from kraken_bot.connection import rest_client
 
 @pytest.fixture
 def system_context(client: TestClient):
-    return client.context
+    return client.context  # type: ignore[attr-defined]
 
 
 def test_system_health_enveloped(client, system_context):

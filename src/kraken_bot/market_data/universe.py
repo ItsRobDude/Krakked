@@ -153,9 +153,15 @@ def build_universe(
     if universe_config.include_pairs:
         for pair in universe_config.include_pairs:
             raw_pair_entry = raw_pairs_by_altname.get(pair)
-            if raw_pair_entry and _is_valid_usd_spot_pair(*raw_pair_entry, region_profile):
-                forced_includes.add(pair)
-                universe_after_overrides.add(pair)
+            if raw_pair_entry:
+                raw_name_for_alt, pair_data_for_alt = raw_pair_entry
+                if _is_valid_usd_spot_pair(raw_name_for_alt, pair_data_for_alt, region_profile):
+                    forced_includes.add(pair)
+                    universe_after_overrides.add(pair)
+                else:
+                    logger.warning(
+                        f"Pair '{pair}' in 'include_pairs' failed hard validity checks and will be ignored."
+                    )
             else:
                 logger.warning(
                     f"Pair '{pair}' in 'include_pairs' failed hard validity checks and will be ignored."
