@@ -35,9 +35,9 @@ def _create_pair_metadata(raw_name: str, pair_data: Dict[str, Any]) -> PairMetad
     """
     Constructs a PairMetadata object from the raw API response data.
     """
-    altname = pair_data.get("altname")
-    base_raw = pair_data.get("base")
-    quote_raw = pair_data.get("quote")
+    altname = pair_data.get("altname") or raw_name
+    base_raw = str(pair_data.get("base") or "")
+    quote_raw = str(pair_data.get("quote") or "")
 
     # Normalize quote to "USD" if it's ZUSD or USD (which we've already filtered for)
     quote_normalized = "USD" if quote_raw in ["ZUSD", "USD"] else quote_raw
@@ -48,18 +48,23 @@ def _create_pair_metadata(raw_name: str, pair_data: Dict[str, Any]) -> PairMetad
     except (TypeError, ValueError):
         min_order_size = 0.0
 
+    ws_symbol = pair_data.get("wsname") or altname
+    price_decimals = int(pair_data.get("pair_decimals") or 0)
+    volume_decimals = int(pair_data.get("lot_decimals") or 0)
+    status = str(pair_data.get("status") or "unknown")
+
     return PairMetadata(
         canonical=altname,
         base=base_raw,
         quote=quote_normalized,
         rest_symbol=altname,
-        ws_symbol=pair_data.get("wsname"),
+        ws_symbol=ws_symbol,
         raw_name=raw_name,
-        price_decimals=pair_data.get("pair_decimals"),
-        volume_decimals=pair_data.get("lot_decimals"),
+        price_decimals=price_decimals,
+        volume_decimals=volume_decimals,
         lot_size=float(pair_data.get("lot_multiplier", 1.0)),
         min_order_size=min_order_size,
-        status=pair_data.get("status"),
+        status=status,
     )
 
 def _filter_by_volume(

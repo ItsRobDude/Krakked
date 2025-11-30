@@ -146,7 +146,7 @@ def get_default_ohlc_store_config() -> Dict[str, str]:
     return {"root_dir": str(default_root), "backend": "parquet"}
 
 
-def load_config(config_path: Path = None) -> AppConfig:
+def load_config(config_path: Optional[Path] = None) -> AppConfig:
     """
     Loads the main application configuration from the default location or a specified path.
     """
