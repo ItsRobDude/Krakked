@@ -85,9 +85,16 @@ def run_strategy_once() -> None:
     # Avoid spinning up the websocket loop while still satisfying connectivity checks
     market_data._ws_client = _WsStub()  # type: ignore[attr-defined]
 
-    portfolio = PortfolioService(
-        safe_config, market_data, rest_client=client, rate_limiter=rate_limiter
-    )
+    try:
+        params = signature(PortfolioService).parameters
+        kwargs = {}
+        if "rest_client" in params:
+            kwargs["rest_client"] = client
+        if "rate_limiter" in params:
+            kwargs["rate_limiter"] = rate_limiter
+        portfolio = PortfolioService(safe_config, market_data, **kwargs)
+    except (ValueError, TypeError):
+        portfolio = PortfolioService(safe_config, market_data)
     portfolio.initialize()
 
     strategy_engine = StrategyEngine(safe_config, market_data, portfolio)
