@@ -20,6 +20,21 @@ class MarketDataAPI:
     """
     The main public interface for the market data module.
     """
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.shutdown()
+
+    def __del__(self):
+        try:
+            ws_client = getattr(self, "_ws_client", None)
+            if ws_client and getattr(ws_client, "_running", False):
+                self.shutdown()
+        except Exception:
+            # Avoid raising exceptions during garbage collection
+            pass
+
     def __init__(
         self,
         config: AppConfig,
