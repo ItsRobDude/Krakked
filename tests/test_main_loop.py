@@ -239,14 +239,50 @@ def test_run_loop_iteration_executes_scheduled_work_and_updates_metrics():
     assert metrics.plans_executed == 3
     assert metrics.blocked_actions == 3
     assert metrics.execution_errors == 0
-    assert metrics.state_updates[-1] == {
+    expected_state = {
         "equity": 1200.0,
         "realized": 15.0,
         "unrealized": 25.0,
         "orders": 2,
         "positions": 1,
     }
+    assert metrics.state_updates[-1] == expected_state
+    assert all(update == expected_state for update in metrics.state_updates)
     assert len(metrics.state_updates) == 5, "metrics should refresh after syncs and strategy cycles"
+
+
+def test_run_loop_iteration_updates_market_data_metrics_when_healthy():
+    now = datetime(2024, 1, 2, tzinfo=timezone.utc)
+    strategy_interval = 1
+    portfolio_interval = 5
+
+    portfolio = StubPortfolioService()
+    strategy_engine = StubStrategyEngine()
+    execution_service = StubExecutionService()
+    market_data = StubMarketData()
+    metrics = FakeMetrics()
+
+    refresh_metrics = lambda: _refresh_metrics_state(portfolio, execution_service, metrics)
+
+    _run_loop_iteration(
+        now=now,
+        strategy_interval=strategy_interval,
+        portfolio_interval=portfolio_interval,
+        last_strategy_cycle=now - timedelta(seconds=strategy_interval),
+        last_portfolio_sync=now - timedelta(seconds=portfolio_interval),
+        portfolio=portfolio,
+        market_data=market_data,
+        strategy_engine=strategy_engine,
+        execution_service=execution_service,
+        metrics=metrics,
+        refresh_metrics_state=refresh_metrics,
+    )
+
+    assert metrics.market_data_ok is True
+    assert metrics.market_data_stale is False
+    assert metrics.market_data_errors == 0
+    assert metrics.market_data_error_messages == []
+    assert metrics.drift_records[0] == (False, None)
 
 
 def test_run_loop_iteration_counts_kill_switch_rejections_as_blocked_actions():
@@ -481,6 +517,50 @@ def test_run_loop_iteration_handles_unavailable_market_data_with_logging_and_met
     assert metrics.last_equity_usd == 900.0
 
 
+def test_run_loop_iteration_skips_strategy_cycle_and_refreshes_metrics_when_stale_market_data():
+    now = datetime(2024, 3, 6, tzinfo=timezone.utc)
+    strategy_interval = 1
+    portfolio_interval = 10
+
+    portfolio = StubPortfolioService()
+    strategy_engine = StubStrategyEngine()
+    execution_service = StubExecutionService()
+    market_data = StubMarketData(
+        MarketDataStatus(health="stale", max_staleness=30.0, reason="late_ticks")
+    )
+    metrics = FakeMetrics()
+    refresh_called: list[bool] = []
+
+    def refresh_metrics_state() -> None:
+        refresh_called.append(True)
+        _refresh_metrics_state(portfolio, execution_service, metrics)
+
+    last_portfolio_sync = now
+    last_strategy_cycle = now - timedelta(seconds=strategy_interval)
+
+    updated_portfolio_sync, updated_strategy_cycle = _run_loop_iteration(
+        now=now,
+        strategy_interval=strategy_interval,
+        portfolio_interval=portfolio_interval,
+        last_strategy_cycle=last_strategy_cycle,
+        last_portfolio_sync=last_portfolio_sync,
+        portfolio=portfolio,
+        market_data=market_data,
+        strategy_engine=strategy_engine,
+        execution_service=execution_service,
+        metrics=metrics,
+        refresh_metrics_state=refresh_metrics_state,
+    )
+
+    assert updated_strategy_cycle == last_strategy_cycle
+    assert updated_portfolio_sync == last_portfolio_sync
+    assert refresh_called and refresh_called[-1] is True
+    assert metrics.market_data_ok is False
+    assert metrics.market_data_stale is True
+    assert metrics.market_data_error_messages[0].startswith("Market data unavailable (late_ticks)")
+    assert metrics.market_data_errors == 1
+
+
 class DriftAwarePortfolio:
     def __init__(self, drift_status: DriftStatus) -> None:
         self.drift_status = drift_status
@@ -625,3 +705,48 @@ def test_run_loop_iteration_records_drift_without_triggering_kill_switch_when_di
     assert metrics.drift_records[0][0] is True
     assert metrics.drift_records[0][1] and metrics.drift_records[0][1].startswith("Portfolio drift detected")
     assert execution_service.calls == ["executed"]
+
+
+def test_system_metrics_snapshot_contains_all_recent_updates():
+    metrics = SystemMetrics()
+
+    metrics.record_plan(blocked_actions=2)
+    metrics.record_plan_execution(["execution failed"])
+    metrics.record_blocked_actions(3)
+    metrics.record_error("unexpected failure")
+    metrics.record_market_data_error("market data down")
+    metrics.update_portfolio_state(
+        equity_usd=1500.0,
+        realized_pnl_usd=10.0,
+        unrealized_pnl_usd=20.0,
+        open_orders_count=4,
+        open_positions_count=2,
+    )
+    metrics.record_drift(True, "drift detected")
+    metrics.update_market_data_status(ok=False, stale=True, reason="stale", max_staleness=12.5)
+
+    snapshot = metrics.snapshot()
+
+    assert snapshot["plans_generated"] == 1
+    assert snapshot["plans_executed"] == 1
+    assert snapshot["blocked_actions"] == 5
+    assert snapshot["execution_errors"] == 2
+    assert snapshot["market_data_errors"] == 1
+    assert snapshot["last_equity_usd"] == 1500.0
+    assert snapshot["last_realized_pnl_usd"] == 10.0
+    assert snapshot["last_unrealized_pnl_usd"] == 20.0
+    assert snapshot["open_orders_count"] == 4
+    assert snapshot["open_positions_count"] == 2
+    assert snapshot["drift_detected"] is True
+    assert snapshot["drift_reason"] == "drift detected"
+    assert snapshot["market_data_ok"] is False
+    assert snapshot["market_data_stale"] is True
+    assert snapshot["market_data_reason"] == "stale"
+    assert snapshot["market_data_max_staleness"] == 12.5
+    error_messages = [error["message"] for error in snapshot["recent_errors"]]
+    assert error_messages[:4] == [
+        "drift detected",
+        "market data down",
+        "unexpected failure",
+        "execution failed",
+    ]
