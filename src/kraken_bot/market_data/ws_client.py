@@ -58,7 +58,8 @@ class KrakenWSClientV2:
         """Stops the WebSocket client."""
         self._running = False
         if self._thread and self._thread.is_alive():
-            # The async loop will break on the next iteration
+            # The async loop will break on the next iteration when _running is cleared,
+            # so joining here ensures we don't leave the background thread alive.
             self._thread.join(timeout=5)
         logger.info("WebSocket client stopped.")
 
@@ -184,8 +185,15 @@ class KrakenWSClientV2:
 
             if is_loop_shutdown and not self._running:
                 logger.debug("Event loop shut down after stop request; exiting run loop quietly.")
+            elif is_loop_shutdown:
+                logger.debug("Event loop closed during shutdown: %s", exc)
             else:
                 logger.error("WebSocket run loop error: %s", exc)
+        finally:
+            try:
+                loop.close()
+            except RuntimeError:
+                logger.debug("Event loop already closed during cleanup.")
 
     async def _connect_and_listen(self):
         """Manages the connection and listens for messages."""
@@ -218,10 +226,11 @@ class KrakenWSClientV2:
                             break
 
             except Exception as e:
+                # Avoid noisy logs when the process is shutting down
                 if self._running:
                     logger.error(f"WebSocket client error: {e}.")
                 else:
-                    break
+                    logger.debug(f"WebSocket client exiting during shutdown: {e}.")
 
             if not self._running:
                 break
