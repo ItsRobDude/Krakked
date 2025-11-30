@@ -140,6 +140,20 @@ class ExecutionService:
                 )
                 continue
 
+            if order is None:
+                missing_order_reason = f"Failed to build order for {action.pair}"
+                result.errors.append(missing_order_reason)
+                logger.warning(
+                    "Order build returned no order",
+                    extra={
+                        "event": "order_build_missing",
+                        "plan_id": plan.plan_id,
+                        "strategy_id": action.strategy_id,
+                        "pair": action.pair,
+                    },
+                )
+                continue
+
             guardrail_reason = self._evaluate_guardrails(
                 action=action,
                 order_notional=max(action.target_notional_usd, 0.0),
@@ -241,7 +255,7 @@ class ExecutionService:
             if self.store:
                 self.store.save_order(order)
 
-            result.errors.append(order.last_error)
+            result.errors.append(order.last_error or "execution concurrency limit reached")
             result.orders.append(order)
 
         result.completed_at = datetime.utcnow()
@@ -409,9 +423,9 @@ class ExecutionService:
                     return order
 
         if self.store and hasattr(self.store, "get_order_by_reference"):
-            order = self.store.get_order_by_reference(kraken_order_id=kraken_id, userref=userref)
-            if order:
-                return order
+            stored_order = self.store.get_order_by_reference(kraken_order_id=kraken_id, userref=userref)
+            if stored_order:
+                return stored_order
 
         return None
 

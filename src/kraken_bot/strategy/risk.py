@@ -10,6 +10,8 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 import pandas as pd
 
+Series = Any
+
 from kraken_bot.config import RiskConfig
 from kraken_bot.market_data.api import MarketDataAPI
 from kraken_bot.portfolio.manager import PortfolioService
@@ -23,16 +25,19 @@ def compute_atr(ohlc_df: pd.DataFrame, window: int) -> float:
     if len(ohlc_df) < window + 1:
         return 0.0
 
-    high = ohlc_df["high"]
-    low = ohlc_df["low"]
-    close = ohlc_df["close"]
+    high: Series = ohlc_df["high"]
+    low: Series = ohlc_df["low"]
+    close: Series = ohlc_df["close"]
     prev_close = close.shift(1)
 
-    tr = pd.concat([
-        high - low,
-        (high - prev_close).abs(),
-        (low - prev_close).abs(),
-    ], axis=1).max(axis=1)
+    tr_arrays = np.stack(
+        [
+            (high - low).to_numpy(),
+            (high - prev_close).abs().to_numpy(),
+            (low - prev_close).abs().to_numpy(),
+        ]
+    )
+    tr: Series = pd.Series(np.max(tr_arrays, axis=0), index=high.index)  # type: ignore[attr-defined]
 
     atr = tr.rolling(window=window).mean().iloc[-1]
     return float(atr) if not np.isnan(atr) else 0.0
