@@ -25,6 +25,11 @@ class SystemMetrics:
         self.open_orders_count = 0
         self.open_positions_count = 0
         self.drift_detected = False
+        self.drift_reason: Optional[str] = None
+        self.market_data_ok = False
+        self.market_data_stale = False
+        self.market_data_reason: Optional[str] = None
+        self.market_data_max_staleness: Optional[float] = None
 
     def record_plan(self, blocked_actions: int = 0) -> None:
         """Increment plan generation metrics."""
@@ -89,8 +94,25 @@ class SystemMetrics:
 
         with self._lock:
             self.drift_detected = drift_flag
+            self.drift_reason = message if drift_flag else None
             if drift_flag and message:
                 self._recent_errors.appendleft(self._format_error(message))
+
+    def update_market_data_status(
+        self,
+        *,
+        ok: bool,
+        stale: bool,
+        reason: Optional[str],
+        max_staleness: Optional[float],
+    ) -> None:
+        """Capture the latest market data health state."""
+
+        with self._lock:
+            self.market_data_ok = ok
+            self.market_data_stale = stale
+            self.market_data_reason = reason
+            self.market_data_max_staleness = max_staleness
 
     def snapshot(self) -> Dict[str, object]:
         """Return a read-only snapshot of current counters."""
@@ -109,6 +131,11 @@ class SystemMetrics:
                 "open_orders_count": self.open_orders_count,
                 "open_positions_count": self.open_positions_count,
                 "drift_detected": self.drift_detected,
+                "drift_reason": self.drift_reason,
+                "market_data_ok": self.market_data_ok,
+                "market_data_stale": self.market_data_stale,
+                "market_data_reason": self.market_data_reason,
+                "market_data_max_staleness": self.market_data_max_staleness,
             }
 
     @staticmethod

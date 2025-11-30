@@ -149,6 +149,15 @@ def _run_loop_iteration(
         logger.error("Failed to evaluate market data health: %s", exc)
         data_status = None
 
+    market_data_ok = bool(data_status and getattr(data_status, "health", "") == "healthy")
+    market_data_stale = bool(data_status and getattr(data_status, "health", "") == "stale")
+    metrics.update_market_data_status(
+        ok=market_data_ok,
+        stale=market_data_stale,
+        reason=getattr(data_status, "reason", "unknown" if data_status is None else None),
+        max_staleness=getattr(data_status, "max_staleness", None),
+    )
+
     if (now - last_portfolio_sync).total_seconds() >= portfolio_interval:
         try:
             portfolio.sync()
@@ -190,8 +199,7 @@ def _run_loop_iteration(
         metrics.record_drift(False)
 
     if (now - last_strategy_cycle).total_seconds() >= strategy_interval:
-        market_data_healthy = data_status and getattr(data_status, "health", "") == "healthy"
-        if not market_data_healthy:
+        if not market_data_ok:
             reason = getattr(data_status, "reason", "unknown") if data_status else "unknown"
             max_staleness = getattr(data_status, "max_staleness", None) if data_status else None
             log_extra = {"event": "market_data_unavailable", "reason": reason}

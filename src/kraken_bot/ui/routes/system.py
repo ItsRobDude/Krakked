@@ -55,13 +55,26 @@ async def system_health(request: Request) -> ApiEnvelope[SystemHealthPayload]:
     try:
         ctx = _context(request)
         data_status = ctx.market_data.get_data_status()
+        metrics_snapshot = ctx.metrics.snapshot()
         execution_config = ctx.execution_service.adapter.config
-        market_data_ok = (
-            data_status.rest_api_reachable
-            and data_status.websocket_connected
-            and data_status.subscription_errors == 0
-            and data_status.stale_pairs == 0
-        )
+        market_data_ok = bool(metrics_snapshot.get("market_data_ok"))
+        market_data_stale = bool(metrics_snapshot.get("market_data_stale"))
+        market_data_reason = metrics_snapshot.get("market_data_reason")
+        market_data_max_staleness = metrics_snapshot.get("market_data_max_staleness")
+
+        if not market_data_ok and not market_data_stale and market_data_reason is None and market_data_max_staleness is None:
+            market_data_ok = (
+                data_status.rest_api_reachable
+                and data_status.websocket_connected
+                and data_status.subscription_errors == 0
+                and data_status.stale_pairs == 0
+            )
+            market_data_stale = data_status.stale_pairs > 0
+            market_data_reason = None if market_data_ok else ("data_stale" if market_data_stale else "connection_issue")
+
+        market_data_status = "healthy"
+        if not market_data_ok:
+            market_data_status = "stale" if market_data_stale else "unavailable"
         execution_ok = execution_config.mode != "live" or bool(
             getattr(execution_config, "allow_live_trading", False)
         )
@@ -73,9 +86,13 @@ async def system_health(request: Request) -> ApiEnvelope[SystemHealthPayload]:
                 stale_pairs=data_status.stale_pairs,
                 subscription_errors=data_status.subscription_errors,
                 market_data_ok=market_data_ok,
+                market_data_status=market_data_status,
+                market_data_reason=market_data_reason,
                 execution_ok=execution_ok,
                 current_mode=execution_config.mode,
                 ui_read_only=ctx.config.ui.read_only,
+                drift_detected=bool(metrics_snapshot.get("drift_detected")),
+                drift_reason=metrics_snapshot.get("drift_reason"),
             ),
             error=None,
         )
