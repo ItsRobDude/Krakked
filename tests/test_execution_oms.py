@@ -10,6 +10,9 @@ from kraken_bot.strategy.models import ExecutionPlan, RiskAdjustedAction
 
 
 class RecordingAdapter:
+    submitted: list[LocalOrder]
+    exception: Exception | None
+
     def __init__(self, exception: Exception | None = None):
         self.submitted = []
         self.exception = exception
