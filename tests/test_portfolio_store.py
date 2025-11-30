@@ -41,7 +41,13 @@ def test_schema_version_initialized(tmp_path):
 def test_schema_version_mismatch_triggers_migration(tmp_path, monkeypatch):
     db_path = tmp_path / "schema_mismatch.db"
     outdated_version = CURRENT_SCHEMA_VERSION - 1
-    seed_schema_version(db_path, outdated_version)
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)")
+        conn.execute(
+            "INSERT INTO meta (key, value) VALUES ('schema_version', ?)",
+            (str(outdated_version),),
+        )
+        conn.commit()
 
     called = {}
 
