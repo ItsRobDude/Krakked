@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime
-import os
 from pathlib import Path
 import shutil
 import sqlite3
@@ -29,6 +28,31 @@ from kraken_bot.portfolio.store import (
 )
 from kraken_bot.secrets import CredentialResult, CredentialStatus
 from scripts import run_strategy_once
+
+DEFAULT_DB_PATH = "portfolio.db"
+
+
+def _add_db_path_argument(subparser: argparse.ArgumentParser) -> None:
+    """Attach the standard --db-path argument to a subparser."""
+
+    subparser.add_argument(
+        "--db-path",
+        default=DEFAULT_DB_PATH,
+        help=f"Path to the SQLite portfolio store (defaults to {DEFAULT_DB_PATH})",
+    )
+
+
+def _db_path_exists(db_path: str) -> bool:
+    """Return whether the given DB path exists on disk."""
+
+    return Path(db_path).expanduser().resolve().exists()
+
+
+def _print_error(message: str) -> int:
+    """Print an error message and return a non-zero exit code."""
+
+    print(message)
+    return 1
 
 
 def _setup_command(_: argparse.Namespace) -> int:
@@ -143,14 +167,12 @@ def _migrate_db_command(args: argparse.Namespace) -> int:
     try:
         stored_version = _get_schema_version(args.db_path)
     except PortfolioSchemaError as exc:
-        print(
+        return _print_error(
             "Migration failed: "
             f"stored schema version value {exc.found} is incompatible with expected {exc.expected}."
         )
-        return 1
     except Exception as exc:  # noqa: BLE001
-        print(f"Migration failed: {exc}")
-        return 1
+        return _print_error(f"Migration failed: {exc}")
 
     version_text = stored_version if stored_version is not None else "unknown"
     print(
@@ -160,14 +182,12 @@ def _migrate_db_command(args: argparse.Namespace) -> int:
     try:
         status = run_migrate_db(args.db_path)
     except PortfolioSchemaError as exc:
-        print(
+        return _print_error(
             "Migration failed: "
             f"stored schema version {exc.found} is incompatible with expected {exc.expected}."
         )
-        return 1
     except Exception as exc:  # noqa: BLE001
-        print(f"Migration failed: {exc}")
-        return 1
+        return _print_error(f"Migration failed: {exc}")
 
     print(f"Migration completed successfully to version {status.version}.")
     return 0
@@ -176,17 +196,17 @@ def _migrate_db_command(args: argparse.Namespace) -> int:
 def _schema_version_command(args: argparse.Namespace) -> int:
     """Display the current portfolio schema version stored at --db-path."""
 
+    resolved_path = Path(args.db_path).expanduser().resolve()
+
     try:
-        status = print_schema_version(args.db_path)
+        status = print_schema_version(resolved_path.as_posix())
     except PortfolioSchemaError as exc:
-        print(
+        return _print_error(
             "Failed to read schema version: "
             f"stored value {exc.found} is incompatible with expected {exc.expected}."
         )
-        return 1
     except Exception as exc:  # noqa: BLE001
-        print(f"Failed to read schema version: {exc}")
-        return 1
+        return _print_error(f"Failed to read schema version: {exc}")
 
     if status.initialized:
         print("Schema version not set; meta table or schema_version row is missing.")
@@ -201,9 +221,8 @@ def _db_backup_command(args: argparse.Namespace) -> int:
 
     db_path = Path(args.db_path).expanduser().resolve()
 
-    if not db_path.exists():
-        print(f"DB file not found: {db_path}")
-        return 1
+    if not _db_path_exists(db_path.as_posix()):
+        return _print_error(f"DB file not found: {db_path}")
 
     timestamp = datetime.now().strftime("%Y%m%d%H%M")
     backup_path = db_path.with_name(f"{db_path.name}.{timestamp}.bak")
@@ -211,8 +230,7 @@ def _db_backup_command(args: argparse.Namespace) -> int:
     try:
         shutil.copy2(db_path, backup_path)
     except Exception as exc:  # noqa: BLE001
-        print(f"Failed to create backup: {exc}")
-        return 1
+        return _print_error(f"Failed to create backup: {exc}")
 
     print(f"Backup created at {backup_path}")
 
@@ -246,38 +264,32 @@ def _db_backup_command(args: argparse.Namespace) -> int:
                 backup.unlink()
                 print(f"- {backup}")
             except Exception as exc:  # noqa: BLE001
-                print(f"Failed to remove old backup {backup}: {exc}")
-                return 1
+                return _print_error(f"Failed to remove old backup {backup}: {exc}")
 
         return 0
     except Exception as exc:  # noqa: BLE001
-        print(f"Failed to prune backups: {exc}")
-        return 1
+        return _print_error(f"Failed to prune backups: {exc}")
 
 
 def _db_info_command(args: argparse.Namespace) -> int:
     """Display information about the portfolio database at --db-path."""
 
-    resolved_path = os.path.abspath(args.db_path)
+    resolved_path = Path(args.db_path).expanduser().resolve()
 
-    if not os.path.exists(resolved_path):
-        print(f"DB file not found: {resolved_path}")
-        return 1
+    if not _db_path_exists(resolved_path.as_posix()):
+        return _print_error(f"DB file not found: {resolved_path}")
 
     try:
-        schema_version = _get_schema_version(resolved_path)
+        schema_version = _get_schema_version(resolved_path.as_posix())
     except PortfolioSchemaError as exc:
-        print(
+        return _print_error(
             "Failed to read schema version: "
             f"stored value {exc.found} is incompatible with expected {exc.expected}."
         )
-        return 1
     except sqlite3.OperationalError as exc:
-        print(f"Failed to read schema version: {exc}")
-        return 1
+        return _print_error(f"Failed to read schema version: {exc}")
     except Exception as exc:  # noqa: BLE001
-        print(f"Failed to read schema version: {exc}")
-        return 1
+        return _print_error(f"Failed to read schema version: {exc}")
 
     tables = [
         "meta",
@@ -292,7 +304,7 @@ def _db_info_command(args: argparse.Namespace) -> int:
     ]
 
     try:
-        with sqlite3.connect(resolved_path) as conn:
+        with sqlite3.connect(resolved_path.as_posix()) as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
             existing_tables = {row[0] for row in cursor.fetchall()}
@@ -311,35 +323,30 @@ def _db_info_command(args: argparse.Namespace) -> int:
                     count = cursor.fetchone()[0]
                     print(f"{table}: {count} rows")
                 except sqlite3.OperationalError as exc:
-                    print(f"{table}: error reading rows ({exc})")
-                    return 1
+                    return _print_error(f"{table}: error reading rows ({exc})")
 
         return 0
     except sqlite3.OperationalError as exc:
-        print(f"Failed to read DB info: {exc}")
-        return 1
+        return _print_error(f"Failed to read DB info: {exc}")
     except Exception as exc:  # noqa: BLE001
-        print(f"Failed to read DB info: {exc}")
-        return 1
+        return _print_error(f"Failed to read DB info: {exc}")
 
 
 def _db_check_command(args: argparse.Namespace) -> int:
     """Run PRAGMA integrity_check against the portfolio database at --db-path."""
 
-    resolved_path = os.path.abspath(args.db_path)
+    resolved_path = Path(args.db_path).expanduser().resolve()
 
-    if not os.path.exists(resolved_path):
-        print(f"DB file not found: {resolved_path}")
-        return 1
+    if not _db_path_exists(resolved_path.as_posix()):
+        return _print_error(f"DB file not found: {resolved_path}")
 
     try:
-        with sqlite3.connect(resolved_path) as conn:
+        with sqlite3.connect(resolved_path.as_posix()) as conn:
             cursor = conn.cursor()
             cursor.execute("PRAGMA integrity_check")
             row = cursor.fetchone()
     except Exception as exc:  # noqa: BLE001
-        print(f"Failed to run integrity check: {exc}")
-        return 1
+        return _print_error(f"Failed to run integrity check: {exc}")
 
     result = row[0] if row else None
     print(f"PRAGMA integrity_check: {result}")
@@ -385,32 +392,20 @@ def _build_parser() -> argparse.ArgumentParser:
         "migrate-db",
         help="Run portfolio DB migrations against the SQLite store",
     )
-    migrate_parser.add_argument(
-        "--db-path",
-        default="portfolio.db",
-        help="Path to the SQLite portfolio store (defaults to portfolio.db)",
-    )
+    _add_db_path_argument(migrate_parser)
     migrate_parser.set_defaults(func=_migrate_db_command)
 
     version_parser = subparsers.add_parser(
         "db-schema-version",
         help="Show the stored schema version for the SQLite portfolio DB",
     )
-    version_parser.add_argument(
-        "--db-path",
-        default="portfolio.db",
-        help="Path to the SQLite portfolio store (defaults to portfolio.db)",
-    )
+    _add_db_path_argument(version_parser)
     version_parser.set_defaults(func=_schema_version_command)
 
     backup_parser = subparsers.add_parser(
         "db-backup", help="Create a timestamped backup of the SQLite portfolio DB"
     )
-    backup_parser.add_argument(
-        "--db-path",
-        default="portfolio.db",
-        help="Path to the SQLite portfolio store (defaults to portfolio.db)",
-    )
+    _add_db_path_argument(backup_parser)
     backup_parser.add_argument(
         "--keep",
         type=int,
@@ -422,22 +417,14 @@ def _build_parser() -> argparse.ArgumentParser:
         "db-info",
         help="Show schema version and row counts for the SQLite portfolio DB",
     )
-    db_info_parser.add_argument(
-        "--db-path",
-        default="portfolio.db",
-        help="Path to the SQLite portfolio store (defaults to portfolio.db)",
-    )
+    _add_db_path_argument(db_info_parser)
     db_info_parser.set_defaults(func=_db_info_command)
 
     db_check_parser = subparsers.add_parser(
         "db-check",
         help="Run PRAGMA integrity_check against the SQLite portfolio DB",
     )
-    db_check_parser.add_argument(
-        "--db-path",
-        default="portfolio.db",
-        help="Path to the SQLite portfolio store (defaults to portfolio.db)",
-    )
+    _add_db_path_argument(db_check_parser)
     db_check_parser.set_defaults(func=_db_check_command)
 
     return parser
