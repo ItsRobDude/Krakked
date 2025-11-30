@@ -261,6 +261,30 @@ def _db_info_command(args: argparse.Namespace) -> int:
         return 1
 
 
+def _db_check_command(args: argparse.Namespace) -> int:
+    """Run PRAGMA integrity_check against the portfolio database at --db-path."""
+
+    resolved_path = os.path.abspath(args.db_path)
+
+    if not os.path.exists(resolved_path):
+        print(f"DB file not found: {resolved_path}")
+        return 1
+
+    try:
+        with sqlite3.connect(resolved_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("PRAGMA integrity_check")
+            row = cursor.fetchone()
+    except Exception as exc:  # noqa: BLE001
+        print(f"Failed to run integrity check: {exc}")
+        return 1
+
+    result = row[0] if row else None
+    print(f"PRAGMA integrity_check: {result}")
+
+    return 0 if result == "ok" else 1
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="krakked", description="Kraken bot utilities")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -327,6 +351,17 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Path to the SQLite portfolio store (defaults to portfolio.db)",
     )
     db_info_parser.set_defaults(func=_db_info_command)
+
+    db_check_parser = subparsers.add_parser(
+        "db-check",
+        help="Run PRAGMA integrity_check against the SQLite portfolio DB",
+    )
+    db_check_parser.add_argument(
+        "--db-path",
+        default="portfolio.db",
+        help="Path to the SQLite portfolio store (defaults to portfolio.db)",
+    )
+    db_check_parser.set_defaults(func=_db_check_command)
 
     return parser
 
