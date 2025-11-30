@@ -17,6 +17,16 @@ def store(tmp_path):
     return SQLitePortfolioStore(str(db_path))
 
 
+def seed_schema_version(db_path, version: int) -> None:
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)")
+        conn.execute(
+            "INSERT INTO meta (key, value) VALUES ('schema_version', ?)",
+            (str(version),),
+        )
+        conn.commit()
+
+
 def test_schema_version_initialized(tmp_path):
     db_path = tmp_path / "schema_init.db"
     SQLitePortfolioStore(str(db_path))
@@ -63,13 +73,7 @@ def test_schema_version_mismatch_triggers_migration(tmp_path, monkeypatch):
 
 def test_schema_version_ahead_raises(tmp_path):
     db_path = tmp_path / "schema_ahead.db"
-    with sqlite3.connect(db_path) as conn:
-        conn.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)")
-        conn.execute(
-            "INSERT INTO meta (key, value) VALUES ('schema_version', ?)",
-            (str(CURRENT_SCHEMA_VERSION + 1),),
-        )
-        conn.commit()
+    seed_schema_version(db_path, CURRENT_SCHEMA_VERSION + 1)
 
     with pytest.raises(PortfolioSchemaError):
         SQLitePortfolioStore(str(db_path))
