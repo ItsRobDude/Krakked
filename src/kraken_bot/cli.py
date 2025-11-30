@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import sqlite3
 import sys
 from typing import Callable
 
@@ -15,6 +16,13 @@ from kraken_bot.connection.exceptions import (
 )
 from kraken_bot.connection.rest_client import KrakenRESTClient
 from kraken_bot.main import run as run_orchestrator
+from kraken_bot.portfolio.exceptions import PortfolioSchemaError
+from kraken_bot.portfolio.store import (
+    CURRENT_SCHEMA_VERSION,
+    SchemaStatus,
+    ensure_portfolio_schema,
+    ensure_portfolio_tables,
+)
 from kraken_bot.secrets import CredentialResult, CredentialStatus
 from scripts import run_strategy_once
 
@@ -71,6 +79,64 @@ def _run_command(args: argparse.Namespace) -> int:
     return run_orchestrator(allow_interactive_setup=args.allow_interactive_setup)
 
 
+def run_migrate_db(db_path: str) -> SchemaStatus:
+    """Upgrade or initialize the portfolio database to the current schema."""
+
+    try:
+        with sqlite3.connect(db_path) as conn:
+            status = ensure_portfolio_schema(conn, CURRENT_SCHEMA_VERSION, migrate=True)
+            ensure_portfolio_tables(conn)
+    except PortfolioSchemaError as exc:
+        print(f"Portfolio schema error for {db_path}: {exc}")
+        raise
+
+    if status.migrated:
+        print(f"Migrated portfolio DB at {db_path} to schema version {status.version}.")
+    elif status.initialized:
+        print(f"Initialized new portfolio DB at {db_path} with schema version {status.version}.")
+    else:
+        print(f"Portfolio DB at {db_path} already at schema version {status.version}.")
+
+    return status
+
+
+def print_schema_version(db_path: str) -> SchemaStatus:
+    """Inspect and report the portfolio DB schema version."""
+
+    try:
+        with sqlite3.connect(db_path) as conn:
+            status = ensure_portfolio_schema(conn, CURRENT_SCHEMA_VERSION, migrate=False)
+    except PortfolioSchemaError as exc:
+        print(f"Portfolio schema error for {db_path}: {exc}")
+        raise
+
+    freshness_note = "(behind current; run migrate-db)" if status.version < CURRENT_SCHEMA_VERSION else ""
+    if status.initialized:
+        print(
+            f"Initialized portfolio DB at {db_path} to schema version {status.version} {freshness_note}".strip()
+        )
+    else:
+        print(f"Portfolio DB at {db_path} is at schema version {status.version} {freshness_note}".strip())
+
+    return status
+
+
+def _migrate_db_command(args: argparse.Namespace) -> int:
+    try:
+        run_migrate_db(args.db_path)
+        return 0
+    except PortfolioSchemaError:
+        return 1
+
+
+def _schema_version_command(args: argparse.Namespace) -> int:
+    try:
+        print_schema_version(args.db_path)
+        return 0
+    except PortfolioSchemaError:
+        return 1
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="krakked", description="Kraken bot utilities")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -104,6 +170,19 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Prompt for credentials if they are not already configured",
     )
     run_parser.set_defaults(func=_run_command)
+
+    migrate_parser = subparsers.add_parser(
+        "migrate-db",
+        help="Initialize or upgrade the portfolio SQLite database to the latest schema",
+    )
+    migrate_parser.add_argument("--db-path", default="portfolio.db", help="Path to the SQLite portfolio store")
+    migrate_parser.set_defaults(func=_migrate_db_command)
+
+    schema_parser = subparsers.add_parser(
+        "schema-version", help="Display the current portfolio database schema version"
+    )
+    schema_parser.add_argument("--db-path", default="portfolio.db", help="Path to the SQLite portfolio store")
+    schema_parser.set_defaults(func=_schema_version_command)
 
     return parser
 
