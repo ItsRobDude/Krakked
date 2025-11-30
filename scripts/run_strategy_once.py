@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import copy
 import logging
-from inspect import Parameter, signature
+from inspect import signature
 from typing import Iterable
 
 from kraken_bot.bootstrap import bootstrap
@@ -68,12 +68,8 @@ def run_strategy_once() -> None:
     safe_config = _ensure_safe_execution(config)
 
     try:
-        market_data_parameters = signature(MarketDataAPI).parameters
-        supports_rate_limiter = "rate_limiter" in market_data_parameters and (
-            market_data_parameters["rate_limiter"].kind
-            in (Parameter.POSITIONAL_OR_KEYWORD, Parameter.KEYWORD_ONLY)
-        )
-        if supports_rate_limiter:
+        params = signature(MarketDataAPI).parameters
+        if "rate_limiter" in params:
             market_data = MarketDataAPI(safe_config, rate_limiter=rate_limiter)
         else:
             market_data = MarketDataAPI(safe_config)
