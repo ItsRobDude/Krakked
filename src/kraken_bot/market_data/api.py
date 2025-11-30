@@ -3,7 +3,7 @@
 import time
 import logging
 from pathlib import Path
-from typing import List, Dict, Optional, Any, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 from kraken_bot.config import AppConfig, PairMetadata, OHLCBar
 from kraken_bot.connection.rate_limiter import RateLimiter
 from kraken_bot.connection.rest_client import KrakenRESTClient
@@ -13,6 +13,9 @@ from kraken_bot.market_data.ohlc_fetcher import backfill_ohlc
 from kraken_bot.market_data.ws_client import KrakenWSClientV2
 from kraken_bot.market_data.metadata_store import PairMetadataStore
 from kraken_bot.market_data.exceptions import PairNotFoundError, DataStaleError
+
+if TYPE_CHECKING:  # pragma: no cover
+    from kraken_bot.config import ConnectionStatus
 
 logger = logging.getLogger(__name__)
 
@@ -221,7 +224,7 @@ class MarketDataAPI:
     def get_latest_price(self, pair: str) -> Optional[float]:
         is_fresh, stale_time = self._ticker_freshness(pair)
 
-        if is_fresh:
+        if is_fresh and self._ws_client:
             ticker = self._ws_client.ticker_cache.get(pair)
             if ticker:
                 # Return mid-price (avg of best bid and ask)
@@ -239,6 +242,8 @@ class MarketDataAPI:
 
     def get_best_bid_ask(self, pair: str) -> Optional[Dict[str, float]]:
         self._check_ticker_staleness(pair)
+        if not self._ws_client:
+            return None
         ticker = self._ws_client.ticker_cache.get(pair)
         if ticker:
             return {"bid": float(ticker["bid"]), "ask": float(ticker["ask"])}
@@ -246,6 +251,7 @@ class MarketDataAPI:
 
     def get_live_ohlc(self, pair: str, timeframe: str) -> Optional[OHLCBar]:
         self._check_ohlc_staleness(pair, timeframe)
+        assert self._ws_client is not None
         ohlc_data = self._ws_client.ohlc_cache.get(pair, {}).get(timeframe)
         if ohlc_data:
             return OHLCBar(
@@ -258,7 +264,7 @@ class MarketDataAPI:
             )
         return None
 
-    def get_data_status(self) -> "ConnectionStatus":
+    def get_data_status(self) -> ConnectionStatus:
         from kraken_bot.config import ConnectionStatus
 
         # 1. Check REST API reachability
