@@ -261,33 +261,55 @@ On SIGINT/SIGTERM or manual UI “shutdown”:
 6.1 DB location & rotation
 
 SQLite DB:
-	•	Lives in the config dir (Phase 1/3), e.g. ~/.krakked/krakked.db.
-	•	Phase 7 must:
-	•	Document where it is,
-	•	Provide a simple maintenance script / doc for:
-	•	Viewing tables,
-	•	Checking integrity (PRAGMA integrity_check).
+        •       Default path today is the working-directory file portfolio.db (shared by SQLitePortfolioStore and the orchestrator when no override is provided).
+        •       All CLI helpers accept --db-path to point at an alternate SQLite file; the default matches the in-code default (portfolio.db).
+        •       Moving the database into a config dir (e.g. ~/.krakked/krakked.db) will require changes to both the code and this document when that refactor lands.
+        •       Phase 7 must:
+        •       Document where it is,
+        •       Provide a simple maintenance script / doc for:
+        •       Viewing tables,
+        •       Checking integrity (PRAGMA integrity_check).
 
-6.2 Backups
+6.2 Running in production: DB maintenance commands
+
+Standard CLI tools (all accept --db-path with the default portfolio.db):
+        •       krakked db-info:
+        •       Prints the resolved DB path, stored schema version (or unknown), and row counts for key tables.
+        •       Exit codes: 0 on success; non-zero on errors so automation can alert.
+        •       krakked db-check:
+        •       Runs PRAGMA integrity_check against the SQLite file and echoes the result.
+        •       Exit codes: 0 when integrity_check returns ok; non-zero otherwise.
+        •       krakked db-backup:
+        •       Copies the DB to a timestamped sibling file using the pattern <db-name>.YYYYMMDDHHMM.bak (e.g. portfolio.db.202401011230.bak).
+        •       --keep prunes old backups, retaining only the N most recent matching files. Example: --keep 7 keeps the seven newest backups and deletes older ones.
+        •       Exit codes: 0 when the backup/prune completes; non-zero if copy or cleanup fails.
+        •       krakked migrate-db:
+        •       Runs portfolio schema migrations to the current version and ensures required tables exist.
+        •       Exit codes: 0 on a completed migration; non-zero if the schema is incompatible or migration fails.
+        •       krakked db-schema-version:
+        •       Ensures metadata exists and reports the stored schema version value.
+        •       Exit codes: 0 on success (including the case where the schema_version row is missing); non-zero on read errors.
+
+6.3 Backups
 
 For live/paper environments:
-	•	Daily backup of the DB file recommended:
-	•	E.g. copy krakked.db to krakked.db.YYYYMMDD.bak.
-	•	Optionally compress and rotate:
-	•	Keep last N backups (7/30).
+        •       Daily backup of the DB file recommended:
+        •       E.g. copy portfolio.db to portfolio.db.YYYYMMDD.bak.
+        •       Optionally compress and rotate:
+        •       Keep last N backups (7/30).
 
 Phase 7 defines:
-	•	A small backup_db() utility (Python function/CLI entrypoint),
-	•	Or a documented pattern for external cron to call a script.
+        •       A small backup_db() utility (Python function/CLI entrypoint),
+        •       Or a documented pattern for external cron to call a script.
 
-6.3 Log retention
-	•	Logs can be:
-	•	Rotated by logrotate or a similar system,
-	•	Or written to daily log files krakked-YYYYMMDD.log.
+6.4 Log retention
+        •       Logs can be:
+        •       Rotated by logrotate or a similar system,
+        •       Or written to daily log files krakked-YYYYMMDD.log.
 
 Phase 7 should:
-	•	Ensure logs are not kept unbounded.
-	•	Document recommended rotation (e.g. 100MB per file, 7 days retained).
+        •       Ensure logs are not kept unbounded.
+        •       Document recommended rotation (e.g. 100MB per file, 7 days retained).
 
 ⸻
 
