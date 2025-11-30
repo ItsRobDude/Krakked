@@ -28,11 +28,30 @@ def test_schema_version_initialized(tmp_path):
     assert int(row[0]) == CURRENT_SCHEMA_VERSION
 
 
-def test_schema_version_mismatch_raises(tmp_path):
+def test_schema_version_mismatch_triggers_migration(tmp_path):
     db_path = tmp_path / "schema_mismatch.db"
     with sqlite3.connect(db_path) as conn:
         conn.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)")
         conn.execute("INSERT INTO meta (key, value) VALUES ('schema_version', '1')")
+        conn.commit()
+
+    SQLitePortfolioStore(str(db_path))
+
+    with sqlite3.connect(db_path) as conn:
+        row = conn.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()
+
+    assert row is not None
+    assert int(row[0]) == CURRENT_SCHEMA_VERSION
+
+
+def test_schema_version_ahead_raises(tmp_path):
+    db_path = tmp_path / "schema_ahead.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)")
+        conn.execute(
+            "INSERT INTO meta (key, value) VALUES ('schema_version', ?)",
+            (str(CURRENT_SCHEMA_VERSION + 1),),
+        )
         conn.commit()
 
     with pytest.raises(PortfolioSchemaError):
