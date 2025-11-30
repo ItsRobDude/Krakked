@@ -11,11 +11,16 @@ import requests
 
 TEXTUAL_AVAILABLE = importlib.util.find_spec("textual") is not None
 
-if TEXTUAL_AVAILABLE:
+if TYPE_CHECKING:
     from textual.app import App, ComposeResult
     from textual.containers import Horizontal, Vertical
-    from textual.reactive import reactive
     from textual.widgets import Static, DataTable, Footer
+    from textual.reactive import Reactive, reactive
+elif TEXTUAL_AVAILABLE:
+    from textual.app import App, ComposeResult
+    from textual.containers import Horizontal, Vertical
+    from textual.widgets import Static, DataTable, Footer
+    from textual.reactive import reactive, Reactive
 
 if not TEXTUAL_AVAILABLE:
     _TEXTUAL_MESSAGE = (
@@ -366,8 +371,8 @@ class HttpBackend:
 class StatusPanel(Static):
     """Left sidebar: system status, integrity, actions, menu."""
 
-    summary: reactive[Optional[PortfolioSummary]] = reactive(None)
-    current_view: reactive[str] = reactive("dashboard")
+    summary: "Reactive[Optional[PortfolioSummary]]" = reactive(None)
+    current_view: "Reactive[str]" = reactive("dashboard")
 
     def update_summary(self, summary: PortfolioSummary) -> None:
         self.summary = summary
@@ -439,7 +444,7 @@ class StatusPanel(Static):
 class SummaryTiles(Static):
     """Top-right summary block: equity, PnL, cash, last update."""
 
-    summary: reactive[Optional[PortfolioSummary]] = reactive(None)
+    summary: "Reactive[Optional[PortfolioSummary]]" = reactive(None)
 
     def update_summary(self, summary: PortfolioSummary) -> None:
         self.summary = summary
@@ -524,7 +529,7 @@ class AssetTable(DataTable):
 class LogPanel(Static):
     """Log output at bottom."""
 
-    logs: reactive[List[LogEntry]] = reactive([])
+    logs: "Reactive[List[LogEntry]]" = reactive([])
 
     def update_logs(self, entries: List[LogEntry]) -> None:
         self.logs = entries
@@ -556,8 +561,8 @@ class LogPanel(Static):
 class RiskSummaryPanel(Static):
     """Top block on Risk view."""
 
-    risk: reactive[Optional[RiskStatus]] = reactive(None)
-    error_message: reactive[Optional[str]] = reactive(None)
+    risk: "Reactive[Optional[RiskStatus]]" = reactive(None)
+    error_message: "Reactive[Optional[str]]" = reactive(None)
 
     def update_risk(self, risk: RiskStatus) -> None:
         self.risk = risk
@@ -700,8 +705,9 @@ class KrakkedDashboard(App):
 
     def set_view(self, view: str) -> None:
         self.current_view = view
-        dash = self.query_one("#dashboard_root", Vertical)
-        risk = self.query_one("#risk_root", Vertical)
+        query_one = getattr(self, "query_one")
+        dash = query_one("#dashboard_root", Vertical)
+        risk = query_one("#risk_root", Vertical)
         if view == "dashboard":
             dash.display = True
             risk.display = False
@@ -756,8 +762,9 @@ class KrakkedDashboard(App):
 
         target_state = not risk.kill_switch_active
         prompt = "Activate kill switch? (y/N): " if target_state else "Deactivate kill switch? (y/N): "
+        console = getattr(self, "console", None)
         try:
-            response = (self.console.input(prompt) if hasattr(self, "console") else input(prompt)).strip().lower()
+            response = (console.input(prompt) if console else input(prompt)).strip().lower()
         except Exception:
             response = ""
 
