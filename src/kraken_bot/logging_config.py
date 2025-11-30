@@ -12,7 +12,15 @@ DEFAULT_ENV = os.getenv("KRAKEN_BOT_ENV", os.getenv("ENV", "local"))
 
 
 class JsonFormatter(logging.Formatter):
-    """Minimal JSON formatter that emits a stable set of fields."""
+    """Minimal JSON formatter that emits a stable set of fields.
+
+    The formatter preserves all values provided through the logging ``extra``
+    dictionary so callers can attach contextual identifiers (e.g. ``event``,
+    ``plan_id``, ``strategy_id``, ``order_id``, ``pair``) without worrying about
+    them being dropped. The ``event`` field is treated as a lightweight,
+    machine-readable label for the log line that downstream systems can rely on
+    for alerting or analytics.
+    """
 
     def __init__(self, env: str | None = None) -> None:
         super().__init__()
@@ -74,16 +82,48 @@ def configure_logging(level: int = logging.INFO, env: str | None = None) -> None
     root_logger.addHandler(handler)
 
 
-def structured_log_extra(*, env: str | None = None, request_id: str | None = None, **kwargs: Any) -> Dict[str, Any]:
-    """Build a consistent set of logging extras with common fields."""
+def structured_log_extra(
+    *,
+    env: str | None = None,
+    request_id: str | None = None,
+    event: str | None = None,
+    strategy_id: str | None = None,
+    plan_id: str | None = None,
+    pair: str | None = None,
+    order_id: str | None = None,
+    kraken_order_id: str | None = None,
+    local_order_id: str | None = None,
+    **kwargs: Any,
+) -> Dict[str, Any]:
+    """Build a consistent set of logging extras with common fields.
+
+    The ``event`` key should be a short, stable identifier for the log. Common
+    contextual identifiers (``plan_id``, ``strategy_id``, ``order_id``,
+    ``local_order_id``, ``kraken_order_id``, ``pair``, etc.) can be provided as
+    keyword arguments and will be forwarded into the structured payload. All
+    identifiers are optional; when omitted they are simply absent from the
+    resulting ``extra`` dict, keeping existing call sites backwards compatible.
+    Additional custom fields are preserved via ``**kwargs``.
+    """
 
     extra: Dict[str, Any] = {
-        "event": kwargs.pop("event", None),
+        "event": kwargs.pop("event", event),
         "env": env or DEFAULT_ENV,
-        "strategy_id": kwargs.pop("strategy_id", None),
-        "plan_id": kwargs.pop("plan_id", None),
+        "strategy_id": kwargs.pop("strategy_id", strategy_id),
+        "plan_id": kwargs.pop("plan_id", plan_id),
         "request_id": request_id,
     }
+
+    identifier_fields = {
+        "pair": kwargs.pop("pair", pair),
+        "order_id": kwargs.pop("order_id", order_id),
+        "kraken_order_id": kwargs.pop("kraken_order_id", kraken_order_id),
+        "local_order_id": kwargs.pop("local_order_id", local_order_id),
+    }
+    for key, value in identifier_fields.items():
+        if value is not None:
+            extra[key] = value
+
     extra.update(kwargs)
     return extra
 
