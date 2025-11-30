@@ -319,7 +319,15 @@ def run(allow_interactive_setup: bool = True) -> int:
             metrics=metrics,
         )
     except PortfolioSchemaError as exc:
-        logger.error("Portfolio store schema mismatch: %s", exc)
+        logger.critical(
+            "Portfolio store schema mismatch: %s",
+            exc,
+            extra=structured_log_extra(
+                event="schema_mismatch",
+                expected_schema=exc.expected,
+                found_schema=exc.found,
+            ),
+        )
         return 1
 
     logger.info(
