@@ -151,12 +151,12 @@ def build_order_from_plan_action(
             warning = f"Failed to fetch market data for {action.pair}: {exc}"
             return None, warning
 
-    if bid_ask:
+    if bid_ask is not None:
         try:
-            bid = float(bid_ask.get("bid"))
-            ask = float(bid_ask.get("ask"))
+            bid = float(bid_ask["bid"])
+            ask = float(bid_ask["ask"])
             requested_price = (bid + ask) / 2
-        except (TypeError, ValueError):
+        except (KeyError, TypeError, ValueError):
             warning = f"Invalid bid/ask data for {action.pair}: {bid_ask}"
             return None, warning
 
