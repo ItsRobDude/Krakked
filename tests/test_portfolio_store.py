@@ -1,10 +1,10 @@
 # tests/test_portfolio_store.py
 
-import os
 import sqlite3
 from datetime import datetime
 
 import pytest
+import kraken_bot.portfolio.store as store_module
 from kraken_bot.execution.models import ExecutionResult, LocalOrder
 from kraken_bot.portfolio.store import CURRENT_SCHEMA_VERSION, SQLitePortfolioStore
 from kraken_bot.portfolio.models import CashFlowRecord, PortfolioSnapshot, AssetValuation
@@ -28,12 +28,28 @@ def test_schema_version_initialized(tmp_path):
     assert int(row[0]) == CURRENT_SCHEMA_VERSION
 
 
-def test_schema_version_mismatch_triggers_migration(tmp_path):
+def test_schema_version_mismatch_triggers_migration(tmp_path, monkeypatch):
     db_path = tmp_path / "schema_mismatch.db"
+    outdated_version = CURRENT_SCHEMA_VERSION - 1
     with sqlite3.connect(db_path) as conn:
         conn.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)")
-        conn.execute("INSERT INTO meta (key, value) VALUES ('schema_version', '1')")
+        conn.execute(
+            "INSERT INTO meta (key, value) VALUES ('schema_version', ?)",
+            (str(outdated_version),),
+        )
         conn.commit()
+
+    called = {}
+
+    def fake_run_migrations(conn, from_version, to_version):
+        called["args"] = (from_version, to_version)
+        conn.execute(
+            "INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?)",
+            (str(to_version),),
+        )
+        conn.commit()
+
+    monkeypatch.setattr(store_module, "run_migrations", fake_run_migrations)
 
     SQLitePortfolioStore(str(db_path))
 
@@ -42,6 +58,7 @@ def test_schema_version_mismatch_triggers_migration(tmp_path):
 
     assert row is not None
     assert int(row[0]) == CURRENT_SCHEMA_VERSION
+    assert called.get("args") == (outdated_version, CURRENT_SCHEMA_VERSION)
 
 
 def test_schema_version_ahead_raises(tmp_path):
