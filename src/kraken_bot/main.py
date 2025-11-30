@@ -192,6 +192,7 @@ def run(allow_interactive_setup: bool = True) -> int:
             market_data=market_data,
             store=portfolio.store,
             rate_limiter=rate_limiter,
+            risk_status_provider=strategy_engine.get_risk_status,
         )
 
         metrics = SystemMetrics()
