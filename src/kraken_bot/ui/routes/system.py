@@ -5,6 +5,7 @@ from __future__ import annotations
 import binascii
 import logging
 from dataclasses import asdict
+from importlib.metadata import PackageNotFoundError, version
 
 from fastapi import APIRouter, Request
 from pydantic import BaseModel
@@ -57,6 +58,13 @@ async def system_health(request: Request) -> ApiEnvelope[SystemHealthPayload]:
         data_status = ctx.market_data.get_data_status()
         metrics_snapshot = ctx.metrics.snapshot()
         execution_config = ctx.execution_service.adapter.config
+        app_version = None
+
+        try:
+            app_version = version("kraken-trader")
+        except PackageNotFoundError:
+            app_version = None
+
         market_data_ok = bool(metrics_snapshot.get("market_data_ok"))
         market_data_stale = bool(metrics_snapshot.get("market_data_stale"))
         market_data_reason = metrics_snapshot.get("market_data_reason")
@@ -78,8 +86,11 @@ async def system_health(request: Request) -> ApiEnvelope[SystemHealthPayload]:
         execution_ok = execution_config.mode != "live" or bool(
             getattr(execution_config, "allow_live_trading", False)
         )
+        risk_status = ctx.strategy_engine.get_risk_status()
         return ApiEnvelope(
             data=SystemHealthPayload(
+                app_version=app_version,
+                execution_mode=getattr(execution_config, "mode", None),
                 rest_api_reachable=data_status.rest_api_reachable,
                 websocket_connected=data_status.websocket_connected,
                 streaming_pairs=data_status.streaming_pairs,
@@ -88,9 +99,12 @@ async def system_health(request: Request) -> ApiEnvelope[SystemHealthPayload]:
                 market_data_ok=market_data_ok,
                 market_data_status=market_data_status,
                 market_data_reason=market_data_reason,
+                market_data_stale=market_data_stale,
+                market_data_max_staleness=market_data_max_staleness,
                 execution_ok=execution_ok,
                 current_mode=execution_config.mode,
                 ui_read_only=ctx.config.ui.read_only,
+                kill_switch_active=getattr(risk_status, "kill_switch_active", None),
                 drift_detected=bool(metrics_snapshot.get("drift_detected")),
                 drift_reason=metrics_snapshot.get("drift_reason"),
             ),
