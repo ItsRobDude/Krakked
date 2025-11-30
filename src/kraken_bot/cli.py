@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime
 import os
+from pathlib import Path
+import shutil
 import sqlite3
 import sys
 from typing import Callable
@@ -193,6 +196,65 @@ def _schema_version_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _db_backup_command(args: argparse.Namespace) -> int:
+    """Create a timestamped backup of the portfolio database at --db-path."""
+
+    db_path = Path(args.db_path).expanduser().resolve()
+
+    if not db_path.exists():
+        print(f"DB file not found: {db_path}")
+        return 1
+
+    timestamp = datetime.now().strftime("%Y%m%d%H%M")
+    backup_path = db_path.with_name(f"{db_path.name}.{timestamp}.bak")
+
+    try:
+        shutil.copy2(db_path, backup_path)
+    except Exception as exc:  # noqa: BLE001
+        print(f"Failed to create backup: {exc}")
+        return 1
+
+    print(f"Backup created at {backup_path}")
+
+    if args.keep is None or args.keep <= 0:
+        return 0
+
+    prefix = f"{db_path.name}."
+    try:
+        backups = []
+        for candidate in db_path.parent.glob(f"{db_path.name}.*.bak"):
+            name = candidate.name
+            if not name.startswith(prefix) or not name.endswith(".bak"):
+                continue
+
+            timestamp_part = name[len(prefix) : -4]
+            if len(timestamp_part) != 12 or not timestamp_part.isdigit():
+                continue
+
+            backups.append((timestamp_part, candidate))
+
+        backups.sort(key=lambda item: item[0], reverse=True)
+        removals = backups[args.keep :]
+
+        if not removals:
+            print("No old backups removed.")
+            return 0
+
+        print("Removed old backups:")
+        for _, backup in removals:
+            try:
+                backup.unlink()
+                print(f"- {backup}")
+            except Exception as exc:  # noqa: BLE001
+                print(f"Failed to remove old backup {backup}: {exc}")
+                return 1
+
+        return 0
+    except Exception as exc:  # noqa: BLE001
+        print(f"Failed to prune backups: {exc}")
+        return 1
+
+
 def _db_info_command(args: argparse.Namespace) -> int:
     """Display information about the portfolio database at --db-path."""
 
@@ -340,6 +402,21 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Path to the SQLite portfolio store (defaults to portfolio.db)",
     )
     version_parser.set_defaults(func=_schema_version_command)
+
+    backup_parser = subparsers.add_parser(
+        "db-backup", help="Create a timestamped backup of the SQLite portfolio DB"
+    )
+    backup_parser.add_argument(
+        "--db-path",
+        default="portfolio.db",
+        help="Path to the SQLite portfolio store (defaults to portfolio.db)",
+    )
+    backup_parser.add_argument(
+        "--keep",
+        type=int,
+        help="Retain only the N most recent backups (older backups will be deleted)",
+    )
+    backup_parser.set_defaults(func=_db_backup_command)
 
     db_info_parser = subparsers.add_parser(
         "db-info",
