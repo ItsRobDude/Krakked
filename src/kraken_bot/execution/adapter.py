@@ -8,6 +8,7 @@ from kraken_bot.config import ExecutionConfig
 from kraken_bot.connection.exceptions import RateLimitError, ServiceUnavailableError
 from kraken_bot.connection.rate_limiter import RateLimiter
 from kraken_bot.connection.rest_client import KrakenRESTClient
+from kraken_bot.logging_config import structured_log_extra
 
 from .exceptions import ExecutionError, OrderCancelError, OrderRejectedError
 from .models import LocalOrder
@@ -39,12 +40,12 @@ class KrakenExecutionAdapter:
             if getattr(self.config, "allow_live_trading", False):
                 logger.warning(
                     "Live trading mode ENABLED; orders will be transmitted to Kraken.",
-                    extra={"event": "live_trading_enabled"},
+                    extra=structured_log_extra(event="live_trading_enabled"),
                 )
             else:
                 logger.warning(
                     "Live trading requested but allow_live_trading is False; orders will be rejected.",
-                    extra={"event": "live_trading_blocked"},
+                    extra=structured_log_extra(event="live_trading_blocked"),
                 )
 
     def submit_order(self, order: LocalOrder) -> LocalOrder:
@@ -65,7 +66,14 @@ class KrakenExecutionAdapter:
                 )
                 logger.error(
                     order.last_error,
-                    extra={"event": "order_rejected_min_notional", "notional": notional},
+                    extra=structured_log_extra(
+                        event="order_rejected_min_notional",
+                        plan_id=order.plan_id,
+                        strategy_id=order.strategy_id,
+                        pair=order.pair,
+                        local_order_id=order.local_id,
+                        notional=notional,
+                    ),
                 )
                 return order
 
@@ -84,37 +92,37 @@ class KrakenExecutionAdapter:
                         self.client.cancel_all_orders_after(self.config.dead_man_switch_seconds)
                         logger.info(
                             "Dead man switch heartbeat set",
-                            extra={
-                                "event": "dead_man_switch_set",
-                                "timeout_seconds": self.config.dead_man_switch_seconds,
-                            },
+                            extra=structured_log_extra(
+                                event="dead_man_switch_set",
+                                timeout_seconds=self.config.dead_man_switch_seconds,
+                            ),
                         )
                     except Exception as exc:  # pragma: no cover - passthrough for client errors
                         logger.warning(
                             "Failed to refresh dead man switch heartbeat",
-                            extra={
-                                "event": "dead_man_switch_error",
-                                "timeout_seconds": self.config.dead_man_switch_seconds,
-                                "error": str(exc),
-                            },
+                            extra=structured_log_extra(
+                                event="dead_man_switch_error",
+                                timeout_seconds=self.config.dead_man_switch_seconds,
+                                error=str(exc),
+                            ),
                         )
                 else:
                     logger.warning(
                         "Dead man switch configured but client does not support cancel_all_orders_after",
-                        extra={
-                            "event": "dead_man_switch_unavailable",
-                            "timeout_seconds": self.config.dead_man_switch_seconds,
-                        },
+                        extra=structured_log_extra(
+                            event="dead_man_switch_unavailable",
+                            timeout_seconds=self.config.dead_man_switch_seconds,
+                        ),
                     )
             else:
                 logger.info(
                     "Dead man switch configured but live trading is disabled; skipping",
-                    extra={
-                        "event": "dead_man_switch_skipped",
-                        "mode": self.config.mode,
-                        "validate_only": self.config.validate_only,
-                        "allow_live_trading": getattr(self.config, "allow_live_trading", False),
-                    },
+                    extra=structured_log_extra(
+                        event="dead_man_switch_skipped",
+                        mode=self.config.mode,
+                        validate_only=self.config.validate_only,
+                        allow_live_trading=getattr(self.config, "allow_live_trading", False),
+                    ),
                 )
 
         if not should_validate and not live_trading_allowed:
@@ -122,7 +130,14 @@ class KrakenExecutionAdapter:
             order.last_error = "Live trading disabled by configuration"
             logger.error(
                 order.last_error,
-                extra={"event": "order_rejected_live_guard", "mode": self.config.mode},
+                extra=structured_log_extra(
+                    event="order_rejected_live_guard",
+                    plan_id=order.plan_id,
+                    strategy_id=order.strategy_id,
+                    pair=order.pair,
+                    local_order_id=order.local_id,
+                    mode=self.config.mode,
+                ),
             )
             return order
 
@@ -140,23 +155,31 @@ class KrakenExecutionAdapter:
                     order.last_error = str(exc)
                     logger.error(
                         "Order submission retries exhausted",
-                        extra={
-                            "event": "order_retry_exhausted",
-                            "retries": attempts - 1,
-                            "error": order.last_error,
-                        },
+                        extra=structured_log_extra(
+                            event="order_retry_exhausted",
+                            plan_id=order.plan_id,
+                            strategy_id=order.strategy_id,
+                            pair=order.pair,
+                            local_order_id=order.local_id,
+                            retries=attempts - 1,
+                            error=order.last_error,
+                        ),
                     )
                     raise ExecutionError(f"Failed to submit order: {exc}") from exc
 
                 sleep_seconds = backoff_seconds * (self.config.retry_backoff_factor ** (attempts - 1))
                 logger.warning(
                     "Transient error submitting order; retrying",
-                    extra={
-                        "event": "order_retry",
-                        "attempt": attempts,
-                        "sleep_seconds": sleep_seconds,
-                        "error": str(exc),
-                    },
+                    extra=structured_log_extra(
+                        event="order_retry",
+                        plan_id=order.plan_id,
+                        strategy_id=order.strategy_id,
+                        pair=order.pair,
+                        local_order_id=order.local_id,
+                        attempt=attempts,
+                        sleep_seconds=sleep_seconds,
+                        error=str(exc),
+                    ),
                 )
                 time.sleep(sleep_seconds)
             except Exception as exc:  # pragma: no cover - passthrough for client errors
@@ -164,7 +187,14 @@ class KrakenExecutionAdapter:
                 order.last_error = str(exc)
                 logger.error(
                     "Order submission error",
-                    extra={"event": "order_submit_error", "error": order.last_error},
+                    extra=structured_log_extra(
+                        event="order_submit_error",
+                        plan_id=order.plan_id,
+                        strategy_id=order.strategy_id,
+                        pair=order.pair,
+                        local_order_id=order.local_id,
+                        error=order.last_error,
+                    ),
                 )
                 raise ExecutionError(f"Failed to submit order: {exc}") from exc
 
@@ -174,14 +204,30 @@ class KrakenExecutionAdapter:
             order.last_error = "; ".join(errors)
             logger.error(
                 "Order rejected by Kraken",
-                extra={"event": "order_rejected", "errors": errors, "order_type": order.order_type},
+                extra=structured_log_extra(
+                    event="order_rejected",
+                    plan_id=order.plan_id,
+                    strategy_id=order.strategy_id,
+                    pair=order.pair,
+                    local_order_id=order.local_id,
+                    errors=errors,
+                    order_type=order.order_type,
+                ),
             )
             raise OrderRejectedError(order.last_error)
 
         if self.config.validate_only or self.config.mode != "live":
             order.status = "validated"
             logger.info(
-                "Order validated only", extra={"event": "order_validated", "mode": self.config.mode}
+                "Order validated only",
+                extra=structured_log_extra(
+                    event="order_validated",
+                    plan_id=order.plan_id,
+                    strategy_id=order.strategy_id,
+                    pair=order.pair,
+                    local_order_id=order.local_id,
+                    mode=self.config.mode,
+                ),
             )
             return order
 
@@ -191,9 +237,15 @@ class KrakenExecutionAdapter:
             order.status = "open"
             logger.info(
                 "Order accepted by Kraken",
-                extra={
-                    "event": "order_submitted", "kraken_order_id": order.kraken_order_id, "mode": self.config.mode
-                },
+                extra=structured_log_extra(
+                    event="order_submitted",
+                    plan_id=order.plan_id,
+                    strategy_id=order.strategy_id,
+                    pair=order.pair,
+                    local_order_id=order.local_id,
+                    kraken_order_id=order.kraken_order_id,
+                    mode=self.config.mode,
+                ),
             )
             return order
 
@@ -250,7 +302,14 @@ class PaperExecutionAdapter:
                 )
                 logger.error(
                     order.last_error,
-                    extra={"event": "order_rejected_min_notional", "notional": notional},
+                    extra=structured_log_extra(
+                        event="order_rejected_min_notional",
+                        plan_id=order.plan_id,
+                        strategy_id=order.strategy_id,
+                        pair=order.pair,
+                        local_order_id=order.local_id,
+                        notional=notional,
+                    ),
                 )
                 return order
 

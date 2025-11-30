@@ -15,6 +15,7 @@ Series = Any
 from kraken_bot.config import RiskConfig
 from kraken_bot.market_data.api import MarketDataAPI
 from kraken_bot.portfolio.manager import PortfolioService
+from kraken_bot.logging_config import structured_log_extra
 from .models import RiskAdjustedAction, RiskStatus, StrategyIntent
 
 logger = logging.getLogger(__name__)
@@ -156,7 +157,10 @@ class RiskEngine:
             kill_switch_reasons.append("Manual Kill Switch")
 
         if self.config.kill_switch_on_drift and ctx.drift_flag:
-            logger.warning("Kill switch active due to portfolio drift.")
+            logger.warning(
+                "Kill switch active due to portfolio drift.",
+                extra=structured_log_extra(event="kill_switch_drift"),
+            )
             kill_switch_active = True
             kill_switch_reasons.append("Portfolio Drift Detected")
 
@@ -165,6 +169,11 @@ class RiskEngine:
                 "Kill switch active: Drawdown %.2f%% > %.2f%%",
                 ctx.daily_drawdown_pct,
                 self.config.max_daily_drawdown_pct,
+                extra=structured_log_extra(
+                    event="kill_switch_drawdown",
+                    drawdown_pct=ctx.daily_drawdown_pct,
+                    max_drawdown_pct=self.config.max_daily_drawdown_pct,
+                ),
             )
             kill_switch_active = True
             kill_switch_reasons.append(
@@ -425,20 +434,29 @@ class RiskEngine:
             liquidity: Optional[float] = getattr(metadata, "liquidity_24h_usd", None)
             return liquidity
         except Exception as exc:  # noqa: BLE001
-            logger.warning("Unable to fetch liquidity for %s: %s", pair, exc)
+            logger.warning(
+                "Unable to fetch liquidity for %s: %s", pair, exc,
+                extra=structured_log_extra(event="liquidity_fetch_failed", pair=pair),
+            )
             return None
 
     def _size_by_volatility(self, pair: str, timeframe: str, price: float, ctx: RiskContext) -> float:
         tf = timeframe or "1d"
         ohlc = self.market_data.get_ohlc(pair, tf, lookback=self.config.volatility_lookback_bars + 10)
         if not ohlc:
-            logger.warning("No OHLC for %s %s, cannot size trade.", pair, tf)
+            logger.warning(
+                "No OHLC for %s %s, cannot size trade.", pair, tf,
+                extra=structured_log_extra(event="ohlc_missing", pair=pair, timeframe=tf),
+            )
             return 0.0
 
         df = pd.DataFrame([asdict(b) for b in ohlc])
         atr = compute_atr(df, self.config.volatility_lookback_bars)
         if atr <= 0:
-            logger.warning("ATR is 0 for %s, defaulting to 0 exposure.", pair)
+            logger.warning(
+                "ATR is 0 for %s, defaulting to 0 exposure.", pair,
+                extra=structured_log_extra(event="atr_zero", pair=pair, timeframe=tf),
+            )
             return 0.0
 
         stop_distance_pct = (2 * atr) / price

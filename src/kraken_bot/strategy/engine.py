@@ -12,6 +12,7 @@ from kraken_bot.config import AppConfig, StrategyConfig
 from kraken_bot.market_data.api import MarketDataAPI
 from kraken_bot.market_data.exceptions import DataStaleError
 from kraken_bot.portfolio.manager import PortfolioService
+from kraken_bot.logging_config import structured_log_extra
 from .base import Strategy, StrategyContext
 from .models import DecisionRecord, ExecutionPlan, RiskAdjustedAction, RiskStatus, StrategyIntent, StrategyState
 from .risk import RiskEngine
@@ -47,21 +48,33 @@ class StrategyEngine:
         self.strategy_states: Dict[str, StrategyState] = {}
 
     def initialize(self) -> None:
-        logger.info("Initializing StrategyEngine...")
+        logger.info(
+            "Initializing StrategyEngine...",
+            extra=structured_log_extra(event="strategy_engine_init"),
+        )
         registry = _strategy_registry()
 
         for name, strat_cfg in self.config.strategies.configs.items():
             if not strat_cfg.enabled:
-                logger.info("Skipping disabled strategy %s", name)
+                logger.info(
+                    "Skipping disabled strategy %s", name,
+                    extra=structured_log_extra(event="strategy_disabled_skip", strategy_id=name),
+                )
                 continue
 
             if name not in self.config.strategies.enabled:
-                logger.info("Strategy %s not in enabled list, skipping", name)
+                logger.info(
+                    "Strategy %s not in enabled list, skipping", name,
+                    extra=structured_log_extra(event="strategy_not_enabled", strategy_id=name),
+                )
                 continue
 
             strat_class = registry.get(strat_cfg.type)
             if not strat_class:
-                logger.warning("Unknown strategy type: %s for %s", strat_cfg.type, name)
+                logger.warning(
+                    "Unknown strategy type: %s for %s", strat_cfg.type, name,
+                    extra=structured_log_extra(event="strategy_unknown_type", strategy_id=name),
+                )
                 continue
 
             strategy = strat_class(strat_cfg)
@@ -78,15 +91,24 @@ class StrategyEngine:
             try:
                 strategy.warmup(self.market_data, self.portfolio)
             except Exception as exc:  # pragma: no cover - defensive
-                logger.error("Error warming up strategy %s: %s", name, exc)
+                logger.error(
+                    "Error warming up strategy %s: %s", name, exc,
+                    extra=structured_log_extra(event="strategy_warmup_error", strategy_id=name),
+                )
 
-        logger.info("StrategyEngine initialized with %d strategies", len(self.strategies))
+        logger.info(
+            "StrategyEngine initialized with %d strategies", len(self.strategies),
+            extra=structured_log_extra(event="strategy_engine_ready", strategy_id="all", count=len(self.strategies)),
+        )
 
     def run_cycle(self, now: Optional[datetime] = None) -> ExecutionPlan:
         """Run a full decision cycle and persist the resulting execution plan."""
         now = now or datetime.now(timezone.utc)
         plan_id = f"plan_{int(now.timestamp())}"
-        logger.info("Starting decision cycle %s", plan_id)
+        logger.info(
+            "Starting decision cycle %s", plan_id,
+            extra=structured_log_extra(event="strategy_cycle", plan_id=plan_id),
+        )
 
         if not self._data_ready():
             return ExecutionPlan(plan_id=plan_id, generated_at=now, actions=[], metadata={"error": "Market data unavailable"})
@@ -117,11 +139,24 @@ class StrategyEngine:
                         name,
                         timeframe,
                         exc.pair,
+                        extra=structured_log_extra(
+                            event="data_stale",
+                            strategy_id=name,
+                            plan_id=plan_id,
+                            pair=exc.pair,
+                            timeframe=timeframe,
+                        ),
                     )
                     continue
                 except Exception as exc:  # pragma: no cover - defensive
                     logger.error(
-                        "Error generating intents for %s on timeframe %s: %s", name, timeframe, exc
+                        "Error generating intents for %s on timeframe %s: %s", name, timeframe, exc,
+                        extra=structured_log_extra(
+                            event="strategy_intent_error",
+                            strategy_id=name,
+                            plan_id=plan_id,
+                            timeframe=timeframe,
+                        ),
                     )
 
         risk_actions = self.risk_engine.process_intents(all_intents)
@@ -143,12 +178,12 @@ class StrategyEngine:
         self._persist_plan(plan)
         logger.info(
             "Execution plan created",
-            extra={
-                "event": "plan_created",
-                "plan_id": plan_id,
-                "action_count": len(plan.actions),
-                "blocked_actions": len([a for a in plan.actions if a.blocked]),
-            },
+            extra=structured_log_extra(
+                event="plan_created",
+                plan_id=plan_id,
+                action_count=len(plan.actions),
+                blocked_actions=len([a for a in plan.actions if a.blocked]),
+            ),
         )
         return plan
 
@@ -156,21 +191,33 @@ class StrategyEngine:
         try:
             status = self.market_data.get_data_status()
         except Exception as exc:  # pragma: no cover - defensive
-            logger.error("Unable to fetch data status: %s", exc)
+            logger.error(
+                "Unable to fetch data status: %s", exc,
+                extra=structured_log_extra(event="data_status_error"),
+            )
             return False
 
         if not status.rest_api_reachable:
-            logger.error("REST API not reachable. Aborting cycle.")
+            logger.error(
+                "REST API not reachable. Aborting cycle.",
+                extra=structured_log_extra(event="rest_unreachable"),
+            )
             return False
 
         if not status.websocket_connected:
-            logger.error("WebSocket not connected. Aborting cycle.")
+            logger.error(
+                "WebSocket not connected. Aborting cycle.",
+                extra=structured_log_extra(event="websocket_unreachable"),
+            )
             return False
 
         try:
             self.portfolio.sync()
         except Exception as exc:  # pragma: no cover - defensive
-            logger.error("Error syncing portfolio: %s", exc)
+            logger.error(
+                "Error syncing portfolio: %s", exc,
+                extra=structured_log_extra(event="portfolio_sync_error"),
+            )
             return False
 
         return True
@@ -210,7 +257,10 @@ class StrategyEngine:
         if callable(persist_method):
             persist_method(plan)
         else:  # pragma: no cover - backwards compatibility
-            logger.debug("PortfolioService missing record_execution_plan; skipping persistence.")
+            logger.debug(
+                "PortfolioService missing record_execution_plan; skipping persistence.",
+                extra=structured_log_extra(event="plan_persist_skipped", plan_id=plan.plan_id),
+            )
 
     def get_risk_status(self) -> RiskStatus:
         return self.risk_engine.get_status()
