@@ -1,7 +1,7 @@
 # src/kraken_bot/execution/oms.py
 
 import logging
-from typing import Any, Dict, List, Optional, TYPE_CHECKING
+from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING
 from datetime import UTC, datetime
 from uuid import uuid4
 
@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from kraken_bot.portfolio.store import PortfolioStore
-    from kraken_bot.strategy.models import RiskAdjustedAction
+    from kraken_bot.strategy.models import RiskAdjustedAction, RiskStatus
 
 
 class ExecutionService:
@@ -42,6 +42,7 @@ class ExecutionService:
         config: Optional[ExecutionConfig] = None,
         market_data: Optional[MarketDataAPI] = None,
         rate_limiter: Optional[RateLimiter] = None,
+        risk_status_provider: Optional[Callable[[], "RiskStatus"]] = None,
     ):
         self.adapter = adapter or get_execution_adapter(
             client=client, config=config or ExecutionConfig(), rate_limiter=rate_limiter
@@ -51,10 +52,25 @@ class ExecutionService:
         self.open_orders: Dict[str, LocalOrder] = {}
         self.recent_executions: List[ExecutionResult] = []
         self.kraken_to_local: Dict[str, str] = {}
+        self._risk_status_provider = risk_status_provider
 
         adapter_config = getattr(self.adapter, "config", None)
         if getattr(adapter_config, "mode", None) == "live":
             self._emit_live_readiness_checklist()
+
+    def _kill_switch_active(self) -> bool:
+        if not self._risk_status_provider:
+            return False
+
+        try:
+            status = self._risk_status_provider()
+        except Exception:
+            logger.exception(
+                "Risk status provider failed", extra={"event": "risk_status_error"}
+            )
+            return False
+
+        return bool(getattr(status, "kill_switch_active", False))
 
     def execute_plan(self, plan: ExecutionPlan) -> ExecutionResult:
         """
@@ -89,6 +105,44 @@ class ExecutionService:
                 continue
 
             eligible_actions.append(action)
+
+        if self._kill_switch_active():
+            blocked_reason = "Kill switch active; execution blocked"
+            logger.warning(
+                "Execution blocked by kill switch", extra={"event": "kill_switch_block", "plan_id": plan.plan_id}
+            )
+            for action in eligible_actions:
+                delta = action.target_base_size - action.current_base_size
+                side = "buy" if delta > 0 else "sell"
+                volume = abs(delta)
+
+                order = LocalOrder(
+                    local_id=str(uuid4()),
+                    plan_id=plan.plan_id,
+                    strategy_id=action.strategy_id,
+                    pair=action.pair,
+                    side=side,
+                    order_type=plan.metadata.get("order_type", ""),
+                    userref=action.userref,
+                    requested_base_size=volume,
+                    requested_price=plan.metadata.get("requested_price"),
+                    status="rejected",
+                    last_error=blocked_reason,
+                )
+                order.updated_at = datetime.now(UTC)
+
+                if self.store:
+                    self.store.save_order(order)
+
+                result.errors.append(blocked_reason)
+                result.orders.append(order)
+
+            result.completed_at = datetime.now(UTC)
+            result.success = not result.errors
+            self.record_execution_result(result)
+            if self.store:
+                self.store.save_execution_result(result)
+            return result
 
         max_concurrent = getattr(adapter_config, "max_concurrent_orders", None)
         actions_to_process = eligible_actions
