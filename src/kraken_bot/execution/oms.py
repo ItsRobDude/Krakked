@@ -52,7 +52,8 @@ class ExecutionService:
         self.recent_executions: List[ExecutionResult] = []
         self.kraken_to_local: Dict[str, str] = {}
 
-        if self.adapter.config.mode == "live":
+        adapter_config = getattr(self.adapter, "config", None)
+        if getattr(adapter_config, "mode", None) == "live":
             self._emit_live_readiness_checklist()
 
     def execute_plan(self, plan: ExecutionPlan) -> ExecutionResult:
@@ -72,6 +73,10 @@ class ExecutionService:
         """
         result = ExecutionResult(plan_id=plan.plan_id, started_at=datetime.utcnow())
 
+        adapter_config = getattr(self.adapter, "config", None)
+        if adapter_config is None:
+            adapter_config = ExecutionConfig()
+
         eligible_actions = []
         for action in plan.actions:
             if action.blocked or action.action_type == "none":
@@ -83,11 +88,14 @@ class ExecutionService:
 
             eligible_actions.append(action)
 
-        max_concurrent = getattr(self.adapter, "config", None)
-        max_concurrent = getattr(max_concurrent, "max_concurrent_orders", None)
+        max_concurrent = getattr(adapter_config, "max_concurrent_orders", None)
         actions_to_process = eligible_actions
         truncated_actions: List["RiskAdjustedAction"] = []
-        if max_concurrent and max_concurrent > 0 and len(eligible_actions) > max_concurrent:
+        if (
+            isinstance(max_concurrent, int)
+            and max_concurrent > 0
+            and len(eligible_actions) > max_concurrent
+        ):
             actions_to_process = eligible_actions[:max_concurrent]
             truncated_actions = eligible_actions[max_concurrent:]
 
@@ -115,7 +123,7 @@ class ExecutionService:
                 action=action,
                 plan=plan,
                 market_data=self.market_data,
-                config=self.adapter.config,
+                config=adapter_config,
             )
 
             if routing_warning:
