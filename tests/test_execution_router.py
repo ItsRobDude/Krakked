@@ -1,3 +1,5 @@
+from typing import Any, Dict
+
 import pytest
 
 from kraken_bot.config import ExecutionConfig
@@ -6,7 +8,7 @@ from kraken_bot.execution.router import build_order_payload
 
 
 def _order(**overrides) -> LocalOrder:
-    base = dict(
+    base: Dict[str, Any] = dict(
         local_id="1",
         plan_id=None,
         strategy_id=None,
@@ -14,8 +16,12 @@ def _order(**overrides) -> LocalOrder:
         side="buy",
         order_type="limit",
         userref=1,
-        requested_base_size=0.5,
-        requested_price=100.0,
+        requested_base_size=0.123,
+        requested_price=10.0,
+        status="pending",
+        last_error=None,
+        raw_request={},
+        raw_response=None,
     )
     base.update(overrides)
     return LocalOrder(**base)
