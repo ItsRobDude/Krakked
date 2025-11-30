@@ -7,6 +7,7 @@ from kraken_bot.config import AppConfig
 from kraken_bot.connection.rate_limiter import RateLimiter
 from kraken_bot.market_data.api import MarketDataAPI
 from kraken_bot.connection.rest_client import KrakenRESTClient
+from kraken_bot.logging_config import structured_log_extra
 from .portfolio import Portfolio
 from .store import PortfolioStore, SQLitePortfolioStore
 from .models import CashFlowRecord, PortfolioSnapshot
@@ -41,10 +42,16 @@ class PortfolioService:
         """
         Loads config, performs initial sync, builds internal state.
         """
-        logger.info("Initializing PortfolioService...")
+        logger.info(
+            "Initializing PortfolioService...",
+            extra=structured_log_extra(event="portfolio_init"),
+        )
         self._bootstrap_from_store()
         self.sync()
-        logger.info("PortfolioService initialized.")
+        logger.info(
+            "PortfolioService initialized.",
+            extra=structured_log_extra(event="portfolio_ready"),
+        )
 
     def _bootstrap_from_store(self):
         if self._bootstrapped:
@@ -67,7 +74,10 @@ class PortfolioService:
         """
         Fetches new trades/ledgers, updates state, reconciles.
         """
-        logger.info("Syncing portfolio...")
+        logger.info(
+            "Syncing portfolio...",
+            extra=structured_log_extra(event="portfolio_sync_start"),
+        )
 
         self._bootstrap_from_store()
 
@@ -120,7 +130,12 @@ class PortfolioService:
 
             safety_counter += 1
             if safety_counter > 200:
-                logger.warning("TradesHistory pagination aborted after 200 pages to avoid infinite loop.")
+                logger.warning(
+                    "TradesHistory pagination aborted after 200 pages to avoid infinite loop.",
+                    extra=structured_log_extra(
+                        event="portfolio_sync_pagination_aborted", pages=safety_counter
+                    ),
+                )
                 break
 
         if new_trades:
@@ -152,7 +167,10 @@ class PortfolioService:
         balance_resp = self.rest_client.get_private("Balance")
         drift_detected = self.portfolio.reconcile(balance_resp)
         if drift_detected:
-            logger.warning("Portfolio Drift Detected during reconciliation.")
+            logger.warning(
+                "Portfolio Drift Detected during reconciliation.",
+                extra=structured_log_extra(event="portfolio_drift_detected"),
+            )
 
     def record_decision(self, record: "DecisionRecord"):
         """

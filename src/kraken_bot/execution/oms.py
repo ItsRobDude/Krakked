@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 from kraken_bot.strategy.models import ExecutionPlan
+from kraken_bot.logging_config import structured_log_extra
 
 from kraken_bot.config import ExecutionConfig
 from kraken_bot.connection.rate_limiter import RateLimiter
@@ -66,7 +67,8 @@ class ExecutionService:
             status = self._risk_status_provider()
         except Exception:
             logger.exception(
-                "Risk status provider failed", extra={"event": "risk_status_error"}
+                "Risk status provider failed",
+                extra=structured_log_extra(event="risk_status_error"),
             )
             return False
 
@@ -110,11 +112,11 @@ class ExecutionService:
             blocked_reason = "Execution blocked by kill switch"
             logger.warning(
                 blocked_reason,
-                extra={
-                    "event": "kill_switch_block",
-                    "plan_id": plan.plan_id,
-                    "eligible_actions": len(eligible_actions),
-                },
+                extra=structured_log_extra(
+                    event="kill_switch_block",
+                    plan_id=plan.plan_id,
+                    eligible_actions=len(eligible_actions),
+                ),
             )
             result.errors.append(blocked_reason)
 
@@ -163,13 +165,13 @@ class ExecutionService:
 
             logger.warning(
                 "Execution concurrency limit reached; truncating actions",
-                extra={
-                    "event": "execution_concurrency_truncated",
-                    "plan_id": plan.plan_id,
-                    "max_concurrent_orders": max_concurrent,
-                    "eligible_actions": len(eligible_actions),
-                    "skipped_actions": len(truncated_actions),
-                },
+                extra=structured_log_extra(
+                    event="execution_concurrency_truncated",
+                    plan_id=plan.plan_id,
+                    max_concurrent_orders=max_concurrent,
+                    eligible_actions=len(eligible_actions),
+                    skipped_actions=len(truncated_actions),
+                ),
             )
 
         pair_target_notional: Dict[str, float] = {}
@@ -192,13 +194,13 @@ class ExecutionService:
                 result.warnings.append(routing_warning)
                 logger.warning(
                     "Order routing failed",
-                    extra={
-                        "event": "order_routing_failed",
-                        "plan_id": plan.plan_id,
-                        "strategy_id": action.strategy_id,
-                        "pair": action.pair,
-                        "reason": routing_warning,
-                    },
+                    extra=structured_log_extra(
+                        event="order_routing_failed",
+                        plan_id=plan.plan_id,
+                        strategy_id=action.strategy_id,
+                        pair=action.pair,
+                        reason=routing_warning,
+                    ),
                 )
                 continue
 
@@ -207,12 +209,12 @@ class ExecutionService:
                 result.errors.append(missing_order_reason)
                 logger.warning(
                     "Order build returned no order",
-                    extra={
-                        "event": "order_build_missing",
-                        "plan_id": plan.plan_id,
-                        "strategy_id": action.strategy_id,
-                        "pair": action.pair,
-                    },
+                    extra=structured_log_extra(
+                        event="order_build_missing",
+                        plan_id=plan.plan_id,
+                        strategy_id=action.strategy_id,
+                        pair=action.pair,
+                    ),
                 )
                 continue
 
@@ -233,13 +235,13 @@ class ExecutionService:
                     self.store.save_order(order)
                 logger.warning(
                     "Order blocked by guardrail",
-                    extra={
-                        "event": "order_guardrail_reject",
-                        "plan_id": plan.plan_id,
-                        "strategy_id": action.strategy_id,
-                        "pair": action.pair,
-                        "reason": guardrail_reason,
-                    },
+                    extra=structured_log_extra(
+                        event="order_guardrail_reject",
+                        plan_id=plan.plan_id,
+                        strategy_id=action.strategy_id,
+                        pair=action.pair,
+                        reason=guardrail_reason,
+                    ),
                 )
                 result.orders.append(order)
                 continue
@@ -247,14 +249,15 @@ class ExecutionService:
             try:
                 logger.info(
                     "Submitting order",
-                    extra={
-                        "event": "order_submit",
-                        "plan_id": plan.plan_id,
-                        "strategy_id": action.strategy_id,
-                        "pair": action.pair,
-                        "side": order.side,
-                        "volume": order.requested_base_size,
-                    },
+                    extra=structured_log_extra(
+                        event="order_routed",
+                        plan_id=plan.plan_id,
+                        strategy_id=action.strategy_id,
+                        pair=action.pair,
+                        side=order.side,
+                        volume=order.requested_base_size,
+                        local_order_id=order.local_id,
+                    ),
                 )
                 order = self.adapter.submit_order(order)
                 self.register_order(order)
@@ -262,13 +265,15 @@ class ExecutionService:
                     self.store.save_order(order)
                 logger.info(
                     "Order submission result",
-                    extra={
-                        "event": "order_status",
-                        "plan_id": plan.plan_id,
-                        "local_id": order.local_id,
-                        "kraken_order_id": order.kraken_order_id,
-                        "status": order.status,
-                    },
+                    extra=structured_log_extra(
+                        event="order_status",
+                        plan_id=plan.plan_id,
+                        strategy_id=action.strategy_id,
+                        pair=action.pair,
+                        local_order_id=order.local_id,
+                        kraken_order_id=order.kraken_order_id,
+                        status=order.status,
+                    ),
                 )
             except ExecutionError as exc:
                 message = str(exc)
@@ -282,12 +287,14 @@ class ExecutionService:
 
                 logger.error(
                     "Order submission failed",
-                    extra={
-                        "event": "order_error",
-                        "plan_id": plan.plan_id,
-                        "local_id": order.local_id,
-                        "error": message,
-                    },
+                    extra=structured_log_extra(
+                        event="execution_error",
+                        plan_id=plan.plan_id,
+                        strategy_id=action.strategy_id,
+                        pair=action.pair,
+                        local_order_id=order.local_id,
+                        error=message,
+                    ),
                 )
 
             result.orders.append(order)
@@ -347,12 +354,12 @@ class ExecutionService:
 
         logger.info(
             "Loaded persisted open orders",
-            extra={
-                "event": "open_orders_loaded",
-                "count": len(orders),
-                "plan_id": plan_id,
-                "strategy_id": strategy_id,
-            },
+            extra=structured_log_extra(
+                event="open_orders_loaded",
+                plan_id=plan_id,
+                strategy_id=strategy_id,
+                count=len(orders),
+            ),
         )
         return orders
 
@@ -452,13 +459,16 @@ class ExecutionService:
 
         logger.info(
             "Reconciled order state",
-            extra={
-                "event": "order_reconciled",
-                "kraken_order_id": kraken_id,
-                "local_id": order.local_id,
-                "status": order.status,
-                "is_closed_feed": is_closed,
-            },
+            extra=structured_log_extra(
+                event="order_reconciled",
+                plan_id=order.plan_id,
+                strategy_id=order.strategy_id,
+                pair=order.pair,
+                kraken_order_id=kraken_id,
+                local_order_id=order.local_id,
+                status=order.status,
+                is_closed_feed=is_closed,
+            ),
         )
 
         if self.store:
@@ -509,17 +519,23 @@ class ExecutionService:
 
         logger.info(
             "Canceled order",
-            extra={
-                "event": "order_canceled",
-                "local_id": order.local_id,
-                "kraken_order_id": order.kraken_order_id,
-            },
+            extra=structured_log_extra(
+                event="order_canceled",
+                plan_id=order.plan_id,
+                strategy_id=order.strategy_id,
+                pair=order.pair,
+                local_order_id=order.local_id,
+                kraken_order_id=order.kraken_order_id,
+            ),
         )
 
     def cancel_all(self) -> None:
         """Cancel all open orders via the adapter and mark them locally."""
 
-        logger.warning("Canceling all open orders", extra={"event": "cancel_all_orders"})
+        logger.warning(
+            "Canceling all open orders",
+            extra=structured_log_extra(event="cancel_all_orders"),
+        )
 
         self.adapter.cancel_all_orders()
 
@@ -532,12 +548,12 @@ class ExecutionService:
 
         logger.info(
             "Reconciled orders after cancel_all",
-            extra={
-                "event": "cancel_all_reconcile",
-                "open_orders_before_refresh": open_before_refresh,
-                "open_orders_after_refresh": open_after_refresh,
-                "open_orders_remaining": len(self.open_orders),
-            },
+            extra=structured_log_extra(
+                event="cancel_all_reconcile",
+                open_orders_before_refresh=open_before_refresh,
+                open_orders_after_refresh=open_after_refresh,
+                open_orders_remaining=len(self.open_orders),
+            ),
         )
 
         for order in list(self.open_orders.values()):
@@ -554,11 +570,14 @@ class ExecutionService:
 
             logger.info(
                 "Canceled order via cancel_all",
-                extra={
-                    "event": "order_canceled",
-                    "local_id": order.local_id,
-                    "kraken_order_id": order.kraken_order_id,
-                },
+                extra=structured_log_extra(
+                    event="order_canceled",
+                    plan_id=order.plan_id,
+                    strategy_id=order.strategy_id,
+                    pair=order.pair,
+                    local_order_id=order.local_id,
+                    kraken_order_id=order.kraken_order_id,
+                ),
             )
 
             self.open_orders.pop(order.local_id, None)
@@ -570,12 +589,15 @@ class ExecutionService:
             except ExecutionError as exc:
                 logger.error(
                     "Failed to cancel order",
-                    extra={
-                        "event": "order_cancel_error",
-                        "local_id": order.local_id,
-                        "kraken_order_id": order.kraken_order_id,
-                        "error": str(exc),
-                    },
+                    extra=structured_log_extra(
+                        event="order_cancel_error",
+                        plan_id=order.plan_id,
+                        strategy_id=order.strategy_id,
+                        pair=order.pair,
+                        local_order_id=order.local_id,
+                        kraken_order_id=order.kraken_order_id,
+                        error=str(exc),
+                    ),
                 )
 
     def _emit_live_readiness_checklist(self) -> None:
@@ -587,15 +609,15 @@ class ExecutionService:
 
         logger.warning(
             "Live readiness checklist",
-            extra={
-                "event": "live_readiness",
-                "mode": config.mode,
-                "validate_only": config.validate_only,
-                "allow_live_trading": getattr(config, "allow_live_trading", False),
-                "config_sane": config_sane,
-                "paper_tests_completed": getattr(config, "paper_tests_completed", False),
-                "reconciliation_available": reconciliation_available,
-            },
+            extra=structured_log_extra(
+                event="live_readiness",
+                mode=config.mode,
+                validate_only=config.validate_only,
+                allow_live_trading=getattr(config, "allow_live_trading", False),
+                config_sane=config_sane,
+                paper_tests_completed=getattr(config, "paper_tests_completed", False),
+                reconciliation_available=reconciliation_available,
+            ),
         )
 
     def _evaluate_guardrails(

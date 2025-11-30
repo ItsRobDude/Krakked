@@ -11,6 +11,7 @@ from pathlib import Path
 from .models import RealizedPnLRecord, CashFlowRecord, PortfolioSnapshot, AssetValuation
 from .exceptions import PortfolioSchemaError
 from .migrations import _ensure_meta_table, _set_schema_version, run_migrations
+from kraken_bot.logging_config import structured_log_extra
 
 if TYPE_CHECKING:
     from kraken_bot.strategy.models import DecisionRecord, ExecutionPlan, RiskAdjustedAction
@@ -56,7 +57,10 @@ def ensure_portfolio_schema(
     try:
         stored_version = int(row[0])
     except (TypeError, ValueError) as exc:
-        logger.exception("Invalid schema version stored in portfolio DB")
+        logger.exception(
+            "Invalid schema version stored in portfolio DB",
+            extra=structured_log_extra(event="portfolio_schema_invalid"),
+        )
         raise PortfolioSchemaError(found=row[0], expected=target_version) from exc
 
     if stored_version > target_version:
@@ -68,7 +72,10 @@ def ensure_portfolio_schema(
             run_migrations(conn, stored_version, target_version)
         except Exception as exc:  # noqa: BLE001
             logger.exception(
-                "Failed to run portfolio migrations from v%s to v%s", stored_version, target_version
+                "Failed to run portfolio migrations from v%s to v%s", stored_version, target_version,
+                extra=structured_log_extra(
+                    event="portfolio_migration_failed", from_version=stored_version, to_version=target_version
+                ),
             )
             raise PortfolioSchemaError(found=stored_version, expected=target_version) from exc
         migrated = True
