@@ -11,9 +11,11 @@ from kraken_bot.portfolio.models import SpotPosition
 from kraken_bot.ui.logging import build_request_log_extra
 from kraken_bot.ui.models import (
     ApiEnvelope,
+    AssetExposureBreakdown,
     ExposureBreakdown,
     PortfolioSummary,
     PositionPayload,
+    StrategyExposureBreakdown,
 )
 
 logger = logging.getLogger(__name__)
@@ -26,9 +28,11 @@ def _context(request: Request):
 
 
 def _build_position_payload(position: SpotPosition, price: float | None) -> PositionPayload:
-    current_value = position.base_size * price if price is not None else None
-    unrealized = None
+    current_value: float | None = None
+    unrealized: float | None = None
+
     if price is not None:
+        current_value = position.base_size * price
         unrealized = current_value - (position.base_size * position.avg_entry_price)
 
     return PositionPayload(
@@ -96,17 +100,21 @@ async def get_exposure(request: Request) -> ApiEnvelope[ExposureBreakdown]:
     ctx = _context(request)
     try:
         by_asset = [
-            {
-                "asset": exp.asset,
-                "value_usd": exp.value_base,
-                "pct_of_equity": exp.percentage_of_equity,
-            }
+            AssetExposureBreakdown(
+                asset=exp.asset,
+                value_usd=exp.value_base,
+                pct_of_equity=exp.percentage_of_equity,
+            )
             for exp in ctx.portfolio.get_asset_exposure()
         ]
 
         risk_status = ctx.strategy_engine.get_risk_status()
         exposure_by_strategy = [
-            {"strategy_id": sid, "value_usd": None, "pct_of_equity": pct}
+            StrategyExposureBreakdown(
+                strategy_id=sid,
+                value_usd=None,
+                pct_of_equity=pct,
+            )
             for sid, pct in (risk_status.per_strategy_exposure_pct or {}).items()
         ]
 
