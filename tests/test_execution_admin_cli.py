@@ -60,7 +60,7 @@ def test_panic_cli_reconciles_and_persists(monkeypatch: pytest.MonkeyPatch, caps
 
     adapter = _FakeAdapter()
     store = _FakeStore()
-    service = admin_cli.ExecutionService(adapter=adapter, store=store)
+    service = admin_cli.ExecutionService(adapter=adapter, store=store)  # type: ignore[arg-type]
 
     order = LocalOrder(
         local_id="local-1",
