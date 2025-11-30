@@ -234,10 +234,10 @@ class HttpBackend:
         url = f"{self.base_url}{path}"
         response = self.session.request(method, url, json=payload, timeout=2)
         response.raise_for_status()
-        payload = response.json()
-        if isinstance(payload, dict) and payload.get("error"):
-            raise RuntimeError(str(payload["error"]))
-        return payload.get("data") if isinstance(payload, dict) else payload
+        payload_data = response.json()
+        if isinstance(payload_data, dict) and payload_data.get("error"):
+            raise RuntimeError(str(payload_data["error"]))
+        return payload_data.get("data") if isinstance(payload_data, dict) else payload_data
 
     def _get(self, path: str) -> Any:
         return self._request("GET", path)
