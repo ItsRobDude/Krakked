@@ -55,6 +55,17 @@ def _kill_switch_provider():
     return SimpleNamespace(kill_switch_active=True)
 
 
+class ToggleableRiskEngine:
+    def __init__(self):
+        self.manual_kill_switch_active = False
+
+    def set_manual_kill_switch(self, active: bool) -> None:
+        self.manual_kill_switch_active = active
+
+    def get_status(self) -> SimpleNamespace:
+        return SimpleNamespace(kill_switch_active=self.manual_kill_switch_active)
+
+
 def test_execute_plan_blocked_by_kill_switch():
     adapter = FakeAdapter()
     service = ExecutionService(adapter=adapter, risk_status_provider=_kill_switch_provider)
@@ -120,3 +131,26 @@ def test_kill_switch_blocks_all_eligible_actions_with_truncation_config():
     assert all("kill_switch" in (order.last_error or "") for order in result.orders)
     assert any("kill switch" in msg.lower() for msg in result.errors)
     assert not adapter.submit_order_calls
+
+
+def test_risk_provider_follows_strategy_engine_kill_switch_state():
+    adapter = FakeAdapter()
+    risk_engine = ToggleableRiskEngine()
+    service = ExecutionService(
+        adapter=adapter, risk_status_provider=risk_engine.get_status
+    )
+
+    plan = ExecutionPlan(
+        plan_id="plan_manual_kill_switch",
+        generated_at=datetime.now(UTC),
+        actions=[_build_action("XBTUSD")],
+    )
+
+    risk_engine.set_manual_kill_switch(True)
+    result = service.execute_plan(plan)
+
+    assert not result.success
+    assert adapter.submit_order_calls == []
+    assert all(
+        "kill_switch" in (order.last_error or "") for order in result.orders
+    )
