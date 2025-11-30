@@ -193,7 +193,7 @@ class Portfolio:
             for asset, amount in live_balances.items()
         }
 
-        position_totals = defaultdict(float)
+        position_totals: dict[str, float] = defaultdict(float)
         for position in self.positions.values():
             position_totals[position.base_asset] += position.base_size
 
@@ -449,7 +449,7 @@ class Portfolio:
     ) -> List[CashFlowRecord]:
         return self.store.get_cash_flows(asset=asset, limit=limit, since=since, until=until, ascending=ascending)
 
-    def get_fee_summary(self) -> Dict[str, float]:
+    def get_fee_summary(self) -> Dict[str, float | Dict[str, float]]:
         return {
             "by_pair": dict(self.fees_paid_base_by_pair),
             "total_base": sum(self.fees_paid_base_by_pair.values()),
