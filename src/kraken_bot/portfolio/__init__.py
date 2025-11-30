@@ -6,6 +6,11 @@ state, provides weighted-average cost PnL calculations, detects cashflows, and
 creates periodic snapshots persisted via :class:`~kraken_bot.portfolio.store.PortfolioStore`.
 """
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .portfolio import Portfolio
+
 __all__ = ["Portfolio"]
 
 
