@@ -140,7 +140,19 @@ class ExecutionService:
                 )
                 continue
 
-            assert order is not None
+            if order is None:
+                missing_order_reason = f"Failed to build order for {action.pair}"
+                result.errors.append(missing_order_reason)
+                logger.warning(
+                    "Order build returned no order",
+                    extra={
+                        "event": "order_build_missing",
+                        "plan_id": plan.plan_id,
+                        "strategy_id": action.strategy_id,
+                        "pair": action.pair,
+                    },
+                )
+                continue
 
             guardrail_reason = self._evaluate_guardrails(
                 action=action,
