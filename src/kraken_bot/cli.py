@@ -17,7 +17,12 @@ from kraken_bot.connection.exceptions import (
 from kraken_bot.connection.rest_client import KrakenRESTClient
 from kraken_bot.main import run as run_orchestrator
 from kraken_bot.portfolio.exceptions import PortfolioSchemaError
-from kraken_bot.portfolio.store import CURRENT_SCHEMA_VERSION, SQLitePortfolioStore
+from kraken_bot.portfolio.store import (
+    CURRENT_SCHEMA_VERSION,
+    SchemaStatus,
+    ensure_portfolio_schema,
+    ensure_portfolio_tables,
+)
 from kraken_bot.secrets import CredentialResult, CredentialStatus
 from scripts import run_strategy_once
 
@@ -101,6 +106,31 @@ def _get_schema_version(db_path: str) -> int | None:
         raise PortfolioSchemaError(found=row[0], expected=CURRENT_SCHEMA_VERSION)
 
 
+def run_migrate_db(db_path: str) -> SchemaStatus:
+    """Run migrations for the SQLite portfolio store at ``db_path``."""
+
+    with sqlite3.connect(db_path) as conn:
+        status = ensure_portfolio_schema(
+            conn, CURRENT_SCHEMA_VERSION, migrate=True
+        )
+        ensure_portfolio_tables(conn)
+        conn.commit()
+
+    return status
+
+
+def print_schema_version(db_path: str) -> SchemaStatus:
+    """Ensure metadata exists and return the stored portfolio schema version."""
+
+    with sqlite3.connect(db_path) as conn:
+        status = ensure_portfolio_schema(
+            conn, CURRENT_SCHEMA_VERSION, migrate=False
+        )
+        conn.commit()
+
+    return status
+
+
 def _migrate_db_command(args: argparse.Namespace) -> int:
     """Run portfolio schema migrations for the SQLite store at --db-path."""
 
@@ -124,7 +154,7 @@ def _migrate_db_command(args: argparse.Namespace) -> int:
     )
 
     try:
-        SQLitePortfolioStore(db_path=args.db_path)
+        status = run_migrate_db(args.db_path)
     except PortfolioSchemaError as exc:
         print(
             "Migration failed: "
@@ -135,9 +165,7 @@ def _migrate_db_command(args: argparse.Namespace) -> int:
         print(f"Migration failed: {exc}")
         return 1
 
-    print(
-        f"Migration completed successfully to version {CURRENT_SCHEMA_VERSION}."
-    )
+    print(f"Migration completed successfully to version {status.version}.")
     return 0
 
 
@@ -145,7 +173,7 @@ def _schema_version_command(args: argparse.Namespace) -> int:
     """Display the current portfolio schema version stored at --db-path."""
 
     try:
-        stored_version = _get_schema_version(args.db_path)
+        status = print_schema_version(args.db_path)
     except PortfolioSchemaError as exc:
         print(
             "Failed to read schema version: "
@@ -156,11 +184,11 @@ def _schema_version_command(args: argparse.Namespace) -> int:
         print(f"Failed to read schema version: {exc}")
         return 1
 
-    if stored_version is None:
+    if status.initialized:
         print("Schema version not set; meta table or schema_version row is missing.")
         return 0
 
-    print(f"Schema version: {stored_version}")
+    print(f"Schema version: {status.version}")
     return 0
 
 
