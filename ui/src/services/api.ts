@@ -56,15 +56,44 @@ export type RecentExecution = {
 };
 
 export type SystemHealth = {
+  app_version?: string | null;
+  execution_mode?: string | null;
   rest_api_reachable: boolean;
   websocket_connected: boolean;
   streaming_pairs: number;
   stale_pairs: number;
   subscription_errors: number;
   market_data_ok: boolean;
+  market_data_status: string;
+  market_data_reason?: string | null;
+  market_data_stale?: boolean;
+  market_data_max_staleness?: number | null;
   execution_ok: boolean;
   current_mode: string;
   ui_read_only: boolean;
+  kill_switch_active?: boolean | null;
+  drift_detected: boolean;
+  drift_reason?: string | null;
+};
+
+export type SystemMetrics = {
+  plans_generated: number;
+  plans_executed: number;
+  blocked_actions: number;
+  execution_errors: number;
+  market_data_errors: number;
+  recent_errors: Array<{ at: string; message: string }>;
+  last_equity_usd: number | null;
+  last_realized_pnl_usd: number | null;
+  last_unrealized_pnl_usd: number | null;
+  open_orders_count: number;
+  open_positions_count: number;
+  drift_detected: boolean;
+  drift_reason: string | null;
+  market_data_ok: boolean;
+  market_data_stale: boolean;
+  market_data_reason: string | null;
+  market_data_max_staleness: number | null;
 };
 
 const API_BASE = import.meta.env.VITE_API_BASE || '/api';
@@ -111,6 +140,22 @@ export async function fetchRecentExecutions(): Promise<RecentExecution[] | null>
 
 export async function fetchSystemHealth(): Promise<SystemHealth | null> {
   return fetchJson<SystemHealth>('/system/health');
+}
+
+export async function fetchSystemMetrics(): Promise<SystemMetrics | null> {
+  return fetchJson<SystemMetrics>('/system/metrics');
+}
+
+export function getAppVersion(health: SystemHealth | null): string | null {
+  return health?.app_version ?? null;
+}
+
+export function getExecutionMode(health: SystemHealth | null): string | null {
+  return health?.execution_mode ?? health?.current_mode ?? null;
+}
+
+export function getKillSwitchState(health: SystemHealth | null): boolean | null {
+  return health?.kill_switch_active ?? null;
 }
 
 export async function getRiskStatus(): Promise<RiskStatus | null> {
