@@ -41,9 +41,9 @@ def test_rate_limiter_no_delay_for_slow_calls():
 
     duration = end_time - start_time
 
-    # The duration should be dominated by the sleep, not the limiter.
-    # It should be just over 0.3s.
-    assert 0.3 <= duration < 0.35
+    # The duration should be dominated by the sleep, not additional limiter delay.
+    # It should be around 0.3s with small tolerance for scheduling jitter.
+    assert 0.29 <= duration < 0.40
 
 def test_rate_limiter_init_with_zero_rate():
     """

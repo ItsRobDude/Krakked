@@ -87,12 +87,12 @@ def run_strategy_once() -> None:
 
     try:
         params = signature(PortfolioService).parameters
-        ps_kwargs = {}
+        kwargs = {}
         if "rest_client" in params:
-            ps_kwargs["rest_client"] = client
+            kwargs["rest_client"] = client
         if "rate_limiter" in params:
-            ps_kwargs["rate_limiter"] = rate_limiter
-        portfolio = PortfolioService(safe_config, market_data, **ps_kwargs)
+            kwargs["rate_limiter"] = rate_limiter
+        portfolio = PortfolioService(safe_config, market_data, **kwargs)
     except (ValueError, TypeError):
         portfolio = PortfolioService(safe_config, market_data)
     portfolio.initialize()
