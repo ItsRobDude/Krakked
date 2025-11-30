@@ -1,12 +1,13 @@
 # src/kraken_bot/connection/rest_client.py
 
-import requests
 import time
 import urllib.parse
 import hashlib
 import hmac
 import base64
 from typing import Any, Dict, Optional
+from requests import HTTPError, RequestException, Timeout
+import requests
 from .rate_limiter import RateLimiter
 from .nonce import NonceGenerator
 from .exceptions import (
@@ -62,15 +63,21 @@ class KrakenRESTClient:
         sigdigest = base64.b64encode(mac.digest())
         return sigdigest.decode()
 
-    def _request(self, method: str, endpoint: str, params: dict = None, private: bool = False) -> Dict[str, Any]:
+    def _request(
+        self,
+        endpoint: str,
+        params: Optional[Dict[str, Any]] = None,
+        private: bool = False,
+    ) -> Dict[str, Any]:
         """
         Internal request handler that manages rate limiting, authentication, and error parsing.
         """
         self.rate_limiter.wait()
 
+        method = "post" if private else "get"
         url = self._get_url(endpoint, private)
         headers = {}
-        data = params or {}
+        data: Dict[str, Any] = dict(params or {})
 
         if private:
             if not self.api_key or not self.api_secret:
@@ -87,9 +94,9 @@ class KrakenRESTClient:
             headers["API-Sign"] = signature
 
         try:
-            if method.lower() == "get":
+            if method == "get":
                 response = self.session.get(url, params=data, headers=headers)
-            elif method.lower() == "post":
+            elif method == "post":
                 response = self.session.post(url, data=data, headers=headers)
             else:
                 raise ValueError(f"Unsupported method: {method}")
@@ -124,27 +131,27 @@ class KrakenRESTClient:
 
             return response_json.get("result", {})
 
-        except requests.exceptions.HTTPError as e:
+        except HTTPError as e:
             status_code = e.response.status_code if e.response else None
             if status_code == 429:
                 raise RateLimitError("Rate limit exceeded") from e
             if status_code and 500 <= status_code < 600:
                 raise ServiceUnavailableError(f"Kraken API Service Error: {e}") from e
             raise KrakenAPIError(f"HTTP Error: {e}") from e
-        except requests.exceptions.Timeout as e:
+        except Timeout as e:
             raise ServiceUnavailableError(f"Request timed out: {e}") from e
-        except requests.exceptions.RequestException as e:
+        except RequestException as e:
             raise ServiceUnavailableError(f"Network Error: {e}") from e
 
-    def get_public(self, endpoint: str, params: dict = None) -> Dict[str, Any]:
+    def get_public(self, endpoint: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Makes a GET request to a public Kraken API endpoint."""
-        return self._request("get", endpoint, params=params, private=False)
+        return self._request(endpoint, params=params, private=False)
 
-    def get_private(self, endpoint: str, params: dict = None) -> Dict[str, Any]:
+    def get_private(self, endpoint: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Makes a POST request to a private Kraken API endpoint (most private endpoints use POST).
         """
-        return self._request("post", endpoint, params=params, private=True)
+        return self._request(endpoint, params=params, private=True)
 
     def add_order(self, params: Dict[str, Any]) -> Dict[str, Any]:
         return self.get_private("AddOrder", params=params)
