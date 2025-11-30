@@ -6,7 +6,7 @@ import json
 import logging
 import os
 from datetime import datetime, timezone
-from typing import Any, Dict, Iterable
+from typing import Any, Dict
 
 DEFAULT_ENV = os.getenv("KRAKEN_BOT_ENV", os.getenv("ENV", "local"))
 
@@ -94,7 +94,7 @@ def get_log_environment() -> str:
     return DEFAULT_ENV
 
 
-__all__: Iterable[str] = [
+__all__: list[str] = [
     "configure_logging",
     "structured_log_extra",
     "get_log_environment",

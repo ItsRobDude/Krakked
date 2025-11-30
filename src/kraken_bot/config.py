@@ -5,8 +5,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-import appdirs
-import yaml
+import appdirs  # type: ignore[import-untyped]
+import yaml  # type: ignore[import-untyped]
 
 @dataclass
 class RegionCapabilities:
