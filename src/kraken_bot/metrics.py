@@ -41,6 +41,15 @@ class SystemMetrics:
             for message in errors or []:
                 self._recent_errors.appendleft(self._format_error(message))
 
+    def record_blocked_actions(self, blocked_actions: int) -> None:
+        """Increment blocked action count without affecting plan counters."""
+
+        if blocked_actions <= 0:
+            return
+
+        with self._lock:
+            self.blocked_actions += blocked_actions
+
     def record_error(self, message: str) -> None:
         """Store an ad-hoc error message in the rolling buffer."""
 
