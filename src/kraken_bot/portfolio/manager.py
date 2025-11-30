@@ -1,7 +1,7 @@
 # src/kraken_bot/portfolio/manager.py
 
 import logging
-from typing import TYPE_CHECKING, Dict, List, Optional
+from typing import TYPE_CHECKING, Dict, List, Optional, Union
 
 from kraken_bot.config import AppConfig
 from kraken_bot.connection.rate_limiter import RateLimiter
@@ -227,7 +227,7 @@ class PortfolioService:
     ) -> List[CashFlowRecord]:
         return self.portfolio.get_cash_flows(asset=asset, limit=limit, since=since, until=until, ascending=ascending)
 
-    def get_fee_summary(self) -> Dict[str, float]:
+    def get_fee_summary(self) -> Dict[str, Union[Dict[str, float], float]]:
         return self.portfolio.get_fee_summary()
 
     def get_asset_exposure(self, include_manual: Optional[bool] = None):

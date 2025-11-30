@@ -140,6 +140,8 @@ class ExecutionService:
                 )
                 continue
 
+            assert order is not None
+
             guardrail_reason = self._evaluate_guardrails(
                 action=action,
                 order_notional=max(action.target_notional_usd, 0.0),
@@ -241,7 +243,7 @@ class ExecutionService:
             if self.store:
                 self.store.save_order(order)
 
-            result.errors.append(order.last_error)
+            result.errors.append(order.last_error or "execution concurrency limit reached")
             result.orders.append(order)
 
         result.completed_at = datetime.utcnow()
@@ -409,9 +411,9 @@ class ExecutionService:
                     return order
 
         if self.store and hasattr(self.store, "get_order_by_reference"):
-            order = self.store.get_order_by_reference(kraken_order_id=kraken_id, userref=userref)
-            if order:
-                return order
+            stored_order = self.store.get_order_by_reference(kraken_order_id=kraken_id, userref=userref)
+            if stored_order:
+                return stored_order
 
         return None
 
