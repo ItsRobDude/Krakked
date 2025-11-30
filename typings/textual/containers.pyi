@@ -1,6 +1,8 @@
-from typing import Any, Iterator
+from typing import Any
 
 class Container:
+    display: bool
+
     def __init__(self, *args: Any, **kwargs: Any) -> None: ...
     def __enter__(self) -> "Container": ...
     def __exit__(self, exc_type: type | None, exc: BaseException | None, tb: object | None) -> None: ...
