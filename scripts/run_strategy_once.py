@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import copy
 import logging
-from inspect import Parameter, signature
+from inspect import signature
 from typing import Iterable
 
 from kraken_bot.bootstrap import bootstrap
@@ -68,12 +68,8 @@ def run_strategy_once() -> None:
     safe_config = _ensure_safe_execution(config)
 
     try:
-        market_data_parameters = signature(MarketDataAPI).parameters
-        supports_rate_limiter = "rate_limiter" in market_data_parameters and (
-            market_data_parameters["rate_limiter"].kind
-            in (Parameter.POSITIONAL_OR_KEYWORD, Parameter.KEYWORD_ONLY)
-        )
-        if supports_rate_limiter:
+        params = signature(MarketDataAPI).parameters
+        if "rate_limiter" in params:
             market_data = MarketDataAPI(safe_config, rate_limiter=rate_limiter)
         else:
             market_data = MarketDataAPI(safe_config)
@@ -89,18 +85,34 @@ def run_strategy_once() -> None:
     # Avoid spinning up the websocket loop while still satisfying connectivity checks
     market_data._ws_client = _WsStub()  # type: ignore[attr-defined]
 
-    portfolio = PortfolioService(
-        safe_config, market_data, rest_client=client, rate_limiter=rate_limiter
-    )
+    try:
+        params = signature(PortfolioService).parameters
+        ps_kwargs = {}
+        if "rest_client" in params:
+            ps_kwargs["rest_client"] = client
+        if "rate_limiter" in params:
+            ps_kwargs["rate_limiter"] = rate_limiter
+        portfolio = PortfolioService(safe_config, market_data, **ps_kwargs)
+    except (ValueError, TypeError):
+        portfolio = PortfolioService(safe_config, market_data)
     portfolio.initialize()
 
     strategy_engine = StrategyEngine(safe_config, market_data, portfolio)
     strategy_engine.initialize()
     plan = strategy_engine.run_cycle()
 
-    execution_service = ExecutionService(
-        client=client, config=safe_config.execution, rate_limiter=rate_limiter
-    )
+    try:
+        es_params = signature(ExecutionService).parameters
+        es_kwargs = {}
+        if "client" in es_params:
+            es_kwargs["client"] = client
+        if "config" in es_params:
+            es_kwargs["config"] = safe_config.execution
+        if "rate_limiter" in es_params:
+            es_kwargs["rate_limiter"] = rate_limiter
+        execution_service = ExecutionService(**es_kwargs)
+    except (ValueError, TypeError):
+        execution_service = ExecutionService(client=client, config=safe_config.execution)
     result = execution_service.execute_plan(plan)
 
     logger.info("Plan %s executed. success=%s errors=%s", plan.plan_id, result.success, result.errors)

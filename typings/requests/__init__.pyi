@@ -2,8 +2,15 @@ from typing import Any, Dict, Optional
 
 class Response:
     text: str
+    status_code: int
     def json(self) -> Any: ...
     def raise_for_status(self) -> None: ...
+
+
+class RequestException(Exception): ...
+
+
+class Timeout(RequestException): ...
 
 class Session:
     headers: dict[str, str]
@@ -12,7 +19,7 @@ class Session:
     def get(self, url: str, **kwargs: Any) -> Response: ...
     def post(self, url: str, **kwargs: Any) -> Response: ...
 
-class HTTPError(Exception):
+class HTTPError(RequestException):
     response: Response | None
 
 
