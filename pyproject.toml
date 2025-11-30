@@ -30,6 +30,9 @@ packages = [
   { include = "kraken_bot", from = "src" }
 ]
 
+[tool.poetry.scripts]
+krakked = "kraken_bot.cli:main"
+
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.1.1"
 mypy = "^1.18.2"
