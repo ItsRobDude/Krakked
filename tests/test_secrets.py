@@ -54,7 +54,10 @@ def test_encrypt_and_decrypt_flow(mock_config_dir):
     # Verify file exists
     secrets_file = mock_config_dir / "secrets.enc"
     assert secrets_file.exists()
-    assert stat.S_IMODE(secrets_file.stat().st_mode) == 0o600
+    if os.name == "posix":
+        assert stat.S_IMODE(secrets_file.stat().st_mode) == 0o600
+    else:
+        assert stat.S_IMODE(secrets_file.stat().st_mode) in (0o600, 0o666)
 
     # Mock getpass to return the password automatically
     with patch("getpass.getpass", return_value=password):

@@ -24,7 +24,7 @@ def _parse_ohlc_response(response: Dict[str, Any], pair: str) -> List[OHLCBar]:
     Parses the raw OHLC data from the Kraken API into a list of OHLCBar objects.
     Note: The last entry in the response is the current, running candle. We exclude it.
     """
-    bars: list[OHLCBar] = []
+    bars: List[OHLCBar] = []
     # The key for the pair data in the response can be the raw_name or altname
     pair_key = next((key for key in response.keys() if key != "last"), None)
     if not pair_key:
@@ -73,7 +73,7 @@ def backfill_ohlc(
             "pair": pair_metadata.rest_symbol,
             "interval": TIMEFRAME_MAP[timeframe],
         }
-        if since:
+        if since is not None:
             params["since"] = since
 
         try:

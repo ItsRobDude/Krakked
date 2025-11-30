@@ -355,8 +355,8 @@ def load_api_keys(allow_interactive_setup: bool = False) -> CredentialResult:
         env_password = os.getenv("KRAKEN_BOT_SECRET_PW")
         if not env_password and not allow_interactive_setup:
             message = (
-                "Encrypted credentials found but KRAKEN_BOT_SECRET_PW is not set; "
-                "credentials are unavailable in non-interactive mode."
+                "Encrypted credentials found but KRAKEN_BOT_SECRET_PW password environment variable "
+                "is not set; credentials are unavailable in non-interactive mode."
             )
             print(message)
             return CredentialResult(
