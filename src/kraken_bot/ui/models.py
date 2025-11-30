@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Dict, Generic, List, Optional, TypeVar
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 T = TypeVar("T")
@@ -138,6 +138,13 @@ class ExecutionResultPayload(BaseModel):
 
 
 class SystemHealthPayload(BaseModel):
+    app_version: Optional[str] = Field(
+        None, description="Application semantic version reported to the UI."
+    )
+    execution_mode: Optional[str] = Field(
+        None,
+        description="execution_mode reflects the configured trading mode: dry-run, paper, or live.",
+    )
     rest_api_reachable: bool
     websocket_connected: bool
     streaming_pairs: int
@@ -146,9 +153,21 @@ class SystemHealthPayload(BaseModel):
     market_data_ok: bool
     market_data_status: str
     market_data_reason: Optional[str] = None
+    market_data_stale: Optional[bool] = Field(
+        None,
+        description="Indicates whether market data is considered stale based on stream freshness.",
+    )
+    market_data_max_staleness: Optional[float] = Field(
+        None,
+        description="Maximum observed staleness for market data feeds in seconds.",
+    )
     execution_ok: bool
     current_mode: str
     ui_read_only: bool
+    kill_switch_active: Optional[bool] = Field(
+        None,
+        description="Reports whether the risk engine's kill switch is currently active.",
+    )
     drift_detected: bool
     drift_reason: Optional[str] = None
 
