@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
 from kraken_bot.main import _refresh_metrics_state, _run_loop_iteration
+from kraken_bot.market_data.api import MarketDataStatus
 from kraken_bot.metrics import SystemMetrics
 
 
@@ -95,6 +96,14 @@ class StubExecutionService:
         return list(self.open_orders)
 
 
+class StubMarketData:
+    def __init__(self, status: MarketDataStatus | None = None) -> None:
+        self.status = status or MarketDataStatus(health="healthy", max_staleness=0.0)
+
+    def get_health_status(self) -> MarketDataStatus:
+        return self.status
+
+
 class StubSystemMetrics(SystemMetrics):
     state_updates: list[dict[str, object]]
 
@@ -137,6 +146,7 @@ def test_run_loop_iteration_executes_scheduled_work_and_updates_metrics():
     portfolio = StubPortfolioService()
     strategy_engine = StubStrategyEngine()
     execution_service = StubExecutionService()
+    market_data = StubMarketData()
     metrics = StubSystemMetrics()
 
     refresh_metrics = lambda: _refresh_metrics_state(portfolio, execution_service, metrics)
@@ -151,6 +161,7 @@ def test_run_loop_iteration_executes_scheduled_work_and_updates_metrics():
         last_strategy_cycle=last_strategy_cycle,
         last_portfolio_sync=last_portfolio_sync,
         portfolio=portfolio,
+        market_data=market_data,
         strategy_engine=strategy_engine,
         execution_service=execution_service,
         metrics=metrics,
@@ -164,6 +175,7 @@ def test_run_loop_iteration_executes_scheduled_work_and_updates_metrics():
         last_strategy_cycle=last_strategy_cycle,
         last_portfolio_sync=last_portfolio_sync,
         portfolio=portfolio,
+        market_data=market_data,
         strategy_engine=strategy_engine,
         execution_service=execution_service,
         metrics=metrics,
@@ -177,6 +189,7 @@ def test_run_loop_iteration_executes_scheduled_work_and_updates_metrics():
         last_strategy_cycle=last_strategy_cycle,
         last_portfolio_sync=last_portfolio_sync,
         portfolio=portfolio,
+        market_data=market_data,
         strategy_engine=strategy_engine,
         execution_service=execution_service,
         metrics=metrics,
@@ -232,6 +245,7 @@ def test_run_loop_iteration_counts_kill_switch_rejections_as_blocked_actions():
             )
 
     execution_service = KillSwitchExecutionService()
+    market_data = StubMarketData()
     metrics = StubSystemMetrics()
 
     refresh_metrics = lambda: _refresh_metrics_state(portfolio, execution_service, metrics)
@@ -246,6 +260,7 @@ def test_run_loop_iteration_counts_kill_switch_rejections_as_blocked_actions():
         last_strategy_cycle=last_strategy_cycle,
         last_portfolio_sync=last_portfolio_sync,
         portfolio=portfolio,
+        market_data=market_data,
         strategy_engine=strategy_engine,
         execution_service=execution_service,
         metrics=metrics,
@@ -256,3 +271,45 @@ def test_run_loop_iteration_counts_kill_switch_rejections_as_blocked_actions():
     assert metrics.plans_executed == 1
     assert metrics.blocked_actions == 2
     assert metrics.execution_errors == 1
+
+
+def test_run_loop_iteration_skips_strategy_when_market_data_unhealthy():
+    now = datetime(2024, 3, 1, tzinfo=timezone.utc)
+    strategy_interval = 1
+    portfolio_interval = 10
+
+    portfolio = StubPortfolioService()
+    strategy_engine = StubStrategyEngine()
+    execution_service = StubExecutionService()
+    market_data = StubMarketData(
+        MarketDataStatus(health="stale", max_staleness=120.0, reason="data_stale")
+    )
+    metrics = StubSystemMetrics()
+
+    refresh_metrics = lambda: _refresh_metrics_state(portfolio, execution_service, metrics)
+
+    last_portfolio_sync = now
+    last_strategy_cycle = now - timedelta(seconds=strategy_interval)
+
+    updated_portfolio_sync, updated_strategy_cycle = _run_loop_iteration(
+        now=now,
+        strategy_interval=strategy_interval,
+        portfolio_interval=portfolio_interval,
+        last_strategy_cycle=last_strategy_cycle,
+        last_portfolio_sync=last_portfolio_sync,
+        portfolio=portfolio,
+        market_data=market_data,
+        strategy_engine=strategy_engine,
+        execution_service=execution_service,
+        metrics=metrics,
+        refresh_metrics_state=refresh_metrics,
+    )
+
+    assert updated_strategy_cycle == last_strategy_cycle
+    assert updated_portfolio_sync == last_portfolio_sync
+    assert strategy_engine.calls == []
+    assert execution_service.plans == []
+    assert metrics.market_data_errors == 1
+    recent_errors = metrics.snapshot()["recent_errors"]
+    assert recent_errors[0]["message"].startswith("Market data unavailable")
+    assert metrics.state_updates[-1]["equity"] == 1200.0

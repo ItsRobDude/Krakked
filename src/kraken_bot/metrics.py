@@ -18,6 +18,7 @@ class SystemMetrics:
         self.plans_executed = 0
         self.blocked_actions = 0
         self.execution_errors = 0
+        self.market_data_errors = 0
         self.last_equity_usd: Optional[float] = None
         self.last_realized_pnl_usd: Optional[float] = None
         self.last_unrealized_pnl_usd: Optional[float] = None
@@ -57,6 +58,13 @@ class SystemMetrics:
             self.execution_errors += 1
             self._recent_errors.appendleft(self._format_error(message))
 
+    def record_market_data_error(self, message: str) -> None:
+        """Track market-data-related issues without affecting execution counters."""
+
+        with self._lock:
+            self.market_data_errors += 1
+            self._recent_errors.appendleft(self._format_error(message))
+
     def update_portfolio_state(
         self,
         *,
@@ -84,6 +92,7 @@ class SystemMetrics:
                 "plans_executed": self.plans_executed,
                 "blocked_actions": self.blocked_actions,
                 "execution_errors": self.execution_errors,
+                "market_data_errors": self.market_data_errors,
                 "recent_errors": list(self._recent_errors),
                 "last_equity_usd": self.last_equity_usd,
                 "last_realized_pnl_usd": self.last_realized_pnl_usd,

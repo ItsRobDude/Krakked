@@ -2,6 +2,7 @@
 
 import time
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from kraken_bot.config import AppConfig, ConnectionStatus, PairMetadata, OHLCBar
@@ -15,6 +16,16 @@ from kraken_bot.market_data.metadata_store import PairMetadataStore
 from kraken_bot.market_data.exceptions import PairNotFoundError, DataStaleError
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class MarketDataStatus:
+    """Aggregated health indicator for market data streams."""
+
+    health: str  # healthy | stale | unavailable
+    max_staleness: Optional[float] = None
+    reason: Optional[str] = None
+
 
 class MarketDataAPI:
     """
@@ -317,6 +328,35 @@ class MarketDataAPI:
             stale_pairs=stale_count,
             subscription_errors=subscription_errors,
         )
+
+    def get_health_status(self) -> MarketDataStatus:
+        """Summarize market data freshness into a simple health indicator."""
+
+        try:
+            connection_status = self.get_data_status()
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logger.error("Failed to fetch market data connection status: %s", exc)
+            return MarketDataStatus(health="unavailable", reason=str(exc))
+
+        if not connection_status.rest_api_reachable:
+            return MarketDataStatus(health="unavailable", reason="rest_unreachable")
+        if not connection_status.websocket_connected:
+            return MarketDataStatus(health="unavailable", reason="websocket_disconnected")
+
+        max_staleness: Optional[float] = None
+        stale_detected = False
+
+        for pair_meta in self._universe:
+            is_fresh, stale_time = self._ticker_freshness(pair_meta.canonical)
+            if stale_time >= 0:
+                max_staleness = stale_time if max_staleness is None else max(max_staleness, stale_time)
+            if not is_fresh:
+                stale_detected = True
+
+        if stale_detected:
+            return MarketDataStatus(health="stale", max_staleness=max_staleness, reason="data_stale")
+
+        return MarketDataStatus(health="healthy", max_staleness=max_staleness or 0.0)
 
     def get_subscription_status(self) -> Dict[str, Dict[str, Dict[str, Any]]]:
         """Exposes the current WebSocket subscription status map."""
