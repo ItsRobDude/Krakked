@@ -53,6 +53,9 @@ class StubPlan:
 
 
 class StubStrategyEngine:
+    calls: list[datetime]
+    plan_counter: int
+
     def __init__(self) -> None:
         self.calls = []
         self.plan_counter = 0
@@ -73,6 +76,9 @@ class StubExecutionResult:
 
 
 class StubExecutionService:
+    plans: list[StubPlan]
+    open_orders: list[str]
+
     def __init__(self) -> None:
         self.plans = []
         self.open_orders = ["order-1", "order-2"]
@@ -89,6 +95,8 @@ class StubExecutionService:
 
 
 class StubSystemMetrics(SystemMetrics):
+    state_updates: list[dict[str, object]]
+
     def __init__(self) -> None:
         super().__init__()
         self.state_updates = []
