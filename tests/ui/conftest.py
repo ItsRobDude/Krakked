@@ -190,5 +190,5 @@ def client(mock_context: AppContext) -> TestClient:
 
     app = create_api(mock_context)
     client = TestClient(app)
-    client.context = mock_context
+    client.context = mock_context  # type: ignore[attr-defined]
     return client
