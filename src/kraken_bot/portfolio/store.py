@@ -4,13 +4,13 @@ import abc
 import sqlite3
 import json
 import logging
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from typing import List, Optional, Dict, Any, TYPE_CHECKING
 from pathlib import Path
 from .models import RealizedPnLRecord, CashFlowRecord, PortfolioSnapshot, AssetValuation
 from .exceptions import PortfolioSchemaError
-from .migrations import run_migrations
+from .migrations import _ensure_meta_table, _set_schema_version, run_migrations
 
 if TYPE_CHECKING:
     from kraken_bot.strategy.models import DecisionRecord, ExecutionPlan, RiskAdjustedAction
@@ -19,6 +19,229 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 CURRENT_SCHEMA_VERSION = 5
+
+
+@dataclass
+class SchemaStatus:
+    version: int
+    migrated: bool
+    initialized: bool
+
+    @property
+    def changed(self) -> bool:
+        return self.migrated or self.initialized
+
+
+def ensure_portfolio_schema(
+    conn: sqlite3.Connection, target_version: int = CURRENT_SCHEMA_VERSION, migrate: bool = True
+) -> SchemaStatus:
+    """Ensure the portfolio DB matches the expected schema version.
+
+    Missing schema metadata initializes the DB to ``target_version``.
+    If ``migrate`` is True, migrations will be applied when the stored
+    version is behind. A schema ahead of ``target_version`` raises
+    :class:`PortfolioSchemaError`.
+    """
+
+    _ensure_meta_table(conn)
+    cursor = conn.cursor()
+    row = cursor.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()
+
+    initialized = False
+    if row is None:
+        _set_schema_version(conn, target_version)
+        initialized = True
+        return SchemaStatus(version=target_version, migrated=False, initialized=initialized)
+
+    try:
+        stored_version = int(row[0])
+    except (TypeError, ValueError) as exc:
+        logger.exception("Invalid schema version stored in portfolio DB")
+        raise PortfolioSchemaError(found=row[0], expected=target_version) from exc
+
+    if stored_version > target_version:
+        raise PortfolioSchemaError(found=stored_version, expected=target_version)
+
+    migrated = False
+    if migrate and stored_version < target_version:
+        try:
+            run_migrations(conn, stored_version, target_version)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception(
+                "Failed to run portfolio migrations from v%s to v%s", stored_version, target_version
+            )
+            raise PortfolioSchemaError(found=stored_version, expected=target_version) from exc
+        migrated = True
+        stored_version = target_version
+
+    return SchemaStatus(version=stored_version, migrated=migrated, initialized=initialized)
+
+
+def ensure_portfolio_tables(conn: sqlite3.Connection) -> None:
+    cursor = conn.cursor()
+
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS meta (
+            key TEXT PRIMARY KEY,
+            value TEXT
+        )
+        """
+    )
+
+    # Trades Table
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS trades (
+            id TEXT PRIMARY KEY,
+            ordertxid TEXT,
+            pair TEXT,
+            time REAL,
+            type TEXT,
+            ordertype TEXT,
+            price REAL,
+            cost REAL,
+            fee REAL,
+            vol REAL,
+            margin REAL,
+            misc TEXT,
+            posstatus TEXT,
+            cprice REAL,
+            ccost REAL,
+            cfee REAL,
+            cvol REAL,
+            cmargin REAL,
+            net REAL,
+            trades_csv TEXT,
+            raw_json TEXT
+        )
+        """
+    )
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_trades_time ON trades(time)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_trades_pair ON trades(pair)")
+
+    # Cash Flows Table
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS cash_flows (
+            id TEXT PRIMARY KEY,
+            time REAL,
+            asset TEXT,
+            amount REAL,
+            type TEXT,
+            note TEXT
+        )
+        """
+    )
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_cash_flows_time ON cash_flows(time)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_cash_flows_asset ON cash_flows(asset)")
+
+    # Snapshots Table
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS snapshots (
+            timestamp REAL PRIMARY KEY,
+            equity_base REAL,
+            cash_base REAL,
+            data_json TEXT
+        )
+        """
+    )
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_snapshots_timestamp ON snapshots(timestamp)")
+
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS decisions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            time INTEGER NOT NULL,
+            plan_id TEXT,
+            strategy_name TEXT,
+            pair TEXT,
+            action_type TEXT,
+            target_position_usd REAL,
+            blocked INTEGER NOT NULL,
+            block_reason TEXT,
+            kill_switch_active INTEGER NOT NULL,
+            raw_json TEXT
+        )
+        """
+    )
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_decisions_time ON decisions(time)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_decisions_plan_id ON decisions(plan_id)")
+
+    # Execution Plans Table
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS execution_plans (
+            plan_id TEXT PRIMARY KEY,
+            generated_at REAL NOT NULL,
+            action_count INTEGER NOT NULL,
+            blocked_actions INTEGER NOT NULL,
+            metadata_json TEXT,
+            plan_json TEXT
+        )
+        """
+    )
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_execution_plans_generated_at ON execution_plans(generated_at)")
+
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS execution_orders (
+            local_id TEXT PRIMARY KEY,
+            plan_id TEXT,
+            strategy_id TEXT,
+            pair TEXT NOT NULL,
+            side TEXT NOT NULL,
+            order_type TEXT,
+            kraken_order_id TEXT,
+            userref INTEGER,
+            requested_base_size REAL,
+            requested_price REAL,
+            status TEXT,
+            created_at REAL,
+            updated_at REAL,
+            cumulative_base_filled REAL,
+            avg_fill_price REAL,
+            last_error TEXT,
+            raw_request_json TEXT,
+            raw_response_json TEXT
+        )
+        """
+    )
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_execution_orders_plan_id ON execution_orders(plan_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_execution_orders_kraken_id ON execution_orders(kraken_order_id)")
+
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS execution_order_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            local_order_id TEXT NOT NULL,
+            plan_id TEXT,
+            event_time REAL NOT NULL,
+            status TEXT,
+            message TEXT,
+            raw_json TEXT
+        )
+        """
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_execution_order_events_order ON execution_order_events(local_order_id)"
+    )
+
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS execution_results (
+            plan_id TEXT PRIMARY KEY,
+            started_at REAL,
+            completed_at REAL,
+            success INTEGER,
+            errors_json TEXT
+        )
+        """
+    )
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_execution_results_started_at ON execution_results(started_at)")
+
+    conn.commit()
 
 class PortfolioStore(abc.ABC):
     @abc.abstractmethod
@@ -153,182 +376,12 @@ class SQLitePortfolioStore(PortfolioStore):
 
     def _init_db(self):
         conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
 
-        cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS meta (
-                key TEXT PRIMARY KEY,
-                value TEXT
-            )
-            """
-        )
-
-        cursor.execute("SELECT value FROM meta WHERE key = 'schema_version'")
-        row = cursor.fetchone()
-
-        if row is None:
-            cursor.execute(
-                "INSERT INTO meta (key, value) VALUES ('schema_version', ?)",
-                (str(CURRENT_SCHEMA_VERSION),),
-            )
-        else:
-            try:
-                stored_version = int(row[0])
-            except (TypeError, ValueError):
-                conn.close()
-                raise PortfolioSchemaError(found=row[0], expected=CURRENT_SCHEMA_VERSION)
-
-            if stored_version > CURRENT_SCHEMA_VERSION:
-                conn.close()
-                raise PortfolioSchemaError(found=stored_version, expected=CURRENT_SCHEMA_VERSION)
-
-            if stored_version < CURRENT_SCHEMA_VERSION:
-                try:
-                    run_migrations(conn, stored_version, CURRENT_SCHEMA_VERSION)
-                except Exception:
-                    logger.exception("Failed to run portfolio migrations")
-                    conn.close()
-                    raise PortfolioSchemaError(
-                        found=stored_version, expected=CURRENT_SCHEMA_VERSION
-                    )
-
-        # Trades Table
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS trades (
-                id TEXT PRIMARY KEY,
-                ordertxid TEXT,
-                pair TEXT,
-                time REAL,
-                type TEXT,
-                ordertype TEXT,
-                price REAL,
-                cost REAL,
-                fee REAL,
-                vol REAL,
-                margin REAL,
-                misc TEXT,
-                posstatus TEXT,
-                cprice REAL,
-                ccost REAL,
-                cfee REAL,
-                cvol REAL,
-                cmargin REAL,
-                net REAL,
-                trades_csv TEXT,
-                raw_json TEXT
-            )
-        """)
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_trades_time ON trades(time)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_trades_pair ON trades(pair)")
-
-        # Cash Flows Table
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS cash_flows (
-                id TEXT PRIMARY KEY,
-                time REAL,
-                asset TEXT,
-                amount REAL,
-                type TEXT,
-                note TEXT
-            )
-        """)
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_cash_flows_time ON cash_flows(time)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_cash_flows_asset ON cash_flows(asset)")
-
-        # Snapshots Table
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS snapshots (
-                timestamp REAL PRIMARY KEY,
-                equity_base REAL,
-                cash_base REAL,
-                data_json TEXT
-            )
-        """)
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_snapshots_timestamp ON snapshots(timestamp)")
-
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS decisions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                time INTEGER NOT NULL,
-                plan_id TEXT,
-                strategy_name TEXT,
-                pair TEXT,
-                action_type TEXT,
-                target_position_usd REAL,
-                blocked INTEGER NOT NULL,
-                block_reason TEXT,
-                kill_switch_active INTEGER NOT NULL,
-                raw_json TEXT
-            )
-        """)
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_decisions_time ON decisions(time)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_decisions_plan_id ON decisions(plan_id)")
-
-        # Execution Plans Table
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS execution_plans (
-                plan_id TEXT PRIMARY KEY,
-                generated_at REAL NOT NULL,
-                action_count INTEGER NOT NULL,
-                blocked_actions INTEGER NOT NULL,
-                metadata_json TEXT,
-                plan_json TEXT
-            )
-        """)
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_execution_plans_generated_at ON execution_plans(generated_at)")
-
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS execution_orders (
-                local_id TEXT PRIMARY KEY,
-                plan_id TEXT,
-                strategy_id TEXT,
-                pair TEXT NOT NULL,
-                side TEXT NOT NULL,
-                order_type TEXT,
-                kraken_order_id TEXT,
-                userref INTEGER,
-                requested_base_size REAL,
-                requested_price REAL,
-                status TEXT,
-                created_at REAL,
-                updated_at REAL,
-                cumulative_base_filled REAL,
-                avg_fill_price REAL,
-                last_error TEXT,
-                raw_request_json TEXT,
-                raw_response_json TEXT
-            )
-        """)
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_execution_orders_plan_id ON execution_orders(plan_id)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_execution_orders_kraken_id ON execution_orders(kraken_order_id)")
-
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS execution_order_events (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                local_order_id TEXT NOT NULL,
-                plan_id TEXT,
-                event_time REAL NOT NULL,
-                status TEXT,
-                message TEXT,
-                raw_json TEXT
-            )
-        """)
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_execution_order_events_order ON execution_order_events(local_order_id)")
-
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS execution_results (
-                plan_id TEXT PRIMARY KEY,
-                started_at REAL,
-                completed_at REAL,
-                success INTEGER,
-                errors_json TEXT
-            )
-        """)
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_execution_results_started_at ON execution_results(started_at)")
-
-        conn.commit()
-        conn.close()
+        try:
+            ensure_portfolio_schema(conn, CURRENT_SCHEMA_VERSION, migrate=True)
+            ensure_portfolio_tables(conn)
+        finally:
+            conn.close()
 
     def _get_conn(self):
         return sqlite3.connect(self.db_path)
