@@ -227,12 +227,14 @@ class MarketDataAPI:
                 # Return mid-price (avg of best bid and ask)
                 return (float(ticker["bid"]) + float(ticker["ask"])) / 2
 
-        fallback_price = self._get_cached_price_from_store(pair)
-        if fallback_price is None:
-            fallback_price = self._get_rest_ticker_price(pair)
+        fallback_timeframes = self._get_fallback_timeframes()
+        if fallback_timeframes:
+            fallback_price = self._get_cached_price_from_store(pair)
+            if fallback_price is None:
+                fallback_price = self._get_rest_ticker_price(pair)
 
-        if fallback_price is not None:
-            return fallback_price
+            if fallback_price is not None:
+                return fallback_price
 
         raise DataStaleError(pair, stale_time, self._ws_stale_tolerance)
 
