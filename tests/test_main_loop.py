@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 from kraken_bot.main import _refresh_metrics_state, _run_loop_iteration
 from kraken_bot.market_data.api import MarketDataStatus
 from kraken_bot.metrics import SystemMetrics
+from kraken_bot.portfolio.models import DriftMismatchedAsset, DriftStatus
 
 
 class StubMarketDataAPI:
@@ -28,6 +29,13 @@ class StubPortfolioService:
         self.sync_calls = 0
         self.equity = StubEquity(1200.0, 15.0, 25.0)
         self.positions = ["BTC/USD"]
+        self.drift_status = DriftStatus(
+            drift_flag=False,
+            expected_position_value_base=0.0,
+            actual_balance_value_base=0.0,
+            tolerance_base=0.0,
+            mismatched_assets=[],
+        )
 
     def initialize(self) -> None:
         ...
@@ -40,6 +48,9 @@ class StubPortfolioService:
 
     def get_positions(self):
         return list(self.positions)
+
+    def get_drift_status(self) -> DriftStatus:
+        return self.drift_status
 
 
 class StubAction:
@@ -271,6 +282,67 @@ def test_run_loop_iteration_counts_kill_switch_rejections_as_blocked_actions():
     assert metrics.plans_executed == 1
     assert metrics.blocked_actions == 2
     assert metrics.execution_errors == 1
+
+
+def test_run_loop_iteration_flags_drift_and_enables_kill_switch():
+    now = datetime(2024, 2, 2, tzinfo=timezone.utc)
+    strategy_interval = 60
+    portfolio_interval = 60
+
+    class DriftPortfolioService(StubPortfolioService):
+        def __init__(self) -> None:
+            super().__init__()
+            self.drift_status = DriftStatus(
+                drift_flag=True,
+                expected_position_value_base=1500.0,
+                actual_balance_value_base=1200.0,
+                tolerance_base=10.0,
+                mismatched_assets=[
+                    DriftMismatchedAsset(
+                        asset="BTC",
+                        expected_quantity=0.5,
+                        actual_quantity=0.4,
+                        difference_base=300.0,
+                    )
+                ],
+            )
+
+    class DriftStrategyEngine(StubStrategyEngine):
+        def __init__(self) -> None:
+            super().__init__()
+            self.kill_switch_calls: list[bool] = []
+            risk_cfg = type("risk", (), {"kill_switch_on_drift": True})()
+            self.config = type("cfg", (), {"risk": risk_cfg})()
+
+        def set_manual_kill_switch(self, active: bool) -> None:  # type: ignore[override]
+            self.kill_switch_calls.append(active)
+
+    portfolio = DriftPortfolioService()
+    strategy_engine = DriftStrategyEngine()
+    execution_service = StubExecutionService()
+    market_data = StubMarketData()
+    metrics = StubSystemMetrics()
+
+    refresh_metrics = lambda: _refresh_metrics_state(portfolio, execution_service, metrics)
+
+    _run_loop_iteration(
+        now=now,
+        strategy_interval=strategy_interval,
+        portfolio_interval=portfolio_interval,
+        last_strategy_cycle=now,
+        last_portfolio_sync=now,
+        portfolio=portfolio,
+        market_data=market_data,
+        strategy_engine=strategy_engine,
+        execution_service=execution_service,
+        metrics=metrics,
+        refresh_metrics_state=refresh_metrics,
+    )
+
+    snapshot = metrics.snapshot()
+    assert snapshot["drift_detected"] is True
+    assert snapshot["recent_errors"][0]["message"].startswith("Portfolio drift detected")
+    assert strategy_engine.kill_switch_calls == [True]
 
 
 def test_run_loop_iteration_skips_strategy_when_market_data_unhealthy():

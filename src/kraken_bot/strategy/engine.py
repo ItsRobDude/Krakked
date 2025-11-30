@@ -218,6 +218,12 @@ class StrategyEngine:
     def get_strategy_state(self) -> List[StrategyState]:
         return list(self.strategy_states.values())
 
+    def set_manual_kill_switch(self, active: bool) -> None:
+        self.risk_engine.set_manual_kill_switch(active)
+
+    def clear_manual_kill_switch(self) -> None:
+        self.risk_engine.clear_manual_kill_switch()
+
 
 # Backwards compatibility alias
 StrategyRiskEngine = StrategyEngine

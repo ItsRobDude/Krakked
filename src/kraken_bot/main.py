@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import signal
 import threading
+from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Optional, Tuple
 
@@ -16,6 +17,7 @@ from kraken_bot.logging_config import configure_logging, structured_log_extra
 from kraken_bot.market_data.api import MarketDataAPI
 from kraken_bot.metrics import SystemMetrics
 from kraken_bot.portfolio.manager import PortfolioService
+from kraken_bot.portfolio.models import DriftStatus
 from kraken_bot.portfolio.exceptions import PortfolioSchemaError
 from kraken_bot.ui.api import create_api
 from kraken_bot.ui.context import AppContext
@@ -107,6 +109,21 @@ def _refresh_metrics_state(
         logger.error("Failed to refresh metrics state: %s", exc)
 
 
+def _get_portfolio_drift(portfolio: PortfolioService) -> Optional[DriftStatus]:
+    """Safely retrieve the current drift status from the portfolio service."""
+
+    try:
+        drift_status = portfolio.get_drift_status()
+    except Exception as exc:  # pragma: no cover - defensive logging
+        logger.error("Failed to fetch portfolio drift status: %s", exc)
+        return None
+
+    if isinstance(drift_status, DriftStatus):
+        return drift_status
+
+    return None
+
+
 def _run_loop_iteration(
     *,
     now: datetime,
@@ -140,6 +157,37 @@ def _run_loop_iteration(
         except Exception as exc:  # pragma: no cover - defensive logging
             logger.error("Portfolio sync failed: %s", exc)
             metrics.record_error(f"Portfolio sync failed: {exc}")
+
+    drift_status = _get_portfolio_drift(portfolio)
+    if drift_status:
+        drift_message = None
+        if drift_status.drift_flag:
+            drift_message = (
+                "Portfolio drift detected: expected position value %.2f vs balances %.2f"
+                % (drift_status.expected_position_value_base, drift_status.actual_balance_value_base)
+            )
+            logger.warning(
+                drift_message,
+                extra=structured_log_extra(
+                    event="portfolio_drift_detected",
+                    expected_position_value_base=drift_status.expected_position_value_base,
+                    actual_balance_value_base=drift_status.actual_balance_value_base,
+                    tolerance_base=drift_status.tolerance_base,
+                    mismatched_assets=[asdict(asset) for asset in drift_status.mismatched_assets],
+                ),
+            )
+
+            risk_config = getattr(getattr(strategy_engine, "config", None), "risk", None)
+            if getattr(risk_config, "kill_switch_on_drift", False):
+                activate_kill_switch = getattr(strategy_engine, "set_manual_kill_switch", None)
+                if callable(activate_kill_switch):
+                    try:
+                        activate_kill_switch(True)
+                    except Exception as exc:  # pragma: no cover - defensive logging
+                        logger.error("Failed to activate kill switch on drift: %s", exc)
+        metrics.record_drift(drift_status.drift_flag, drift_message)
+    else:
+        metrics.record_drift(False)
 
     if (now - last_strategy_cycle).total_seconds() >= strategy_interval:
         market_data_healthy = data_status and getattr(data_status, "health", "") == "healthy"

@@ -20,6 +20,8 @@ from kraken_bot.portfolio.models import (
     AssetExposure,
     AssetValuation,
     CashFlowRecord,
+    DriftMismatchedAsset,
+    DriftStatus,
     EquityView,
     PortfolioSnapshot,
     RealizedPnLRecord,
@@ -56,6 +58,13 @@ class Portfolio:
         self.realized_pnl_base_by_pair: Dict[str, float] = defaultdict(float)
         self.fees_paid_base_by_pair: Dict[str, float] = defaultdict(float)
         self.drift_flag: bool = False
+        self.drift_status = DriftStatus(
+            drift_flag=False,
+            expected_position_value_base=0.0,
+            actual_balance_value_base=0.0,
+            tolerance_base=self.config.reconciliation_tolerance,
+            mismatched_assets=[],
+        )
         self._last_snapshot_ts: int = 0
 
     # ------------------------------------------------------------------
@@ -198,16 +207,38 @@ class Portfolio:
             position_totals[position.base_asset] += position.base_size
 
         drift_detected = False
+        mismatched_assets: List[DriftMismatchedAsset] = []
+        expected_position_value_base = 0.0
+        actual_balance_value_base = 0.0
         for asset, pos_total in position_totals.items():
             balance_total = self.balances.get(asset, AssetBalance(asset, 0.0, 0.0, 0.0)).total
             diff_qty = abs(pos_total - balance_total)
             diff_value = self._convert_to_base_currency(diff_qty, asset).value_base
+            expected_position_value_base += self._convert_to_base_currency(pos_total, asset).value_base
+            actual_balance_value_base += self._convert_to_base_currency(balance_total, asset).value_base
             if diff_value > self.config.reconciliation_tolerance:
                 drift_detected = True
-                break
+                mismatched_assets.append(
+                    DriftMismatchedAsset(
+                        asset=asset,
+                        expected_quantity=pos_total,
+                        actual_quantity=balance_total,
+                        difference_base=diff_value,
+                    )
+                )
 
         self.drift_flag = drift_detected
+        self.drift_status = DriftStatus(
+            drift_flag=drift_detected,
+            expected_position_value_base=expected_position_value_base,
+            actual_balance_value_base=actual_balance_value_base,
+            tolerance_base=self.config.reconciliation_tolerance,
+            mismatched_assets=mismatched_assets,
+        )
         return drift_detected
+
+    def get_drift_status(self) -> DriftStatus:
+        return self.drift_status
 
     def equity_view(self, include_manual: Optional[bool] = None) -> EquityView:
         include_manual = self._should_include_manual(include_manual)

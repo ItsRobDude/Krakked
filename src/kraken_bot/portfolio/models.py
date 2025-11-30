@@ -86,3 +86,20 @@ class EquityView:
     unrealized_pnl_base_total: float
     drift_flag: bool
     unvalued_assets: List[str] = field(default_factory=list)
+
+
+@dataclass
+class DriftMismatchedAsset:
+    asset: str
+    expected_quantity: float
+    actual_quantity: float
+    difference_base: float
+
+
+@dataclass
+class DriftStatus:
+    drift_flag: bool
+    expected_position_value_base: float
+    actual_balance_value_base: float
+    tolerance_base: float
+    mismatched_assets: List[DriftMismatchedAsset] = field(default_factory=list)
