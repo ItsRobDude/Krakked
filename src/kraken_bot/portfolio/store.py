@@ -375,6 +375,11 @@ class PortfolioStore(abc.ABC):
         """Return recent execution results."""
         pass
 
+    def get_schema_version(self) -> Optional[int]:
+        """Return the stored schema version if available."""
+
+        return None
+
 
 class SQLitePortfolioStore(PortfolioStore):
     def __init__(self, db_path: str = "portfolio.db"):
@@ -392,6 +397,32 @@ class SQLitePortfolioStore(PortfolioStore):
 
     def _get_conn(self):
         return sqlite3.connect(self.db_path)
+
+    def get_schema_version(self) -> Optional[int]:
+        conn = None
+        try:
+            conn = self._get_conn()
+            cursor = conn.cursor()
+            row = cursor.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()
+            if row is None:
+                return None
+
+            try:
+                return int(row[0])
+            except (TypeError, ValueError):
+                logger.warning(
+                    "Non-integer schema version stored in portfolio DB", extra=structured_log_extra(event="schema_unknown")
+                )
+                return None
+        except sqlite3.Error as exc:  # pragma: no cover - defensive logging
+            logger.warning("Unable to read portfolio schema version: %s", exc)
+            return None
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:  # pragma: no cover - best effort cleanup
+                    pass
 
     def save_trades(self, trades: List[Dict[str, Any]]):
         if not trades:

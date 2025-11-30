@@ -11,9 +11,10 @@ from typing import Callable, Optional, Tuple
 
 import uvicorn
 
+from kraken_bot import APP_VERSION
 from kraken_bot.bootstrap import bootstrap
 from kraken_bot.execution.oms import ExecutionService
-from kraken_bot.logging_config import configure_logging, structured_log_extra
+from kraken_bot.logging_config import configure_logging, get_log_environment, structured_log_extra
 from kraken_bot.market_data.api import MarketDataAPI
 from kraken_bot.metrics import SystemMetrics
 from kraken_bot.portfolio.manager import PortfolioService
@@ -65,13 +66,41 @@ def _shutdown(
     stop_event: threading.Event,
     ui_server: Optional[uvicorn.Server],
     ui_thread: Optional[threading.Thread],
+    *,
+    reason: str = "exit",
+    signal_number: Optional[int] = None,
 ) -> None:
     """Signal all loops to stop, halt the UI server, and cancel open orders."""
 
-    if stop_event.is_set():
-        logger.info("Shutdown already in progress")
-    else:
-        stop_event.set()
+    first_shutdown = not stop_event.is_set()
+    stop_event.set()
+
+    metrics_snapshot = None
+    if isinstance(context.metrics, SystemMetrics):
+        metrics_snapshot = context.metrics.snapshot()
+
+    shutdown_extra = structured_log_extra(
+        event="shutdown",
+        reason=reason,
+        signal_number=signal_number,
+        components={
+            "ui_server": bool(ui_server),
+            "market_data": True,
+            "execution_service": True,
+            "strategy_engine": True,
+        },
+        portfolio_db_path=getattr(getattr(context.portfolio, "store", None), "db_path", None),
+    )
+
+    if metrics_snapshot:
+        shutdown_extra.update(
+            last_equity_usd=metrics_snapshot.get("last_equity_usd"),
+            open_positions_count=metrics_snapshot.get("open_positions_count"),
+            open_orders_count=metrics_snapshot.get("open_orders_count"),
+        )
+
+    log_message = "Initiating shutdown" if first_shutdown else "Shutdown already in progress"
+    logger.info(log_message, extra=shutdown_extra)
 
     if ui_server:
         ui_server.should_exit = True
@@ -88,7 +117,7 @@ def _shutdown(
     except Exception as exc:  # pragma: no cover - defensive logging
         logger.error("Error shutting down market data: %s", exc)
 
-    logger.info("Shutdown complete")
+    logger.info("Shutdown complete", extra=structured_log_extra(event="shutdown_complete", reason=reason))
 
 
 def _refresh_metrics_state(
@@ -293,6 +322,18 @@ def run(allow_interactive_setup: bool = True) -> int:
         logger.error("Portfolio store schema mismatch: %s", exc)
         return 1
 
+    logger.info(
+        "Starting Kraken bot",
+        extra=structured_log_extra(
+            event="startup",
+            env=get_log_environment(),
+            app_version=APP_VERSION,
+            execution_mode=getattr(config.execution, "mode", "unknown"),
+            portfolio_db_path=getattr(portfolio.store, "db_path", None),
+            schema_version=getattr(portfolio.store, "get_schema_version", lambda: None)(),
+        ),
+    )
+
     ui_server, ui_thread = _start_ui_server(context)
 
     strategy_interval = _coerce_interval(getattr(config.strategies, "loop_interval_seconds", None), 60, "strategy interval")
@@ -307,8 +348,7 @@ def run(allow_interactive_setup: bool = True) -> int:
     last_portfolio_sync = datetime.now(timezone.utc) - timedelta(seconds=portfolio_interval)
 
     def _signal_handler(signum, _frame) -> None:  # pragma: no cover - signal driven
-        logger.info("Received signal %s; shutting down", signum, extra=structured_log_extra(event="shutdown_signal"))
-        _shutdown(context, stop_event, ui_server, ui_thread)
+        _shutdown(context, stop_event, ui_server, ui_thread, reason="signal", signal_number=signum)
 
     signal.signal(signal.SIGINT, _signal_handler)
     signal.signal(signal.SIGTERM, _signal_handler)
@@ -333,7 +373,7 @@ def run(allow_interactive_setup: bool = True) -> int:
 
             stop_event.wait(loop_interval)
     finally:
-        _shutdown(context, stop_event, ui_server, ui_thread)
+        _shutdown(context, stop_event, ui_server, ui_thread, reason="loop_exit")
 
     return 0
 
