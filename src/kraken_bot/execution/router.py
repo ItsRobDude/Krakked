@@ -153,8 +153,15 @@ def build_order_from_plan_action(
 
     if bid_ask:
         try:
-            bid = float(bid_ask.get("bid"))
-            ask = float(bid_ask.get("ask"))
+            bid_value = bid_ask.get("bid")
+            ask_value = bid_ask.get("ask")
+
+            if bid_value is None or ask_value is None:
+                warning = f"Invalid bid/ask data for {action.pair}: {bid_ask}"
+                return None, warning
+
+            bid = float(bid_value)
+            ask = float(ask_value)
             requested_price = (bid + ask) / 2
         except (TypeError, ValueError):
             warning = f"Invalid bid/ask data for {action.pair}: {bid_ask}"

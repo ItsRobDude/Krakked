@@ -15,7 +15,7 @@ from __future__ import annotations
 import copy
 import logging
 from inspect import signature
-from typing import Iterable
+from typing import Any, Iterable
 
 from kraken_bot.bootstrap import bootstrap
 from kraken_bot.config import AppConfig
@@ -83,11 +83,11 @@ def run_strategy_once() -> None:
     )
 
     # Avoid spinning up the websocket loop while still satisfying connectivity checks
-    market_data._ws_client = _WsStub()  # type: ignore[attr-defined]
+    market_data._ws_client = _WsStub()  # type: ignore[assignment]
 
     try:
         params = signature(PortfolioService).parameters
-        kwargs = {}
+        kwargs: dict[str, Any] = {}
         if "rest_client" in params:
             kwargs["rest_client"] = client
         if "rate_limiter" in params:
@@ -103,7 +103,7 @@ def run_strategy_once() -> None:
 
     try:
         es_params = signature(ExecutionService).parameters
-        es_kwargs = {}
+        es_kwargs: dict[str, Any] = {}
         if "client" in es_params:
             es_kwargs["client"] = client
         if "config" in es_params:
