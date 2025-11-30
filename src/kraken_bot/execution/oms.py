@@ -123,7 +123,7 @@ class ExecutionService:
                 side = "buy" if delta > 0 else "sell"
                 volume = abs(delta)
 
-                order = LocalOrder(
+                rejected_order = LocalOrder(
                     local_id=str(uuid4()),
                     plan_id=plan.plan_id,
                     strategy_id=action.strategy_id,
@@ -136,12 +136,12 @@ class ExecutionService:
                     status="rejected",
                     last_error=f"{blocked_reason} (kill_switch_active)",
                 )
-                order.updated_at = datetime.now(UTC)
+                rejected_order.updated_at = datetime.now(UTC)
 
                 if self.store:
-                    self.store.save_order(order)
+                    self.store.save_order(rejected_order)
 
-                result.orders.append(order)
+                result.orders.append(rejected_order)
 
             result.completed_at = datetime.now(UTC)
             result.success = False

@@ -144,9 +144,13 @@ class SystemHealthPayload(BaseModel):
     stale_pairs: int
     subscription_errors: int
     market_data_ok: bool
+    market_data_status: str
+    market_data_reason: Optional[str] = None
     execution_ok: bool
     current_mode: str
     ui_read_only: bool
+    drift_detected: bool
+    drift_reason: Optional[str] = None
 
 
 class ErrorRecord(BaseModel):
@@ -167,3 +171,8 @@ class SystemMetricsPayload(BaseModel):
     open_orders_count: int
     open_positions_count: int
     drift_detected: bool
+    drift_reason: Optional[str] = None
+    market_data_ok: bool
+    market_data_stale: bool
+    market_data_reason: Optional[str] = None
+    market_data_max_staleness: Optional[float] = None
