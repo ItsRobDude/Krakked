@@ -16,6 +16,8 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          cache: 'poetry'
+          cache-dependency-path: poetry.lock
 
       - name: Install Poetry
         run: python -m pip install poetry==2.2.1
@@ -26,14 +28,37 @@ jobs:
       - name: Install dependencies
         run: poetry install --no-interaction --no-ansi --with dev --extras tui
 
-      - name: Install Pyright in Poetry environment
-        if: matrix.check == 'pyright'
-        run: poetry run pip install pyright
-
       - name: Run tests
         env:
           KRAKEN_LIVE_TESTS: '0'
         run: poetry run pytest
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'poetry'
+          cache-dependency-path: poetry.lock
+
+      - name: Install Poetry
+        run: python -m pip install poetry==2.2.1
+
+      - name: Configure Poetry
+        run: poetry config virtualenvs.in-project true
+
+      - name: Install dependencies
+        run: poetry install --no-interaction --no-ansi --with dev --extras tui
+
+      - name: Install lint dependencies
+        run: poetry run pip install flake8
+
+      - name: Lint
+        run: poetry run flake8 src tests
 
   static-typing:
     runs-on: ubuntu-latest
@@ -48,6 +73,8 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          cache: 'poetry'
+          cache-dependency-path: poetry.lock
 
       - name: Install Poetry
         run: python -m pip install poetry==2.2.1
