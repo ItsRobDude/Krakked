@@ -8,7 +8,7 @@ from kraken_bot.portfolio.models import AssetExposure, EquityView, SpotPosition
 
 @pytest.fixture
 def portfolio_context(client: TestClient):
-    return client.context
+    return client.context  # type: ignore[attr-defined]
 
 
 def test_portfolio_summary_enveloped(client, portfolio_context):
