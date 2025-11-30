@@ -146,8 +146,11 @@ async def system_health(request: Request) -> ApiEnvelope[SystemHealthPayload]:
 @router.get("/metrics", response_model=ApiEnvelope[SystemMetricsPayload])
 async def system_metrics(request: Request) -> ApiEnvelope[SystemMetricsPayload]:
     try:
-        snapshot = _context(request).metrics.snapshot()
-        return ApiEnvelope(data=SystemMetricsPayload(**snapshot), error=None)
+        metrics = _context(request).metrics
+        # Thin wrapper around the shared SystemMetrics snapshot to avoid duplicating logic.
+        snapshot = metrics.snapshot()
+        payload = SystemMetricsPayload(**snapshot)
+        return ApiEnvelope(data=payload, error=None)
     except Exception as exc:  # pragma: no cover - defensive
         logger.exception(
             "Failed to fetch system metrics",
