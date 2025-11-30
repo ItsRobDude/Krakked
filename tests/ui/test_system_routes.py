@@ -53,6 +53,7 @@ def test_system_metrics_endpoint(client, system_context):
     assert payload["data"]["plans_executed"] == 1
     assert payload["data"]["blocked_actions"] == 2
     assert payload["data"]["execution_errors"] == 2
+    assert payload["data"]["market_data_errors"] == 0
     assert len(payload["data"]["recent_errors"]) == 2
     assert payload["data"]["last_equity_usd"] == 1000.0
     assert payload["data"]["last_realized_pnl_usd"] == 25.5

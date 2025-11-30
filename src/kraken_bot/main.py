@@ -115,6 +115,7 @@ def _run_loop_iteration(
     last_strategy_cycle: datetime,
     last_portfolio_sync: datetime,
     portfolio: PortfolioService,
+    market_data: MarketDataAPI,
     strategy_engine: StrategyEngine,
     execution_service: ExecutionService,
     metrics: SystemMetrics,
@@ -124,6 +125,12 @@ def _run_loop_iteration(
 
     updated_portfolio_sync = last_portfolio_sync
     updated_strategy_cycle = last_strategy_cycle
+
+    try:
+        data_status = market_data.get_health_status()
+    except Exception as exc:  # pragma: no cover - defensive logging
+        logger.error("Failed to evaluate market data health: %s", exc)
+        data_status = None
 
     if (now - last_portfolio_sync).total_seconds() >= portfolio_interval:
         try:
@@ -135,35 +142,53 @@ def _run_loop_iteration(
             metrics.record_error(f"Portfolio sync failed: {exc}")
 
     if (now - last_strategy_cycle).total_seconds() >= strategy_interval:
-        try:
-            plan = strategy_engine.run_cycle(now)
-            blocked_actions = len([a for a in plan.actions if getattr(a, "blocked", False)])
-            metrics.record_plan(blocked_actions)
-            updated_strategy_cycle = now
-            result = None
-            if plan.actions:
-                result = execution_service.execute_plan(plan)
-                kill_switch_rejections = [
-                    order
-                    for order in getattr(result, "orders", [])
-                    if order.status == "rejected"
-                    and isinstance(order.last_error, str)
-                    and "kill_switch_active" in order.last_error
-                ]
-                if kill_switch_rejections:
-                    metrics.record_blocked_actions(len(kill_switch_rejections))
-                metrics.record_plan_execution(result.errors)
-            else:
-                logger.info(
-                    "No actions generated for plan %s; skipping execution",
-                    plan.plan_id,
-                    extra=structured_log_extra(event="plan_skipped", plan_id=plan.plan_id),
-                )
-        except Exception as exc:  # pragma: no cover - defensive logging
-            logger.error("Strategy cycle failed: %s", exc)
-            metrics.record_error(f"Strategy cycle failed: {exc}")
-        else:
+        market_data_healthy = data_status and getattr(data_status, "health", "") == "healthy"
+        if not market_data_healthy:
+            reason = getattr(data_status, "reason", "unknown") if data_status else "unknown"
+            max_staleness = getattr(data_status, "max_staleness", None) if data_status else None
+            log_extra = {"event": "market_data_unavailable", "reason": reason}
+            if max_staleness is not None:
+                log_extra["max_staleness"] = max_staleness
+            logger.warning(
+                "Skipping strategy cycle due to market data health: %s",
+                getattr(data_status, "health", "unknown"),
+                extra=structured_log_extra(**log_extra),
+            )
+            message = f"Market data unavailable ({reason})"
+            if max_staleness is not None:
+                message = f"{message}; stale for {max_staleness:.2f}s"
+            metrics.record_market_data_error(message)
             refresh_metrics_state()
+        else:
+            try:
+                plan = strategy_engine.run_cycle(now)
+                blocked_actions = len([a for a in plan.actions if getattr(a, "blocked", False)])
+                metrics.record_plan(blocked_actions)
+                updated_strategy_cycle = now
+                result = None
+                if plan.actions:
+                    result = execution_service.execute_plan(plan)
+                    kill_switch_rejections = [
+                        order
+                        for order in getattr(result, "orders", [])
+                        if order.status == "rejected"
+                        and isinstance(order.last_error, str)
+                        and "kill_switch_active" in order.last_error
+                    ]
+                    if kill_switch_rejections:
+                        metrics.record_blocked_actions(len(kill_switch_rejections))
+                    metrics.record_plan_execution(result.errors)
+                else:
+                    logger.info(
+                        "No actions generated for plan %s; skipping execution",
+                        plan.plan_id,
+                        extra=structured_log_extra(event="plan_skipped", plan_id=plan.plan_id),
+                    )
+            except Exception as exc:  # pragma: no cover - defensive logging
+                logger.error("Strategy cycle failed: %s", exc)
+                metrics.record_error(f"Strategy cycle failed: {exc}")
+            else:
+                refresh_metrics_state()
 
     return updated_portfolio_sync, updated_strategy_cycle
 
@@ -241,6 +266,7 @@ def run(allow_interactive_setup: bool = True) -> int:
                 last_strategy_cycle=last_strategy_cycle,
                 last_portfolio_sync=last_portfolio_sync,
                 portfolio=portfolio,
+                market_data=market_data,
                 strategy_engine=strategy_engine,
                 execution_service=execution_service,
                 metrics=metrics,
