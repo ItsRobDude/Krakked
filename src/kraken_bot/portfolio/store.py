@@ -10,6 +10,7 @@ from typing import List, Optional, Dict, Any, TYPE_CHECKING
 from pathlib import Path
 from .models import RealizedPnLRecord, CashFlowRecord, PortfolioSnapshot, AssetValuation
 from .exceptions import PortfolioSchemaError
+from .migrations import run_migrations
 
 if TYPE_CHECKING:
     from kraken_bot.strategy.models import DecisionRecord, ExecutionPlan, RiskAdjustedAction
@@ -178,9 +179,19 @@ class SQLitePortfolioStore(PortfolioStore):
                 conn.close()
                 raise PortfolioSchemaError(found=row[0], expected=CURRENT_SCHEMA_VERSION)
 
-            if stored_version != CURRENT_SCHEMA_VERSION:
+            if stored_version > CURRENT_SCHEMA_VERSION:
                 conn.close()
                 raise PortfolioSchemaError(found=stored_version, expected=CURRENT_SCHEMA_VERSION)
+
+            if stored_version < CURRENT_SCHEMA_VERSION:
+                try:
+                    run_migrations(conn, stored_version, CURRENT_SCHEMA_VERSION)
+                except Exception:
+                    logger.exception("Failed to run portfolio migrations")
+                    conn.close()
+                    raise PortfolioSchemaError(
+                        found=stored_version, expected=CURRENT_SCHEMA_VERSION
+                    )
 
         # Trades Table
         cursor.execute("""
