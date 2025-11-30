@@ -140,8 +140,18 @@ def _run_loop_iteration(
             blocked_actions = len([a for a in plan.actions if getattr(a, "blocked", False)])
             metrics.record_plan(blocked_actions)
             updated_strategy_cycle = now
+            result = None
             if plan.actions:
                 result = execution_service.execute_plan(plan)
+                kill_switch_rejections = [
+                    order
+                    for order in getattr(result, "orders", [])
+                    if order.status == "rejected"
+                    and isinstance(order.last_error, str)
+                    and "kill_switch_active" in order.last_error
+                ]
+                if kill_switch_rejections:
+                    metrics.record_blocked_actions(len(kill_switch_rejections))
                 metrics.record_plan_execution(result.errors)
             else:
                 logger.info(

@@ -71,8 +71,9 @@ class StubStrategyEngine:
 
 
 class StubExecutionResult:
-    def __init__(self, errors=None) -> None:
+    def __init__(self, errors=None, orders=None) -> None:
         self.errors = errors or []
+        self.orders = orders or []
 
 
 class StubExecutionService:
@@ -202,3 +203,56 @@ def test_run_loop_iteration_executes_scheduled_work_and_updates_metrics():
         "positions": 1,
     }
     assert len(metrics.state_updates) == 5, "metrics should refresh after syncs and strategy cycles"
+
+
+def test_run_loop_iteration_counts_kill_switch_rejections_as_blocked_actions():
+    now = datetime(2024, 2, 1, tzinfo=timezone.utc)
+    strategy_interval = 1
+    portfolio_interval = 10
+
+    portfolio = StubPortfolioService()
+    strategy_engine = StubStrategyEngine()
+
+    class KillSwitchExecutionService(StubExecutionService):
+        def __init__(self) -> None:
+            super().__init__()
+            self.kill_switch_orders = [
+                type(
+                    "KillSwitchOrder",
+                    (),
+                    {"status": "rejected", "last_error": "Execution blocked by kill switch (kill_switch_active)"},
+                )()
+            ]
+
+        def execute_plan(self, plan: StubPlan) -> StubExecutionResult:  # type: ignore[override]
+            self.plans.append(plan)
+            return StubExecutionResult(
+                errors=["Execution blocked by kill switch"],
+                orders=list(self.kill_switch_orders),
+            )
+
+    execution_service = KillSwitchExecutionService()
+    metrics = StubSystemMetrics()
+
+    refresh_metrics = lambda: _refresh_metrics_state(portfolio, execution_service, metrics)
+
+    last_portfolio_sync = now
+    last_strategy_cycle = now - timedelta(seconds=strategy_interval)
+
+    _run_loop_iteration(
+        now=now,
+        strategy_interval=strategy_interval,
+        portfolio_interval=portfolio_interval,
+        last_strategy_cycle=last_strategy_cycle,
+        last_portfolio_sync=last_portfolio_sync,
+        portfolio=portfolio,
+        strategy_engine=strategy_engine,
+        execution_service=execution_service,
+        metrics=metrics,
+        refresh_metrics_state=refresh_metrics,
+    )
+
+    assert metrics.plans_generated == 1
+    assert metrics.plans_executed == 1
+    assert metrics.blocked_actions == 2
+    assert metrics.execution_errors == 1

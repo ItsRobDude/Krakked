@@ -107,10 +107,17 @@ class ExecutionService:
             eligible_actions.append(action)
 
         if self._kill_switch_active():
-            blocked_reason = "Kill switch active; execution blocked"
+            blocked_reason = "Execution blocked by kill switch"
             logger.warning(
-                "Execution blocked by kill switch", extra={"event": "kill_switch_block", "plan_id": plan.plan_id}
+                blocked_reason,
+                extra={
+                    "event": "kill_switch_block",
+                    "plan_id": plan.plan_id,
+                    "eligible_actions": len(eligible_actions),
+                },
             )
+            result.errors.append(blocked_reason)
+
             for action in eligible_actions:
                 delta = action.target_base_size - action.current_base_size
                 side = "buy" if delta > 0 else "sell"
@@ -127,18 +134,17 @@ class ExecutionService:
                     requested_base_size=volume,
                     requested_price=plan.metadata.get("requested_price"),
                     status="rejected",
-                    last_error=blocked_reason,
+                    last_error=f"{blocked_reason} (kill_switch_active)",
                 )
                 order.updated_at = datetime.now(UTC)
 
                 if self.store:
                     self.store.save_order(order)
 
-                result.errors.append(blocked_reason)
                 result.orders.append(order)
 
             result.completed_at = datetime.now(UTC)
-            result.success = not result.errors
+            result.success = False
             self.record_execution_result(result)
             if self.store:
                 self.store.save_execution_result(result)

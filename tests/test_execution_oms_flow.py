@@ -1,5 +1,6 @@
 from datetime import UTC, datetime
 from typing import Any, Dict
+from types import SimpleNamespace
 from unittest.mock import MagicMock, call
 
 import pytest
@@ -127,6 +128,33 @@ def test_execute_plan_truncates_to_max_concurrent_orders_and_rejects_extra():
 
     assert rejected[0].last_error in result.errors
     assert any(call.args[0] == rejected[0] for call in store.save_order.call_args_list)
+
+
+def test_execute_plan_blocked_by_kill_switch():
+    adapter = MagicMock()
+    adapter.config = ExecutionConfig(validate_only=True)
+    status = SimpleNamespace(kill_switch_active=True)
+    service = ExecutionService(
+        adapter=adapter,
+        market_data=_market_data(),
+        risk_status_provider=lambda: status,
+    )
+
+    actions = [
+        _action(target_base_size=2.0, current_base_size=0.0),
+        _action(target_base_size=0.0, current_base_size=1.0),
+    ]
+    plan = _plan(actions)
+
+    result = service.execute_plan(plan)
+
+    assert result.success is False
+    assert result.errors == ["Execution blocked by kill switch"]
+    assert len(result.orders) == len(actions)
+    assert all(order.status == "rejected" for order in result.orders)
+    assert all("kill_switch_active" in (order.last_error or "") for order in result.orders)
+    assert result.completed_at is not None
+    adapter.submit_order.assert_not_called()
 
 
 def test_refresh_open_orders_updates_tracked_orders():
