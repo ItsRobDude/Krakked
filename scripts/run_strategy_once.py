@@ -101,9 +101,18 @@ def run_strategy_once() -> None:
     strategy_engine.initialize()
     plan = strategy_engine.run_cycle()
 
-    execution_service = ExecutionService(
-        client=client, config=safe_config.execution, rate_limiter=rate_limiter
-    )
+    try:
+        es_params = signature(ExecutionService).parameters
+        es_kwargs = {}
+        if "client" in es_params:
+            es_kwargs["client"] = client
+        if "config" in es_params:
+            es_kwargs["config"] = safe_config.execution
+        if "rate_limiter" in es_params:
+            es_kwargs["rate_limiter"] = rate_limiter
+        execution_service = ExecutionService(**es_kwargs)
+    except (ValueError, TypeError):
+        execution_service = ExecutionService(client=client, config=safe_config.execution)
     result = execution_service.execute_plan(plan)
 
     logger.info("Plan %s executed. success=%s errors=%s", plan.plan_id, result.success, result.errors)
