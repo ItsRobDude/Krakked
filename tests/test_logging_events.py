@@ -10,6 +10,7 @@ import pytest
 
 from starlette.testclient import TestClient
 
+from kraken_bot.execution.adapter import ExecutionAdapter
 from kraken_bot.execution.models import LocalOrder
 from kraken_bot.execution.oms import ExecutionService
 from kraken_bot.main import _run_loop_iteration, _shutdown, run
@@ -26,8 +27,8 @@ from tests.ui.conftest import build_test_context
 class _FakeAdapter:
     def __init__(self) -> None:
         # Minimal stub that satisfies the ExecutionAdapter Protocol
-        self.client: Any = MagicMock()
-        self.config: Any = MagicMock()
+        self.client = cast(KrakenRESTClient, MagicMock())
+        self.config = ExecutionConfig()
         self.submit_order_calls: list[LocalOrder] = []
 
     def submit_order(self, order: LocalOrder) -> LocalOrder:
