@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime, timedelta, timezone
 from types import SimpleNamespace
+from typing import Any, cast
 from unittest.mock import MagicMock
 
 import pytest
@@ -12,7 +13,10 @@ from starlette.testclient import TestClient
 from kraken_bot.execution.models import LocalOrder
 from kraken_bot.execution.oms import ExecutionService
 from kraken_bot.main import _run_loop_iteration, _shutdown, run
+from kraken_bot.market_data.api import MarketDataAPI
+from kraken_bot.metrics import SystemMetrics
 from kraken_bot.portfolio.exceptions import PortfolioSchemaError
+from kraken_bot.portfolio.manager import PortfolioService
 from kraken_bot.strategy.models import ExecutionPlan, RiskAdjustedAction
 from kraken_bot.ui.api import create_api
 from kraken_bot.ui.context import AppContext
@@ -47,9 +51,12 @@ def _build_action(pair: str) -> RiskAdjustedAction:
 def test_kill_switch_block_logs_warning_with_event(caplog: pytest.LogCaptureFixture):
     caplog.set_level(logging.WARNING, logger="kraken_bot.execution.oms")
 
+    def _kill_switch_status() -> Any:
+        return SimpleNamespace(kill_switch_active=True)
+
     service = ExecutionService(
         adapter=_FakeAdapter(),
-        risk_status_provider=lambda: SimpleNamespace(kill_switch_active=True),
+        risk_status_provider=_kill_switch_status,
     )
 
     plan = ExecutionPlan(
