@@ -10,13 +10,13 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 import pandas as pd
 
-Series = Any
-
 from kraken_bot.config import RiskConfig
 from kraken_bot.market_data.api import MarketDataAPI
 from kraken_bot.portfolio.manager import PortfolioService
 from kraken_bot.logging_config import structured_log_extra
 from .models import RiskAdjustedAction, RiskStatus, StrategyIntent
+
+Series = Any
 
 logger = logging.getLogger(__name__)
 

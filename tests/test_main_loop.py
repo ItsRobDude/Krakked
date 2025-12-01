@@ -180,7 +180,8 @@ def test_run_loop_iteration_executes_scheduled_work_and_updates_metrics():
     market_data = StubMarketData()
     metrics = StubSystemMetrics()
 
-    refresh_metrics = lambda: _refresh_metrics_state(portfolio, execution_service, metrics)
+    def refresh_metrics() -> None:
+        _refresh_metrics_state(portfolio, execution_service, metrics)
 
     last_portfolio_sync = now - timedelta(seconds=portfolio_interval)
     last_strategy_cycle = now - timedelta(seconds=strategy_interval)
@@ -262,7 +263,8 @@ def test_run_loop_iteration_updates_market_data_metrics_when_healthy():
     market_data = StubMarketData()
     metrics = FakeMetrics()
 
-    refresh_metrics = lambda: _refresh_metrics_state(portfolio, execution_service, metrics)
+    def refresh_metrics() -> None:
+        _refresh_metrics_state(portfolio, execution_service, metrics)
 
     _run_loop_iteration(
         now=now,
@@ -315,7 +317,8 @@ def test_run_loop_iteration_counts_kill_switch_rejections_as_blocked_actions():
     market_data = StubMarketData()
     metrics = StubSystemMetrics()
 
-    refresh_metrics = lambda: _refresh_metrics_state(portfolio, execution_service, metrics)
+    def refresh_metrics() -> None:
+        _refresh_metrics_state(portfolio, execution_service, metrics)
 
     last_portfolio_sync = now
     last_strategy_cycle = now - timedelta(seconds=strategy_interval)
@@ -379,7 +382,8 @@ def test_run_loop_iteration_flags_drift_and_enables_kill_switch():
     market_data = StubMarketData()
     metrics = StubSystemMetrics()
 
-    refresh_metrics = lambda: _refresh_metrics_state(portfolio, execution_service, metrics)
+    def refresh_metrics() -> None:
+        _refresh_metrics_state(portfolio, execution_service, metrics)
 
     _run_loop_iteration(
         now=now,
@@ -414,7 +418,8 @@ def test_run_loop_iteration_skips_strategy_when_market_data_unhealthy():
     )
     metrics = StubSystemMetrics()
 
-    refresh_metrics = lambda: _refresh_metrics_state(portfolio, execution_service, metrics)
+    def refresh_metrics() -> None:
+        _refresh_metrics_state(portfolio, execution_service, metrics)
 
     last_portfolio_sync = now
     last_strategy_cycle = now - timedelta(seconds=strategy_interval)
@@ -644,7 +649,8 @@ def test_run_loop_iteration_triggers_kill_switch_on_drift_and_blocks_execution()
     market_data = StubMarketData()
     metrics = FakeMetrics()
 
-    refresh_metrics = lambda: _refresh_metrics_state(portfolio, execution_service, metrics)
+    def refresh_metrics() -> None:
+        _refresh_metrics_state(portfolio, execution_service, metrics)
 
     _run_loop_iteration(
         now=now,
@@ -685,7 +691,8 @@ def test_run_loop_iteration_records_drift_without_triggering_kill_switch_when_di
     market_data = StubMarketData()
     metrics = FakeMetrics()
 
-    refresh_metrics = lambda: _refresh_metrics_state(portfolio, execution_service, metrics)
+    def refresh_metrics() -> None:
+        _refresh_metrics_state(portfolio, execution_service, metrics)
 
     _run_loop_iteration(
         now=now,

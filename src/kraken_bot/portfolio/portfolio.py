@@ -11,7 +11,7 @@ from __future__ import annotations
 import time
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Any, Callable, DefaultDict, Dict, Iterable, List, Optional, Sequence, Tuple, Union, cast
+from typing import Callable, DefaultDict, Dict, Iterable, List, Optional, Sequence, Tuple, Union, cast
 
 from kraken_bot.config import OHLCBar, PortfolioConfig
 from kraken_bot.market_data.api import MarketDataAPI
