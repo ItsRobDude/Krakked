@@ -324,7 +324,9 @@ async def validate_credentials(
     except Exception as exc:  # pragma: no cover - defensive
         logger.exception(
             "Unexpected error during credential validation",
-            extra=build_request_log_extra(request, event="credential_validation_failed"),
+            extra=build_request_log_extra(
+                request, event="credential_validation_failed", error=str(exc)
+            ),
         )
         return ApiEnvelope(
             data={"valid": False},

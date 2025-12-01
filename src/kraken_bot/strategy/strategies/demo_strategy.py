@@ -1,8 +1,7 @@
 # src/kraken_bot/strategy/strategies/demo_strategy.py
 
 from dataclasses import dataclass
-from typing import List, Dict, Any
-from datetime import datetime, timezone
+from typing import List
 
 from kraken_bot.config import StrategyConfig
 from kraken_bot.strategy.base import Strategy, StrategyContext
@@ -48,7 +47,8 @@ class TrendFollowingStrategy(Strategy):
 
             # Simple SMA
             def sma(data, period):
-                if len(data) < period: return 0
+                if len(data) < period:
+                    return 0
                 return sum(data[-period:]) / period
 
             fast_ma = sma(closes, self.params.ma_fast)

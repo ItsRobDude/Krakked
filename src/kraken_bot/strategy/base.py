@@ -2,8 +2,8 @@
 
 import abc
 from dataclasses import dataclass
-from typing import List, Dict, Any, Optional
 from datetime import datetime
+from typing import List
 
 from kraken_bot.config import StrategyConfig
 from kraken_bot.market_data.api import MarketDataAPI
