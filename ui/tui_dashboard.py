@@ -390,7 +390,7 @@ class StatusPanel(Static):
         # SYSTEM STATUS
         lines.append("[bold]SYSTEM STATUS[/bold]")
         lines.append("")
-        lines.append(f"  [green]● ONLINE[/green]")
+        lines.append("  [green]● ONLINE[/green]")
         lines.append(f"  Mode: [bold]{s.system_mode.upper()}[/bold]")
         if s.ui_read_only:
             lines.append("  [yellow]READ-ONLY[/]")

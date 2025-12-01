@@ -1,14 +1,13 @@
 # tests/test_strategy_risk.py
 
-import pytest
 import pandas as pd
 from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
 from kraken_bot.config import RiskConfig
-from kraken_bot.strategy.risk import RiskEngine, compute_atr, RiskContext
-from kraken_bot.strategy.models import StrategyIntent, RiskAdjustedAction
-from kraken_bot.portfolio.models import SpotPosition, AssetExposure, EquityView
+from kraken_bot.strategy.risk import RiskEngine, compute_atr
+from kraken_bot.strategy.models import StrategyIntent
+from kraken_bot.portfolio.models import EquityView
 from kraken_bot.market_data.api import MarketDataAPI
 from kraken_bot.portfolio.manager import PortfolioService
 
@@ -118,7 +117,6 @@ def test_kill_switch_drawdown():
         unrealized_pnl_base_total=0, drift_flag=False
     )
     # Mock snapshots
-    from kraken_bot.portfolio.models import PortfolioSnapshot
     portfolio.store = MagicMock()
     # Mock snapshot object behavior
     snap = MagicMock()

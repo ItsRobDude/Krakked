@@ -3,7 +3,7 @@
 import pytest
 import time
 from unittest.mock import MagicMock, patch, PropertyMock
-from kraken_bot.config import AppConfig, UniverseConfig, MarketDataConfig, ConnectionStatus, PortfolioConfig, OHLCBar
+from kraken_bot.config import AppConfig, MarketDataConfig, ConnectionStatus, PortfolioConfig, OHLCBar
 from kraken_bot.market_data.api import MarketDataAPI
 from kraken_bot.market_data.exceptions import DataStaleError
 

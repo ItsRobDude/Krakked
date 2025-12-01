@@ -6,15 +6,15 @@ import json
 import logging
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
-from typing import List, Optional, Dict, Any, TYPE_CHECKING
-from pathlib import Path
-from .models import RealizedPnLRecord, CashFlowRecord, PortfolioSnapshot, AssetValuation
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
+
+from .models import AssetValuation, CashFlowRecord, PortfolioSnapshot
 from .exceptions import PortfolioSchemaError
 from .migrations import _ensure_meta_table, _set_schema_version, run_migrations
 from kraken_bot.logging_config import structured_log_extra
 
 if TYPE_CHECKING:
-    from kraken_bot.strategy.models import DecisionRecord, ExecutionPlan, RiskAdjustedAction
+    from kraken_bot.strategy.models import DecisionRecord, ExecutionPlan
     from kraken_bot.execution.models import LocalOrder, ExecutionResult
 
 logger = logging.getLogger(__name__)
@@ -678,8 +678,6 @@ class SQLitePortfolioStore(PortfolioStore):
         conn.close()
 
     def add_decision(self, record: "DecisionRecord"):
-        from kraken_bot.strategy.models import DecisionRecord
-
         conn = self._get_conn()
         cursor = conn.cursor()
 
@@ -705,8 +703,6 @@ class SQLitePortfolioStore(PortfolioStore):
         conn.close()
 
     def save_execution_plan(self, plan: "ExecutionPlan"):
-        from kraken_bot.strategy.models import ExecutionPlan
-
         conn = self._get_conn()
         cursor = conn.cursor()
 
@@ -737,8 +733,6 @@ class SQLitePortfolioStore(PortfolioStore):
         conn.close()
 
     def save_order(self, order: "LocalOrder"):
-        from kraken_bot.execution.models import LocalOrder
-
         conn = self._get_conn()
         cursor = conn.cursor()
 
@@ -852,8 +846,6 @@ class SQLitePortfolioStore(PortfolioStore):
         conn.close()
 
     def save_execution_result(self, result: "ExecutionResult"):
-        from kraken_bot.execution.models import ExecutionResult
-
         conn = self._get_conn()
         cursor = conn.cursor()
 

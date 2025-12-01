@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 from typing import Any, Dict
 from types import SimpleNamespace
-from unittest.mock import MagicMock, call
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -127,7 +127,7 @@ def test_execute_plan_truncates_to_max_concurrent_orders_and_rejects_extra():
     assert rejected[0].pair == actions[-1].pair
 
     assert rejected[0].last_error in result.errors
-    assert any(call.args[0] == rejected[0] for call in store.save_order.call_args_list)
+    assert any(_call.args[0] == rejected[0] for _call in store.save_order.call_args_list)
 
 
 def test_execute_plan_blocked_by_kill_switch():
