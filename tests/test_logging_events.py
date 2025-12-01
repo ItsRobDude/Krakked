@@ -26,11 +26,20 @@ from tests.ui.conftest import build_test_context
 
 class _FakeAdapter:
     def __init__(self) -> None:
+        # Minimal stub that satisfies the ExecutionAdapter Protocol
+        self.client = cast(KrakenRESTClient, MagicMock())
+        self.config = ExecutionConfig()
         self.submit_order_calls: list[LocalOrder] = []
 
     def submit_order(self, order: LocalOrder) -> LocalOrder:
         self.submit_order_calls.append(order)
         return order
+
+    def cancel_order(self, order: LocalOrder) -> None:  # pragma: no cover - not used here
+        return None
+
+    def cancel_all_orders(self) -> None:  # pragma: no cover - not used here
+        return None
 
 
 def _build_action(pair: str) -> RiskAdjustedAction:
