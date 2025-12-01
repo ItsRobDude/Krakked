@@ -380,10 +380,21 @@ def load_config(config_path: Optional[Path] = None, env: Optional[str] = None) -
         execution_data = {}
 
     default_execution = ExecutionConfig()
-    execution_mode = execution_data.get("mode", default_execution.mode)
+    execution_mode = execution_data.get("mode")
+    if execution_mode is None:
+        execution_mode = "live" if effective_env == "live" else "paper"
+
+    if execution_mode not in {"paper", "live"}:
+        logger.warning(
+            "Invalid execution mode '%s'; defaulting to 'paper'",
+            execution_mode,
+            extra={"event": "config_invalid_execution_mode", "config_path": str(config_path)},
+        )
+        execution_mode = "paper"
+
     validate_only = execution_data.get("validate_only")
     if validate_only is None:
-        validate_only = execution_mode != "live"
+        validate_only = True
 
     execution_config = ExecutionConfig(
         mode=execution_mode,
@@ -419,6 +430,26 @@ def load_config(config_path: Optional[Path] = None, env: Optional[str] = None) -
             "min_order_notional_usd", default_execution.min_order_notional_usd
         ),
     )
+
+    if (
+        execution_config.mode == "live"
+        and execution_config.validate_only is False
+        and execution_config.allow_live_trading is False
+    ):
+        logger.warning(
+            "Live mode requested without allow_live_trading; forcing validate_only",
+            extra={"event": "config_live_without_allow_live", "config_path": str(config_path)},
+        )
+        execution_config.validate_only = True
+    elif (
+        execution_config.mode == "live"
+        and execution_config.validate_only is False
+        and execution_config.allow_live_trading is True
+    ):
+        logger.info(
+            "Live mode with trading enabled; fully live trading is active",
+            extra={"event": "config_live_trading_enabled", "config_path": str(config_path)},
+        )
 
     ui_data = raw_config.get("ui") or {}
     if not isinstance(ui_data, dict):
