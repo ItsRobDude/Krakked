@@ -24,6 +24,10 @@ class RateLimiter:
             elapsed = now - self.last_call_time
 
             if elapsed < self.interval:
-                time.sleep(self.interval - elapsed)
-
-            self.last_call_time = time.monotonic()
+                sleep_time = self.interval - elapsed
+                time.sleep(sleep_time)
+                # Anchor the next allowed time to the ideal schedule to avoid
+                # cumulative drift from shorter-than-expected sleeps.
+                self.last_call_time = max(self.last_call_time + self.interval, time.monotonic())
+            else:
+                self.last_call_time = now

@@ -1,3 +1,5 @@
+from typing import Any, Dict, cast
+
 import pytest
 
 from kraken_bot.metrics import SystemMetrics
@@ -173,7 +175,7 @@ def test_system_metrics_payload_accepts_snapshot(metrics: SystemMetrics):
 
     snapshot = metrics.snapshot()
 
-    payload = SystemMetricsPayload(**snapshot)
+    payload = SystemMetricsPayload(**cast(Dict[str, Any], snapshot))
 
     assert payload.plans_generated == 1
     assert payload.blocked_actions == 1
