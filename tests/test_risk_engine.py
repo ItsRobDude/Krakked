@@ -1,4 +1,5 @@
 from datetime import datetime
+import pytest
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -111,3 +112,57 @@ def test_kill_switch_handles_unexpected_price_errors():
     assert len(actions) == 1
     assert actions[0].target_notional_usd == 0.0
     assert actions[0].blocked is True
+
+
+def test_manual_positions_excluded_from_limits():
+    market_data = MagicMock()
+    market_data.get_latest_price.side_effect = lambda pair: {"MANUSD": 50.0, "STRATUSD": 200.0}[pair]
+
+    portfolio = _build_portfolio_mock()
+
+    manual_position = SpotPosition(
+        pair="MANUSD",
+        base_asset="MAN",
+        quote_asset="USD",
+        base_size=2.0,
+        avg_entry_price=40.0,
+        realized_pnl_base=0.0,
+        fees_paid_base=0.0,
+    )
+
+    strategy_position = SpotPosition(
+        pair="STRATUSD",
+        base_asset="STRA",
+        quote_asset="USD",
+        base_size=1.0,
+        avg_entry_price=150.0,
+        realized_pnl_base=0.0,
+        fees_paid_base=0.0,
+        strategy_tag="trend",
+    )
+
+    portfolio.get_positions.return_value = [manual_position, strategy_position]
+
+    include_config = RiskConfig(include_manual_positions=True)
+    include_engine = RiskEngine(include_config, market_data, portfolio)
+    include_ctx = include_engine.build_risk_context()
+
+    assert include_ctx.manual_positions_included is True
+    assert include_ctx.total_exposure_usd == pytest.approx(300.0)
+    assert include_ctx.total_exposure_pct == pytest.approx(30.0)
+    assert include_ctx.manual_exposure_usd == pytest.approx(100.0)
+    assert include_ctx.manual_exposure_pct == pytest.approx(10.0)
+    assert include_ctx.per_strategy_exposure_usd["manual"] == pytest.approx(100.0)
+    assert include_ctx.per_strategy_exposure_usd["trend"] == pytest.approx(200.0)
+
+    exclude_config = RiskConfig(include_manual_positions=False)
+    exclude_engine = RiskEngine(exclude_config, market_data, portfolio)
+    exclude_ctx = exclude_engine.build_risk_context()
+
+    assert exclude_ctx.manual_positions_included is False
+    assert exclude_ctx.total_exposure_usd == pytest.approx(200.0)
+    assert exclude_ctx.total_exposure_pct == pytest.approx(20.0)
+    assert exclude_ctx.manual_exposure_usd == pytest.approx(100.0)
+    assert exclude_ctx.manual_exposure_pct == pytest.approx(10.0)
+    assert "manual" not in exclude_ctx.per_strategy_exposure_usd
+    assert exclude_ctx.per_strategy_exposure_usd["trend"] == pytest.approx(200.0)

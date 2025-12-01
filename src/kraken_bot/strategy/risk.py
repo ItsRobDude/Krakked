@@ -104,8 +104,12 @@ class RiskEngine:
                     continue
             included_positions.append(pos)
 
-        total_exposure_usd = sum(pos.current_value_base for pos in positions)
-        total_exposure_pct = (total_exposure_usd / equity_view.equity_base * 100.0) if equity_view.equity_base else 0.0
+        exposure_positions = included_positions
+
+        total_exposure_usd = sum(pos.current_value_base for pos in exposure_positions)
+        total_exposure_pct = (
+            total_exposure_usd / equity_view.equity_base * 100.0
+        ) if equity_view.equity_base else 0.0
 
         manual_exposure_usd = sum(pos.current_value_base for pos in manual_positions)
         manual_exposure_pct = (manual_exposure_usd / equity_view.equity_base * 100.0) if equity_view.equity_base else 0.0
