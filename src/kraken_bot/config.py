@@ -1,6 +1,7 @@
 # src/kraken_bot/config.py
 
 import logging
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -146,7 +147,7 @@ def get_default_ohlc_store_config() -> Dict[str, str]:
     return {"root_dir": str(default_root), "backend": "parquet"}
 
 
-def load_config(config_path: Optional[Path] = None) -> AppConfig:
+def load_config(config_path: Optional[Path] = None, env: Optional[str] = None) -> AppConfig:
     """
     Loads the main application configuration from the default location or a specified path.
     """
@@ -161,10 +162,23 @@ def load_config(config_path: Optional[Path] = None) -> AppConfig:
         )
         return default
 
+    allowed_envs = {"dev", "paper", "live"}
+
     if config_path is None:
         config_path = get_config_dir() / "config.yaml"
 
     config_path = config_path.expanduser()
+
+    initial_env = env if env is not None else os.environ.get("KRAKEN_BOT_ENV")
+    if initial_env not in allowed_envs:
+        logger.warning(
+            "Invalid or missing environment '%s'; defaulting to 'paper'",
+            initial_env,
+            extra={"event": "config_invalid_env", "config_path": str(config_path)},
+        )
+        effective_env = "paper"
+    else:
+        effective_env = initial_env
 
     if not config_path.exists():
         logger.warning(
@@ -182,6 +196,29 @@ def load_config(config_path: Optional[Path] = None) -> AppConfig:
             extra={"event": "config_invalid_format", "config_path": str(config_path)},
         )
         raw_config = {}
+
+    def _deep_merge_dicts(base: Dict[str, Any], overlay: Dict[str, Any]) -> Dict[str, Any]:
+        merged = base.copy()
+        for key, value in overlay.items():
+            if key in merged and isinstance(merged[key], dict) and isinstance(value, dict):
+                merged[key] = _deep_merge_dicts(merged[key], value)
+            else:
+                merged[key] = value
+        return merged
+
+    env_config_path = config_path.parent / f"config.{effective_env}.yaml"
+    if env_config_path.exists():
+        with open(env_config_path, "r") as f:
+            env_config = yaml.safe_load(f) or {}
+
+        if not isinstance(env_config, dict):
+            logger.warning(
+                "Environment config is not a mapping; skipping env overlay",
+                extra={"event": "config_invalid_env_file", "config_path": str(env_config_path)},
+            )
+            env_config = {}
+
+        raw_config = _deep_merge_dicts(raw_config, env_config)
 
     default_region = RegionProfile(
         code="US_CA",
