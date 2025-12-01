@@ -55,9 +55,8 @@ def test_kill_switch_block_logs_warning_with_event(caplog: pytest.LogCaptureFixt
     def _kill_switch_status() -> Any:
         return SimpleNamespace(kill_switch_active=True)
 
-    adapter = cast(ExecutionAdapter, _FakeAdapter())
     service = ExecutionService(
-        adapter=adapter,
+        adapter=_FakeAdapter(),
         risk_status_provider=_kill_switch_status,
     )
 
