@@ -34,6 +34,8 @@ def api(mock_config):
 
             api_instance = MarketDataAPI(mock_config)
             api_instance.initialize(backfill=False)
+
+            mock_store_cls.assert_called_once_with(mock_config.market_data)
             return api_instance
 
 def test_get_ohlc_since_success(api):
