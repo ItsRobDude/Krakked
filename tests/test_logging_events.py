@@ -7,9 +7,10 @@ from typing import Any, cast
 from unittest.mock import MagicMock
 
 import pytest
-
 from starlette.testclient import TestClient
 
+from kraken_bot.config import ExecutionConfig
+from kraken_bot.connection.rest_client import KrakenRESTClient
 from kraken_bot.execution.adapter import ExecutionAdapter
 from kraken_bot.execution.models import LocalOrder
 from kraken_bot.execution.oms import ExecutionService
@@ -24,7 +25,8 @@ from kraken_bot.ui.context import AppContext
 from tests.ui.conftest import build_test_context
 
 
-class _FakeAdapter:
+
+class _FakeAdapter(ExecutionAdapter):
     def __init__(self) -> None:
         # Minimal stub that satisfies the ExecutionAdapter Protocol
         self.client = cast(KrakenRESTClient, MagicMock())
@@ -40,6 +42,7 @@ class _FakeAdapter:
 
     def cancel_all_orders(self) -> None:  # pragma: no cover - not used here
         return None
+
 
 
 def _build_action(pair: str) -> RiskAdjustedAction:
