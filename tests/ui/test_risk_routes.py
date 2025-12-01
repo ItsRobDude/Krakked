@@ -1,5 +1,6 @@
 from datetime import UTC, datetime
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -34,9 +35,9 @@ def risk_context(client: TestClient):
 class RecordingAdapter:
     def __init__(self, config: ExecutionConfig | None = None):
         self.config = config or ExecutionConfig()
-        self.submit_order_calls = []
-        self.cancel_order_calls = []
-        self.cancel_all_calls = 0
+        self.submit_order_calls: list[Any] = []
+        self.cancel_order_calls: list[Any] = []
+        self.cancel_all_calls: int = 0
         self.client = SimpleNamespace(
             get_open_orders=lambda params=None: {},
             get_closed_orders=lambda: {},
