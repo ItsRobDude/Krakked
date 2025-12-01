@@ -28,7 +28,9 @@ def sample_bars() -> list[OHLCBar]:
 
 def test_file_ohlc_store_init(mock_market_data_config: MarketDataConfig):
     """Tests that the store initializes correctly and creates the root directory."""
-    _store = FileOHLCStore(mock_market_data_config)
+    store = FileOHLCStore(mock_market_data_config)
+    assert store.root_dir == Path(mock_market_data_config.ohlc_store["root_dir"])
+
     assert Path(mock_market_data_config.ohlc_store["root_dir"]).exists()
 
 def test_append_and_get_bars(mock_market_data_config: MarketDataConfig, sample_bars: list[OHLCBar]):

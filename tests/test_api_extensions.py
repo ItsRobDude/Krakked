@@ -22,7 +22,7 @@ def mock_config() -> AppConfig:
 
 @pytest.fixture
 def api(mock_config):
-    with patch('kraken_bot.market_data.api.FileOHLCStore') as _mock_store_cls:
+    with patch('kraken_bot.market_data.api.FileOHLCStore') as mock_store_cls:
         # Mock universe building
         with patch('kraken_bot.market_data.api.build_universe') as mock_build_universe:
             pair_meta = PairMetadata(
