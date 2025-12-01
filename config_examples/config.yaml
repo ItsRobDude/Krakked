@@ -1,0 +1,94 @@
+# Base configuration shared by all environments.
+region:
+  code: "US_CA"
+  capabilities:
+    supports_margin: false
+    supports_futures: false
+    supports_staking: false
+  default_quote: "USD"
+
+universe:
+  include_pairs:
+    - "ETH/USD"
+    - "BTC/USD"
+  exclude_pairs: []
+  min_24h_volume_usd: 100000.0
+
+market_data:
+  ws:
+    url: "wss://ws.kraken.com/v2"
+  ohlc_store:
+    root_dir: "~/.local/share/kraken_bot/ohlc"
+    backend: "parquet"
+  backfill_timeframes:
+    - "1h"
+    - "4h"
+  ws_timeframes:
+    - "1m"
+    - "5m"
+  metadata_path: "~/.local/share/kraken_bot/metadata.json"
+
+portfolio:
+  base_currency: "USD"
+  valuation_pairs: { }
+  include_assets: []
+  exclude_assets: []
+  cost_basis_method: "wac"
+  track_manual_trades: true
+  snapshot_retention_days: 30
+  reconciliation_tolerance: 1.0
+
+execution:
+  mode: "paper"
+  default_order_type: "limit"
+  max_slippage_bps: 50
+  time_in_force: "GTC"
+  post_only: false
+  validate_only: true
+  allow_live_trading: false
+  paper_tests_completed: false
+  dead_man_switch_seconds: 600
+  max_retries: 3
+  retry_backoff_seconds: 2
+  retry_backoff_factor: 2.0
+  max_concurrent_orders: 10
+  min_order_notional_usd: 20.0
+
+risk:
+  max_risk_per_trade_pct: 1.0
+  max_portfolio_risk_pct: 10.0
+  max_open_positions: 10
+  max_per_asset_pct: 5.0
+  max_per_strategy_pct: {}
+  max_daily_drawdown_pct: 10.0
+  kill_switch_on_drift: true
+  include_manual_positions: true
+  volatility_lookback_bars: 20
+  min_liquidity_24h_usd: 100000.0
+
+strategies:
+  enabled:
+    - "momentum"
+  configs:
+    momentum:
+      name: "momentum"
+      type: "example"
+      enabled: true
+      params:
+        lookback_bars: 48
+        threshold_bps: 15
+      userref: 101
+
+ui:
+  enabled: true
+  host: "127.0.0.1"
+  port: 8080
+  base_path: "/"
+  auth:
+    enabled: false
+    token: ""
+  read_only: false
+  refresh_intervals:
+    dashboard_ms: 5000
+    orders_ms: 5000
+    strategies_ms: 10000

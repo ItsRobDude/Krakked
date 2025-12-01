@@ -1,0 +1,9 @@
+# Paper-trading overlay. Loaded when KRAKEN_BOT_ENV=paper (default).
+execution:
+  mode: "paper"
+  validate_only: true
+  allow_live_trading: false
+  paper_tests_completed: false
+
+ui:
+  read_only: false

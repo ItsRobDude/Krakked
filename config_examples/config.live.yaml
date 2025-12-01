@@ -1,0 +1,9 @@
+# Live-trading overlay. Live submissions remain disabled unless allow_live_trading is explicitly set.
+execution:
+  mode: "live"
+  validate_only: true        # Live mode still defaults to validate-only for safety
+  allow_live_trading: false  # Flip to true only after manual verification
+  paper_tests_completed: true
+
+ui:
+  read_only: true

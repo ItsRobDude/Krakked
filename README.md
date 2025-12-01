@@ -104,7 +104,7 @@ pip install -e .[tui]
 
 ## ⚙️ Configuration
 
-The bot uses two configuration files stored in your OS-specific user configuration directory (handled via `appdirs`).
+The bot uses two configuration files stored in your OS-specific user configuration directory (handled via `appdirs`). Example files live in `config_examples/`, and the overlay/merging rules are documented in [`docs/CONFIG.md`](docs/CONFIG.md).
 
 *   **Linux**: `~/.config/kraken_bot/`
 *   **macOS**: `~/Library/Application Support/kraken_bot/`
