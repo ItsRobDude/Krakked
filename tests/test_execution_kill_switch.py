@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from typing import List
 from types import SimpleNamespace
 
 from kraken_bot.config import ExecutionConfig
@@ -32,9 +33,9 @@ def _build_action(
 class FakeAdapter:
     def __init__(self, config: ExecutionConfig | None = None):
         self.config = config or ExecutionConfig()
-        self.submit_order_calls = []
-        self.cancel_order_calls = []
-        self.cancel_all_calls = 0
+        self.submit_order_calls: List[LocalOrder] = []
+        self.cancel_order_calls: List[LocalOrder] = []
+        self.cancel_all_calls: int = 0
         self.client = SimpleNamespace(
             get_open_orders=lambda params=None: {},
             get_closed_orders=lambda: {},
