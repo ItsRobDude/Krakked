@@ -12,7 +12,7 @@ from kraken_bot.config import ExecutionConfig
 from kraken_bot.connection.rate_limiter import RateLimiter
 from kraken_bot.market_data.api import MarketDataAPI
 from kraken_bot.connection.rest_client import KrakenRESTClient
-from .adapter import ExecutionAdapter, KrakenExecutionAdapter, get_execution_adapter
+from .adapter import ExecutionAdapter, get_execution_adapter
 from .exceptions import ExecutionError
 from .models import ExecutionResult, LocalOrder
 from .router import build_order_from_plan_action
