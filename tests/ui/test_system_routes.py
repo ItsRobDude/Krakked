@@ -243,7 +243,7 @@ def test_auth_middleware_allows_valid_token(client, ui_auth_token):
 
 @pytest.mark.parametrize("ui_auth_enabled", [True])
 def test_credential_validation_auth_and_missing_fields(monkeypatch, client, ui_auth_token):
-    headers = {"Authorization": f"Bearer wrong"}
+    headers = {"Authorization": "Bearer wrong"}
 
     unauthorized = client.post(
         "/api/system/credentials/validate",

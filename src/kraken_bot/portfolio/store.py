@@ -678,8 +678,6 @@ class SQLitePortfolioStore(PortfolioStore):
         conn.close()
 
     def add_decision(self, record: "DecisionRecord"):
-        from kraken_bot.strategy.models import DecisionRecord
-
         conn = self._get_conn()
         cursor = conn.cursor()
 
@@ -705,8 +703,6 @@ class SQLitePortfolioStore(PortfolioStore):
         conn.close()
 
     def save_execution_plan(self, plan: "ExecutionPlan"):
-        from kraken_bot.strategy.models import ExecutionPlan
-
         conn = self._get_conn()
         cursor = conn.cursor()
 
@@ -737,8 +733,6 @@ class SQLitePortfolioStore(PortfolioStore):
         conn.close()
 
     def save_order(self, order: "LocalOrder"):
-        from kraken_bot.execution.models import LocalOrder
-
         conn = self._get_conn()
         cursor = conn.cursor()
 
@@ -852,8 +846,6 @@ class SQLitePortfolioStore(PortfolioStore):
         conn.close()
 
     def save_execution_result(self, result: "ExecutionResult"):
-        from kraken_bot.execution.models import ExecutionResult
-
         conn = self._get_conn()
         cursor = conn.cursor()
 

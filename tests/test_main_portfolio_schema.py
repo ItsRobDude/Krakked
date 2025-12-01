@@ -1,5 +1,3 @@
-import pytest
-
 from kraken_bot import main
 from kraken_bot.portfolio.exceptions import PortfolioSchemaError
 

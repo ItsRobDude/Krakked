@@ -117,7 +117,8 @@ def test_market_data_warning_emits_structured_event(caplog: pytest.LogCaptureFix
         def get_drift_status(self):
             return None
 
-    refresh_metrics = lambda: None
+    def refresh_metrics() -> None:
+        return None
     portfolio = cast(PortfolioService, _Portfolio())
     md = cast(MarketDataAPI, market_data)
     metrics_obj = cast(SystemMetrics, _Metrics())
