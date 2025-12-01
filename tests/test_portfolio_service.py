@@ -1,7 +1,7 @@
 # tests/test_portfolio_service.py
 
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 from kraken_bot.config import AppConfig, PortfolioConfig, RegionProfile, RegionCapabilities, UniverseConfig, MarketDataConfig
 from kraken_bot.portfolio.manager import PortfolioService
 from kraken_bot.portfolio.models import SpotPosition
@@ -96,13 +96,13 @@ def test_reconciliation_drift(service):
     # Case 1: Match
     service.rest_client.get_private.return_value = {"XXBT": "1.0"}
     service._reconcile()
-    assert service.drift_flag == False
+    assert not service.drift_flag
 
     # Case 2: Drift
     service.rest_client.get_private.return_value = {"XXBT": "0.5"}
     # Tolerance is 1.0 USD. Drift is 0.5 BTC * 50k = 25k USD.
     service._reconcile()
-    assert service.drift_flag == True
+    assert service.drift_flag
 
 def test_get_equity(service):
     # Setup balances

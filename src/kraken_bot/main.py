@@ -350,7 +350,8 @@ def run(allow_interactive_setup: bool = True) -> int:
     )
     loop_interval = min(strategy_interval, portfolio_interval, 5)
 
-    refresh_metrics_state = lambda: _refresh_metrics_state(portfolio, execution_service, metrics)
+    def refresh_metrics_state() -> None:
+        _refresh_metrics_state(portfolio, execution_service, metrics)
 
     last_strategy_cycle = datetime.now(timezone.utc) - timedelta(seconds=strategy_interval)
     last_portfolio_sync = datetime.now(timezone.utc) - timedelta(seconds=portfolio_interval)

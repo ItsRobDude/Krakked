@@ -1,7 +1,6 @@
 # tests/test_nonce.py
 
 import time
-import pytest
 from kraken_bot.connection.nonce import NonceGenerator
 
 def test_nonce_monotonicity():
