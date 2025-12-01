@@ -10,8 +10,7 @@ import pytest
 
 from starlette.testclient import TestClient
 
-from kraken_bot.config import ExecutionConfig
-from kraken_bot.connection.rest_client import KrakenRESTClient
+from kraken_bot.execution.adapter import ExecutionAdapter
 from kraken_bot.execution.models import LocalOrder
 from kraken_bot.execution.oms import ExecutionService
 from kraken_bot.main import _run_loop_iteration, _shutdown, run
