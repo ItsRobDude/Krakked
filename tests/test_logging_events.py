@@ -105,6 +105,9 @@ def test_market_data_warning_emits_structured_event(caplog: pytest.LogCaptureFix
             return None
 
     refresh_metrics = lambda: None
+    portfolio = cast(PortfolioService, _Portfolio())
+    md = cast(MarketDataAPI, market_data)
+    metrics_obj = cast(SystemMetrics, _Metrics())
 
     _run_loop_iteration(
         now=datetime.now(timezone.utc),
@@ -112,11 +115,11 @@ def test_market_data_warning_emits_structured_event(caplog: pytest.LogCaptureFix
         portfolio_interval=60,
         last_strategy_cycle=datetime.now(timezone.utc) - timedelta(seconds=2),
         last_portfolio_sync=datetime.now(timezone.utc),
-        portfolio=_Portfolio(),
-        market_data=market_data,
+        portfolio=portfolio,
+        market_data=md,
         strategy_engine=MagicMock(),
         execution_service=MagicMock(),
-        metrics=_Metrics(),
+        metrics=metrics_obj,
         refresh_metrics_state=refresh_metrics,
     )
 
