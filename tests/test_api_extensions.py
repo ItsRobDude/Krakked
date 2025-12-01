@@ -22,19 +22,21 @@ def mock_config() -> AppConfig:
 
 @pytest.fixture
 def api(mock_config):
-    with patch('kraken_bot.market_data.api.FileOHLCStore') as mock_store_cls:
-        # Mock universe building
-        with patch('kraken_bot.market_data.api.build_universe') as mock_build_universe:
-            pair_meta = PairMetadata(
-                canonical="XBTUSD", base="XBT", quote="USD", rest_symbol="XXBTZUSD",
-                ws_symbol="XBT/USD", raw_name="XXBTZUSD", price_decimals=1,
-                volume_decimals=8, lot_size=1, min_order_size=0.0, status="online"
-            )
-            mock_build_universe.return_value = [pair_meta]
+    with patch('kraken_bot.market_data.api.FileOHLCStore') as mock_store_cls, patch(
+        'kraken_bot.market_data.api.build_universe'
+    ) as mock_build_universe:
+        pair_meta = PairMetadata(
+            canonical="XBTUSD", base="XBT", quote="USD", rest_symbol="XXBTZUSD",
+            ws_symbol="XBT/USD", raw_name="XXBTZUSD", price_decimals=1,
+            volume_decimals=8, lot_size=1, min_order_size=0.0, status="online"
+        )
+        mock_build_universe.return_value = [pair_meta]
 
-            api_instance = MarketDataAPI(mock_config)
-            api_instance.initialize(backfill=False)
-            return api_instance
+        api_instance = MarketDataAPI(mock_config)
+        api_instance.initialize(backfill=False)
+
+    mock_store_cls.assert_called_once_with(mock_config.market_data)
+    return api_instance
 
 def test_get_ohlc_since_success(api):
     # Setup mock return from store
