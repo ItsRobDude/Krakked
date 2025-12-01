@@ -16,14 +16,12 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          cache: 'poetry'
-          cache-dependency-path: poetry.lock
 
       - name: Install Poetry
-        run: python -m pip install poetry==2.2.1
-
-      - name: Configure Poetry
-        run: poetry config virtualenvs.in-project true
+        uses: snok/install-poetry@v1
+        with:
+          version: 2.2.1
+          virtualenvs-in-project: true
 
       - name: Install dependencies
         run: poetry install --no-interaction --no-ansi --with dev --extras tui
@@ -42,14 +40,12 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          cache: 'poetry'
-          cache-dependency-path: poetry.lock
 
       - name: Install Poetry
-        run: python -m pip install poetry==2.2.1
-
-      - name: Configure Poetry
-        run: poetry config virtualenvs.in-project true
+        uses: snok/install-poetry@v1
+        with:
+          version: 2.2.1
+          virtualenvs-in-project: true
 
       - name: Install dependencies
         run: poetry install --no-interaction --no-ansi --with dev --extras tui
@@ -73,14 +69,12 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          cache: 'poetry'
-          cache-dependency-path: poetry.lock
 
       - name: Install Poetry
-        run: python -m pip install poetry==2.2.1
-
-      - name: Configure Poetry
-        run: poetry config virtualenvs.in-project true
+        uses: snok/install-poetry@v1
+        with:
+          version: 2.2.1
+          virtualenvs-in-project: true
 
       - name: Install dependencies
         run: poetry install --no-interaction --no-ansi --with dev --extras tui
@@ -116,14 +110,12 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          cache: 'poetry'
-          cache-dependency-path: poetry.lock
 
       - name: Install Poetry
-        run: python -m pip install poetry==2.2.1
-
-      - name: Configure Poetry
-        run: poetry config virtualenvs.in-project true
+        uses: snok/install-poetry@v1
+        with:
+          version: 2.2.1
+          virtualenvs-in-project: true
 
       - name: Build wheel
         run: poetry build
@@ -146,14 +138,12 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          cache: 'poetry'
-          cache-dependency-path: poetry.lock
 
       - name: Install Poetry
-        run: python -m pip install poetry==2.2.1
-
-      - name: Configure Poetry
-        run: poetry config virtualenvs.in-project true
+        uses: snok/install-poetry@v1
+        with:
+          version: 2.2.1
+          virtualenvs-in-project: true
 
       - name: Build distribution
         run: poetry build
