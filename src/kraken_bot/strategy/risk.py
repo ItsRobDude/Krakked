@@ -12,6 +12,7 @@ import pandas as pd
 
 from kraken_bot.config import RiskConfig
 from kraken_bot.market_data.api import MarketDataAPI
+from kraken_bot.market_data.exceptions import DataStaleError
 from kraken_bot.portfolio.manager import PortfolioService
 from kraken_bot.logging_config import structured_log_extra
 from .models import RiskAdjustedAction, RiskStatus, StrategyIntent
@@ -211,7 +212,24 @@ class RiskEngine:
         for intent in intents:
             current_pos = next((p for p in ctx.open_positions if p.pair == intent.pair), None)
             current_size = current_pos.base_size if current_pos else 0.0
-            price = self.market_data.get_latest_price(intent.pair) or 0.0
+            try:
+                price = self.market_data.get_latest_price(intent.pair) or 0.0
+            except DataStaleError as exc:
+                logger.warning(
+                    "Stale price during kill switch for %s, defaulting to 0.0: %s",
+                    intent.pair,
+                    exc,
+                    extra=structured_log_extra(event="kill_switch_price_stale", pair=intent.pair),
+                )
+                price = 0.0
+            except Exception as exc:  # noqa: BLE001
+                logger.debug(
+                    "Error fetching price during kill switch for %s, defaulting to 0.0: %s",
+                    intent.pair,
+                    exc,
+                    extra=structured_log_extra(event="kill_switch_price_error", pair=intent.pair),
+                )
+                price = 0.0
 
             if intent.intent_type in ["exit", "reduce"]:
                 target_usd = intent.desired_exposure_usd if intent.desired_exposure_usd is not None else 0.0
