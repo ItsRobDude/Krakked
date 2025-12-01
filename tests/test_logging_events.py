@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime, timedelta, timezone
 from types import SimpleNamespace
+from typing import Any, cast
 from unittest.mock import MagicMock
 
 import pytest
@@ -12,7 +13,10 @@ from starlette.testclient import TestClient
 from kraken_bot.execution.models import LocalOrder
 from kraken_bot.execution.oms import ExecutionService
 from kraken_bot.main import _run_loop_iteration, _shutdown, run
+from kraken_bot.market_data.api import MarketDataAPI
+from kraken_bot.metrics import SystemMetrics
 from kraken_bot.portfolio.exceptions import PortfolioSchemaError
+from kraken_bot.portfolio.manager import PortfolioService
 from kraken_bot.strategy.models import ExecutionPlan, RiskAdjustedAction
 from kraken_bot.ui.api import create_api
 from kraken_bot.ui.context import AppContext
@@ -47,9 +51,12 @@ def _build_action(pair: str) -> RiskAdjustedAction:
 def test_kill_switch_block_logs_warning_with_event(caplog: pytest.LogCaptureFixture):
     caplog.set_level(logging.WARNING, logger="kraken_bot.execution.oms")
 
+    def _kill_switch_status() -> Any:
+        return SimpleNamespace(kill_switch_active=True)
+
     service = ExecutionService(
         adapter=_FakeAdapter(),
-        risk_status_provider=lambda: SimpleNamespace(kill_switch_active=True),
+        risk_status_provider=_kill_switch_status,
     )
 
     plan = ExecutionPlan(
@@ -98,6 +105,9 @@ def test_market_data_warning_emits_structured_event(caplog: pytest.LogCaptureFix
             return None
 
     refresh_metrics = lambda: None
+    portfolio = cast(PortfolioService, _Portfolio())
+    md = cast(MarketDataAPI, market_data)
+    metrics_obj = cast(SystemMetrics, _Metrics())
 
     _run_loop_iteration(
         now=datetime.now(timezone.utc),
@@ -105,11 +115,11 @@ def test_market_data_warning_emits_structured_event(caplog: pytest.LogCaptureFix
         portfolio_interval=60,
         last_strategy_cycle=datetime.now(timezone.utc) - timedelta(seconds=2),
         last_portfolio_sync=datetime.now(timezone.utc),
-        portfolio=_Portfolio(),
-        market_data=market_data,
+        portfolio=portfolio,
+        market_data=md,
         strategy_engine=MagicMock(),
         execution_service=MagicMock(),
-        metrics=_Metrics(),
+        metrics=metrics_obj,
         refresh_metrics_state=refresh_metrics,
     )
 
