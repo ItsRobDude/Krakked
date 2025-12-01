@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections import deque
 from datetime import datetime, timezone
 from threading import Lock
-from typing import Deque, Dict, List, Optional
+from typing import Any, Deque, Dict, List, Optional
 
 
 class SystemMetrics:
@@ -114,7 +114,7 @@ class SystemMetrics:
             self.market_data_reason = reason
             self.market_data_max_staleness = max_staleness
 
-    def snapshot(self) -> Dict[str, object]:
+    def snapshot(self) -> Dict[str, Any]:
         """Return a read-only snapshot of current counters."""
 
         with self._lock:

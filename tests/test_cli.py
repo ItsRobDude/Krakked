@@ -217,7 +217,10 @@ def test_migrate_db_subcommand_handles_migration_failure(
     _seed_schema_version(str(db_path), CURRENT_SCHEMA_VERSION - 1)
 
     def _failing_migrate(db_path: str) -> None:  # noqa: ARG001
-        raise PortfolioSchemaError(found="bad", expected=CURRENT_SCHEMA_VERSION)
+        raise PortfolioSchemaError(
+            found=CURRENT_SCHEMA_VERSION - 1,
+            expected=CURRENT_SCHEMA_VERSION,
+        )
 
     monkeypatch.setattr(cli, "run_migrate_db", _failing_migrate)
 
