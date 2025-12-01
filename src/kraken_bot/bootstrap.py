@@ -7,6 +7,7 @@ from kraken_bot.config import AppConfig, load_config
 from kraken_bot.connection.rate_limiter import RateLimiter
 from kraken_bot.connection.rest_client import KrakenRESTClient
 from kraken_bot.secrets import CredentialResult, CredentialStatus, load_api_keys
+from kraken_bot.safety import check_safety, log_safety_status
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +66,8 @@ def bootstrap(
     """
 
     config = load_config()
+    safety_status = check_safety(config)
+    log_safety_status(safety_status)
     credential_result = load_api_keys(allow_interactive_setup=allow_interactive_setup)
     api_key, api_secret = _validate_credentials(credential_result)
 
