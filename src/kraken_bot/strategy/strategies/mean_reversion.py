@@ -4,6 +4,7 @@ from dataclasses import asdict, dataclass
 from typing import List
 
 import pandas as pd
+from pandas import Series  # type: ignore[attr-defined]
 
 from kraken_bot.config import StrategyConfig
 from kraken_bot.strategy.base import Strategy, StrategyContext
@@ -56,7 +57,7 @@ class MeanReversionStrategy(Strategy):
                 continue
 
             df = pd.DataFrame([asdict(bar) for bar in ohlc])
-            close_series = df["close"].tail(self.params.lookback_bars)
+            close_series: Series = df["close"].tail(self.params.lookback_bars)
 
             ma = float(close_series.mean())
             std = float(close_series.std(ddof=0))

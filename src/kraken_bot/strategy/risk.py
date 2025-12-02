@@ -532,7 +532,7 @@ class RiskEngine:
         for exp in ctx.asset_exposures:
             per_asset[exp.asset] = exp.percentage_of_equity * 100
 
-        drift_info = {
+        drift_info: Dict[str, Any] = {
             "expected_position_value_base": ctx.drift_status.expected_position_value_base,
             "actual_balance_value_base": ctx.drift_status.actual_balance_value_base,
             "tolerance_base": ctx.drift_status.tolerance_base,
