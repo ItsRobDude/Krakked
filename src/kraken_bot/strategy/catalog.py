@@ -43,6 +43,8 @@ CANONICAL_STRATEGIES: Dict[str, StrategyDefinition] = {
     ),
 }
 
-CANONICAL_STRATEGY_TYPES = {definition.type for definition in CANONICAL_STRATEGIES.values()}
+CANONICAL_STRATEGY_TYPES = {
+    definition.type for definition in CANONICAL_STRATEGIES.values()
+}
 
 __all__ = ["CANONICAL_STRATEGIES", "CANONICAL_STRATEGY_TYPES", "StrategyDefinition"]

@@ -1,6 +1,6 @@
 from datetime import UTC, datetime
-from typing import Any, Dict
 from types import SimpleNamespace
+from typing import Any, Dict
 from unittest.mock import MagicMock
 
 import pytest
@@ -42,7 +42,10 @@ def _plan(actions):
 
 def _market_data(mid_price: float = 25.0) -> MagicMock:
     market_data = MagicMock()
-    market_data.get_best_bid_ask.return_value = {"bid": mid_price - 0.5, "ask": mid_price + 0.5}
+    market_data.get_best_bid_ask.return_value = {
+        "bid": mid_price - 0.5,
+        "ask": mid_price + 0.5,
+    }
     return market_data
 
 
@@ -127,7 +130,9 @@ def test_execute_plan_truncates_to_max_concurrent_orders_and_rejects_extra():
     assert rejected[0].pair == actions[-1].pair
 
     assert rejected[0].last_error in result.errors
-    assert any(_call.args[0] == rejected[0] for _call in store.save_order.call_args_list)
+    assert any(
+        _call.args[0] == rejected[0] for _call in store.save_order.call_args_list
+    )
 
 
 def test_execute_plan_blocked_by_kill_switch():
@@ -152,7 +157,9 @@ def test_execute_plan_blocked_by_kill_switch():
     assert result.errors == ["Execution blocked by kill switch"]
     assert len(result.orders) == len(actions)
     assert all(order.status == "rejected" for order in result.orders)
-    assert all("kill_switch_active" in (order.last_error or "") for order in result.orders)
+    assert all(
+        "kill_switch_active" in (order.last_error or "") for order in result.orders
+    )
     assert result.completed_at is not None
     adapter.submit_order.assert_not_called()
 
@@ -178,7 +185,12 @@ def test_refresh_open_orders_updates_tracked_orders():
 
     client.get_open_orders.return_value = {
         "open": {
-            "OID123": {"userref": 7, "status": "open", "vol_exec": "0.5", "price": "21.0"}
+            "OID123": {
+                "userref": 7,
+                "status": "open",
+                "vol_exec": "0.5",
+                "price": "21.0",
+            }
         }
     }
 
@@ -212,7 +224,12 @@ def test_reconcile_orders_closes_and_updates_local_order():
 
     client.get_closed_orders.return_value = {
         "closed": {
-            "OIDCLOSE": {"userref": 8, "status": "closed", "vol_exec": "1.0", "price_avg": "22.0"}
+            "OIDCLOSE": {
+                "userref": 8,
+                "status": "closed",
+                "vol_exec": "1.0",
+                "price_avg": "22.0",
+            }
         }
     }
 
@@ -233,7 +250,9 @@ def test_cancel_all_requests_adapter_and_marks_orders():
             self.client.get_closed_orders.return_value = {"closed": {}}
             self.cancel_all_called = False
 
-        def submit_order(self, order: LocalOrder) -> LocalOrder:  # pragma: no cover - unused
+        def submit_order(
+            self, order: LocalOrder
+        ) -> LocalOrder:  # pragma: no cover - unused
             return order
 
         def cancel_order(self, order: LocalOrder) -> None:  # pragma: no cover - unused

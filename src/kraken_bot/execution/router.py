@@ -1,7 +1,7 @@
 # src/kraken_bot/execution/router.py
 
 import logging
-from typing import Any, Dict, Optional, Tuple, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
 from uuid import uuid4
 
 from kraken_bot.config import ExecutionConfig
@@ -19,7 +19,11 @@ def round_order_size(pair_metadata: Dict[str, Any], size: float) -> float:
     """Round order volume using pair metadata decimals when available."""
     decimals = None
     if pair_metadata:
-        decimals = pair_metadata.get("volume_decimals") if isinstance(pair_metadata, dict) else getattr(pair_metadata, "volume_decimals", None)
+        decimals = (
+            pair_metadata.get("volume_decimals")
+            if isinstance(pair_metadata, dict)
+            else getattr(pair_metadata, "volume_decimals", None)
+        )
 
     try:
         precision = int(decimals) if decimals is not None else None
@@ -33,7 +37,11 @@ def round_order_price(pair_metadata: Dict[str, Any], price: float) -> float:
     """Round order price using pair metadata decimals when available."""
     decimals = None
     if pair_metadata:
-        decimals = pair_metadata.get("price_decimals") if isinstance(pair_metadata, dict) else getattr(pair_metadata, "price_decimals", None)
+        decimals = (
+            pair_metadata.get("price_decimals")
+            if isinstance(pair_metadata, dict)
+            else getattr(pair_metadata, "price_decimals", None)
+        )
 
     try:
         precision = int(decimals) if decimals is not None else None
@@ -84,7 +92,9 @@ def apply_slippage(order: LocalOrder, config: ExecutionConfig) -> Optional[float
 
 
 def build_order_payload(
-    order: LocalOrder, config: ExecutionConfig, pair_metadata: Optional[Dict[str, Any]] = None
+    order: LocalOrder,
+    config: ExecutionConfig,
+    pair_metadata: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Construct the Kraken AddOrder payload for a given LocalOrder.

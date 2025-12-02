@@ -90,7 +90,9 @@ def test_relative_strength_prefers_top_return():
         return btc_bars if pair == "BTC/USD" else eth_bars
 
     market.get_ohlc.side_effect = _get_ohlc
-    market.get_latest_price.side_effect = lambda pair: 105.0 if pair == "BTC/USD" else 99.0
+    market.get_latest_price.side_effect = lambda pair: (
+        105.0 if pair == "BTC/USD" else 99.0
+    )
 
     intents = strat.generate_intents(ctx)
 

@@ -17,11 +17,13 @@ logger = logging.getLogger(__name__)
 
 KRAKEN_WS_V2_URL = "wss://ws.kraken.com/v2"
 
+
 class KrakenWSClientV2:
     """
     Handles the connection to the Kraken WebSocket API v2, subscribes to channels,
     and maintains an in-memory cache of the latest market data.
     """
+
     def __init__(self, pairs: List[PairMetadata], timeframes: List[str] = ["1m"]):
         self._url = KRAKEN_WS_V2_URL
         self._pairs = pairs
@@ -35,8 +37,12 @@ class KrakenWSClientV2:
         self.last_ticker_update_ts: Dict[str, float] = defaultdict(float)
         self.last_ohlc_update_ts: Dict[str, Dict[str, float]] = defaultdict(dict)
         self.ticker_cache: Dict[str, Dict[str, Any]] = {}
-        self.ohlc_cache: Dict[str, Dict[str, Any]] = {} # key: pair, value: {timeframe: ohlc_data}
-        self.subscription_status: Dict[str, Dict[str, Dict[str, Any]]] = defaultdict(dict)
+        self.ohlc_cache: Dict[str, Dict[str, Any]] = (
+            {}
+        )  # key: pair, value: {timeframe: ohlc_data}
+        self.subscription_status: Dict[str, Dict[str, Dict[str, Any]]] = defaultdict(
+            dict
+        )
 
     @property
     def is_connected(self) -> bool:
@@ -81,22 +87,26 @@ class KrakenWSClientV2:
                 "channel": "ticker",
                 "symbol": self._ws_symbols,
             },
-            "req_id": int(time.time() * 1000)
+            "req_id": int(time.time() * 1000),
         }
         await self._websocket.send(json.dumps(ticker_sub))
         logger.info(f"Subscribed to ticker for {len(self._ws_symbols)} pairs.")
 
         # OHLC subscriptions
         for tf in self._timeframes:
-            interval = int(tf[:-1]) if tf.endswith('m') else int(tf[:-1]) * 60 if tf.endswith('h') else int(tf[:-1]) * 1440
+            interval = (
+                int(tf[:-1])
+                if tf.endswith("m")
+                else int(tf[:-1]) * 60 if tf.endswith("h") else int(tf[:-1]) * 1440
+            )
             ohlc_sub = {
                 "method": "subscribe",
                 "params": {
                     "channel": "ohlc",
                     "symbol": self._ws_symbols,
-                    "interval": interval
+                    "interval": interval,
                 },
-                "req_id": int(time.time() * 1000) + 1
+                "req_id": int(time.time() * 1000) + 1,
             }
             await self._websocket.send(json.dumps(ohlc_sub))
             logger.info(f"Subscribed to OHLC ({tf}) for {len(self._ws_symbols)} pairs.")
@@ -104,9 +114,7 @@ class KrakenWSClientV2:
     def _get_timeframe_from_interval(self, interval: int) -> Optional[str]:
         """Maps a Kraken interval integer back to a timeframe string like '1m'."""
         # This is a reverse mapping of the one used in the OHLC fetcher
-        interval_to_tf = {
-            1: "1m", 5: "5m", 15: "15m", 60: "1h", 240: "4h", 1440: "1d"
-        }
+        interval_to_tf = {1: "1m", 5: "5m", 15: "15m", 60: "1h", 240: "4h", 1440: "1d"}
         return interval_to_tf.get(interval)
 
     async def _handle_message(self, message: str):
@@ -128,9 +136,17 @@ class KrakenWSClientV2:
                 recorded_pairs = []
                 display_names = []
                 for ws_symbol in ws_symbols:
-                    canonical_pair = self._get_canonical_from_ws_symbol(ws_symbol) if ws_symbol else None
+                    canonical_pair = (
+                        self._get_canonical_from_ws_symbol(ws_symbol)
+                        if ws_symbol
+                        else None
+                    )
                     pair_key = canonical_pair or ws_symbol or "unknown"
-                    status_record = {"status": status, "message": error_message, "req_id": req_id}
+                    status_record = {
+                        "status": status,
+                        "message": error_message,
+                        "req_id": req_id,
+                    }
                     self.subscription_status[pair_key][channel] = status_record
                     recorded_pairs.append(pair_key)
                     display_names.append(ws_symbol or canonical_pair or "unknown")
@@ -162,13 +178,17 @@ class KrakenWSClientV2:
                 interval = data.get("params", {}).get("interval")
                 timeframe_key = self._get_timeframe_from_interval(interval)
                 if not timeframe_key:
-                    logger.warning(f"Received OHLC data for unknown interval: {interval}")
+                    logger.warning(
+                        f"Received OHLC data for unknown interval: {interval}"
+                    )
                     return
 
                 if canonical_pair not in self.ohlc_cache:
                     self.ohlc_cache[canonical_pair] = {}
                 self.ohlc_cache[canonical_pair][timeframe_key] = data["data"][0]
-                self.last_ohlc_update_ts[canonical_pair][timeframe_key] = time.monotonic()
+                self.last_ohlc_update_ts[canonical_pair][
+                    timeframe_key
+                ] = time.monotonic()
 
     def _run(self):
         """The main run loop with reconnection logic."""
@@ -184,7 +204,9 @@ class KrakenWSClientV2:
             )
 
             if is_loop_shutdown and not self._running:
-                logger.debug("Event loop shut down after stop request; exiting run loop quietly.")
+                logger.debug(
+                    "Event loop shut down after stop request; exiting run loop quietly."
+                )
             elif is_loop_shutdown:
                 logger.debug("Event loop closed during shutdown: %s", exc)
             else:
@@ -204,7 +226,7 @@ class KrakenWSClientV2:
                 async with connect(self._url) as ws:
                     self._websocket = ws
                     logger.info("WebSocket connection established.")
-                    backoff_delay = 1 # Reset backoff on successful connection
+                    backoff_delay = 1  # Reset backoff on successful connection
                     self.subscription_status.clear()
                     await self._subscribe()
 
@@ -237,6 +259,8 @@ class KrakenWSClientV2:
 
             logger.info(f"Reconnecting in {backoff_delay}s...")
             await asyncio.sleep(backoff_delay)
-            backoff_delay = min(backoff_delay * 2, max_backoff) # Exponential backoff up to max_backoff
+            backoff_delay = min(
+                backoff_delay * 2, max_backoff
+            )  # Exponential backoff up to max_backoff
 
         logger.info("WebSocket run loop terminated.")

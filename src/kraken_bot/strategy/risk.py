@@ -11,11 +11,12 @@ import numpy as np
 import pandas as pd
 
 from kraken_bot.config import RiskConfig
+from kraken_bot.logging_config import structured_log_extra
 from kraken_bot.market_data.api import MarketDataAPI
 from kraken_bot.market_data.exceptions import DataStaleError
 from kraken_bot.portfolio.manager import PortfolioService
 from kraken_bot.portfolio.models import DriftStatus
-from kraken_bot.logging_config import structured_log_extra
+
 from .models import RiskAdjustedAction, RiskStatus, StrategyIntent
 
 Series = Any
@@ -100,7 +101,11 @@ class RiskEngine:
         equity_view = self.portfolio.get_equity(include_manual=True)
         try:
             drift_status_candidate = self.portfolio.get_drift_status()
-            drift_status = drift_status_candidate if isinstance(drift_status_candidate, DriftStatus) else None
+            drift_status = (
+                drift_status_candidate
+                if isinstance(drift_status_candidate, DriftStatus)
+                else None
+            )
         except Exception:  # noqa: BLE001
             drift_status = None
 
@@ -138,19 +143,24 @@ class RiskEngine:
 
         total_exposure_usd = sum(pos.current_value_base for pos in exposure_positions)
         total_exposure_pct = (
-            total_exposure_usd / equity_view.equity_base * 100.0
-        ) if equity_view.equity_base else 0.0
+            (total_exposure_usd / equity_view.equity_base * 100.0)
+            if equity_view.equity_base
+            else 0.0
+        )
 
         manual_exposure_pct = (
-            manual_exposure_usd / equity_view.equity_base * 100.0
-        ) if equity_view.equity_base else 0.0
+            (manual_exposure_usd / equity_view.equity_base * 100.0)
+            if equity_view.equity_base
+            else 0.0
+        )
 
         per_strategy_exposure_usd: Dict[str, float] = {}
         per_strategy_exposure_pct: Dict[str, float] = {}
         for pos in strategy_positions:
             strategy_key = pos.strategy_tag or "unattributed"
             per_strategy_exposure_usd[strategy_key] = (
-                per_strategy_exposure_usd.get(strategy_key, 0.0) + pos.current_value_base
+                per_strategy_exposure_usd.get(strategy_key, 0.0)
+                + pos.current_value_base
             )
 
         # When manual positions participate in budgets, expose them as a synthetic "manual" strategy
@@ -163,14 +173,20 @@ class RiskEngine:
                     # Manual exposure is tracked separately via manual_exposure_pct
                     # and should not appear in per_strategy_exposure_pct.
                     continue
-                per_strategy_exposure_pct[strategy_key] = (usd / equity_view.equity_base) * 100.0
+                per_strategy_exposure_pct[strategy_key] = (
+                    usd / equity_view.equity_base
+                ) * 100.0
 
         now_ts = int(datetime.now(timezone.utc).timestamp())
         day_ago = now_ts - 86400
         snapshots = self.portfolio.store.get_snapshots(since=day_ago)
 
         current_equity = equity_view.equity_base
-        max_equity_24h = max([current_equity] + [s.equity_base for s in snapshots]) if snapshots else current_equity
+        max_equity_24h = (
+            max([current_equity] + [s.equity_base for s in snapshots])
+            if snapshots
+            else current_equity
+        )
 
         drawdown_pct = 0.0
         if max_equity_24h > 0:
@@ -195,7 +211,9 @@ class RiskEngine:
             daily_drawdown_pct=drawdown_pct,
         )
 
-    def process_intents(self, intents: List[StrategyIntent]) -> List[RiskAdjustedAction]:
+    def process_intents(
+        self, intents: List[StrategyIntent]
+    ) -> List[RiskAdjustedAction]:
         ctx = self.build_risk_context()
 
         kill_switch_reasons: List[str] = []
@@ -229,17 +247,26 @@ class RiskEngine:
 
         self._kill_switch_active = kill_switch_active
         if kill_switch_active:
-            reason = "; ".join(kill_switch_reasons) if kill_switch_reasons else "Kill Switch Active"
+            reason = (
+                "; ".join(kill_switch_reasons)
+                if kill_switch_reasons
+                else "Kill Switch Active"
+            )
             return self._block_all_opens(intents, ctx, reason)
 
         intents_by_pair: Dict[str, List[StrategyIntent]] = {}
         for intent in intents:
             intents_by_pair.setdefault(intent.pair, []).append(intent)
 
-        actions = [self._process_pair_intents(pair, pair_intents, ctx) for pair, pair_intents in intents_by_pair.items()]
+        actions = [
+            self._process_pair_intents(pair, pair_intents, ctx)
+            for pair, pair_intents in intents_by_pair.items()
+        ]
         return actions
 
-    def _resolve_userref(self, strategies: List[str], timeframe: Optional[str] = None) -> Optional[str]:
+    def _resolve_userref(
+        self, strategies: List[str], timeframe: Optional[str] = None
+    ) -> Optional[str]:
         unique_strategies = {sid for sid in strategies if sid}
         if len(unique_strategies) != 1:
             return None
@@ -259,10 +286,14 @@ class RiskEngine:
         strategy_id = next(iter(unique_strategies))
         return self.strategy_tags.get(strategy_id) or strategy_id
 
-    def _block_all_opens(self, intents: List[StrategyIntent], ctx: RiskContext, reason: str) -> List[RiskAdjustedAction]:
+    def _block_all_opens(
+        self, intents: List[StrategyIntent], ctx: RiskContext, reason: str
+    ) -> List[RiskAdjustedAction]:
         actions: List[RiskAdjustedAction] = []
         for intent in intents:
-            current_pos = next((p for p in ctx.open_positions if p.pair == intent.pair), None)
+            current_pos = next(
+                (p for p in ctx.open_positions if p.pair == intent.pair), None
+            )
             current_size = current_pos.base_size if current_pos else 0.0
             try:
                 price = self.market_data.get_latest_price(intent.pair) or 0.0
@@ -271,7 +302,9 @@ class RiskEngine:
                     "Stale price during kill switch for %s, defaulting to 0.0: %s",
                     intent.pair,
                     exc,
-                    extra=structured_log_extra(event="kill_switch_price_stale", pair=intent.pair),
+                    extra=structured_log_extra(
+                        event="kill_switch_price_stale", pair=intent.pair
+                    ),
                 )
                 price = 0.0
             except Exception as exc:  # noqa: BLE001
@@ -279,23 +312,31 @@ class RiskEngine:
                     "Error fetching price during kill switch for %s, defaulting to 0.0: %s",
                     intent.pair,
                     exc,
-                    extra=structured_log_extra(event="kill_switch_price_error", pair=intent.pair),
+                    extra=structured_log_extra(
+                        event="kill_switch_price_error", pair=intent.pair
+                    ),
                 )
                 price = 0.0
 
             if intent.intent_type in ["exit", "reduce"]:
-                target_usd = intent.desired_exposure_usd if intent.desired_exposure_usd is not None else 0.0
+                target_usd = (
+                    intent.desired_exposure_usd
+                    if intent.desired_exposure_usd is not None
+                    else 0.0
+                )
                 target_base = (target_usd / price) if price > 0 else 0.0
                 actions.append(
-                        RiskAdjustedAction(
-                            pair=intent.pair,
-                            strategy_id=intent.strategy_id,
-                            strategy_tag=self._resolve_strategy_tag([intent.strategy_id]),
-                            userref=self._resolve_userref([intent.strategy_id], intent.timeframe),
-                            action_type="reduce" if target_base > 0 else "close",
-                            target_base_size=target_base,
-                            target_notional_usd=target_usd,
-                            current_base_size=current_size,
+                    RiskAdjustedAction(
+                        pair=intent.pair,
+                        strategy_id=intent.strategy_id,
+                        strategy_tag=self._resolve_strategy_tag([intent.strategy_id]),
+                        userref=self._resolve_userref(
+                            [intent.strategy_id], intent.timeframe
+                        ),
+                        action_type="reduce" if target_base > 0 else "close",
+                        target_base_size=target_base,
+                        target_notional_usd=target_usd,
+                        current_base_size=current_size,
                         reason=f"Allowed close/reduce during kill switch: {reason}",
                         blocked=False,
                         blocked_reasons=[],
@@ -309,7 +350,9 @@ class RiskEngine:
                     pair=intent.pair,
                     strategy_id=intent.strategy_id,
                     strategy_tag=self._resolve_strategy_tag([intent.strategy_id]),
-                    userref=self._resolve_userref([intent.strategy_id], intent.timeframe),
+                    userref=self._resolve_userref(
+                        [intent.strategy_id], intent.timeframe
+                    ),
                     action_type="none",
                     target_base_size=current_size,
                     target_notional_usd=current_size * price,
@@ -322,10 +365,14 @@ class RiskEngine:
             )
         return actions
 
-    def _process_pair_intents(self, pair: str, intents: List[StrategyIntent], ctx: RiskContext) -> RiskAdjustedAction:
+    def _process_pair_intents(
+        self, pair: str, intents: List[StrategyIntent], ctx: RiskContext
+    ) -> RiskAdjustedAction:
         price = self.market_data.get_latest_price(pair)
         if not price or price <= 0:
-            return self._create_blocked_action(pair, intents[0].strategy_id, "Missing price data", ctx)
+            return self._create_blocked_action(
+                pair, intents[0].strategy_id, "Missing price data", ctx
+            )
 
         blocked_reasons: List[str] = []
         liquidity_24h = self._get_pair_liquidity(pair)
@@ -348,7 +395,9 @@ class RiskEngine:
         pair_positions = [p for p in ctx.open_positions if p.pair == pair]
         for pos in pair_positions:
             strategy_key = pos.strategy_tag or "manual"
-            current_by_strategy[strategy_key] = current_by_strategy.get(strategy_key, 0.0) + (pos.base_size * price)
+            current_by_strategy[strategy_key] = current_by_strategy.get(
+                strategy_key, 0.0
+            ) + (pos.base_size * price)
 
         manual_current = current_by_strategy.get("manual", 0.0)
         if manual_current > 0 and "manual" not in target_usd_by_strategy:
@@ -373,7 +422,9 @@ class RiskEngine:
                     target_usd_by_strategy[key], current_by_strategy.get(key, 0.0)
                 )
 
-        adjusted_targets, limit_reasons = self._apply_limits(target_usd_by_strategy, current_by_strategy, ctx)
+        adjusted_targets, limit_reasons = self._apply_limits(
+            target_usd_by_strategy, current_by_strategy, ctx
+        )
         blocked_reasons.extend(limit_reasons)
         target_usd = sum(adjusted_targets.values())
 
@@ -399,18 +450,27 @@ class RiskEngine:
             target_base_size=target_base,
             target_notional_usd=target_usd,
             current_base_size=current_base,
-            reason="Aggregated Intent" if not blocked_reasons else f"Clamped: {'; '.join(blocked_reasons)}",
+            reason=(
+                "Aggregated Intent"
+                if not blocked_reasons
+                else f"Clamped: {'; '.join(blocked_reasons)}"
+            ),
             blocked=bool(blocked_reasons) and target_usd == 0,
             blocked_reasons=blocked_reasons,
             risk_limits_snapshot=asdict(self.config),
         )
 
     def _apply_limits(
-        self, target_by_strategy: Dict[str, float], current_by_strategy: Dict[str, float], ctx: RiskContext
+        self,
+        target_by_strategy: Dict[str, float],
+        current_by_strategy: Dict[str, float],
+        ctx: RiskContext,
     ) -> tuple[Dict[str, float], List[str]]:
         blocked_reasons: List[str] = []
 
-        def clamp_total(available_total: float, reason: str, targets: Dict[str, float]) -> Dict[str, float]:
+        def clamp_total(
+            available_total: float, reason: str, targets: Dict[str, float]
+        ) -> Dict[str, float]:
             manual_target = targets.get("manual", 0.0)
             non_manual_keys = [k for k in targets.keys() if k != "manual"]
             non_manual_total = sum(targets[k] for k in non_manual_keys)
@@ -426,7 +486,11 @@ class RiskEngine:
                 blocked_reasons.append(reason)
                 return targets
 
-            scale = remaining_for_strategies / non_manual_total if non_manual_total > 0 else 0.0
+            scale = (
+                remaining_for_strategies / non_manual_total
+                if non_manual_total > 0
+                else 0.0
+            )
             for k in non_manual_keys:
                 targets[k] *= scale
             blocked_reasons.append(reason)
@@ -444,17 +508,27 @@ class RiskEngine:
                 continue
 
             allowed_usd = ctx.equity_usd * (pct_limit / 100.0)
-            current_total_for_strategy = ctx.per_strategy_exposure_usd.get(strategy_id, 0.0)
+            current_total_for_strategy = ctx.per_strategy_exposure_usd.get(
+                strategy_id, 0.0
+            )
             current_pair_usd = current_by_strategy.get(strategy_id, 0.0)
-            projected_total = current_total_for_strategy - current_pair_usd + target_by_strategy[strategy_id]
+            projected_total = (
+                current_total_for_strategy
+                - current_pair_usd
+                + target_by_strategy[strategy_id]
+            )
 
             if projected_total > allowed_usd:
-                available = max(allowed_usd - (current_total_for_strategy - current_pair_usd), 0.0)
+                available = max(
+                    allowed_usd - (current_total_for_strategy - current_pair_usd), 0.0
+                )
                 reason = (
                     f"Strategy {strategy_id} budget exceeded "
                     f"({projected_total:.2f} > {allowed_usd:.2f})"
                 )
-                target_by_strategy[strategy_id] = min(target_by_strategy[strategy_id], available)
+                target_by_strategy[strategy_id] = min(
+                    target_by_strategy[strategy_id], available
+                )
                 blocked_reasons.append(reason)
 
         total_target_usd = sum(target_by_strategy.values())
@@ -463,14 +537,20 @@ class RiskEngine:
         projected_total = ctx.total_exposure_usd - current_usd + total_target_usd
         if projected_total > max_asset_usd:
             available = max(max_asset_usd - (ctx.total_exposure_usd - current_usd), 0.0)
-            reason = f"Max per asset limit ({projected_total:.2f} > {max_asset_usd:.2f})"
+            reason = (
+                f"Max per asset limit ({projected_total:.2f} > {max_asset_usd:.2f})"
+            )
             target_by_strategy = clamp_total(available, reason, target_by_strategy)
             total_target_usd = sum(target_by_strategy.values())
 
-        portfolio_limit_usd = ctx.equity_usd * (self.config.max_portfolio_risk_pct / 100.0)
+        portfolio_limit_usd = ctx.equity_usd * (
+            self.config.max_portfolio_risk_pct / 100.0
+        )
         projected_total = ctx.total_exposure_usd - current_usd + total_target_usd
         if projected_total > portfolio_limit_usd:
-            available = max(portfolio_limit_usd - (ctx.total_exposure_usd - current_usd), 0.0)
+            available = max(
+                portfolio_limit_usd - (ctx.total_exposure_usd - current_usd), 0.0
+            )
             reason = (
                 "Max portfolio exposure limit "
                 f"({projected_total:.2f} > {portfolio_limit_usd:.2f})"
@@ -480,16 +560,25 @@ class RiskEngine:
 
         if ctx.open_positions:
             active_count = len(
-                [p for p in ctx.open_positions if p.base_size * self.market_data.get_latest_price(p.pair) > 10.0]
+                [
+                    p
+                    for p in ctx.open_positions
+                    if p.base_size * self.market_data.get_latest_price(p.pair) > 10.0
+                ]
             )
         else:
             active_count = 0
 
-        if active_count >= self.config.max_open_positions and total_target_usd > current_usd:
+        if (
+            active_count >= self.config.max_open_positions
+            and total_target_usd > current_usd
+        ):
             blocked_reasons.append(f"Max open positions reached ({active_count})")
             for key in list(target_by_strategy.keys()):
                 if key != "manual":
-                    target_by_strategy[key] = min(target_by_strategy[key], current_by_strategy.get(key, 0.0))
+                    target_by_strategy[key] = min(
+                        target_by_strategy[key], current_by_strategy.get(key, 0.0)
+                    )
 
         return target_by_strategy, blocked_reasons
 
@@ -505,18 +594,28 @@ class RiskEngine:
             return liquidity
         except Exception as exc:  # noqa: BLE001
             logger.warning(
-                "Unable to fetch liquidity for %s: %s", pair, exc,
+                "Unable to fetch liquidity for %s: %s",
+                pair,
+                exc,
                 extra=structured_log_extra(event="liquidity_fetch_failed", pair=pair),
             )
             return None
 
-    def _size_by_volatility(self, pair: str, timeframe: str, price: float, ctx: RiskContext) -> float:
+    def _size_by_volatility(
+        self, pair: str, timeframe: str, price: float, ctx: RiskContext
+    ) -> float:
         tf = timeframe or "1d"
-        ohlc = self.market_data.get_ohlc(pair, tf, lookback=self.config.volatility_lookback_bars + 10)
+        ohlc = self.market_data.get_ohlc(
+            pair, tf, lookback=self.config.volatility_lookback_bars + 10
+        )
         if not ohlc:
             logger.warning(
-                "No OHLC for %s %s, cannot size trade.", pair, tf,
-                extra=structured_log_extra(event="ohlc_missing", pair=pair, timeframe=tf),
+                "No OHLC for %s %s, cannot size trade.",
+                pair,
+                tf,
+                extra=structured_log_extra(
+                    event="ohlc_missing", pair=pair, timeframe=tf
+                ),
             )
             return 0.0
 
@@ -524,7 +623,8 @@ class RiskEngine:
         atr = compute_atr(df, self.config.volatility_lookback_bars)
         if atr <= 0:
             logger.warning(
-                "ATR is 0 for %s, defaulting to 0 exposure.", pair,
+                "ATR is 0 for %s, defaulting to 0 exposure.",
+                pair,
                 extra=structured_log_extra(event="atr_zero", pair=pair, timeframe=tf),
             )
             return 0.0
@@ -535,7 +635,9 @@ class RiskEngine:
             return 0.0
         return risk_amount_usd / stop_distance_pct
 
-    def _create_blocked_action(self, pair: str, strategy_id: str, reason: str, ctx: RiskContext) -> RiskAdjustedAction:
+    def _create_blocked_action(
+        self, pair: str, strategy_id: str, reason: str, ctx: RiskContext
+    ) -> RiskAdjustedAction:
         current_pos = next((p for p in ctx.open_positions if p.pair == pair), None)
         current_base = current_pos.base_size if current_pos else 0.0
         return RiskAdjustedAction(
@@ -565,10 +667,13 @@ class RiskEngine:
             "tolerance_base": ctx.drift_status.tolerance_base,
         }
         if ctx.drift_status.mismatched_assets:
-            drift_info["mismatched_assets"] = [asdict(m) for m in ctx.drift_status.mismatched_assets]
+            drift_info["mismatched_assets"] = [
+                asdict(m) for m in ctx.drift_status.mismatched_assets
+            ]
 
         return RiskStatus(
-            kill_switch_active=self._kill_switch_active or self._manual_kill_switch_active,
+            kill_switch_active=self._kill_switch_active
+            or self._manual_kill_switch_active,
             daily_drawdown_pct=ctx.daily_drawdown_pct,
             drift_flag=ctx.drift_flag,
             drift_info=drift_info,

@@ -1,7 +1,8 @@
 # src/kraken_bot/portfolio/models.py
 
 from dataclasses import dataclass, field
-from typing import Optional, List, Dict
+from typing import Dict, List, Optional
+
 
 @dataclass
 class AssetBalance:
@@ -9,6 +10,7 @@ class AssetBalance:
     free: float
     reserved: float
     total: float
+
 
 @dataclass
 class SpotPosition:
@@ -24,6 +26,7 @@ class SpotPosition:
     strategy_tag: Optional[str] = None
     raw_userref: Optional[str] = None
     comment: Optional[str] = None
+
 
 @dataclass
 class RealizedPnLRecord:
@@ -41,14 +44,16 @@ class RealizedPnLRecord:
     raw_userref: Optional[str] = None
     comment: Optional[str] = None
 
+
 @dataclass
 class CashFlowRecord:
     id: str
     time: int  # UTC Timestamp
     asset: str
     amount: float
-    type: str # "deposit" | "withdrawal" | "reward" | "adjustment"
+    type: str  # "deposit" | "withdrawal" | "reward" | "adjustment"
     note: Optional[str]
+
 
 @dataclass
 class AssetValuation:
@@ -57,6 +62,7 @@ class AssetValuation:
     value_base: float
     source_pair: Optional[str]
     valuation_status: str = "valued"
+
 
 @dataclass
 class PortfolioSnapshot:
@@ -69,6 +75,7 @@ class PortfolioSnapshot:
     realized_pnl_base_by_pair: Dict[str, float]
     unrealized_pnl_base_by_pair: Dict[str, float]
 
+
 @dataclass
 class AssetExposure:
     asset: str
@@ -76,6 +83,7 @@ class AssetExposure:
     value_base: float
     percentage_of_equity: float
     valuation_status: str = "valued"
+
 
 @dataclass
 class EquityView:

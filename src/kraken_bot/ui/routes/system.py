@@ -10,12 +10,12 @@ from fastapi import APIRouter, Request
 from pydantic import BaseModel
 
 from kraken_bot import APP_VERSION
+from kraken_bot.connection import rest_client
 from kraken_bot.connection.exceptions import (
     AuthError,
     KrakenAPIError,
     ServiceUnavailableError,
 )
-from kraken_bot.connection import rest_client
 from kraken_bot.market_data.api import MarketDataStatus
 from kraken_bot.ui.logging import build_request_log_extra
 from kraken_bot.ui.models import ApiEnvelope, SystemHealthPayload, SystemMetricsPayload
@@ -72,7 +72,9 @@ async def system_health(request: Request) -> ApiEnvelope[SystemHealthPayload]:
             market_data_ok = getattr(market_data_health, "health", "") == "healthy"
             market_data_stale = getattr(market_data_health, "health", "") == "stale"
             market_data_reason = getattr(market_data_health, "reason", None)
-            market_data_max_staleness = getattr(market_data_health, "max_staleness", None)
+            market_data_max_staleness = getattr(
+                market_data_health, "max_staleness", None
+            )
 
         if market_data_ok is None:
             market_data_ok = (
@@ -84,14 +86,18 @@ async def system_health(request: Request) -> ApiEnvelope[SystemHealthPayload]:
         if market_data_stale is None:
             market_data_stale = data_status.stale_pairs > 0
         if market_data_reason is None:
-            market_data_reason = None if market_data_ok else (
-                "data_stale" if market_data_stale else "connection_issue"
+            market_data_reason = (
+                None
+                if market_data_ok
+                else ("data_stale" if market_data_stale else "connection_issue")
             )
 
         metrics_market_data_ok = metrics_snapshot.get("market_data_ok")
         metrics_market_data_stale = metrics_snapshot.get("market_data_stale")
         metrics_market_data_reason = metrics_snapshot.get("market_data_reason")
-        metrics_market_data_max_staleness = metrics_snapshot.get("market_data_max_staleness")
+        metrics_market_data_max_staleness = metrics_snapshot.get(
+            "market_data_max_staleness"
+        )
 
         metrics_has_update = bool(
             metrics_market_data_reason is not None
@@ -196,25 +202,34 @@ async def set_execution_mode(
 
     if new_mode == current_mode:
         return ApiEnvelope(
-            data={"mode": current_mode, "validate_only": execution_config.validate_only},
+            data={
+                "mode": current_mode,
+                "validate_only": execution_config.validate_only,
+            },
             error=None,
         )
 
-    if new_mode == "live" and not getattr(execution_config, "allow_live_trading", False):
+    if new_mode == "live" and not getattr(
+        execution_config, "allow_live_trading", False
+    ):
         logger.warning(
             "Live mode change blocked: allow_live_trading is False",
             extra=build_request_log_extra(
                 request, event="mode_change_blocked", requested_mode=new_mode
             ),
         )
-        return ApiEnvelope(data=None, error="Live trading not permitted by configuration")
+        return ApiEnvelope(
+            data=None, error="Live trading not permitted by configuration"
+        )
 
     execution_config.mode = new_mode
     execution_config.validate_only = new_mode != "live"
     ctx.execution_service.adapter.config.mode = new_mode
     ctx.execution_service.adapter.config.validate_only = execution_config.validate_only
 
-    if new_mode == "live" and hasattr(ctx.execution_service, "_emit_live_readiness_checklist"):
+    if new_mode == "live" and hasattr(
+        ctx.execution_service, "_emit_live_readiness_checklist"
+    ):
         ctx.execution_service._emit_live_readiness_checklist()
 
     logger.info(
@@ -248,7 +263,9 @@ async def validate_credentials(
     if auth_config.enabled and auth_header != expected_auth:
         logger.warning(
             "Unauthorized credential validation attempt",
-            extra=build_request_log_extra(request, event="credential_validation_unauthorized"),
+            extra=build_request_log_extra(
+                request, event="credential_validation_unauthorized"
+            ),
         )
         return ApiEnvelope(data={"valid": False}, error="Unauthorized")
 

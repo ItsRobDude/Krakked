@@ -1,8 +1,9 @@
 # src/kraken_bot/market_data/ohlc_fetcher.py
 
-import time
 import logging
-from typing import List, Dict, Any, Optional
+import time
+from typing import Any, Dict, List, Optional
+
 from kraken_bot.config import OHLCBar, PairMetadata
 from kraken_bot.connection.rate_limiter import RateLimiter
 from kraken_bot.connection.rest_client import KrakenRESTClient
@@ -19,6 +20,7 @@ TIMEFRAME_MAP = {
     "1d": 1440,
 }
 
+
 def _parse_ohlc_response(response: Dict[str, Any], pair: str) -> List[OHLCBar]:
     """
     Parses the raw OHLC data from the Kraken API into a list of OHLCBar objects.
@@ -32,15 +34,18 @@ def _parse_ohlc_response(response: Dict[str, Any], pair: str) -> List[OHLCBar]:
 
     # Exclude the last item, which is the incomplete running candle
     for row in response[pair_key][:-1]:
-        bars.append(OHLCBar(
-            timestamp=int(row[0]),
-            open=float(row[1]),
-            high=float(row[2]),
-            low=float(row[3]),
-            close=float(row[4]),
-            volume=float(row[6]), # vwap is row[5], volume is row[6]
-        ))
+        bars.append(
+            OHLCBar(
+                timestamp=int(row[0]),
+                open=float(row[1]),
+                high=float(row[2]),
+                low=float(row[3]),
+                close=float(row[4]),
+                volume=float(row[6]),  # vwap is row[5], volume is row[6]
+            )
+        )
     return bars
+
 
 def backfill_ohlc(
     pair_metadata: PairMetadata,
@@ -59,12 +64,16 @@ def backfill_ohlc(
     Returns the number of bars successfully backfilled.
     """
     if timeframe not in TIMEFRAME_MAP:
-        raise ValueError(f"Unsupported timeframe: {timeframe}. Supported: {list(TIMEFRAME_MAP.keys())}")
+        raise ValueError(
+            f"Unsupported timeframe: {timeframe}. Supported: {list(TIMEFRAME_MAP.keys())}"
+        )
 
     if client is None:
         client = KrakenRESTClient(rate_limiter=rate_limiter)
 
-    logger.info(f"Backfilling OHLC for {pair_metadata.canonical} ({timeframe}), since timestamp {since}")
+    logger.info(
+        f"Backfilling OHLC for {pair_metadata.canonical} ({timeframe}), since timestamp {since}"
+    )
 
     total_bars_fetched = 0
 
@@ -79,17 +88,23 @@ def backfill_ohlc(
         try:
             response = client.get_public("OHLC", params)
         except Exception as e:
-            logger.error(f"Failed to fetch OHLC data for {pair_metadata.canonical}: {e}")
-            break # Exit on error
+            logger.error(
+                f"Failed to fetch OHLC data for {pair_metadata.canonical}: {e}"
+            )
+            break  # Exit on error
 
         if not response or next(iter(response)) not in response:
-            logger.info(f"No more OHLC data returned for {pair_metadata.canonical}. Backfill complete.")
+            logger.info(
+                f"No more OHLC data returned for {pair_metadata.canonical}. Backfill complete."
+            )
             break
 
         bars = _parse_ohlc_response(response, pair_metadata.canonical)
 
         if not bars:
-            logger.info(f"No new closed candles for {pair_metadata.canonical}. Backfill complete.")
+            logger.info(
+                f"No new closed candles for {pair_metadata.canonical}. Backfill complete."
+            )
             break
 
         if store:
@@ -119,5 +134,7 @@ def backfill_ohlc(
         # A small sleep to be polite, even with the rate limiter
         time.sleep(0.5)
 
-    logger.info(f"Completed backfill for {pair_metadata.canonical} ({timeframe}). Fetched {total_bars_fetched} new bars.")
+    logger.info(
+        f"Completed backfill for {pair_metadata.canonical} ({timeframe}). Fetched {total_bars_fetched} new bars."
+    )
     return total_bars_fetched

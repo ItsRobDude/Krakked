@@ -1,13 +1,15 @@
 # src/kraken_bot/connection/nonce.py
 
-import time
 import threading
+import time
+
 
 class NonceGenerator:
     """
     Generates monotonically increasing nonces for Kraken API requests.
     Uses high-resolution timer to prevent collisions in quick succession.
     """
+
     def __init__(self):
         self._lock = threading.Lock()
         self._last_nonce = 0

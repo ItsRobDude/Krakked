@@ -9,7 +9,9 @@ from kraken_bot.config import load_config
 
 
 @pytest.mark.parametrize("env_value", [None, "prod"])
-def test_invalid_or_missing_env_defaults_to_paper(monkeypatch, tmp_path: Path, env_value):
+def test_invalid_or_missing_env_defaults_to_paper(
+    monkeypatch, tmp_path: Path, env_value
+):
     """Invalid or missing env should fall back to paper config overlay and defaults."""
 
     config_dir = tmp_path / "config"
@@ -130,7 +132,9 @@ execution:
     assert app_config.execution.allow_live_trading is False
 
 
-def test_live_mode_without_allow_trading_is_forced_validate(monkeypatch, tmp_path: Path):
+def test_live_mode_without_allow_trading_is_forced_validate(
+    monkeypatch, tmp_path: Path
+):
     """Live mode without allow_live_trading should coerce validate_only to True."""
 
     config_dir = tmp_path / "config"

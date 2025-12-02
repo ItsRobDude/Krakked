@@ -25,7 +25,9 @@ def _build_action(pair: str, target_notional: float) -> RiskAdjustedAction:
 def test_pair_notional_guardrail_blocks_submission():
     adapter = MagicMock()
     adapter.config = ExecutionConfig(max_pair_notional_usd=500.0)
-    adapter.submit_order.side_effect = AssertionError("submit_order should not be called")
+    adapter.submit_order.side_effect = AssertionError(
+        "submit_order should not be called"
+    )
 
     plan = ExecutionPlan(
         plan_id="plan_pair_limit",
@@ -50,7 +52,9 @@ def test_pair_notional_guardrail_blocks_submission():
 def test_total_notional_guardrail_blocks_submission():
     adapter = MagicMock()
     adapter.config = ExecutionConfig(max_total_notional_usd=1000.0)
-    adapter.submit_order.side_effect = AssertionError("submit_order should not be called")
+    adapter.submit_order.side_effect = AssertionError(
+        "submit_order should not be called"
+    )
 
     actions = [_build_action("XBTUSD", 600.0), _build_action("ETHUSD", 700.0)]
     plan = ExecutionPlan(
@@ -68,6 +72,8 @@ def test_total_notional_guardrail_blocks_submission():
 
     assert len(result.orders) == 2
     assert all(order.status == "rejected" for order in result.orders)
-    assert all("max_total_notional_usd" in (order.last_error or "") for order in result.orders)
+    assert all(
+        "max_total_notional_usd" in (order.last_error or "") for order in result.orders
+    )
     assert len(result.errors) == 2
     assert adapter.submit_order.call_count == 0

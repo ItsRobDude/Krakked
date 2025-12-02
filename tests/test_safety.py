@@ -17,9 +17,15 @@ from kraken_bot.safety import SafetyStatus, check_safety
 
 def _make_config(execution: ExecutionConfig) -> AppConfig:
     return AppConfig(
-        region=RegionProfile(code="US", capabilities=RegionCapabilities(False, False, False)),
-        universe=UniverseConfig(include_pairs=[], exclude_pairs=[], min_24h_volume_usd=0.0),
-        market_data=MarketDataConfig(ws={}, ohlc_store={}, backfill_timeframes=[], ws_timeframes=[]),
+        region=RegionProfile(
+            code="US", capabilities=RegionCapabilities(False, False, False)
+        ),
+        universe=UniverseConfig(
+            include_pairs=[], exclude_pairs=[], min_24h_volume_usd=0.0
+        ),
+        market_data=MarketDataConfig(
+            ws={}, ohlc_store={}, backfill_timeframes=[], ws_timeframes=[]
+        ),
         portfolio=PortfolioConfig(),
         execution=execution,
         risk=RiskConfig(),
@@ -43,7 +49,9 @@ def test_safety_status_for_paper_mode():
 
 
 def test_safety_status_for_live_validate_only():
-    execution = ExecutionConfig(mode="live", validate_only=True, allow_live_trading=False)
+    execution = ExecutionConfig(
+        mode="live", validate_only=True, allow_live_trading=False
+    )
     status = check_safety(_make_config(execution))
 
     assert status == SafetyStatus(

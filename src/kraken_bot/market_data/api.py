@@ -1,19 +1,20 @@
 # src/kraken_bot/market_data/api.py
 
-import time
 import logging
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
-from kraken_bot.config import AppConfig, ConnectionStatus, PairMetadata, OHLCBar
+
+from kraken_bot.config import AppConfig, ConnectionStatus, OHLCBar, PairMetadata
 from kraken_bot.connection.rate_limiter import RateLimiter
 from kraken_bot.connection.rest_client import KrakenRESTClient
-from kraken_bot.market_data.universe import build_universe
-from kraken_bot.market_data.ohlc_store import OHLCStore, FileOHLCStore
-from kraken_bot.market_data.ohlc_fetcher import backfill_ohlc
-from kraken_bot.market_data.ws_client import KrakenWSClientV2
+from kraken_bot.market_data.exceptions import DataStaleError, PairNotFoundError
 from kraken_bot.market_data.metadata_store import PairMetadataStore
-from kraken_bot.market_data.exceptions import PairNotFoundError, DataStaleError
+from kraken_bot.market_data.ohlc_fetcher import backfill_ohlc
+from kraken_bot.market_data.ohlc_store import FileOHLCStore, OHLCStore
+from kraken_bot.market_data.universe import build_universe
+from kraken_bot.market_data.ws_client import KrakenWSClientV2
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +32,7 @@ class MarketDataAPI:
     """
     The main public interface for the market data module.
     """
+
     def __enter__(self):
         return self
 
@@ -66,7 +68,9 @@ class MarketDataAPI:
         self._universe_map: Dict[str, PairMetadata] = {}
 
         self._ws_client: Optional[KrakenWSClientV2] = None
-        self._ws_stale_tolerance = config.market_data.ws.get("stale_tolerance_seconds", 60)
+        self._ws_stale_tolerance = config.market_data.ws.get(
+            "stale_tolerance_seconds", 60
+        )
 
     def initialize(self, backfill: bool = True):
         """
@@ -79,7 +83,9 @@ class MarketDataAPI:
 
         # 2. Start the WebSocket client
         if self._universe:
-            self._ws_client = KrakenWSClientV2(self._universe, timeframes=self._config.market_data.ws_timeframes)
+            self._ws_client = KrakenWSClientV2(
+                self._universe, timeframes=self._config.market_data.ws_timeframes
+            )
             self._ws_client.start()
             logger.info("WebSocket client started.")
         else:
@@ -93,7 +99,7 @@ class MarketDataAPI:
                         pair_metadata=pair_meta,
                         timeframe=timeframe,
                         client=self._rest_client,
-                        store=self._ohlc_store
+                        store=self._ohlc_store,
                     )
         logger.info("MarketDataAPI initialized.")
 
@@ -106,9 +112,7 @@ class MarketDataAPI:
     def refresh_universe(self):
         """Re-fetches the asset pairs and rebuilds the universe."""
         self._universe = build_universe(
-            self._rest_client,
-            self._config.region,
-            self._config.universe
+            self._rest_client, self._config.region, self._config.universe
         )
 
         if self._universe:
@@ -116,7 +120,9 @@ class MarketDataAPI:
         else:
             cached = self._metadata_store.load()
             if cached:
-                logger.warning("Falling back to cached pair metadata due to empty universe response.")
+                logger.warning(
+                    "Falling back to cached pair metadata due to empty universe response."
+                )
                 self._universe = cached
 
         self._universe_map = {p.canonical: p for p in self._universe}
@@ -145,7 +151,9 @@ class MarketDataAPI:
             raise PairNotFoundError(pair)
         return self._ohlc_store.get_bars_since(pair, timeframe, since_ts)
 
-    def backfill_ohlc(self, pair: str, timeframe: str, since: Optional[int] = None) -> int:
+    def backfill_ohlc(
+        self, pair: str, timeframe: str, since: Optional[int] = None
+    ) -> int:
         """
         Backfills historical OHLC data for the given pair and timeframe.
         Returns the number of bars fetched.
@@ -159,7 +167,7 @@ class MarketDataAPI:
             timeframe=timeframe,
             since=since,
             client=self._rest_client,
-            store=self._ohlc_store
+            store=self._ohlc_store,
         )
 
     def _ticker_freshness(self, pair: str) -> Tuple[bool, float]:
@@ -188,11 +196,13 @@ class MarketDataAPI:
 
     def _check_ohlc_staleness(self, pair: str, timeframe: str):
         if not self._ws_client:
-            raise DataStaleError(pair, -1, self._ws_stale_tolerance) # No client running
+            raise DataStaleError(
+                pair, -1, self._ws_stale_tolerance
+            )  # No client running
 
         last_update = self._ws_client.last_ohlc_update_ts.get(pair, {}).get(timeframe)
         if not last_update:
-            raise DataStaleError(pair, -1, self._ws_stale_tolerance) # No updates yet
+            raise DataStaleError(pair, -1, self._ws_stale_tolerance)  # No updates yet
 
         stale_time = time.monotonic() - last_update
         if stale_time > self._ws_stale_tolerance:
@@ -202,7 +212,10 @@ class MarketDataAPI:
         """Combines configured timeframes for fallback lookups without duplicates."""
         timeframes: List[str] = []
         seen = set()
-        for tf in self._config.market_data.ws_timeframes + self._config.market_data.backfill_timeframes:
+        for tf in (
+            self._config.market_data.ws_timeframes
+            + self._config.market_data.backfill_timeframes
+        ):
             if tf not in seen:
                 seen.add(tf)
                 timeframes.append(tf)
@@ -229,9 +242,21 @@ class MarketDataAPI:
         if not ticker_values:
             return None
 
-        bid = ticker_values.get("b", [None])[0] if isinstance(ticker_values.get("b"), list) else None
-        ask = ticker_values.get("a", [None])[0] if isinstance(ticker_values.get("a"), list) else None
-        last_trade = ticker_values.get("c", [None])[0] if isinstance(ticker_values.get("c"), list) else None
+        bid = (
+            ticker_values.get("b", [None])[0]
+            if isinstance(ticker_values.get("b"), list)
+            else None
+        )
+        ask = (
+            ticker_values.get("a", [None])[0]
+            if isinstance(ticker_values.get("a"), list)
+            else None
+        )
+        last_trade = (
+            ticker_values.get("c", [None])[0]
+            if isinstance(ticker_values.get("c"), list)
+            else None
+        )
 
         try:
             if bid is not None and ask is not None:
@@ -341,7 +366,9 @@ class MarketDataAPI:
         if not connection_status.rest_api_reachable:
             return MarketDataStatus(health="unavailable", reason="rest_unreachable")
         if not connection_status.websocket_connected:
-            return MarketDataStatus(health="unavailable", reason="websocket_disconnected")
+            return MarketDataStatus(
+                health="unavailable", reason="websocket_disconnected"
+            )
 
         max_staleness: Optional[float] = None
         stale_detected = False
@@ -349,12 +376,18 @@ class MarketDataAPI:
         for pair_meta in self._universe:
             is_fresh, stale_time = self._ticker_freshness(pair_meta.canonical)
             if stale_time >= 0:
-                max_staleness = stale_time if max_staleness is None else max(max_staleness, stale_time)
+                max_staleness = (
+                    stale_time
+                    if max_staleness is None
+                    else max(max_staleness, stale_time)
+                )
             if not is_fresh:
                 stale_detected = True
 
         if stale_detected:
-            return MarketDataStatus(health="stale", max_staleness=max_staleness, reason="data_stale")
+            return MarketDataStatus(
+                health="stale", max_staleness=max_staleness, reason="data_stale"
+            )
 
         return MarketDataStatus(health="healthy", max_staleness=max_staleness or 0.0)
 

@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import logging
-import sqlite3
 import signal
+import sqlite3
 import threading
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
@@ -15,21 +15,25 @@ import uvicorn
 from kraken_bot import APP_VERSION
 from kraken_bot.bootstrap import bootstrap
 from kraken_bot.execution.oms import ExecutionService
-from kraken_bot.logging_config import configure_logging, get_log_environment, structured_log_extra
+from kraken_bot.logging_config import (
+    configure_logging,
+    get_log_environment,
+    structured_log_extra,
+)
 from kraken_bot.market_data.api import MarketDataAPI
 from kraken_bot.metrics import SystemMetrics
+from kraken_bot.portfolio.exceptions import PortfolioSchemaError
 from kraken_bot.portfolio.manager import PortfolioService
 from kraken_bot.portfolio.models import DriftStatus
-from kraken_bot.portfolio.exceptions import PortfolioSchemaError
 from kraken_bot.portfolio.store import (
     CURRENT_SCHEMA_VERSION,
     assert_portfolio_schema,
     ensure_portfolio_schema,
     ensure_portfolio_tables,
 )
+from kraken_bot.strategy.engine import StrategyEngine
 from kraken_bot.ui.api import create_api
 from kraken_bot.ui.context import AppContext
-from kraken_bot.strategy.engine import StrategyEngine
 
 logger = logging.getLogger(__name__)
 
@@ -44,15 +48,26 @@ def _coerce_interval(value: Optional[int], default: int, name: str) -> int:
     return default
 
 
-def _start_ui_server(context: AppContext) -> Tuple[Optional[uvicorn.Server], Optional[threading.Thread]]:
+def _start_ui_server(
+    context: AppContext,
+) -> Tuple[Optional[uvicorn.Server], Optional[threading.Thread]]:
     """Launch the FastAPI UI server in a background thread when enabled."""
 
     if not context.config.ui.enabled:
-        logger.info("UI disabled by configuration; skipping API startup", extra=structured_log_extra(event="ui_disabled"))
+        logger.info(
+            "UI disabled by configuration; skipping API startup",
+            extra=structured_log_extra(event="ui_disabled"),
+        )
         return None, None
 
     app = create_api(context)
-    config = uvicorn.Config(app, host=context.config.ui.host, port=context.config.ui.port, log_level="info", log_config=None)
+    config = uvicorn.Config(
+        app,
+        host=context.config.ui.host,
+        port=context.config.ui.port,
+        log_level="info",
+        log_config=None,
+    )
     server = uvicorn.Server(config)
 
     thread = threading.Thread(target=server.run, daemon=True)
@@ -96,7 +111,9 @@ def _shutdown(
             "execution_service": True,
             "strategy_engine": True,
         },
-        portfolio_db_path=getattr(getattr(context.portfolio, "store", None), "db_path", None),
+        portfolio_db_path=getattr(
+            getattr(context.portfolio, "store", None), "db_path", None
+        ),
     )
 
     if metrics_snapshot:
@@ -106,7 +123,9 @@ def _shutdown(
             open_orders_count=metrics_snapshot.get("open_orders_count"),
         )
 
-    log_message = "Initiating shutdown" if first_shutdown else "Shutdown already in progress"
+    log_message = (
+        "Initiating shutdown" if first_shutdown else "Shutdown already in progress"
+    )
     logger.info(log_message, extra=shutdown_extra)
 
     if ui_server:
@@ -124,11 +143,16 @@ def _shutdown(
     except Exception as exc:  # pragma: no cover - defensive logging
         logger.error("Error shutting down market data: %s", exc)
 
-    logger.info("Shutdown complete", extra=structured_log_extra(event="shutdown_complete", reason=reason))
+    logger.info(
+        "Shutdown complete",
+        extra=structured_log_extra(event="shutdown_complete", reason=reason),
+    )
 
 
 def _refresh_metrics_state(
-    portfolio: PortfolioService, execution_service: ExecutionService, metrics: SystemMetrics
+    portfolio: PortfolioService,
+    execution_service: ExecutionService,
+    metrics: SystemMetrics,
 ) -> None:
     try:
         equity = portfolio.get_equity()
@@ -184,15 +208,23 @@ def _run_loop_iteration(
         data_status = market_data.get_health_status()
     except Exception as exc:  # pragma: no cover - defensive logging
         logger.error("Failed to evaluate market data health: %s", exc)
-        metrics.record_market_data_error(f"Failed to evaluate market data health: {exc}")
+        metrics.record_market_data_error(
+            f"Failed to evaluate market data health: {exc}"
+        )
         data_status = None
 
-    market_data_ok = bool(data_status and getattr(data_status, "health", "") == "healthy")
-    market_data_stale = bool(data_status and getattr(data_status, "health", "") == "stale")
+    market_data_ok = bool(
+        data_status and getattr(data_status, "health", "") == "healthy"
+    )
+    market_data_stale = bool(
+        data_status and getattr(data_status, "health", "") == "stale"
+    )
     metrics.update_market_data_status(
         ok=market_data_ok,
         stale=market_data_stale,
-        reason=getattr(data_status, "reason", "unknown" if data_status is None else None),
+        reason=getattr(
+            data_status, "reason", "unknown" if data_status is None else None
+        ),
         max_staleness=getattr(data_status, "max_staleness", None),
     )
 
@@ -211,7 +243,10 @@ def _run_loop_iteration(
         if drift_status.drift_flag:
             drift_message = (
                 "Portfolio drift detected: expected position value %.2f vs balances %.2f"
-                % (drift_status.expected_position_value_base, drift_status.actual_balance_value_base)
+                % (
+                    drift_status.expected_position_value_base,
+                    drift_status.actual_balance_value_base,
+                )
             )
             logger.warning(
                 drift_message,
@@ -220,13 +255,19 @@ def _run_loop_iteration(
                     expected_position_value_base=drift_status.expected_position_value_base,
                     actual_balance_value_base=drift_status.actual_balance_value_base,
                     tolerance_base=drift_status.tolerance_base,
-                    mismatched_assets=[asdict(asset) for asset in drift_status.mismatched_assets],
+                    mismatched_assets=[
+                        asdict(asset) for asset in drift_status.mismatched_assets
+                    ],
                 ),
             )
 
-            risk_config = getattr(getattr(strategy_engine, "config", None), "risk", None)
+            risk_config = getattr(
+                getattr(strategy_engine, "config", None), "risk", None
+            )
             if getattr(risk_config, "kill_switch_on_drift", False):
-                activate_kill_switch = getattr(strategy_engine, "set_manual_kill_switch", None)
+                activate_kill_switch = getattr(
+                    strategy_engine, "set_manual_kill_switch", None
+                )
                 if callable(activate_kill_switch):
                     try:
                         activate_kill_switch(True)
@@ -238,8 +279,12 @@ def _run_loop_iteration(
 
     if (now - last_strategy_cycle).total_seconds() >= strategy_interval:
         if not market_data_ok:
-            reason = getattr(data_status, "reason", "unknown") if data_status else "unknown"
-            max_staleness = getattr(data_status, "max_staleness", None) if data_status else None
+            reason = (
+                getattr(data_status, "reason", "unknown") if data_status else "unknown"
+            )
+            max_staleness = (
+                getattr(data_status, "max_staleness", None) if data_status else None
+            )
             log_extra = {"event": "market_data_unavailable", "reason": reason}
             if max_staleness is not None:
                 log_extra["max_staleness"] = max_staleness
@@ -256,7 +301,9 @@ def _run_loop_iteration(
         else:
             try:
                 plan = strategy_engine.run_cycle(now)
-                blocked_actions = len([a for a in plan.actions if getattr(a, "blocked", False)])
+                blocked_actions = len(
+                    [a for a in plan.actions if getattr(a, "blocked", False)]
+                )
                 metrics.record_plan(blocked_actions)
                 updated_strategy_cycle = now
                 result = None
@@ -276,7 +323,9 @@ def _run_loop_iteration(
                     logger.info(
                         "No actions generated for plan %s; skipping execution",
                         plan.plan_id,
-                        extra=structured_log_extra(event="plan_skipped", plan_id=plan.plan_id),
+                        extra=structured_log_extra(
+                            event="plan_skipped", plan_id=plan.plan_id
+                        ),
                     )
             except Exception as exc:  # pragma: no cover - defensive logging
                 logger.error("Strategy cycle failed: %s", exc)
@@ -296,7 +345,9 @@ def run(allow_interactive_setup: bool = True) -> int:
     schema_status = None
 
     try:
-        client, config, rate_limiter = bootstrap(allow_interactive_setup=allow_interactive_setup)
+        client, config, rate_limiter = bootstrap(
+            allow_interactive_setup=allow_interactive_setup
+        )
 
         db_path = getattr(getattr(config, "portfolio", None), "db_path", "portfolio.db")
 
@@ -310,11 +361,17 @@ def run(allow_interactive_setup: bool = True) -> int:
         else:
             schema_status = assert_portfolio_schema(db_path)
 
-        market_data = MarketDataAPI(config, rest_client=client, rate_limiter=rate_limiter)
+        market_data = MarketDataAPI(
+            config, rest_client=client, rate_limiter=rate_limiter
+        )
         market_data.initialize()
 
         portfolio = PortfolioService(
-            config, market_data, db_path=db_path, rest_client=client, rate_limiter=rate_limiter
+            config,
+            market_data,
+            db_path=db_path,
+            rest_client=client,
+            rate_limiter=rate_limiter,
         )
         portfolio.initialize()
 
@@ -379,20 +436,37 @@ def run(allow_interactive_setup: bool = True) -> int:
 
     ui_server, ui_thread = _start_ui_server(context)
 
-    strategy_interval = _coerce_interval(getattr(config.strategies, "loop_interval_seconds", None), 60, "strategy interval")
+    strategy_interval = _coerce_interval(
+        getattr(config.strategies, "loop_interval_seconds", None),
+        60,
+        "strategy interval",
+    )
     portfolio_interval = _coerce_interval(
-        getattr(config.portfolio, "sync_interval_seconds", None), 300, "portfolio sync interval"
+        getattr(config.portfolio, "sync_interval_seconds", None),
+        300,
+        "portfolio sync interval",
     )
     loop_interval = min(strategy_interval, portfolio_interval, 5)
 
     def refresh_metrics_state() -> None:
         _refresh_metrics_state(portfolio, execution_service, metrics)
 
-    last_strategy_cycle = datetime.now(timezone.utc) - timedelta(seconds=strategy_interval)
-    last_portfolio_sync = datetime.now(timezone.utc) - timedelta(seconds=portfolio_interval)
+    last_strategy_cycle = datetime.now(timezone.utc) - timedelta(
+        seconds=strategy_interval
+    )
+    last_portfolio_sync = datetime.now(timezone.utc) - timedelta(
+        seconds=portfolio_interval
+    )
 
     def _signal_handler(signum, _frame) -> None:  # pragma: no cover - signal driven
-        _shutdown(context, stop_event, ui_server, ui_thread, reason="signal", signal_number=signum)
+        _shutdown(
+            context,
+            stop_event,
+            ui_server,
+            ui_thread,
+            reason="signal",
+            signal_number=signum,
+        )
 
     signal.signal(signal.SIGINT, _signal_handler)
     signal.signal(signal.SIGTERM, _signal_handler)

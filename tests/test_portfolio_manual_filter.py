@@ -1,6 +1,7 @@
-import pytest
 from types import SimpleNamespace
 from unittest.mock import MagicMock
+
+import pytest
 
 from kraken_bot.config import PortfolioConfig
 from kraken_bot.portfolio.portfolio import Portfolio
@@ -11,13 +12,17 @@ class InMemoryStore(PortfolioStore):
     def save_trades(self, trades):
         self.trades = getattr(self, "trades", []) + trades
 
-    def get_trades(self, pair=None, limit=None, since=None, until=None, ascending=False):
+    def get_trades(
+        self, pair=None, limit=None, since=None, until=None, ascending=False
+    ):
         return getattr(self, "trades", [])
 
     def save_cash_flows(self, records):
         pass
 
-    def get_cash_flows(self, asset=None, limit=None, since=None, until=None, ascending=False):
+    def get_cash_flows(
+        self, asset=None, limit=None, since=None, until=None, ascending=False
+    ):
         return []
 
     def save_snapshot(self, snapshot):
@@ -76,7 +81,9 @@ class InMemoryStore(PortfolioStore):
 @pytest.fixture
 def market_data_mock():
     md = MagicMock()
-    md.get_pair_metadata.return_value = SimpleNamespace(canonical="XBTUSD", base="XBT", quote="USD")
+    md.get_pair_metadata.return_value = SimpleNamespace(
+        canonical="XBTUSD", base="XBT", quote="USD"
+    )
     md.get_latest_price.side_effect = lambda pair: 110.0 if pair == "XBTUSD" else None
     return md
 
@@ -206,7 +213,9 @@ def test_manual_realized_pnl_filtered_by_config(portfolio):
     assert pytest.approx(manual_view.realized_pnl_base_total, rel=1e-6) == 10.0
 
 
-def test_realized_pnl_by_strategy_groups_manual_and_tagged(portfolio_with_manual_default):
+def test_realized_pnl_by_strategy_groups_manual_and_tagged(
+    portfolio_with_manual_default,
+):
     tagged_buy = {
         "id": "T1",
         "pair": "XBTUSD",
@@ -312,13 +321,17 @@ def test_realized_pnl_by_strategy_respects_manual_flag(market_data_mock):
         userref_to_strategy={"99": "trend_core"},
     )
 
-    strategy_portfolio.ingest_trades([manual_buy, manual_sell, strategy_buy, strategy_sell], persist=False)
+    strategy_portfolio.ingest_trades(
+        [manual_buy, manual_sell, strategy_buy, strategy_sell], persist=False
+    )
 
     default_grouped = strategy_portfolio.get_realized_pnl_by_strategy()
     assert "manual" not in default_grouped
     assert pytest.approx(default_grouped["trend_core"], rel=1e-6) == 10.0
 
-    grouped_with_manual = strategy_portfolio.get_realized_pnl_by_strategy(include_manual=True)
+    grouped_with_manual = strategy_portfolio.get_realized_pnl_by_strategy(
+        include_manual=True
+    )
     assert pytest.approx(grouped_with_manual["manual"], rel=1e-6) == 20.0
     assert pytest.approx(grouped_with_manual["trend_core"], rel=1e-6) == 10.0
 
@@ -349,7 +362,12 @@ def test_userref_mapping_sets_strategy_tag(portfolio_with_strategy_tags):
 
     portfolio_with_strategy_tags.ingest_trades([buy, sell], persist=False)
 
-    assert portfolio_with_strategy_tags.realized_pnl_history[-1].strategy_tag == "trend_core"
+    assert (
+        portfolio_with_strategy_tags.realized_pnl_history[-1].strategy_tag
+        == "trend_core"
+    )
 
-    pnl_by_strategy = portfolio_with_strategy_tags.get_realized_pnl_by_strategy(include_manual=True)
+    pnl_by_strategy = portfolio_with_strategy_tags.get_realized_pnl_by_strategy(
+        include_manual=True
+    )
     assert "trend_core" in pnl_by_strategy

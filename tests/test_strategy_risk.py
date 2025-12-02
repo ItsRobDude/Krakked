@@ -1,12 +1,13 @@
 # tests/test_strategy_risk.py
 
-import pandas as pd
 from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
+import pandas as pd
+
 from kraken_bot.config import PortfolioConfig, RiskConfig
-from kraken_bot.strategy.risk import RiskEngine, compute_atr
-from kraken_bot.strategy.models import StrategyIntent
+from kraken_bot.market_data.api import MarketDataAPI
+from kraken_bot.portfolio.manager import PortfolioService
 from kraken_bot.portfolio.models import (
     AssetExposure,
     DriftMismatchedAsset,
@@ -15,15 +16,16 @@ from kraken_bot.portfolio.models import (
     RealizedPnLRecord,
     SpotPosition,
 )
-from kraken_bot.market_data.api import MarketDataAPI
-from kraken_bot.portfolio.manager import PortfolioService
 from kraken_bot.portfolio.portfolio import Portfolio
+from kraken_bot.strategy.models import StrategyIntent
+from kraken_bot.strategy.risk import RiskEngine, compute_atr
+
 
 def test_compute_atr():
     data = {
-        'high': [10, 11, 12, 11, 13],
-        'low': [9, 10, 11, 10, 11],
-        'close': [10, 10.5, 11.5, 10.5, 12.5]
+        "high": [10, 11, 12, 11, 13],
+        "low": [9, 10, 11, 10, 11],
+        "close": [10, 10.5, 11.5, 10.5, 12.5],
     }
     df = pd.DataFrame(data)
     # TR:
@@ -38,11 +40,9 @@ def test_compute_atr():
     atr = compute_atr(df, window=3)
     assert abs(atr - 1.833) < 0.01
 
+
 def test_risk_engine_sizing():
-    config = RiskConfig(
-        max_risk_per_trade_pct=1.0,
-        volatility_lookback_bars=3
-    )
+    config = RiskConfig(max_risk_per_trade_pct=1.0, volatility_lookback_bars=3)
 
     # Mock dependencies
     market = MagicMock(spec=MarketDataAPI)
@@ -53,6 +53,7 @@ def test_risk_engine_sizing():
     market.get_pair_metadata.return_value = MagicMock(liquidity_24h_usd=1_000_000.0)
     # Mock OHLC for ATR
     from dataclasses import dataclass
+
     @dataclass
     class MockBar:
         high: float
@@ -60,13 +61,16 @@ def test_risk_engine_sizing():
         close: float
 
     market.get_ohlc.return_value = [
-        MockBar(105, 95, 100) for _ in range(15) # Consistent volatility
+        MockBar(105, 95, 100) for _ in range(15)  # Consistent volatility
     ]
 
     # Setup Portfolio Equity
     portfolio.get_equity.return_value = EquityView(
-        equity_base=10000.0, cash_base=10000.0, realized_pnl_base_total=0,
-        unrealized_pnl_base_total=0, drift_flag=False
+        equity_base=10000.0,
+        cash_base=10000.0,
+        realized_pnl_base_total=0,
+        unrealized_pnl_base_total=0,
+        drift_flag=False,
     )
     portfolio.get_positions.return_value = []
     portfolio.get_asset_exposure.return_value = []
@@ -88,10 +92,10 @@ def test_risk_engine_sizing():
         pair="XBTUSD",
         side="long",
         intent_type="enter",
-        desired_exposure_usd=None, # Auto-size
+        desired_exposure_usd=None,  # Auto-size
         confidence=1.0,
         timeframe="1h",
-        generated_at=datetime.now(timezone.utc)
+        generated_at=datetime.now(timezone.utc),
     )
 
     actions = engine.process_intents([intent])
@@ -152,6 +156,7 @@ def test_userref_falls_back_to_strategy_id_when_missing_mapping():
 
     assert action.userref.startswith("alpha")
 
+
 def test_kill_switch_drawdown():
     config = RiskConfig(max_daily_drawdown_pct=5.0)
     market = MagicMock(spec=MarketDataAPI)
@@ -160,8 +165,11 @@ def test_kill_switch_drawdown():
 
     # Equity dropped from 10000 (snapshot) to 9000 (current) -> 10% drawdown
     portfolio.get_equity.return_value = EquityView(
-        equity_base=9000.0, cash_base=9000.0, realized_pnl_base_total=0,
-        unrealized_pnl_base_total=0, drift_flag=False
+        equity_base=9000.0,
+        cash_base=9000.0,
+        realized_pnl_base_total=0,
+        unrealized_pnl_base_total=0,
+        drift_flag=False,
     )
     # Mock snapshots
     portfolio.store = MagicMock()
@@ -175,7 +183,9 @@ def test_kill_switch_drawdown():
 
     engine = RiskEngine(config, market, portfolio)
 
-    intent = StrategyIntent("test", "XBTUSD", "long", "enter", 1000.0, 1.0, "1h", datetime.now(timezone.utc))
+    intent = StrategyIntent(
+        "test", "XBTUSD", "long", "enter", 1000.0, 1.0, "1h", datetime.now(timezone.utc)
+    )
     actions = engine.process_intents([intent])
 
     assert actions[0].blocked
@@ -208,8 +218,26 @@ def test_manual_kill_switch_blocks_opens_allows_reductions():
     engine.set_manual_kill_switch(True)
 
     intents = [
-        StrategyIntent("test", "XBTUSD", "long", "enter", 1000.0, 1.0, "1h", datetime.now(timezone.utc)),
-        StrategyIntent("test", "XBTUSD", "flat", "exit", None, 1.0, "1h", datetime.now(timezone.utc)),
+        StrategyIntent(
+            "test",
+            "XBTUSD",
+            "long",
+            "enter",
+            1000.0,
+            1.0,
+            "1h",
+            datetime.now(timezone.utc),
+        ),
+        StrategyIntent(
+            "test",
+            "XBTUSD",
+            "flat",
+            "exit",
+            None,
+            1.0,
+            "1h",
+            datetime.now(timezone.utc),
+        ),
     ]
 
     actions = engine.process_intents(intents)
@@ -247,7 +275,9 @@ def test_kill_switch_reasons_are_additive():
     engine = RiskEngine(config, market, portfolio)
     engine.set_manual_kill_switch(True)
 
-    intent = StrategyIntent("test", "XBTUSD", "long", "enter", 1000.0, 1.0, "1h", datetime.now(timezone.utc))
+    intent = StrategyIntent(
+        "test", "XBTUSD", "long", "enter", 1000.0, 1.0, "1h", datetime.now(timezone.utc)
+    )
     action = engine.process_intents([intent])[0]
 
     assert action.blocked
@@ -260,7 +290,10 @@ def test_manual_vs_strategy_grouping_and_exposure():
     market = MagicMock(spec=MarketDataAPI)
     portfolio = MagicMock(spec=PortfolioService)
 
-    market.get_latest_price.side_effect = lambda pair: {"XBTUSD": 100.0, "ETHUSD": 50.0}[pair]
+    market.get_latest_price.side_effect = lambda pair: {
+        "XBTUSD": 100.0,
+        "ETHUSD": 50.0,
+    }[pair]
     market.get_pair_metadata.return_value = MagicMock(liquidity_24h_usd=1_000_000.0)
 
     manual_position = SpotPosition(
@@ -293,16 +326,24 @@ def test_manual_vs_strategy_grouping_and_exposure():
     )
 
     exposures_total = [
-        AssetExposure(asset="XBT", amount=3.0, value_base=300.0, percentage_of_equity=0.3),
-        AssetExposure(asset="ETH", amount=2.0, value_base=100.0, percentage_of_equity=0.1),
+        AssetExposure(
+            asset="XBT", amount=3.0, value_base=300.0, percentage_of_equity=0.3
+        ),
+        AssetExposure(
+            asset="ETH", amount=2.0, value_base=100.0, percentage_of_equity=0.1
+        ),
     ]
     exposures_strategy_only = [
-        AssetExposure(asset="ETH", amount=2.0, value_base=100.0, percentage_of_equity=0.1)
+        AssetExposure(
+            asset="ETH", amount=2.0, value_base=100.0, percentage_of_equity=0.1
+        )
     ]
 
     portfolio.get_equity.return_value = equity
     portfolio.get_positions.return_value = [manual_position, strategy_position]
-    portfolio.get_asset_exposure.side_effect = lambda include_manual=True: exposures_total if include_manual else exposures_strategy_only
+    portfolio.get_asset_exposure.side_effect = lambda include_manual=True: (
+        exposures_total if include_manual else exposures_strategy_only
+    )
     portfolio.get_realized_pnl_by_strategy.side_effect = [
         {"manual": 50.0, "trend_core": 100.0},
         {"trend_core": 100.0},
@@ -417,8 +458,26 @@ def test_drift_kill_switch_blocks_opening_orders():
     engine = RiskEngine(config, market, portfolio)
 
     intents = [
-        StrategyIntent("trend_core", "XBTUSD", "long", "enter", 1000.0, 1.0, "1h", datetime.now(timezone.utc)),
-        StrategyIntent("trend_core", "XBTUSD", "long", "reduce", 0.0, 1.0, "1h", datetime.now(timezone.utc)),
+        StrategyIntent(
+            "trend_core",
+            "XBTUSD",
+            "long",
+            "enter",
+            1000.0,
+            1.0,
+            "1h",
+            datetime.now(timezone.utc),
+        ),
+        StrategyIntent(
+            "trend_core",
+            "XBTUSD",
+            "long",
+            "reduce",
+            0.0,
+            1.0,
+            "1h",
+            datetime.now(timezone.utc),
+        ),
     ]
 
     actions = engine.process_intents(intents)
@@ -428,16 +487,20 @@ def test_drift_kill_switch_blocks_opening_orders():
     assert not actions[1].blocked
     assert engine.get_status().drift_flag
 
+
 def test_max_per_asset():
-    config = RiskConfig(max_per_asset_pct=10.0) # 10% max
+    config = RiskConfig(max_per_asset_pct=10.0)  # 10% max
     market = MagicMock(spec=MarketDataAPI)
     portfolio = MagicMock(spec=PortfolioService)
     market.get_latest_price.return_value = 100.0
     market.get_pair_metadata.return_value = MagicMock(liquidity_24h_usd=1_000_000.0)
 
     portfolio.get_equity.return_value = EquityView(
-        equity_base=10000.0, cash_base=10000.0, realized_pnl_base_total=0,
-        unrealized_pnl_base_total=0, drift_flag=False
+        equity_base=10000.0,
+        cash_base=10000.0,
+        realized_pnl_base_total=0,
+        unrealized_pnl_base_total=0,
+        drift_flag=False,
     )
     portfolio.get_positions.return_value = []
     portfolio.get_asset_exposure.return_value = []
@@ -447,7 +510,9 @@ def test_max_per_asset():
     engine = RiskEngine(config, market, portfolio)
 
     # Try to buy 2000 USD (20%)
-    intent = StrategyIntent("test", "XBTUSD", "long", "enter", 2000.0, 1.0, "1h", datetime.now(timezone.utc))
+    intent = StrategyIntent(
+        "test", "XBTUSD", "long", "enter", 2000.0, 1.0, "1h", datetime.now(timezone.utc)
+    )
     actions = engine.process_intents([intent])
 
     # Should be clamped to 1000 (10%)

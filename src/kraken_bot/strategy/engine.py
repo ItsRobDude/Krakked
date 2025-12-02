@@ -9,15 +9,23 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional, Type
 
 from kraken_bot.config import AppConfig, StrategyConfig
+from kraken_bot.logging_config import structured_log_extra
 from kraken_bot.market_data.api import MarketDataAPI
 from kraken_bot.market_data.exceptions import DataStaleError
 from kraken_bot.portfolio.manager import PortfolioService
-from kraken_bot.logging_config import structured_log_extra
+
 from .base import Strategy, StrategyContext
-from .models import DecisionRecord, ExecutionPlan, RiskAdjustedAction, RiskStatus, StrategyIntent, StrategyState
+from .models import (
+    DecisionRecord,
+    ExecutionPlan,
+    RiskAdjustedAction,
+    RiskStatus,
+    StrategyIntent,
+    StrategyState,
+)
 from .risk import RiskEngine
-from .strategies.demo_strategy import TrendFollowingStrategy
 from .strategies.dca_rebalance import DcaRebalanceStrategy
+from .strategies.demo_strategy import TrendFollowingStrategy
 from .strategies.mean_reversion import MeanReversionStrategy
 from .strategies.relative_strength import RelativeStrengthStrategy
 from .strategies.vol_breakout import VolBreakoutStrategy
@@ -39,7 +47,9 @@ def _strategy_registry() -> Dict[str, Type[Strategy]]:
 class StrategyEngine:
     """Loads configured strategies, routes intents through risk, and persists plans."""
 
-    def __init__(self, config: AppConfig, market_data: MarketDataAPI, portfolio: PortfolioService):
+    def __init__(
+        self, config: AppConfig, market_data: MarketDataAPI, portfolio: PortfolioService
+    ):
         self.config = config
         self.market_data = market_data
         self.portfolio = portfolio
@@ -52,7 +62,9 @@ class StrategyEngine:
             market_data,
             portfolio,
             strategy_userrefs=strategy_userrefs,
-            strategy_tags={cfg.name: cfg.name for cfg in config.strategies.configs.values()},
+            strategy_tags={
+                cfg.name: cfg.name for cfg in config.strategies.configs.values()
+            },
         )
 
         self.strategies: Dict[str, Strategy] = {}
@@ -73,29 +85,41 @@ class StrategyEngine:
                     config_key,
                     strategy_id,
                     extra=structured_log_extra(
-                        event="strategy_key_mismatch", strategy_key=config_key, strategy_id=strategy_id
+                        event="strategy_key_mismatch",
+                        strategy_key=config_key,
+                        strategy_id=strategy_id,
                     ),
                 )
 
             if not strat_cfg.enabled:
                 logger.info(
-                    "Skipping disabled strategy %s", strategy_id,
-                    extra=structured_log_extra(event="strategy_disabled_skip", strategy_id=strategy_id),
+                    "Skipping disabled strategy %s",
+                    strategy_id,
+                    extra=structured_log_extra(
+                        event="strategy_disabled_skip", strategy_id=strategy_id
+                    ),
                 )
                 continue
 
             if strategy_id not in self.config.strategies.enabled:
                 logger.info(
-                    "Strategy %s not in enabled list, skipping", strategy_id,
-                    extra=structured_log_extra(event="strategy_not_enabled", strategy_id=strategy_id),
+                    "Strategy %s not in enabled list, skipping",
+                    strategy_id,
+                    extra=structured_log_extra(
+                        event="strategy_not_enabled", strategy_id=strategy_id
+                    ),
                 )
                 continue
 
             strat_class = registry.get(strat_cfg.type)
             if not strat_class:
                 logger.warning(
-                    "Unknown strategy type: %s for %s", strat_cfg.type, strategy_id,
-                    extra=structured_log_extra(event="strategy_unknown_type", strategy_id=strategy_id),
+                    "Unknown strategy type: %s for %s",
+                    strat_cfg.type,
+                    strategy_id,
+                    extra=structured_log_extra(
+                        event="strategy_unknown_type", strategy_id=strategy_id
+                    ),
                 )
                 continue
 
@@ -115,13 +139,22 @@ class StrategyEngine:
                 strategy.warmup(self.market_data, self.portfolio)
             except Exception as exc:  # pragma: no cover - defensive
                 logger.error(
-                    "Error warming up strategy %s: %s", strategy_id, exc,
-                    extra=structured_log_extra(event="strategy_warmup_error", strategy_id=strategy_id),
+                    "Error warming up strategy %s: %s",
+                    strategy_id,
+                    exc,
+                    extra=structured_log_extra(
+                        event="strategy_warmup_error", strategy_id=strategy_id
+                    ),
                 )
 
         logger.info(
-            "StrategyEngine initialized with %d strategies", len(self.strategies),
-            extra=structured_log_extra(event="strategy_engine_ready", strategy_id="all", count=len(self.strategies)),
+            "StrategyEngine initialized with %d strategies",
+            len(self.strategies),
+            extra=structured_log_extra(
+                event="strategy_engine_ready",
+                strategy_id="all",
+                count=len(self.strategies),
+            ),
         )
 
     def run_cycle(self, now: Optional[datetime] = None) -> ExecutionPlan:
@@ -129,12 +162,18 @@ class StrategyEngine:
         now = now or datetime.now(timezone.utc)
         plan_id = f"plan_{int(now.timestamp())}"
         logger.info(
-            "Starting decision cycle %s", plan_id,
+            "Starting decision cycle %s",
+            plan_id,
             extra=structured_log_extra(event="strategy_cycle", plan_id=plan_id),
         )
 
         if not self._data_ready():
-            return ExecutionPlan(plan_id=plan_id, generated_at=now, actions=[], metadata={"error": "Market data unavailable"})
+            return ExecutionPlan(
+                plan_id=plan_id,
+                generated_at=now,
+                actions=[],
+                metadata={"error": "Market data unavailable"},
+            )
 
         all_intents: List[StrategyIntent] = []
         for name, strategy in self.strategies.items():
@@ -157,7 +196,9 @@ class StrategyEngine:
                         intent.metadata.setdefault("strategy_id", name)
                         intent.metadata.setdefault("timeframe", timeframe)
                         if strategy.config.userref is not None:
-                            intent.metadata.setdefault("userref", str(strategy.config.userref))
+                            intent.metadata.setdefault(
+                                "userref", str(strategy.config.userref)
+                            )
                     all_intents.extend(intents)
                     self.strategy_states[name].last_intents_at = now
                 except DataStaleError as exc:
@@ -180,7 +221,10 @@ class StrategyEngine:
                     continue
                 except Exception as exc:  # pragma: no cover - defensive
                     logger.error(
-                        "Error generating intents for %s on timeframe %s: %s", name, timeframe, exc,
+                        "Error generating intents for %s on timeframe %s: %s",
+                        name,
+                        timeframe,
+                        exc,
                         extra=structured_log_extra(
                             event="strategy_intent_error",
                             strategy_id=name,
@@ -222,7 +266,8 @@ class StrategyEngine:
             status = self.market_data.get_data_status()
         except Exception as exc:  # pragma: no cover - defensive
             logger.error(
-                "Unable to fetch data status: %s", exc,
+                "Unable to fetch data status: %s",
+                exc,
                 extra=structured_log_extra(event="data_status_error"),
             )
             return False
@@ -245,14 +290,17 @@ class StrategyEngine:
             self.portfolio.sync()
         except Exception as exc:  # pragma: no cover - defensive
             logger.error(
-                "Error syncing portfolio: %s", exc,
+                "Error syncing portfolio: %s",
+                exc,
                 extra=structured_log_extra(event="portfolio_sync_error"),
             )
             return False
 
         return True
 
-    def _build_context(self, now: datetime, strategy_config: StrategyConfig, timeframe: str) -> StrategyContext:
+    def _build_context(
+        self, now: datetime, strategy_config: StrategyConfig, timeframe: str
+    ) -> StrategyContext:
         universe = self.config.universe.include_pairs
         return StrategyContext(
             now=now,
@@ -262,7 +310,9 @@ class StrategyEngine:
             timeframe=timeframe,
         )
 
-    def _persist_actions(self, plan_id: str, now: datetime, actions: List[RiskAdjustedAction]) -> None:
+    def _persist_actions(
+        self, plan_id: str, now: datetime, actions: List[RiskAdjustedAction]
+    ) -> None:
         for action in actions:
             record = DecisionRecord(
                 time=int(now.timestamp()),
@@ -272,7 +322,9 @@ class StrategyEngine:
                 action_type=action.action_type,
                 target_position_usd=action.target_notional_usd,
                 blocked=action.blocked,
-                block_reason=";".join(action.blocked_reasons) if action.blocked_reasons else None,
+                block_reason=(
+                    ";".join(action.blocked_reasons) if action.blocked_reasons else None
+                ),
                 kill_switch_active=self.risk_engine._kill_switch_active,
                 raw_json=json.dumps(asdict(action), default=str),
             )
@@ -289,7 +341,9 @@ class StrategyEngine:
         else:  # pragma: no cover - backwards compatibility
             logger.debug(
                 "PortfolioService missing record_execution_plan; skipping persistence.",
-                extra=structured_log_extra(event="plan_persist_skipped", plan_id=plan.plan_id),
+                extra=structured_log_extra(
+                    event="plan_persist_skipped", plan_id=plan.plan_id
+                ),
             )
 
     def get_risk_status(self) -> RiskStatus:

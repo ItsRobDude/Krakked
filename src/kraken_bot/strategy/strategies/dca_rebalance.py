@@ -50,7 +50,9 @@ class DcaRebalanceStrategy(Strategy):
         if weight_sum <= 0:
             raise ValueError("Target weights must sum to a positive value")
 
-        normalized_weights = {pair: weight / weight_sum for pair, weight in target_weights.items()}
+        normalized_weights = {
+            pair: weight / weight_sum for pair, weight in target_weights.items()
+        }
 
         rebalance_threshold_pct = float(params.get("rebalance_threshold_pct", 1.0))
         if rebalance_threshold_pct < 0:
@@ -108,7 +110,9 @@ class DcaRebalanceStrategy(Strategy):
             if target_notional <= 0:
                 deviation_pct = 0.0 if current_notional == 0 else 100.0
             else:
-                deviation_pct = (current_notional - target_notional) / target_notional * 100
+                deviation_pct = (
+                    (current_notional - target_notional) / target_notional * 100
+                )
 
             if abs(deviation_pct) < self.params.rebalance_threshold_pct:
                 continue
@@ -120,7 +124,9 @@ class DcaRebalanceStrategy(Strategy):
             }
 
             if current_notional < target_notional:
-                new_target = min(target_notional, current_notional + self.params.dca_notional_usd)
+                new_target = min(
+                    target_notional, current_notional + self.params.dca_notional_usd
+                )
                 intent_type = "enter" if current_notional == 0 else "increase"
                 intents.append(
                     StrategyIntent(
@@ -136,7 +142,9 @@ class DcaRebalanceStrategy(Strategy):
                     )
                 )
             else:
-                new_target = max(target_notional, current_notional - self.params.dca_notional_usd)
+                new_target = max(
+                    target_notional, current_notional - self.params.dca_notional_usd
+                )
                 if new_target <= 0:
                     intents.append(
                         StrategyIntent(

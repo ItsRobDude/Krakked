@@ -30,7 +30,9 @@ def plan_metadata():
     return {"order_type": "limit", "requested_price": 100.0}
 
 
-def make_action(target: float, current: float, blocked: bool = False, action_type: str = "open"):
+def make_action(
+    target: float, current: float, blocked: bool = False, action_type: str = "open"
+):
     return RiskAdjustedAction(
         pair="XBTUSD",
         strategy_id="strat-1",
@@ -73,7 +75,10 @@ def test_execute_plan_skips_blocked_noop_and_zero_delta(plan_metadata):
 def test_execute_plan_creates_buy_and_sell_orders(plan_metadata):
     adapter = RecordingAdapter()
     service = ExecutionService(adapter)
-    actions = [make_action(target=3.0, current=1.0), make_action(target=1.0, current=3.0)]
+    actions = [
+        make_action(target=3.0, current=1.0),
+        make_action(target=1.0, current=3.0),
+    ]
     plan = make_plan(actions, plan_metadata)
 
     result = service.execute_plan(plan)
