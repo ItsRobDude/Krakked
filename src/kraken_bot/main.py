@@ -20,6 +20,7 @@ from kraken_bot.metrics import SystemMetrics
 from kraken_bot.portfolio.manager import PortfolioService
 from kraken_bot.portfolio.models import DriftStatus
 from kraken_bot.portfolio.exceptions import PortfolioSchemaError
+from kraken_bot.portfolio.store import assert_portfolio_schema
 from kraken_bot.ui.api import create_api
 from kraken_bot.ui.context import AppContext
 from kraken_bot.strategy.engine import StrategyEngine
@@ -285,14 +286,20 @@ def run(allow_interactive_setup: bool = True) -> int:
 
     configure_logging(level=logging.INFO)
     stop_event = threading.Event()
+    db_path = "portfolio.db"
 
     try:
         client, config, rate_limiter = bootstrap(allow_interactive_setup=allow_interactive_setup)
 
+        db_path = getattr(getattr(config, "portfolio", None), "db_path", "portfolio.db")
+        assert_portfolio_schema(db_path)
+
         market_data = MarketDataAPI(config, rest_client=client, rate_limiter=rate_limiter)
         market_data.initialize()
 
-        portfolio = PortfolioService(config, market_data, rest_client=client, rate_limiter=rate_limiter)
+        portfolio = PortfolioService(
+            config, market_data, db_path=db_path, rest_client=client, rate_limiter=rate_limiter
+        )
         portfolio.initialize()
 
         strategy_engine = StrategyEngine(config, market_data, portfolio)
@@ -320,12 +327,13 @@ def run(allow_interactive_setup: bool = True) -> int:
         )
     except PortfolioSchemaError as exc:
         logger.critical(
-            "Portfolio store schema mismatch: %s",
+            "Portfolio store schema check failed: %s",
             exc,
             extra=structured_log_extra(
-                event="schema_mismatch",
+                event="schema_guard_failed",
                 expected_schema=exc.expected,
                 found_schema=exc.found,
+                db_path=db_path,
             ),
         )
         return 1

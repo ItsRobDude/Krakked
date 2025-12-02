@@ -92,6 +92,7 @@ class PortfolioConfig:
     track_manual_trades: bool = True
     snapshot_retention_days: int = 30
     reconciliation_tolerance: float = 1.0
+    db_path: str = "portfolio.db"
 
 @dataclass
 class RiskConfig:
@@ -265,7 +266,8 @@ def load_config(config_path: Optional[Path] = None, env: Optional[str] = None) -
         cost_basis_method=portfolio_data.get("cost_basis_method", "wac"),
         track_manual_trades=portfolio_data.get("track_manual_trades", True),
         snapshot_retention_days=portfolio_data.get("snapshot_retention_days", 30),
-        reconciliation_tolerance=portfolio_data.get("reconciliation_tolerance", 1.0)
+        reconciliation_tolerance=portfolio_data.get("reconciliation_tolerance", 1.0),
+        db_path=portfolio_data.get("db_path", "portfolio.db"),
     )
 
     # Parsing Risk Config with defaults
