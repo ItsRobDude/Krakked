@@ -18,6 +18,7 @@ from .models import DecisionRecord, ExecutionPlan, RiskAdjustedAction, RiskStatu
 from .risk import RiskEngine
 from .strategies.dca_rebalance import DcaRebalanceStrategy
 from .strategies.demo_strategy import TrendFollowingStrategy
+from .strategies.vol_breakout import VolBreakoutStrategy
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +28,7 @@ def _strategy_registry() -> Dict[str, Type[Strategy]]:
     return {
         "trend_following": TrendFollowingStrategy,
         "dca_rebalance": DcaRebalanceStrategy,
+        "vol_breakout": VolBreakoutStrategy,
     }
 
 
