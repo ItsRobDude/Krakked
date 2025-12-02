@@ -105,6 +105,7 @@ class StrategyEngine:
                 last_actions_at=None,
                 current_positions=[],
                 pnl_summary={},
+                params=dict(strat_cfg.params),
             )
 
             try:

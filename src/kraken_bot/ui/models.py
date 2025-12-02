@@ -104,6 +104,7 @@ class StrategyStatePayload(BaseModel):
     last_actions_at: Optional[datetime]
     current_positions: List[StrategyPosition]
     pnl_summary: Dict[str, float]
+    params: Dict[str, Any] = Field(default_factory=dict)
 
 
 class OpenOrderPayload(BaseModel):
