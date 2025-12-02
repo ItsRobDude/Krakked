@@ -41,6 +41,7 @@ pyright = ">=1.1.380,<2.0"
 flake8 = "^7.3.0"
 black = "^24.8.0"
 isort = "^5.13.0"
+pre-commit = "^4.5.0"
 
 [build-system]
 requires = ["poetry-core>=1.0.0"]
@@ -70,6 +71,9 @@ src_paths = ["src", "tests"]
 max-line-length = 88
 extend-ignore = [
   "E203",
+  "E302",
+  "E701",
+  "E722",
   "E501",
   "W503",
 ]
@@ -79,4 +83,6 @@ exclude = [
   ".venv",
   "build",
   "dist",
+  "typings",
+  "ui/node_modules",
 ]

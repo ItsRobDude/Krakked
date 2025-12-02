@@ -1,5 +1,8 @@
 from typing import Any
 
+# flake8: noqa
+
+
 class Widget:
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         ...
