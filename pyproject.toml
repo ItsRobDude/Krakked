@@ -80,5 +80,4 @@ exclude = [
   ".venv",
   "build",
   "dist",
-  "E701",
 ]
