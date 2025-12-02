@@ -84,7 +84,7 @@ strategies:
     vol_breakout:
       name: "vol_breakout"
       type: "vol_breakout"
-      enabled: false  # off by default; user can turn on later
+      enabled: false   # off by default; user can turn on later
       params:
         pairs:
           - "BTC/USD"
