@@ -115,7 +115,7 @@ class OpenOrderPayload(BaseModel):
     side: str
     order_type: str
     kraken_order_id: Optional[str] = None
-    userref: Optional[str] = None
+    userref: Optional[int] = None
     requested_base_size: float
     requested_price: Optional[float]
     status: str
