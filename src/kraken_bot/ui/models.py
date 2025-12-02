@@ -104,6 +104,7 @@ class StrategyStatePayload(BaseModel):
     last_actions_at: Optional[datetime]
     current_positions: List[StrategyPosition]
     pnl_summary: Dict[str, float]
+    params: Dict[str, Any] = Field(default_factory=dict)
 
 
 class OpenOrderPayload(BaseModel):
@@ -114,7 +115,7 @@ class OpenOrderPayload(BaseModel):
     side: str
     order_type: str
     kraken_order_id: Optional[str] = None
-    userref: Optional[int] = None
+    userref: Optional[str] = None
     requested_base_size: float
     requested_price: Optional[float]
     status: str

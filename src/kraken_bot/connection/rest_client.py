@@ -28,6 +28,7 @@ class KrakenRESTClient:
         api_key: Optional[str] = None,
         api_secret: Optional[str] = None,
         rate_limiter: Optional[RateLimiter] = None,
+        request_timeout: float = 10.0,
     ):
         self.api_url = api_url
         # Use the same rate limiter for both public and private calls for simplicity and safety
@@ -35,6 +36,7 @@ class KrakenRESTClient:
 
         self.api_key = api_key
         self.api_secret = api_secret
+        self.request_timeout = request_timeout
 
         self.session = requests.Session()
         self.session.headers.update(
@@ -95,9 +97,13 @@ class KrakenRESTClient:
 
         try:
             if method == "get":
-                response = self.session.get(url, params=data, headers=headers)
+                response = self.session.get(
+                    url, params=data, headers=headers, timeout=self.request_timeout
+                )
             elif method == "post":
-                response = self.session.post(url, data=data, headers=headers)
+                response = self.session.post(
+                    url, data=data, headers=headers, timeout=self.request_timeout
+                )
             else:
                 raise ValueError(f"Unsupported method: {method}")
 

@@ -1,12 +1,15 @@
 # src/kraken_bot/config.py
 
 import logging
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import appdirs  # type: ignore[import-untyped]
 import yaml  # type: ignore[import-untyped]
+
+from kraken_bot.strategy.catalog import CANONICAL_STRATEGIES
 
 @dataclass
 class RegionCapabilities:
@@ -89,6 +92,7 @@ class PortfolioConfig:
     track_manual_trades: bool = True
     snapshot_retention_days: int = 30
     reconciliation_tolerance: float = 1.0
+    db_path: str = "portfolio.db"
 
 @dataclass
 class RiskConfig:
@@ -146,7 +150,7 @@ def get_default_ohlc_store_config() -> Dict[str, str]:
     return {"root_dir": str(default_root), "backend": "parquet"}
 
 
-def load_config(config_path: Optional[Path] = None) -> AppConfig:
+def load_config(config_path: Optional[Path] = None, env: Optional[str] = None) -> AppConfig:
     """
     Loads the main application configuration from the default location or a specified path.
     """
@@ -161,10 +165,23 @@ def load_config(config_path: Optional[Path] = None) -> AppConfig:
         )
         return default
 
+    allowed_envs = {"dev", "paper", "live"}
+
     if config_path is None:
         config_path = get_config_dir() / "config.yaml"
 
     config_path = config_path.expanduser()
+
+    initial_env = env if env is not None else os.environ.get("KRAKEN_BOT_ENV")
+    if initial_env not in allowed_envs:
+        logger.warning(
+            "Invalid or missing environment '%s'; defaulting to 'paper'",
+            initial_env,
+            extra={"event": "config_invalid_env", "config_path": str(config_path)},
+        )
+        effective_env = "paper"
+    else:
+        effective_env = initial_env
 
     if not config_path.exists():
         logger.warning(
@@ -182,6 +199,29 @@ def load_config(config_path: Optional[Path] = None) -> AppConfig:
             extra={"event": "config_invalid_format", "config_path": str(config_path)},
         )
         raw_config = {}
+
+    def _deep_merge_dicts(base: Dict[str, Any], overlay: Dict[str, Any]) -> Dict[str, Any]:
+        merged = base.copy()
+        for key, value in overlay.items():
+            if key in merged and isinstance(merged[key], dict) and isinstance(value, dict):
+                merged[key] = _deep_merge_dicts(merged[key], value)
+            else:
+                merged[key] = value
+        return merged
+
+    env_config_path = config_path.parent / f"config.{effective_env}.yaml"
+    if env_config_path.exists():
+        with open(env_config_path, "r") as f:
+            env_config = yaml.safe_load(f) or {}
+
+        if not isinstance(env_config, dict):
+            logger.warning(
+                "Environment config is not a mapping; skipping env overlay",
+                extra={"event": "config_invalid_env_file", "config_path": str(env_config_path)},
+            )
+            env_config = {}
+
+        raw_config = _deep_merge_dicts(raw_config, env_config)
 
     default_region = RegionProfile(
         code="US_CA",
@@ -226,7 +266,8 @@ def load_config(config_path: Optional[Path] = None) -> AppConfig:
         cost_basis_method=portfolio_data.get("cost_basis_method", "wac"),
         track_manual_trades=portfolio_data.get("track_manual_trades", True),
         snapshot_retention_days=portfolio_data.get("snapshot_retention_days", 30),
-        reconciliation_tolerance=portfolio_data.get("reconciliation_tolerance", 1.0)
+        reconciliation_tolerance=portfolio_data.get("reconciliation_tolerance", 1.0),
+        db_path=portfolio_data.get("db_path", "portfolio.db"),
     )
 
     # Parsing Risk Config with defaults
@@ -237,18 +278,6 @@ def load_config(config_path: Optional[Path] = None) -> AppConfig:
             extra={"event": "config_invalid_risk", "config_path": str(config_path)},
         )
         risk_data = {}
-    risk_config = RiskConfig(
-        max_risk_per_trade_pct=risk_data.get("max_risk_per_trade_pct", 1.0),
-        max_portfolio_risk_pct=risk_data.get("max_portfolio_risk_pct", 10.0),
-        max_open_positions=risk_data.get("max_open_positions", 10),
-        max_per_asset_pct=risk_data.get("max_per_asset_pct", 5.0),
-        max_per_strategy_pct=risk_data.get("max_per_strategy_pct", {}),
-        max_daily_drawdown_pct=risk_data.get("max_daily_drawdown_pct", 10.0),
-        kill_switch_on_drift=risk_data.get("kill_switch_on_drift", True),
-        include_manual_positions=risk_data.get("include_manual_positions", True),
-        volatility_lookback_bars=risk_data.get("volatility_lookback_bars", 20),
-        min_liquidity_24h_usd=risk_data.get("min_liquidity_24h_usd", 100000.0)
-    )
 
     # Parsing Strategies Config
     strategies_data = raw_config.get("strategies") or {}
@@ -258,7 +287,7 @@ def load_config(config_path: Optional[Path] = None) -> AppConfig:
             extra={"event": "config_invalid_strategies", "config_path": str(config_path)},
         )
         strategies_data = {}
-    strategy_configs = {}
+    strategy_configs: Dict[str, StrategyConfig] = {}
 
     # Process 'configs' section
     raw_strategy_configs = strategies_data.get("configs") or {}
@@ -268,22 +297,53 @@ def load_config(config_path: Optional[Path] = None) -> AppConfig:
             extra={"event": "config_invalid_strategy_configs", "config_path": str(config_path)},
         )
         raw_strategy_configs = {}
-    for name, cfg in raw_strategy_configs.items():
+    for config_key, cfg in raw_strategy_configs.items():
         if not isinstance(cfg, dict):
             logger.warning(
                 "Strategy config is not a mapping; skipping entry",
                 extra={
                     "event": "config_invalid_strategy_entry",
                     "config_path": str(config_path),
-                    "strategy": name,
+                    "strategy": config_key,
                 },
             )
             continue
         # Copy cfg to avoid modifying the original dictionary during pop
         cfg_copy = cfg.copy()
 
-        # Extract known fields
-        s_type = cfg_copy.pop("type", "unknown")
+        cfg_name = cfg_copy.pop("name", config_key)
+        if cfg_name != config_key:
+            logger.warning(
+                "Strategy name '%s' does not match key '%s'; using key as canonical id",
+                cfg_name,
+                config_key,
+                extra={
+                    "event": "config_strategy_name_mismatch",
+                    "config_path": str(config_path),
+                    "strategy_key": config_key,
+                    "strategy_name": cfg_name,
+                },
+            )
+            cfg_name = config_key
+
+        canonical_def = CANONICAL_STRATEGIES.get(cfg_name)
+        s_type = cfg_copy.pop("type", canonical_def.type if canonical_def else "unknown")
+        if canonical_def and s_type != canonical_def.type:
+            logger.warning(
+                "Strategy %s type '%s' does not match canonical '%s'; forcing canonical type",
+                cfg_name,
+                s_type,
+                canonical_def.type,
+                extra={
+                    "event": "config_strategy_type_mismatch",
+                    "config_path": str(config_path),
+                    "strategy_id": cfg_name,
+                    "strategy_type": s_type,
+                    "canonical_type": canonical_def.type,
+                },
+            )
+            s_type = canonical_def.type
+
         # In the config file, 'enabled' might be on the specific strategy config
         # or just inferred from the global enabled list. We'll support both, defaulting to True here
         # and checking the global list separately if needed, or assume the global list drives execution.
@@ -295,17 +355,75 @@ def load_config(config_path: Optional[Path] = None) -> AppConfig:
         # The rest are params
         params = cfg_copy
 
-        strategy_configs[name] = StrategyConfig(
-            name=name,
+        strategy_configs[cfg_name] = StrategyConfig(
+            name=cfg_name,
             type=s_type,
             enabled=s_enabled,
             userref=userref,
             params=params
         )
 
+    raw_enabled = strategies_data.get("enabled", [])
+    if not isinstance(raw_enabled, list):
+        logger.warning(
+            "Enabled strategies should be a list; defaulting to empty",
+            extra={"event": "config_invalid_strategy_enabled", "config_path": str(config_path)},
+        )
+        raw_enabled = []
+
+    normalized_enabled: List[str] = []
+    for strategy_id in raw_enabled:
+        if strategy_id not in strategy_configs:
+            logger.warning(
+                "Enabled strategy %s has no matching config; skipping",
+                strategy_id,
+                extra={
+                    "event": "config_unknown_strategy_enabled",
+                    "config_path": str(config_path),
+                    "strategy_id": strategy_id,
+                },
+            )
+            continue
+        normalized_enabled.append(strategy_id)
+
     strategies_config = StrategiesConfig(
-        enabled=strategies_data.get("enabled", []),
+        enabled=normalized_enabled,
         configs=strategy_configs
+    )
+
+    raw_strategy_limits = risk_data.get("max_per_strategy_pct", {})
+    if not isinstance(raw_strategy_limits, dict):
+        logger.warning(
+            "max_per_strategy_pct should be a mapping; defaulting to empty",
+            extra={"event": "config_invalid_strategy_limits", "config_path": str(config_path)},
+        )
+        raw_strategy_limits = {}
+
+    normalized_limits: Dict[str, float] = {}
+    for strategy_id, pct_limit in raw_strategy_limits.items():
+        if strategy_id not in strategy_configs:
+            logger.warning(
+                "Risk limit references unknown strategy %s; skipping", strategy_id,
+                extra={
+                    "event": "config_unknown_strategy_limit",
+                    "config_path": str(config_path),
+                    "strategy_id": strategy_id,
+                },
+            )
+            continue
+        normalized_limits[strategy_id] = pct_limit
+
+    risk_config = RiskConfig(
+        max_risk_per_trade_pct=risk_data.get("max_risk_per_trade_pct", 1.0),
+        max_portfolio_risk_pct=risk_data.get("max_portfolio_risk_pct", 10.0),
+        max_open_positions=risk_data.get("max_open_positions", 10),
+        max_per_asset_pct=risk_data.get("max_per_asset_pct", 5.0),
+        max_per_strategy_pct=normalized_limits,
+        max_daily_drawdown_pct=risk_data.get("max_daily_drawdown_pct", 10.0),
+        kill_switch_on_drift=risk_data.get("kill_switch_on_drift", True),
+        include_manual_positions=risk_data.get("include_manual_positions", True),
+        volatility_lookback_bars=risk_data.get("volatility_lookback_bars", 20),
+        min_liquidity_24h_usd=risk_data.get("min_liquidity_24h_usd", 100000.0)
     )
 
     universe_data = raw_config.get("universe") or {}
@@ -343,10 +461,21 @@ def load_config(config_path: Optional[Path] = None) -> AppConfig:
         execution_data = {}
 
     default_execution = ExecutionConfig()
-    execution_mode = execution_data.get("mode", default_execution.mode)
+    execution_mode = execution_data.get("mode")
+    if execution_mode is None:
+        execution_mode = "live" if effective_env == "live" else "paper"
+
+    if execution_mode not in {"paper", "live"}:
+        logger.warning(
+            "Invalid execution mode '%s'; defaulting to 'paper'",
+            execution_mode,
+            extra={"event": "config_invalid_execution_mode", "config_path": str(config_path)},
+        )
+        execution_mode = "paper"
+
     validate_only = execution_data.get("validate_only")
     if validate_only is None:
-        validate_only = execution_mode != "live"
+        validate_only = True
 
     execution_config = ExecutionConfig(
         mode=execution_mode,
@@ -382,6 +511,26 @@ def load_config(config_path: Optional[Path] = None) -> AppConfig:
             "min_order_notional_usd", default_execution.min_order_notional_usd
         ),
     )
+
+    if (
+        execution_config.mode == "live"
+        and execution_config.validate_only is False
+        and execution_config.allow_live_trading is False
+    ):
+        logger.warning(
+            "Live mode requested without allow_live_trading; forcing validate_only",
+            extra={"event": "config_live_without_allow_live", "config_path": str(config_path)},
+        )
+        execution_config.validate_only = True
+    elif (
+        execution_config.mode == "live"
+        and execution_config.validate_only is False
+        and execution_config.allow_live_trading is True
+    ):
+        logger.info(
+            "Live mode with trading enabled; fully live trading is active",
+            extra={"event": "config_live_trading_enabled", "config_path": str(config_path)},
+        )
 
     ui_data = raw_config.get("ui") or {}
     if not isinstance(ui_data, dict):

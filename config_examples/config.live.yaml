@@ -1,0 +1,25 @@
+# Live-trading overlay. Live submissions remain disabled unless allow_live_trading is explicitly set.
+execution:
+  mode: "live"
+  validate_only: true        # Live mode still defaults to validate-only for safety
+  allow_live_trading: false  # Flip to true only after manual verification
+  paper_tests_completed: true
+
+ui:
+  read_only: true
+
+# In live env, also start with just core + DCA enabled.
+strategies:
+  enabled:
+    - "trend_core"
+    - "dca_overlay"
+
+# Keep per-strategy caps the same as base for now (you can lower these if you want)
+risk:
+  max_per_strategy_pct:
+    trend_core: 40.0
+    dca_overlay: 20.0
+    vol_breakout: 10.0
+    majors_mean_rev: 10.0
+    rs_rotation: 20.0
+    manual: 20.0

@@ -104,7 +104,7 @@ pip install -e .[tui]
 
 ## ⚙️ Configuration
 
-The bot uses two configuration files stored in your OS-specific user configuration directory (handled via `appdirs`).
+The bot uses two configuration files stored in your OS-specific user configuration directory (handled via `appdirs`). Example files live in `config_examples/`, and the overlay/merging rules are documented in [`docs/CONFIG.md`](docs/CONFIG.md).
 
 *   **Linux**: `~/.config/kraken_bot/`
 *   **macOS**: `~/Library/Application Support/kraken_bot/`
@@ -175,6 +175,17 @@ Phase 4 produces risk-adjusted actions that now flow through an OMS capable of p
 #### Strategy ID propagation and tagging
 
 `strategy_id` remains carried end-to-end: strategies emit `StrategyIntent`, the risk engine normalizes that into `RiskAdjustedAction`, and the resulting `DecisionRecord` snapshots the same identifier for audit/history. Each strategy config supports an optional `userref` field in `StrategyConfig` to give the strategy a stable numeric tag that is forwarded into Kraken orders for attribution.
+
+#### Canonical strategy identifiers
+
+Use the shared strategy IDs and implementation type strings below everywhere—`strategies.configs` keys, `StrategyConfig.name`, `StrategyIntent.strategy_id`, and `risk.max_per_strategy_pct` keys—to keep config, risk, and UI labels aligned. `load_config` will coerce known IDs back to their canonical types when they diverge.
+
+* `trend_core` (`type: trend_following`) – upgraded trend follower and current default.
+* `dca_overlay` (`type: dca_rebalance`) – DCA/rebalance overlay.
+* `vol_breakout` (`type: vol_breakout`) – volatility breakout.
+* `majors_mean_rev` (`type: mean_reversion`) – BTC/ETH mean reversion.
+* `rs_rotation` (`type: relative_strength`) – relative strength rotation.
+
 
 ### 🧪 Paper / Validate Quickstart
 

@@ -16,10 +16,15 @@ from kraken_bot.strategy.models import RiskAdjustedAction
 def test_engine_cycle():
     # Setup Config
     strat_config = StrategyConfig(
-        name="trend_v1", type="trend_following", enabled=True,
-        params={"timeframes": ["1h"], "ma_fast": 10, "ma_slow": 20}
+        name="trend_core",
+        type="trend_following",
+        enabled=True,
+        params={"timeframes": ["1h"], "ma_fast": 10, "ma_slow": 20},
     )
-    strategies_cfg = StrategiesConfig(enabled=["trend_v1"], configs={"trend_v1": strat_config})
+    strategies_cfg = StrategiesConfig(
+        enabled=["trend_core"],
+        configs={"trend_core": strat_config},
+    )
 
     app_config = MagicMock(spec=AppConfig)
     app_config.strategies = strategies_cfg
@@ -277,7 +282,10 @@ def test_actions_inherit_userref_and_persist_in_execution_plan():
 
     plan = engine.run_cycle(datetime.now(timezone.utc))
 
-    assert plan.actions[0].userref == 4242
+    assert plan.actions[0].strategy_id == "fake"
+    assert plan.actions[0].userref == "4242"
     portfolio.record_execution_plan.assert_called_once()
     persisted_plan = portfolio.record_execution_plan.call_args[0][0]
-    assert persisted_plan.actions[0].userref == 4242
+    assert persisted_plan.actions[0].userref == "4242"
+    decision_record = portfolio.record_decision.call_args_list[0][0][0]
+    assert decision_record.strategy_name == "fake"

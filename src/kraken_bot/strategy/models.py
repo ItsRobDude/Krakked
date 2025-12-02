@@ -7,7 +7,7 @@ from kraken_bot.portfolio.models import SpotPosition
 
 @dataclass
 class StrategyIntent:
-    strategy_id: str           # e.g. "trend_following_v1"
+    strategy_id: str           # e.g. "trend_core"
     pair: str                  # canonical pair, e.g. "XBTUSD"
     side: str                  # "long" | "flat"
     intent_type: str           # "enter" | "exit" | "increase" | "reduce" | "hold"
@@ -29,7 +29,7 @@ class RiskAdjustedAction:
     blocked: bool                     # true if action is blocked by risk limits
     blocked_reasons: List[str]        # list of violated limits, if any
     strategy_tag: Optional[str] = None
-    userref: Optional[int] = None
+    userref: Optional[str] = None
     risk_limits_snapshot: Dict[str, Any] = field(default_factory=dict) # config values, equity, etc.
 
 @dataclass
@@ -57,10 +57,12 @@ class RiskStatus:
     kill_switch_active: bool
     daily_drawdown_pct: float
     drift_flag: bool
+    drift_info: Optional[Dict[str, Any]]
     total_exposure_pct: float
     manual_exposure_pct: float
     per_asset_exposure_pct: Dict[str, float]
     per_strategy_exposure_pct: Dict[str, float]
+    drift_info: Optional[Dict[str, Any]] = None
 
 @dataclass
 class StrategyState:
@@ -70,3 +72,4 @@ class StrategyState:
     last_actions_at: Optional[datetime]
     current_positions: List[SpotPosition]     # positions attributable to this strategy
     pnl_summary: Dict[str, float]             # high-level from PortfolioService
+    params: Dict[str, Any] = field(default_factory=dict)

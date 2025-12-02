@@ -1,0 +1,158 @@
+# Base configuration shared by all environments.
+region:
+  code: "US_CA"
+  capabilities:
+    supports_margin: false
+    supports_futures: false
+    supports_staking: false
+  default_quote: "USD"
+
+universe:
+  include_pairs:
+    - "ETH/USD"
+    - "BTC/USD"
+  exclude_pairs: []
+  min_24h_volume_usd: 100000.0
+
+market_data:
+  ws:
+    url: "wss://ws.kraken.com/v2"
+  ohlc_store:
+    root_dir: "~/.local/share/kraken_bot/ohlc"
+    backend: "parquet"
+  backfill_timeframes:
+    - "1h"
+    - "4h"
+  ws_timeframes:
+    - "1m"
+    - "5m"
+  metadata_path: "~/.local/share/kraken_bot/metadata.json"
+
+portfolio:
+  base_currency: "USD"
+  valuation_pairs: { }
+  include_assets: []
+  exclude_assets: []
+  cost_basis_method: "wac"
+  track_manual_trades: true
+  snapshot_retention_days: 30
+  reconciliation_tolerance: 1.0
+
+execution:
+  mode: "paper"
+  default_order_type: "limit"
+  max_slippage_bps: 50
+  time_in_force: "GTC"
+  post_only: false
+  validate_only: true
+  allow_live_trading: false
+  paper_tests_completed: false
+  dead_man_switch_seconds: 600
+  max_retries: 3
+  retry_backoff_seconds: 2
+  retry_backoff_factor: 2.0
+  max_concurrent_orders: 10
+  min_order_notional_usd: 20.0
+
+risk:
+  max_risk_per_trade_pct: 1.0
+  max_portfolio_risk_pct: 10.0
+  max_open_positions: 10
+  max_per_asset_pct: 5.0
+  max_per_strategy_pct:
+    trend_core: 40.0
+    dca_overlay: 20.0
+    vol_breakout: 10.0
+    majors_mean_rev: 10.0
+    rs_rotation: 20.0
+    manual: 20.0
+  max_daily_drawdown_pct: 10.0
+  kill_switch_on_drift: true
+  include_manual_positions: true
+  volatility_lookback_bars: 20
+  min_liquidity_24h_usd: 100000.0
+
+strategies:
+  enabled:
+    - "trend_core"
+    - "dca_overlay"
+    - "vol_breakout"
+    - "majors_mean_rev"
+  configs:
+    trend_core:
+      name: "trend_core"
+      type: "trend_following"
+      enabled: true
+      params:
+        risk_profile: "balanced"
+        timeframes: ["1h", "4h"]
+        ma_fast: 10
+        ma_slow: 20
+        regime_timeframe: "1d"
+        min_trend_strength_bps: 15
+      userref: 1001
+
+    dca_overlay:
+      name: "dca_overlay"
+      type: "dca_rebalance"
+      enabled: true
+      params:
+        pairs: ["BTC/USD", "ETH/USD"]
+        target_weights:
+          "BTC/USD": 0.6
+          "ETH/USD": 0.4
+        rebalance_threshold_pct: 5.0
+        dca_interval_minutes: 240
+        dca_notional_usd: 100.0
+      userref: 1002
+
+    vol_breakout:
+      name: "vol_breakout"
+      type: "vol_breakout"
+      enabled: false   # off by default; user can turn on later
+      params:
+        pairs: ["BTC/USD", "ETH/USD"]
+        timeframes: ["15m", "1h"]
+        lookback_bars: 20
+        min_compression_bps: 10.0
+        breakout_multiple: 1.5
+      userref: 1003
+
+    majors_mean_rev:
+      name: "majors_mean_rev"
+      type: "mean_reversion"
+      enabled: false
+      params:
+        pairs: ["BTC/USD", "ETH/USD"]
+        timeframe: "1h"
+        lookback_bars: 50
+        band_width_bps: 150
+        max_positions: 2
+      userref: 1004
+
+    rs_rotation:
+      name: "rs_rotation"
+      type: "relative_strength"
+      enabled: false
+      params:
+        pairs: ["BTC/USD", "ETH/USD", "SOL/USD", "ADA/USD"]
+        lookback_bars: 42
+        timeframe: "4h"
+        rebalance_interval_hours: 24
+        top_n: 2
+        total_allocation_pct: 20.0
+      userref: 1005
+
+ui:
+  enabled: true
+  host: "127.0.0.1"
+  port: 8080
+  base_path: "/"
+  auth:
+    enabled: false
+    token: ""
+  read_only: false
+  refresh_intervals:
+    dashboard_ms: 5000
+    orders_ms: 5000
+    strategies_ms: 10000

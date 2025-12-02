@@ -103,6 +103,8 @@ async def update_strategy_config(strategy_id: str, request: Request) -> ApiEnvel
             if field == "params" and isinstance(value, dict):
                 strat_cfg.params.update(value)
                 updated_fields[field] = value
+                if strategy_id in ctx.strategy_engine.strategy_states:
+                    ctx.strategy_engine.strategy_states[strategy_id].params.update(value)
             elif hasattr(strat_cfg, field) and field not in {"name", "type"}:
                 setattr(strat_cfg, field, value)
                 updated_fields[field] = value

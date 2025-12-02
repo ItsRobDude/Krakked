@@ -281,6 +281,13 @@ p {
   color: var(--text-muted);
 }
 
+.risk-config__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+}
+
 .panel__hint {
   margin: 0;
   color: var(--text-muted);
@@ -440,6 +447,45 @@ p {
 
 .table__row span {
   color: #e2e8f0;
+}
+
+.strategy-panel {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.strategy__label {
+  font-weight: 700;
+}
+
+.strategy__meta {
+  color: var(--text-muted);
+}
+
+.strategy-toggle__label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.strategy-toggle {
+  width: 1.1rem;
+  height: 1.1rem;
+  accent-color: var(--primary);
+}
+
+.strategy-select {
+  width: 100%;
+  padding: 0.45rem 0.75rem;
+  border-radius: 10px;
+  border: 1px solid var(--border-subtle);
+  background: var(--surface-elevated);
+  color: #e2e8f0;
+}
+
+.strategy-select:disabled,
+.strategy-toggle:disabled + .pill {
+  opacity: 0.6;
 }
 
 .table--positions .table__row span:nth-child(1) {
