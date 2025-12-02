@@ -104,36 +104,3 @@ def test_relative_strength_prefers_top_return():
     assert eth_intent.desired_exposure_usd == 0.0
     assert btc_intent.intent_type in ["enter", "increase"]
     assert eth_intent.intent_type == "exit"
-
-
-def test_relative_strength_risk_profile_presets():
-    conservative_cfg = StrategyConfig(
-        name="rs_rotation",
-        type="relative_strength",
-        enabled=True,
-        params={"risk_profile": "conservative"},
-        userref=1005,
-    )
-    conservative = RelativeStrengthStrategy(conservative_cfg)
-    conservative_defaults = RelativeStrengthStrategy.PROFILE_PRESETS["conservative"]
-
-    assert conservative.params.risk_profile == "conservative"
-    assert conservative.params.lookback_bars == conservative_defaults["lookback_bars"]
-    assert conservative.params.rebalance_interval_hours == conservative_defaults["rebalance_interval_hours"]
-    assert conservative.params.top_n == conservative_defaults["top_n"]
-    assert conservative.params.total_allocation_pct == conservative_defaults["total_allocation_pct"]
-    assert conservative.params.timeframe == conservative_defaults["timeframe"]
-
-    override_cfg = StrategyConfig(
-        name="rs_rotation",
-        type="relative_strength",
-        enabled=True,
-        params={"risk_profile": "aggressive", "lookback_bars": 60, "total_allocation_pct": 30.0},
-        userref=1005,
-    )
-    overridden = RelativeStrengthStrategy(override_cfg)
-
-    assert overridden.params.risk_profile == "aggressive"
-    assert overridden.params.lookback_bars == 60
-    assert overridden.params.total_allocation_pct == 30.0
-    assert overridden.params.top_n == RelativeStrengthStrategy.PROFILE_PRESETS["aggressive"]["top_n"]

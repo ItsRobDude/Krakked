@@ -18,55 +18,22 @@ class RelativeStrengthConfig:
     rebalance_interval_hours: int
     top_n: int
     total_allocation_pct: float
-    risk_profile: str
 
 
 class RelativeStrengthStrategy(Strategy):
-    PROFILE_PRESETS: Dict[str, Dict[str, Any]] = {
-        "conservative": {
-            "lookback_bars": 72,
-            "timeframe": "4h",
-            "rebalance_interval_hours": 48,
-            "top_n": 1,
-            "total_allocation_pct": 10.0,
-        },
-        "balanced": {
-            "lookback_bars": 42,
-            "timeframe": "4h",
-            "rebalance_interval_hours": 24,
-            "top_n": 2,
-            "total_allocation_pct": 20.0,
-        },
-        "aggressive": {
-            "lookback_bars": 24,
-            "timeframe": "1h",
-            "rebalance_interval_hours": 12,
-            "top_n": 3,
-            "total_allocation_pct": 25.0,
-        },
-    }
-
     def __init__(self, base_cfg: StrategyConfig):
         super().__init__(base_cfg)
         params = base_cfg.params or {}
-        risk_profile = str(params.get("risk_profile", "balanced")).lower()
-        preset = self.PROFILE_PRESETS.get(risk_profile, self.PROFILE_PRESETS["balanced"])
-
         pairs_param = params.get("pairs") or ["BTC/USD", "ETH/USD"]
         pairs = list(pairs_param) if isinstance(pairs_param, list) else [str(pairs_param)]
 
         self.params = RelativeStrengthConfig(
             pairs=pairs,
-            lookback_bars=max(int(params.get("lookback_bars", preset["lookback_bars"])), 2),
-            timeframe=str(params.get("timeframe", preset["timeframe"])),
-            rebalance_interval_hours=max(
-                int(params.get("rebalance_interval_hours", preset["rebalance_interval_hours"])), 1
-            ),
-            top_n=max(int(params.get("top_n", preset["top_n"])), 1),
-            total_allocation_pct=max(
-                float(params.get("total_allocation_pct", preset["total_allocation_pct"])), 0.0
-            ),
-            risk_profile=risk_profile,
+            lookback_bars=max(int(params.get("lookback_bars", 24)), 2),
+            timeframe=params.get("timeframe", "4h"),
+            rebalance_interval_hours=max(int(params.get("rebalance_interval_hours", 24)), 1),
+            top_n=max(int(params.get("top_n", 2)), 1),
+            total_allocation_pct=max(float(params.get("total_allocation_pct", 10.0)), 0.0),
         )
         self._last_rebalance: Optional[datetime] = None
 

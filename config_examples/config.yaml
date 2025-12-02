@@ -135,7 +135,6 @@ strategies:
       type: "relative_strength"
       enabled: false
       params:
-        risk_profile: "balanced"
         pairs: ["BTC/USD", "ETH/USD", "SOL/USD", "ADA/USD"]
         lookback_bars: 42
         timeframe: "4h"
