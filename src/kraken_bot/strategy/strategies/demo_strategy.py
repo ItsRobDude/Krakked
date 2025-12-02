@@ -1,7 +1,7 @@
 # src/kraken_bot/strategy/strategies/demo_strategy.py
 
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from kraken_bot.config import StrategyConfig
 from kraken_bot.strategy.base import Strategy, StrategyContext
@@ -73,7 +73,7 @@ class TrendFollowingStrategy(Strategy):
         if hasattr(ctx.portfolio, "app_config") and getattr(ctx.portfolio.app_config, "risk", None):
             min_liquidity = ctx.portfolio.app_config.risk.min_liquidity_24h_usd
 
-        positions = []
+        positions: List[Any] = []
         if hasattr(ctx.portfolio, "get_positions"):
             positions = ctx.portfolio.get_positions() or []
 

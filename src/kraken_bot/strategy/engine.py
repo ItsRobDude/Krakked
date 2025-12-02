@@ -16,6 +16,7 @@ from kraken_bot.logging_config import structured_log_extra
 from .base import Strategy, StrategyContext
 from .models import DecisionRecord, ExecutionPlan, RiskAdjustedAction, RiskStatus, StrategyIntent, StrategyState
 from .risk import RiskEngine
+from .strategies.dca_rebalance import DcaRebalanceStrategy
 from .strategies.demo_strategy import TrendFollowingStrategy
 
 logger = logging.getLogger(__name__)
@@ -25,6 +26,7 @@ def _strategy_registry() -> Dict[str, Type[Strategy]]:
     """Return a mapping of strategy type identifiers to implementations."""
     return {
         "trend_following": TrendFollowingStrategy,
+        "dca_rebalance": DcaRebalanceStrategy,
     }
 
 
