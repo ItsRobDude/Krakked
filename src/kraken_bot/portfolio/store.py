@@ -219,7 +219,7 @@ def ensure_portfolio_tables(conn: sqlite3.Connection) -> None:
             side TEXT NOT NULL,
             order_type TEXT,
             kraken_order_id TEXT,
-                userref TEXT,
+            userref INTEGER,
             requested_base_size REAL,
             requested_price REAL,
             status TEXT,
@@ -364,7 +364,7 @@ class PortfolioStore(abc.ABC):
     def get_order_by_reference(
         self,
         kraken_order_id: Optional[str] = None,
-        userref: Optional[str] = None,
+        userref: Optional[int] = None,
     ) -> Optional["LocalOrder"]:
         """Lookup a stored order by Kraken id or user reference."""
         pass
@@ -889,7 +889,7 @@ class SQLitePortfolioStore(PortfolioStore):
     def get_order_by_reference(
         self,
         kraken_order_id: Optional[str] = None,
-        userref: Optional[str] = None,
+        userref: Optional[int] = None,
     ) -> Optional["LocalOrder"]:
         from kraken_bot.execution.models import LocalOrder
 
@@ -936,6 +936,13 @@ class SQLitePortfolioStore(PortfolioStore):
         raw_request = json.loads(row[16]) if row[16] else {}
         raw_response = json.loads(row[17]) if row[17] else None
 
+        db_userref = row[7]
+        if db_userref is None:
+            normalized_userref: Optional[int] = None
+        else:
+            # Handles INTEGER columns and legacy TEXT "42" values
+            normalized_userref = int(db_userref)
+
         return LocalOrder(
             local_id=row[0],
             plan_id=row[1],
@@ -944,7 +951,7 @@ class SQLitePortfolioStore(PortfolioStore):
             side=row[4],
             order_type=row[5],
             kraken_order_id=row[6],
-            userref=row[7],
+            userref=normalized_userref,
             requested_base_size=row[8] or 0.0,
             requested_price=row[9],
             status=row[10] or "pending",
@@ -1118,7 +1125,7 @@ class SQLitePortfolioStore(PortfolioStore):
                     side=row[4],
                     order_type=row[5],
                     kraken_order_id=row[6],
-                    userref=row[7],
+                    userref=int(row[7]) if row[7] is not None else None,
                     requested_base_size=row[8] or 0.0,
                     requested_price=row[9],
                     status=row[10] or "pending",
