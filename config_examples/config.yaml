@@ -60,7 +60,7 @@ risk:
   max_open_positions: 10
   max_per_asset_pct: 5.0
   max_per_strategy_pct:
-    trend_core: 35.0
+    trend_core: 40.0
     dca_overlay: 20.0
     vol_breakout: 20.0
     majors_mean_rev: 15.0
@@ -74,6 +74,7 @@ risk:
 strategies:
   enabled:
     - "trend_core"
+    - "dca_overlay"
   configs:
     trend_core:
       name: "trend_core"
@@ -89,8 +90,18 @@ strategies:
     dca_overlay:
       name: "dca_overlay"
       type: "dca_rebalance"
-      enabled: false
-      params: { }
+      enabled: true
+      userref: 2002
+      params:
+        pairs:
+          - "BTC/USD"
+          - "ETH/USD"
+        target_weights:
+          "BTC/USD": 0.6
+          "ETH/USD": 0.4
+        rebalance_threshold_pct: 5.0
+        dca_interval_minutes: 1440
+        dca_notional_usd: 50.0
     vol_breakout:
       name: "vol_breakout"
       type: "vol_breakout"
