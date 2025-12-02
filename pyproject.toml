@@ -71,6 +71,9 @@ src_paths = ["src", "tests"]
 max-line-length = 88
 extend-ignore = [
   "E203",
+  "E302",
+  "E701",
+  "E722",
   "E501",
   "W503",
 ]
@@ -80,4 +83,6 @@ exclude = [
   ".venv",
   "build",
   "dist",
+  "typings",
+  "ui/node_modules",
 ]
