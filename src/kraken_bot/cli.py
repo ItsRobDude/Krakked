@@ -27,7 +27,7 @@ from kraken_bot.portfolio.store import (
     ensure_portfolio_tables,
 )
 from kraken_bot.secrets import CredentialResult, CredentialStatus
-from scripts import run_strategy_once
+from kraken_bot.scripts import run_strategy_once
 
 DEFAULT_DB_PATH = "portfolio.db"
 
