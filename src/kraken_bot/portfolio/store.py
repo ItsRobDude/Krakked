@@ -84,6 +84,24 @@ def ensure_portfolio_schema(
     return SchemaStatus(version=stored_version, migrated=migrated, initialized=initialized)
 
 
+def assert_portfolio_schema(db_path: str) -> SchemaStatus:
+    """Guard that the on-disk portfolio schema matches the current version.
+
+    No migrations are performed here; callers should run migrations explicitly via CLI
+    tooling before starting the bot. A schema ahead of code or behind the expected
+    version raises :class:`PortfolioSchemaError`.
+    """
+
+    with sqlite3.connect(db_path) as conn:
+        status = ensure_portfolio_schema(conn, CURRENT_SCHEMA_VERSION, migrate=False)
+        conn.commit()
+
+    if status.version < CURRENT_SCHEMA_VERSION:
+        raise PortfolioSchemaError(found=status.version, expected=CURRENT_SCHEMA_VERSION)
+
+    return status
+
+
 def ensure_portfolio_tables(conn: sqlite3.Connection) -> None:
     cursor = conn.cursor()
 

@@ -30,7 +30,8 @@ class PortfolioService:
         self.config = config.portfolio
         self.app_config = config  # Keep full config if needed
         self.market_data = market_data
-        self.store: PortfolioStore = SQLitePortfolioStore(db_path=db_path)
+        resolved_db_path = db_path or getattr(config.portfolio, "db_path", "portfolio.db")
+        self.store: PortfolioStore = SQLitePortfolioStore(db_path=resolved_db_path)
         self.rest_client = rest_client or KrakenRESTClient(
             rate_limiter=rate_limiter
         )  # Used for balance checks and ledger/trades fetching if not passed in
