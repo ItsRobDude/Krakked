@@ -16,10 +16,15 @@ from kraken_bot.strategy.models import RiskAdjustedAction
 def test_engine_cycle():
     # Setup Config
     strat_config = StrategyConfig(
-        name="trend_v1", type="trend_following", enabled=True,
-        params={"timeframes": ["1h"], "ma_fast": 10, "ma_slow": 20}
+        name="trend_core",
+        type="trend_following",
+        enabled=True,
+        params={"timeframes": ["1h"], "ma_fast": 10, "ma_slow": 20},
     )
-    strategies_cfg = StrategiesConfig(enabled=["trend_v1"], configs={"trend_v1": strat_config})
+    strategies_cfg = StrategiesConfig(
+        enabled=["trend_core"],
+        configs={"trend_core": strat_config},
+    )
 
     app_config = MagicMock(spec=AppConfig)
     app_config.strategies = strategies_cfg
