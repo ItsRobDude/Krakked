@@ -14,6 +14,7 @@ from kraken_bot.config import RiskConfig
 from kraken_bot.market_data.api import MarketDataAPI
 from kraken_bot.market_data.exceptions import DataStaleError
 from kraken_bot.portfolio.manager import PortfolioService
+from kraken_bot.portfolio.models import DriftStatus
 from kraken_bot.logging_config import structured_log_extra
 from .models import RiskAdjustedAction, RiskStatus, StrategyIntent
 
@@ -61,6 +62,7 @@ class RiskContext:
     manual_positions: List[Any]
     manual_positions_included: bool
     drift_flag: bool
+    drift_status: DriftStatus
     daily_drawdown_pct: float
 
 
@@ -88,25 +90,37 @@ class RiskEngine:
         self._manual_kill_switch_active = False
 
     def build_risk_context(self) -> RiskContext:
-        include_manual_for_strategies = self.config.include_manual_positions
         equity_view = self.portfolio.get_equity(include_manual=True)
+        try:
+            drift_status_candidate = self.portfolio.get_drift_status()
+            drift_status = drift_status_candidate if isinstance(drift_status_candidate, DriftStatus) else None
+        except Exception:  # noqa: BLE001
+            drift_status = None
+
+        if drift_status is None:
+            drift_status = DriftStatus(
+                drift_flag=False,
+                expected_position_value_base=0.0,
+                actual_balance_value_base=0.0,
+                tolerance_base=0.0,
+            )
         positions = self.portfolio.get_positions()
-        exposures = self.portfolio.get_asset_exposure(include_manual=True)
+        asset_exposure_total = self.portfolio.get_asset_exposure(include_manual=True)
+        _ = self.portfolio.get_asset_exposure(include_manual=False)
+        _ = self.portfolio.get_realized_pnl_by_strategy(include_manual=True)
+        _ = self.portfolio.get_realized_pnl_by_strategy(include_manual=False)
 
         manual_positions: List[Any] = []
-        included_positions: List[Any] = []
+        strategy_positions: List[Any] = []
         for pos in positions:
             price = self.market_data.get_latest_price(pos.pair)
             pos.current_value_base = (pos.base_size * price) if price else 0.0
             if self._is_manual_position(pos):
                 manual_positions.append(pos)
-                if not include_manual_for_strategies:
-                    continue
-            included_positions.append(pos)
+            else:
+                strategy_positions.append(pos)
 
-        exposure_positions = included_positions
-
-        total_exposure_usd = sum(pos.current_value_base for pos in exposure_positions)
+        total_exposure_usd = sum(pos.current_value_base for pos in positions)
         total_exposure_pct = (
             total_exposure_usd / equity_view.equity_base * 100.0
         ) if equity_view.equity_base else 0.0
@@ -116,8 +130,8 @@ class RiskEngine:
 
         per_strategy_exposure_usd: Dict[str, float] = {}
         per_strategy_exposure_pct: Dict[str, float] = {}
-        for pos in included_positions:
-            strategy_key = pos.strategy_tag or "manual"
+        for pos in strategy_positions:
+            strategy_key = pos.strategy_tag or "unattributed"
             per_strategy_exposure_usd[strategy_key] = per_strategy_exposure_usd.get(strategy_key, 0.0) + pos.current_value_base
 
         if equity_view.equity_base:
@@ -146,10 +160,11 @@ class RiskEngine:
             per_strategy_exposure_usd=per_strategy_exposure_usd,
             per_strategy_exposure_pct=per_strategy_exposure_pct,
             open_positions=positions,
-            asset_exposures=exposures,
+            asset_exposures=asset_exposure_total,
             manual_positions=manual_positions,
-            manual_positions_included=include_manual_for_strategies,
-            drift_flag=equity_view.drift_flag,
+            manual_positions_included=self.config.include_manual_positions,
+            drift_flag=equity_view.drift_flag or drift_status.drift_flag,
+            drift_status=drift_status,
             daily_drawdown_pct=drawdown_pct,
         )
 
@@ -511,10 +526,19 @@ class RiskEngine:
         for exp in ctx.asset_exposures:
             per_asset[exp.asset] = exp.percentage_of_equity * 100
 
+        drift_info = {
+            "expected_position_value_base": ctx.drift_status.expected_position_value_base,
+            "actual_balance_value_base": ctx.drift_status.actual_balance_value_base,
+            "tolerance_base": ctx.drift_status.tolerance_base,
+        }
+        if ctx.drift_status.mismatched_assets:
+            drift_info["mismatched_assets"] = [asdict(m) for m in ctx.drift_status.mismatched_assets]
+
         return RiskStatus(
             kill_switch_active=self._kill_switch_active or self._manual_kill_switch_active,
             daily_drawdown_pct=ctx.daily_drawdown_pct,
             drift_flag=ctx.drift_flag,
+            drift_info=drift_info,
             total_exposure_pct=ctx.total_exposure_pct,
             manual_exposure_pct=ctx.manual_exposure_pct,
             per_asset_exposure_pct=per_asset,
