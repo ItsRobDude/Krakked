@@ -536,13 +536,12 @@ class Portfolio:
     def _realized_pnl_by_strategy(self, include_manual: bool) -> Dict[str, float]:
         realized_by_strategy: Dict[str, float] = defaultdict(float)
         for record in self.realized_pnl_history:
-            strategy_tag = record.strategy_tag or "manual"
-            if self._is_manual_tag(strategy_tag):
+            if self._is_manual_tag(record.strategy_tag):
                 if not include_manual:
                     continue
                 strategy_key = "manual"
             else:
-                strategy_key = strategy_tag
+                strategy_key = cast(str, record.strategy_tag)
 
             realized_by_strategy[strategy_key] += record.pnl_quote
 
