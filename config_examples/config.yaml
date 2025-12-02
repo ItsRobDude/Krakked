@@ -60,11 +60,7 @@ risk:
   max_open_positions: 10
   max_per_asset_pct: 5.0
   max_per_strategy_pct:
-    trend_core: 40.0
-    dca_overlay: 20.0
-    vol_breakout: 20.0
-    majors_mean_rev: 15.0
-    rs_rotation: 10.0
+    vol_breakout: 10.0
   max_daily_drawdown_pct: 10.0
   kill_switch_on_drift: true
   include_manual_positions: true
@@ -73,50 +69,33 @@ risk:
 
 strategies:
   enabled:
-    - "trend_core"
-    - "dca_overlay"
+    - "momentum"
+    - "vol_breakout"
   configs:
-    trend_core:
-      name: "trend_core"
-      type: "trend_following"
+    momentum:
+      name: "momentum"
+      type: "example"
       enabled: true
       params:
-        timeframes:
-          - "1h"
-        ma_fast: 20
-        ma_slow: 50
-        min_confidence: 0.5
+        lookback_bars: 48
+        threshold_bps: 15
       userref: 101
-    dca_overlay:
-      name: "dca_overlay"
-      type: "dca_rebalance"
-      enabled: true
-      userref: 2002
+
+    vol_breakout:
+      name: "vol_breakout"
+      type: "vol_breakout"
+      enabled: false   # off by default; user can turn on later
       params:
         pairs:
           - "BTC/USD"
           - "ETH/USD"
-        target_weights:
-          "BTC/USD": 0.6
-          "ETH/USD": 0.4
-        rebalance_threshold_pct: 5.0
-        dca_interval_minutes: 1440
-        dca_notional_usd: 50.0
-    vol_breakout:
-      name: "vol_breakout"
-      type: "vol_breakout"
-      enabled: false
-      params: { }
-    majors_mean_rev:
-      name: "majors_mean_rev"
-      type: "mean_reversion"
-      enabled: false
-      params: { }
-    rs_rotation:
-      name: "rs_rotation"
-      type: "relative_strength"
-      enabled: false
-      params: { }
+        timeframes:
+          - "15m"
+          - "1h"
+        lookback_bars: 20
+        min_compression_bps: 10.0
+        breakout_multiple: 1.5
+      userref: 102
 
 ui:
   enabled: true
