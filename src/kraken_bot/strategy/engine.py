@@ -17,6 +17,8 @@ from .base import Strategy, StrategyContext
 from .models import DecisionRecord, ExecutionPlan, RiskAdjustedAction, RiskStatus, StrategyIntent, StrategyState
 from .risk import RiskEngine
 from .strategies.demo_strategy import TrendFollowingStrategy
+from .strategies.dca_rebalance import DcaRebalanceStrategy
+from .strategies.mean_reversion import MeanReversionStrategy
 from .strategies.vol_breakout import VolBreakoutStrategy
 
 logger = logging.getLogger(__name__)
@@ -26,6 +28,8 @@ def _strategy_registry() -> Dict[str, Type[Strategy]]:
     """Return a mapping of strategy type identifiers to implementations."""
     return {
         "trend_following": TrendFollowingStrategy,
+        "dca_rebalance": DcaRebalanceStrategy,
+        "mean_reversion": MeanReversionStrategy,
         "vol_breakout": VolBreakoutStrategy,
     }
 

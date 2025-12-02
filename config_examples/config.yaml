@@ -60,7 +60,11 @@ risk:
   max_open_positions: 10
   max_per_asset_pct: 5.0
   max_per_strategy_pct:
+    trend_core: 40.0
+    dca_overlay: 20.0
     vol_breakout: 10.0
+    majors_mean_rev: 10.0
+    manual: 20.0
   max_daily_drawdown_pct: 10.0
   kill_switch_on_drift: true
   include_manual_positions: true
@@ -69,33 +73,61 @@ risk:
 
 strategies:
   enabled:
-    - "momentum"
+    - "trend_core"
+    - "dca_overlay"
     - "vol_breakout"
+    - "majors_mean_rev"
   configs:
-    momentum:
-      name: "momentum"
-      type: "example"
+    trend_core:
+      name: "trend_core"
+      type: "trend_following"
       enabled: true
       params:
-        lookback_bars: 48
-        threshold_bps: 15
-      userref: 101
+        risk_profile: "balanced"
+        timeframes: ["1h", "4h"]
+        ma_fast: 10
+        ma_slow: 20
+        regime_timeframe: "1d"
+        min_trend_strength_bps: 15
+      userref: 1001
+
+    dca_overlay:
+      name: "dca_overlay"
+      type: "dca_rebalance"
+      enabled: true
+      params:
+        pairs: ["BTC/USD", "ETH/USD"]
+        target_weights:
+          "BTC/USD": 0.6
+          "ETH/USD": 0.4
+        rebalance_threshold_pct: 5.0
+        dca_interval_minutes: 240
+        dca_notional_usd: 100.0
+      userref: 1002
 
     vol_breakout:
       name: "vol_breakout"
       type: "vol_breakout"
       enabled: false   # off by default; user can turn on later
       params:
-        pairs:
-          - "BTC/USD"
-          - "ETH/USD"
-        timeframes:
-          - "15m"
-          - "1h"
+        pairs: ["BTC/USD", "ETH/USD"]
+        timeframes: ["15m", "1h"]
         lookback_bars: 20
         min_compression_bps: 10.0
         breakout_multiple: 1.5
-      userref: 102
+      userref: 1003
+
+    majors_mean_rev:
+      name: "majors_mean_rev"
+      type: "mean_reversion"
+      enabled: false
+      params:
+        pairs: ["BTC/USD", "ETH/USD"]
+        timeframe: "1h"
+        lookback_bars: 50
+        band_width_bps: 150
+        max_positions: 2
+      userref: 1004
 
 ui:
   enabled: true
