@@ -281,6 +281,13 @@ p {
   color: var(--text-muted);
 }
 
+.risk-config__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+}
+
 .panel__hint {
   margin: 0;
   color: var(--text-muted);
