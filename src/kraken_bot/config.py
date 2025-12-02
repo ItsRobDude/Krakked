@@ -9,6 +9,8 @@ from typing import Any, Dict, List, Optional
 import appdirs  # type: ignore[import-untyped]
 import yaml  # type: ignore[import-untyped]
 
+from kraken_bot.strategy.catalog import CANONICAL_STRATEGIES
+
 @dataclass
 class RegionCapabilities:
     supports_margin: bool
@@ -274,18 +276,6 @@ def load_config(config_path: Optional[Path] = None, env: Optional[str] = None) -
             extra={"event": "config_invalid_risk", "config_path": str(config_path)},
         )
         risk_data = {}
-    risk_config = RiskConfig(
-        max_risk_per_trade_pct=risk_data.get("max_risk_per_trade_pct", 1.0),
-        max_portfolio_risk_pct=risk_data.get("max_portfolio_risk_pct", 10.0),
-        max_open_positions=risk_data.get("max_open_positions", 10),
-        max_per_asset_pct=risk_data.get("max_per_asset_pct", 5.0),
-        max_per_strategy_pct=risk_data.get("max_per_strategy_pct", {}),
-        max_daily_drawdown_pct=risk_data.get("max_daily_drawdown_pct", 10.0),
-        kill_switch_on_drift=risk_data.get("kill_switch_on_drift", True),
-        include_manual_positions=risk_data.get("include_manual_positions", True),
-        volatility_lookback_bars=risk_data.get("volatility_lookback_bars", 20),
-        min_liquidity_24h_usd=risk_data.get("min_liquidity_24h_usd", 100000.0)
-    )
 
     # Parsing Strategies Config
     strategies_data = raw_config.get("strategies") or {}
@@ -295,7 +285,7 @@ def load_config(config_path: Optional[Path] = None, env: Optional[str] = None) -
             extra={"event": "config_invalid_strategies", "config_path": str(config_path)},
         )
         strategies_data = {}
-    strategy_configs = {}
+    strategy_configs: Dict[str, StrategyConfig] = {}
 
     # Process 'configs' section
     raw_strategy_configs = strategies_data.get("configs") or {}
@@ -305,22 +295,53 @@ def load_config(config_path: Optional[Path] = None, env: Optional[str] = None) -
             extra={"event": "config_invalid_strategy_configs", "config_path": str(config_path)},
         )
         raw_strategy_configs = {}
-    for name, cfg in raw_strategy_configs.items():
+    for config_key, cfg in raw_strategy_configs.items():
         if not isinstance(cfg, dict):
             logger.warning(
                 "Strategy config is not a mapping; skipping entry",
                 extra={
                     "event": "config_invalid_strategy_entry",
                     "config_path": str(config_path),
-                    "strategy": name,
+                    "strategy": config_key,
                 },
             )
             continue
         # Copy cfg to avoid modifying the original dictionary during pop
         cfg_copy = cfg.copy()
 
-        # Extract known fields
-        s_type = cfg_copy.pop("type", "unknown")
+        cfg_name = cfg_copy.pop("name", config_key)
+        if cfg_name != config_key:
+            logger.warning(
+                "Strategy name '%s' does not match key '%s'; using key as canonical id",
+                cfg_name,
+                config_key,
+                extra={
+                    "event": "config_strategy_name_mismatch",
+                    "config_path": str(config_path),
+                    "strategy_key": config_key,
+                    "strategy_name": cfg_name,
+                },
+            )
+            cfg_name = config_key
+
+        canonical_def = CANONICAL_STRATEGIES.get(cfg_name)
+        s_type = cfg_copy.pop("type", canonical_def.type if canonical_def else "unknown")
+        if canonical_def and s_type != canonical_def.type:
+            logger.warning(
+                "Strategy %s type '%s' does not match canonical '%s'; forcing canonical type",
+                cfg_name,
+                s_type,
+                canonical_def.type,
+                extra={
+                    "event": "config_strategy_type_mismatch",
+                    "config_path": str(config_path),
+                    "strategy_id": cfg_name,
+                    "strategy_type": s_type,
+                    "canonical_type": canonical_def.type,
+                },
+            )
+            s_type = canonical_def.type
+
         # In the config file, 'enabled' might be on the specific strategy config
         # or just inferred from the global enabled list. We'll support both, defaulting to True here
         # and checking the global list separately if needed, or assume the global list drives execution.
@@ -332,17 +353,75 @@ def load_config(config_path: Optional[Path] = None, env: Optional[str] = None) -
         # The rest are params
         params = cfg_copy
 
-        strategy_configs[name] = StrategyConfig(
-            name=name,
+        strategy_configs[cfg_name] = StrategyConfig(
+            name=cfg_name,
             type=s_type,
             enabled=s_enabled,
             userref=userref,
             params=params
         )
 
+    raw_enabled = strategies_data.get("enabled", [])
+    if not isinstance(raw_enabled, list):
+        logger.warning(
+            "Enabled strategies should be a list; defaulting to empty",
+            extra={"event": "config_invalid_strategy_enabled", "config_path": str(config_path)},
+        )
+        raw_enabled = []
+
+    normalized_enabled: List[str] = []
+    for strategy_id in raw_enabled:
+        if strategy_id not in strategy_configs:
+            logger.warning(
+                "Enabled strategy %s has no matching config; skipping",
+                strategy_id,
+                extra={
+                    "event": "config_unknown_strategy_enabled",
+                    "config_path": str(config_path),
+                    "strategy_id": strategy_id,
+                },
+            )
+            continue
+        normalized_enabled.append(strategy_id)
+
     strategies_config = StrategiesConfig(
-        enabled=strategies_data.get("enabled", []),
+        enabled=normalized_enabled,
         configs=strategy_configs
+    )
+
+    raw_strategy_limits = risk_data.get("max_per_strategy_pct", {})
+    if not isinstance(raw_strategy_limits, dict):
+        logger.warning(
+            "max_per_strategy_pct should be a mapping; defaulting to empty",
+            extra={"event": "config_invalid_strategy_limits", "config_path": str(config_path)},
+        )
+        raw_strategy_limits = {}
+
+    normalized_limits: Dict[str, float] = {}
+    for strategy_id, pct_limit in raw_strategy_limits.items():
+        if strategy_id not in strategy_configs:
+            logger.warning(
+                "Risk limit references unknown strategy %s; skipping", strategy_id,
+                extra={
+                    "event": "config_unknown_strategy_limit",
+                    "config_path": str(config_path),
+                    "strategy_id": strategy_id,
+                },
+            )
+            continue
+        normalized_limits[strategy_id] = pct_limit
+
+    risk_config = RiskConfig(
+        max_risk_per_trade_pct=risk_data.get("max_risk_per_trade_pct", 1.0),
+        max_portfolio_risk_pct=risk_data.get("max_portfolio_risk_pct", 10.0),
+        max_open_positions=risk_data.get("max_open_positions", 10),
+        max_per_asset_pct=risk_data.get("max_per_asset_pct", 5.0),
+        max_per_strategy_pct=normalized_limits,
+        max_daily_drawdown_pct=risk_data.get("max_daily_drawdown_pct", 10.0),
+        kill_switch_on_drift=risk_data.get("kill_switch_on_drift", True),
+        include_manual_positions=risk_data.get("include_manual_positions", True),
+        volatility_lookback_bars=risk_data.get("volatility_lookback_bars", 20),
+        min_liquidity_24h_usd=risk_data.get("min_liquidity_24h_usd", 100000.0)
     )
 
     universe_data = raw_config.get("universe") or {}

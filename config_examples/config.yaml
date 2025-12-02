@@ -59,7 +59,12 @@ risk:
   max_portfolio_risk_pct: 10.0
   max_open_positions: 10
   max_per_asset_pct: 5.0
-  max_per_strategy_pct: {}
+  max_per_strategy_pct:
+    trend_core: 35.0
+    dca_overlay: 20.0
+    vol_breakout: 20.0
+    majors_mean_rev: 15.0
+    rs_rotation: 10.0
   max_daily_drawdown_pct: 10.0
   kill_switch_on_drift: true
   include_manual_positions: true
@@ -68,16 +73,39 @@ risk:
 
 strategies:
   enabled:
-    - "momentum"
+    - "trend_core"
   configs:
-    momentum:
-      name: "momentum"
-      type: "example"
+    trend_core:
+      name: "trend_core"
+      type: "trend_following"
       enabled: true
       params:
-        lookback_bars: 48
-        threshold_bps: 15
+        timeframes:
+          - "1h"
+        ma_fast: 20
+        ma_slow: 50
+        min_confidence: 0.5
       userref: 101
+    dca_overlay:
+      name: "dca_overlay"
+      type: "dca_rebalance"
+      enabled: false
+      params: { }
+    vol_breakout:
+      name: "vol_breakout"
+      type: "vol_breakout"
+      enabled: false
+      params: { }
+    majors_mean_rev:
+      name: "majors_mean_rev"
+      type: "mean_reversion"
+      enabled: false
+      params: { }
+    rs_rotation:
+      name: "rs_rotation"
+      type: "relative_strength"
+      enabled: false
+      params: { }
 
 ui:
   enabled: true

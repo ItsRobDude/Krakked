@@ -7,7 +7,7 @@ from kraken_bot.portfolio.models import SpotPosition
 
 @dataclass
 class StrategyIntent:
-    strategy_id: str           # e.g. "trend_following_v1"
+    strategy_id: str           # e.g. "trend_core"
     pair: str                  # canonical pair, e.g. "XBTUSD"
     side: str                  # "long" | "flat"
     intent_type: str           # "enter" | "exit" | "increase" | "reduce" | "hold"
