@@ -56,6 +56,28 @@ jobs:
       - name: Lint
         run: poetry run flake8 src tests
 
+  pre-commit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Poetry
+        uses: snok/install-poetry@v1
+        with:
+          version: 2.2.1
+          virtualenvs-in-project: true
+
+      - name: Install dependencies
+        run: poetry install --no-interaction --no-ansi --with dev --extras tui
+
+      - name: Run pre-commit (all files)
+        run: poetry run pre-commit run --all-files
+
   static-typing:
     runs-on: ubuntu-latest
     strategy:
@@ -102,7 +124,7 @@ jobs:
 
   package:
     runs-on: ubuntu-latest
-    needs: [tests, lint, static-typing]
+    needs: [tests, lint, static-typing, pre-commit]
     steps:
       - uses: actions/checkout@v4
 

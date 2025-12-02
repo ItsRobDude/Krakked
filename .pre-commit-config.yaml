@@ -1,0 +1,28 @@
+minimum_pre_commit_version: '3.0.0'
+repos:
+  - repo: local
+    hooks:
+      - id: black
+        name: black
+        entry: poetry run black
+        language: system
+        types: [python]
+        require_serial: true
+      - id: isort
+        name: isort
+        entry: poetry run isort
+        language: system
+        types: [python]
+        require_serial: true
+      - id: flake8
+        name: flake8
+        entry: poetry run flake8
+        language: system
+        types: [python]
+      - id: mypy
+        name: mypy
+        entry: poetry run mypy
+        language: system
+        types: [python]
+        pass_filenames: false
+        args: ["src", "tests"]
