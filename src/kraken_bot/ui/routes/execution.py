@@ -29,7 +29,8 @@ def _serialize_order(order: LocalOrder) -> OpenOrderPayload:
         side=order.side,
         order_type=order.order_type,
         kraken_order_id=order.kraken_order_id,
-        userref=order.userref,
+        # Convert int -> str for the API schema
+        userref=str(order.userref) if order.userref is not None else None,
         requested_base_size=order.requested_base_size,
         requested_price=order.requested_price,
         status=order.status,

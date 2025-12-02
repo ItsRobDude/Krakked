@@ -14,7 +14,8 @@ class LocalOrder:
     side: str
     order_type: str
     kraken_order_id: Optional[str] = None
-    userref: Optional[str] = None
+    # Kraken userref is conceptually an integer; keep it int in the core model.
+    userref: Optional[int] = None
     requested_base_size: float = 0.0
     requested_price: Optional[float] = None
     status: str = "pending"
