@@ -201,7 +201,7 @@ def ensure_portfolio_tables(conn: sqlite3.Connection) -> None:
             side TEXT NOT NULL,
             order_type TEXT,
             kraken_order_id TEXT,
-            userref INTEGER,
+                userref TEXT,
             requested_base_size REAL,
             requested_price REAL,
             status TEXT,
@@ -346,7 +346,7 @@ class PortfolioStore(abc.ABC):
     def get_order_by_reference(
         self,
         kraken_order_id: Optional[str] = None,
-        userref: Optional[int] = None,
+        userref: Optional[str] = None,
     ) -> Optional["LocalOrder"]:
         """Lookup a stored order by Kraken id or user reference."""
         pass
@@ -870,7 +870,7 @@ class SQLitePortfolioStore(PortfolioStore):
     def get_order_by_reference(
         self,
         kraken_order_id: Optional[str] = None,
-        userref: Optional[int] = None,
+        userref: Optional[str] = None,
     ) -> Optional["LocalOrder"]:
         from kraken_bot.execution.models import LocalOrder
 

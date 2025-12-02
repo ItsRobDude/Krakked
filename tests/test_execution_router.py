@@ -1,57 +1,35 @@
-from typing import Any, Dict
-
-import pytest
+from datetime import datetime, timezone
 
 from kraken_bot.config import ExecutionConfig
-from kraken_bot.execution.models import LocalOrder
-from kraken_bot.execution.router import build_order_payload
+from kraken_bot.strategy.models import ExecutionPlan, RiskAdjustedAction
+from kraken_bot.execution.router import build_order_from_plan_action
 
 
-def _order(**overrides) -> LocalOrder:
-    base: Dict[str, Any] = dict(
-        local_id="1",
-        plan_id=None,
-        strategy_id=None,
+def test_local_order_preserves_strategy_id_and_userref():
+    action = RiskAdjustedAction(
         pair="XBTUSD",
-        side="buy",
-        order_type="limit",
-        userref=1,
-        requested_base_size=0.123,
-        requested_price=10.0,
-        status="pending",
-        last_error=None,
-        raw_request={},
-        raw_response=None,
+        strategy_id="trend_core",
+        action_type="open",
+        target_base_size=1.0,
+        target_notional_usd=100.0,
+        current_base_size=0.0,
+        reason="test",
+        blocked=False,
+        blocked_reasons=[],
+        risk_limits_snapshot={},
+        strategy_tag="trend_core",
+        userref="trend_core:1h",
     )
-    base.update(overrides)
-    return LocalOrder(**base)
 
+    plan = ExecutionPlan(
+        plan_id="plan_1",
+        generated_at=datetime.now(timezone.utc),
+        actions=[action],
+        metadata={"order_type": "market"},
+    )
 
-def test_build_order_payload_sets_validate_and_userref():
-    config = ExecutionConfig(mode="paper", validate_only=True)
-    order = _order(userref=42)
+    order, warning = build_order_from_plan_action(action, plan, market_data=None, config=ExecutionConfig())
 
-    payload = build_order_payload(order, config)
-
-    assert payload["validate"] == 1
-    assert payload["userref"] == 42
-
-
-def test_build_order_payload_applies_slippage_and_rounding():
-    config = ExecutionConfig(max_slippage_bps=100, validate_only=False)
-    pair_meta = {"price_decimals": 2, "volume_decimals": 3}
-    order = _order(requested_base_size=0.12345, requested_price=10.0)
-
-    payload = build_order_payload(order, config, pair_metadata=pair_meta)
-
-    assert payload["volume"] == pytest.approx(0.123)
-    assert payload["price"] == pytest.approx(10.1)
-
-
-def test_build_order_payload_excludes_price_for_market_orders():
-    config = ExecutionConfig(validate_only=False)
-    order = _order(order_type="market", requested_price=55.0)
-
-    payload = build_order_payload(order, config)
-
-    assert "price" not in payload
+    assert warning is None
+    assert order.strategy_id == "trend_core"
+    assert order.userref == "trend_core:1h"

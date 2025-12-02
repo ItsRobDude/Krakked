@@ -110,8 +110,47 @@ def test_risk_engine_sizing():
     # Allow some floating point variance
     assert 490 < action.target_notional_usd < 510
     assert not action.blocked
-    assert action.userref == 42
+    assert action.userref == "42"
     assert action.strategy_tag == "trend_v1"
+
+
+def test_userref_falls_back_to_strategy_id_when_missing_mapping():
+    config = RiskConfig()
+
+    market = MagicMock(spec=MarketDataAPI)
+    market.get_latest_price.return_value = 100.0
+    market.get_pair_metadata.return_value = MagicMock(liquidity_24h_usd=1_000_000.0)
+
+    portfolio = MagicMock(spec=PortfolioService)
+    portfolio.get_equity.return_value = EquityView(
+        equity_base=10000.0,
+        cash_base=10000.0,
+        realized_pnl_base_total=0,
+        unrealized_pnl_base_total=0,
+        drift_flag=False,
+    )
+    portfolio.get_positions.return_value = []
+    portfolio.get_asset_exposure.return_value = []
+    portfolio.get_realized_pnl_by_strategy.return_value = {}
+    portfolio.store = MagicMock()
+    portfolio.store.get_snapshots.return_value = []
+
+    engine = RiskEngine(config, market, portfolio, strategy_tags={"alpha": "alpha"})
+
+    intent = StrategyIntent(
+        strategy_id="alpha",
+        pair="XBTUSD",
+        side="long",
+        intent_type="enter",
+        desired_exposure_usd=500.0,
+        confidence=1.0,
+        timeframe="1h",
+        generated_at=datetime.now(timezone.utc),
+    )
+
+    action = engine.process_intents([intent])[0]
+
+    assert action.userref.startswith("alpha")
 
 def test_kill_switch_drawdown():
     config = RiskConfig(max_daily_drawdown_pct=5.0)

@@ -35,7 +35,18 @@ class PortfolioService:
             rate_limiter=rate_limiter
         )  # Used for balance checks and ledger/trades fetching if not passed in
 
-        self.portfolio = Portfolio(self.config, self.market_data, self.store)
+        strategy_tags = {cfg.name: cfg.name for cfg in config.strategies.configs.values()}
+        userref_to_strategy = {
+            str(cfg.userref): cfg.name for cfg in config.strategies.configs.values() if cfg.userref is not None
+        }
+
+        self.portfolio = Portfolio(
+            self.config,
+            self.market_data,
+            self.store,
+            strategy_tags=strategy_tags,
+            userref_to_strategy=userref_to_strategy,
+        )
         self._bootstrapped = False
 
     def initialize(self):

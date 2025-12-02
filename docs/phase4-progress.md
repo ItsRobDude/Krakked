@@ -9,5 +9,5 @@ Short checklist mapped to key contract sections for fast traceability.
 - [x] Market data staleness handling blocks decisions (aligns with §3 dependencies on `MarketDataAPI.get_data_status()` and §9.5 integration tests).
 
 ## Remaining before Phase 5
-- [ ] Richer manual-position attribution so strategy vs. manual PnL stays distinct (aligns with §3 Phase 3 dependency on `RealizedPnLRecord.strategy_tag`).
-- [ ] Propagate strategy userref/tag details through to execution plans for OMS handoff (aligns with §10 strategy tagging expectations for Phase 5).
+- [x] Richer manual-position attribution so strategy vs. manual PnL stays distinct (aligns with §3 Phase 3 dependency on `RealizedPnLRecord.strategy_tag`).
+- [x] Propagate strategy userref/tag details through to execution plans for OMS handoff (aligns with §10 strategy tagging expectations for Phase 5).

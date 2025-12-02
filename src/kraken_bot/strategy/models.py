@@ -29,7 +29,7 @@ class RiskAdjustedAction:
     blocked: bool                     # true if action is blocked by risk limits
     blocked_reasons: List[str]        # list of violated limits, if any
     strategy_tag: Optional[str] = None
-    userref: Optional[int] = None
+    userref: Optional[str] = None
     risk_limits_snapshot: Dict[str, Any] = field(default_factory=dict) # config values, equity, etc.
 
 @dataclass
@@ -62,6 +62,7 @@ class RiskStatus:
     manual_exposure_pct: float
     per_asset_exposure_pct: Dict[str, float]
     per_strategy_exposure_pct: Dict[str, float]
+    drift_info: Optional[Dict[str, Any]] = None
 
 @dataclass
 class StrategyState:
