@@ -70,3 +70,4 @@ class StrategyState:
     last_actions_at: Optional[datetime]
     current_positions: List[SpotPosition]     # positions attributable to this strategy
     pnl_summary: Dict[str, float]             # high-level from PortfolioService
+    params: Dict[str, Any] = field(default_factory=dict)
