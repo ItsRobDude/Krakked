@@ -178,7 +178,7 @@ def build_order_from_plan_action(
         pair=action.pair,
         side=side,
         order_type=order_type,
-        userref=action.userref,
+        userref=int(action.userref) if action.userref is not None else None,
         requested_base_size=volume,
         requested_price=requested_price,
     )

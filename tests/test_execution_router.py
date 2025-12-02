@@ -18,7 +18,7 @@ def test_local_order_preserves_strategy_id_and_userref():
         blocked_reasons=[],
         risk_limits_snapshot={},
         strategy_tag="trend_core",
-        userref="trend_core:1h",
+        userref=42,
     )
 
     plan = ExecutionPlan(
@@ -32,4 +32,4 @@ def test_local_order_preserves_strategy_id_and_userref():
 
     assert warning is None
     assert order.strategy_id == "trend_core"
-    assert order.userref == "trend_core:1h"
+    assert order.userref == 42
