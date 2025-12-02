@@ -71,6 +71,7 @@ src_paths = ["src", "tests"]
 max-line-length = 88
 extend-ignore = [
   "E203",
+  "E701",
   "E501",
   "W503",
 ]
