@@ -38,6 +38,19 @@ export type RiskStatus = {
   per_strategy_exposure_pct: Record<string, number>;
 };
 
+export type RiskConfig = {
+  max_risk_per_trade_pct: number;
+  max_portfolio_risk_pct: number;
+  max_open_positions: number;
+  max_per_asset_pct: number;
+  max_per_strategy_pct: Record<string, number>;
+  max_daily_drawdown_pct: number;
+  kill_switch_on_drift: boolean;
+  include_manual_positions: boolean;
+  volatility_lookback_bars: number;
+  min_liquidity_24h_usd: number;
+};
+
 export type RecentExecution = {
   plan_id: string;
   started_at: string;
@@ -158,6 +171,17 @@ export async function fetchSystemMetrics(): Promise<SystemMetrics | null> {
 
 export async function fetchStrategies(): Promise<StrategyState[] | null> {
   return fetchJson<StrategyState[]>('/strategies');
+}
+
+export async function fetchRiskConfig(): Promise<RiskConfig | null> {
+  return fetchJson<RiskConfig>('/risk/config');
+}
+
+export async function updateRiskConfig(patch: Partial<RiskConfig>): Promise<RiskConfig | null> {
+  return fetchJson<RiskConfig>('/risk/config', {
+    method: 'PATCH',
+    body: JSON.stringify(patch),
+  });
 }
 
 export async function setStrategyEnabled(id: string, enabled: boolean): Promise<void> {

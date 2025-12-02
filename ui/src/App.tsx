@@ -15,15 +15,18 @@ import {
   fetchRecentExecutions,
   fetchSystemHealth,
   fetchStrategies,
+  fetchRiskConfig,
   getRiskStatus,
   ExposureBreakdown,
   PortfolioSummary,
   PositionPayload,
+  RiskConfig,
   RiskStatus,
   RecentExecution,
   StrategyRiskProfile,
   StrategyState,
   SystemHealth,
+  updateRiskConfig,
   setKillSwitch,
   patchStrategyConfig,
   setStrategyEnabled,
@@ -128,6 +131,9 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
   const [risk, setRisk] = useState<RiskStatus | null>(null);
   const [riskBusy, setRiskBusy] = useState(false);
   const [riskFeedback, setRiskFeedback] = useState<{ tone: 'info' | 'error' | 'success'; message: string } | null>(null);
+  const [riskConfig, setRiskConfig] = useState<RiskConfig | null>(null);
+  const [riskConfigBusy, setRiskConfigBusy] = useState(false);
+  const [riskConfigError, setRiskConfigError] = useState<string | null>(null);
   const [strategies, setStrategies] = useState<StrategyState[]>([]);
   const [strategyRisk, setStrategyRisk] = useState<Record<string, StrategyRiskProfile>>({});
   const [strategyBusy, setStrategyBusy] = useState<Set<string>>(new Set());
@@ -184,6 +190,22 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
     return () => {
       cancelled = true;
       clearInterval(interval);
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadRiskConfig = async () => {
+      const config = await fetchRiskConfig();
+      if (cancelled) return;
+      if (config) setRiskConfig(config);
+    };
+
+    loadRiskConfig();
+
+    return () => {
+      cancelled = true;
     };
   }, []);
 
@@ -320,6 +342,35 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
     }
   };
 
+  const handlePerStrategyBudgetChange = async (strategyId: string, valuePct: number) => {
+    if (health?.ui_read_only) {
+      setRiskConfigError('Backend is read-only. Risk config changes are disabled.');
+      return;
+    }
+
+    if (!riskConfig) return;
+
+    const nextMap = {
+      ...riskConfig.max_per_strategy_pct,
+      [strategyId]: valuePct,
+    };
+
+    setRiskConfig({ ...riskConfig, max_per_strategy_pct: nextMap });
+    setRiskConfigBusy(true);
+    setRiskConfigError(null);
+
+    const updated = await updateRiskConfig({ max_per_strategy_pct: nextMap });
+
+    if (!updated) {
+      setRiskConfigError('Unable to update risk config. Restored prior values.');
+      setRiskConfig(riskConfig);
+    } else {
+      setRiskConfig(updated);
+    }
+
+    setRiskConfigBusy(false);
+  };
+
   const handleRiskProfileChange = async (strategyId: string, profile: StrategyRiskProfile) => {
     if (health?.ui_read_only) {
       setStrategyFeedback('Backend is read-only. Strategy controls are disabled.');
@@ -396,6 +447,35 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
       </section>
 
       <RiskPanel status={risk} readOnly={Boolean(health?.ui_read_only)} busy={riskBusy} onToggle={handleToggleKillSwitch} feedback={riskFeedback} />
+
+      {riskConfig ? (
+        <section className="panel">
+          <div className="panel__header">
+            <h2>Risk budgets</h2>
+            {riskConfigBusy ? <span className="pill pill--info">Saving…</span> : null}
+          </div>
+          <p className="panel__description">
+            Per-strategy maximum share of portfolio risk. Changes apply immediately.
+          </p>
+
+          {riskConfigError ? <p className="field__error">{riskConfigError}</p> : null}
+
+          <div className="risk-config__grid">
+            {Object.entries(riskConfig.max_per_strategy_pct).map(([strategyId, pct]) => (
+              <div key={strategyId} className="field">
+                <label>{strategyId}</label>
+                <input
+                  type="number"
+                  min={0}
+                  max={100}
+                  value={pct}
+                  onChange={(e) => handlePerStrategyBudgetChange(strategyId, Number(e.target.value))}
+                />
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : null}
 
       <StrategiesPanel
         strategies={strategies}
