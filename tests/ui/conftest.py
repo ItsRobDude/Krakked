@@ -27,7 +27,9 @@ from kraken_bot.ui.api import create_api
 from kraken_bot.ui.context import AppContext
 
 
-def _build_app_config(*, auth_enabled: bool, auth_token: str, read_only: bool) -> AppConfig:
+def _build_app_config(
+    *, auth_enabled: bool, auth_token: str, read_only: bool
+) -> AppConfig:
     """Create a lightweight in-memory :class:`AppConfig` for UI tests."""
 
     region = RegionProfile(
@@ -46,7 +48,11 @@ def _build_app_config(*, auth_enabled: bool, auth_token: str, read_only: bool) -
             include_pairs=[], exclude_pairs=[], min_24h_volume_usd=0.0
         ),
         market_data=MarketDataConfig(
-            ws={}, ohlc_store={}, backfill_timeframes=[], ws_timeframes=[], metadata_path=None
+            ws={},
+            ohlc_store={},
+            backfill_timeframes=[],
+            ws_timeframes=[],
+            metadata_path=None,
         ),
         portfolio=PortfolioConfig(),
         execution=ExecutionConfig(),
@@ -108,7 +114,9 @@ def _mock_risk_status() -> SimpleNamespace:
     )
 
 
-def build_test_context(*, auth_enabled: bool, auth_token: str, read_only: bool) -> AppContext:
+def build_test_context(
+    *, auth_enabled: bool, auth_token: str, read_only: bool
+) -> AppContext:
     """Construct an :class:`AppContext` populated with mocked services."""
 
     config = _build_app_config(
@@ -176,7 +184,9 @@ def ui_read_only(request: pytest.FixtureRequest) -> bool:
 
 
 @pytest.fixture
-def mock_context(ui_auth_enabled: bool, ui_auth_token: str, ui_read_only: bool) -> AppContext:
+def mock_context(
+    ui_auth_enabled: bool, ui_auth_token: str, ui_read_only: bool
+) -> AppContext:
     """Construct a mocked :class:`AppContext` for UI API tests."""
 
     return build_test_context(

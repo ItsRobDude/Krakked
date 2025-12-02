@@ -39,6 +39,9 @@ mypy = "^1.18.2"
 httpx = { version = ">=0.28.1,<0.29.0" }
 pyright = ">=1.1.380,<2.0"
 flake8 = "^7.3.0"
+black = "^24.8.0"
+isort = "^5.13.0"
+pre-commit = "^3.7.0"
 
 [build-system]
 requires = ["poetry-core>=1.0.0"]
@@ -53,3 +56,28 @@ pythonpath = [
 python_version = "3.11"
 mypy_path = ["src", "typings"]
 exclude = ["build", "dist"]
+
+[tool.black]
+line-length = 88
+target-version = ["py311"]
+include = "src/|tests/"
+
+[tool.isort]
+profile = "black"
+line_length = 88
+src_paths = ["src", "tests"]
+
+[tool.flake8]
+max-line-length = 88
+extend-ignore = [
+  "E203",
+  "E501",
+  "W503",
+]
+exclude = [
+  ".git",
+  "__pycache__",
+  ".venv",
+  "build",
+  "dist",
+]

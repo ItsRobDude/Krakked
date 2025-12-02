@@ -1,5 +1,6 @@
 # src/kraken_bot/execution/exceptions.py
 
+
 class ExecutionError(Exception):
     """Base exception for execution and OMS related errors."""
 

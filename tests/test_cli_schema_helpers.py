@@ -27,7 +27,9 @@ def test_run_migrate_db_initializes_blank_db(tmp_path):
     assert status.version == CURRENT_SCHEMA_VERSION
 
     with sqlite3.connect(db_path) as conn:
-        row = conn.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()
+        row = conn.execute(
+            "SELECT value FROM meta WHERE key = 'schema_version'"
+        ).fetchone()
 
     assert row is not None
     assert int(row[0]) == CURRENT_SCHEMA_VERSION
@@ -45,7 +47,9 @@ def test_run_migrate_db_upgrades_outdated_schema(tmp_path):
     assert status.version == CURRENT_SCHEMA_VERSION
 
     with sqlite3.connect(db_path) as conn:
-        row = conn.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()
+        row = conn.execute(
+            "SELECT value FROM meta WHERE key = 'schema_version'"
+        ).fetchone()
 
     assert row is not None
     assert int(row[0]) == CURRENT_SCHEMA_VERSION
@@ -63,7 +67,9 @@ def test_print_schema_version_reports_existing_version(tmp_path):
     assert status.initialized is False
 
     with sqlite3.connect(db_path) as conn:
-        row = conn.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()
+        row = conn.execute(
+            "SELECT value FROM meta WHERE key = 'schema_version'"
+        ).fetchone()
 
     assert row is not None
     assert int(row[0]) == prior_version
@@ -78,7 +84,9 @@ def test_print_schema_version_initializes_missing_meta(tmp_path):
     assert status.version == CURRENT_SCHEMA_VERSION
 
     with sqlite3.connect(db_path) as conn:
-        row = conn.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()
+        row = conn.execute(
+            "SELECT value FROM meta WHERE key = 'schema_version'"
+        ).fetchone()
 
     assert row is not None
     assert int(row[0]) == CURRENT_SCHEMA_VERSION

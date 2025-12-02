@@ -1,25 +1,26 @@
 # src/kraken_bot/secrets.py
 
-import os
-import json
-import getpass
 import base64
-from enum import Enum
+import getpass
+import json
+import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from enum import Enum
+
 from cryptography.fernet import Fernet, InvalidToken
+from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-from cryptography.hazmat.backends import default_backend
 
 from kraken_bot.config import get_config_dir
-from kraken_bot.connection.rest_client import KrakenRESTClient
 from kraken_bot.connection.exceptions import (
     AuthError,
+    KrakenAPIError,
     RateLimitError,
     ServiceUnavailableError,
-    KrakenAPIError,
 )
+from kraken_bot.connection.rest_client import KrakenRESTClient
 
 # --- Constants ---
 SECRETS_FILE_NAME = "secrets.enc"
@@ -66,11 +67,15 @@ class CredentialResult:
     validation_error: str | None = None
     error: Exception | None = None
 
+
 class SecretsDecryptionError(Exception):
     """Raised when decryption fails (wrong password or corrupted file)."""
+
     pass
 
+
 # --- Cryptographic Helpers ---
+
 
 def _derive_key(password: str, salt: bytes) -> bytes:
     """Derives a Fernet-compatible key from a password and salt."""
@@ -79,9 +84,10 @@ def _derive_key(password: str, salt: bytes) -> bytes:
         length=32,
         salt=salt,
         iterations=_KDF_ITERATIONS,
-        backend=default_backend()
+        backend=default_backend(),
     )
     return base64.urlsafe_b64encode(kdf.derive(password.encode()))
+
 
 def encrypt_secrets(
     api_key: str,
@@ -127,6 +133,7 @@ def encrypt_secrets(
         f.write(salt + encrypted_data)
     secrets_path.chmod(0o600)
 
+
 def _decrypt_secrets(password: str) -> dict:
     """Loads and decrypts secrets from the file."""
     secrets_path = get_config_dir() / SECRETS_FILE_NAME
@@ -146,9 +153,13 @@ def _decrypt_secrets(password: str) -> dict:
         decrypted_data = fernet.decrypt(encrypted_data)
         return json.loads(decrypted_data)
     except InvalidToken as e:
-        raise SecretsDecryptionError("Invalid password or corrupted secrets file.") from e
+        raise SecretsDecryptionError(
+            "Invalid password or corrupted secrets file."
+        ) from e
+
 
 # --- First-Time Setup ---
+
 
 def _interactive_setup() -> CredentialResult:
     """
@@ -181,12 +192,18 @@ def _interactive_setup() -> CredentialResult:
         )
     except (RateLimitError, ServiceUnavailableError, KrakenAPIError) as e:
         print(f"\nCould not validate credentials due to a service/network issue: {e}")
-        save_unvalidated = input(
-            "Validation failed due to service issues. Save credentials unvalidated anyway? (y/N): "
-        ).strip().lower()
+        save_unvalidated = (
+            input(
+                "Validation failed due to service issues. Save credentials unvalidated anyway? (y/N): "
+            )
+            .strip()
+            .lower()
+        )
         if save_unvalidated.startswith("y"):
             while True:
-                password = getpass.getpass("Create a master password to encrypt your keys: ")
+                password = getpass.getpass(
+                    "Create a master password to encrypt your keys: "
+                )
                 password_confirm = getpass.getpass("Confirm master password: ")
                 if password == password_confirm:
                     break
@@ -322,6 +339,7 @@ def persist_api_keys(
 
 # --- Core Credential Loading ---
 
+
 def load_api_keys(allow_interactive_setup: bool = False) -> CredentialResult:
     """
     Loads API keys, following a specific priority, and returns a structured result
@@ -348,7 +366,9 @@ def load_api_keys(allow_interactive_setup: bool = False) -> CredentialResult:
 
     if api_key and api_secret:
         print("Loaded API keys from environment variables.")
-        return CredentialResult(api_key, api_secret, CredentialStatus.LOADED, source="environment")
+        return CredentialResult(
+            api_key, api_secret, CredentialStatus.LOADED, source="environment"
+        )
 
     secrets_path = get_config_dir() / SECRETS_FILE_NAME
     if secrets_path.exists():
@@ -367,7 +387,9 @@ def load_api_keys(allow_interactive_setup: bool = False) -> CredentialResult:
                 validation_error=message,
             )
 
-        password = env_password or getpass.getpass("Enter master password to decrypt API keys: ")
+        password = env_password or getpass.getpass(
+            "Enter master password to decrypt API keys: "
+        )
         try:
             secrets = _decrypt_secrets(password)
             print("Loaded API keys from encrypted file.")
@@ -392,7 +414,13 @@ def load_api_keys(allow_interactive_setup: bool = False) -> CredentialResult:
             )
         except Exception as e:
             print(f"Error loading secrets: {e}")
-            return CredentialResult(None, None, CredentialStatus.SERVICE_ERROR, source="secrets_file", error=e)
+            return CredentialResult(
+                None,
+                None,
+                CredentialStatus.SERVICE_ERROR,
+                source="secrets_file",
+                error=e,
+            )
 
     if allow_interactive_setup:
         return _interactive_setup()

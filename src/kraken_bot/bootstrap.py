@@ -6,8 +6,8 @@ from typing import Tuple
 from kraken_bot.config import AppConfig, load_config
 from kraken_bot.connection.rate_limiter import RateLimiter
 from kraken_bot.connection.rest_client import KrakenRESTClient
-from kraken_bot.secrets import CredentialResult, CredentialStatus, load_api_keys
 from kraken_bot.safety import check_safety, log_safety_status
+from kraken_bot.secrets import CredentialResult, CredentialStatus, load_api_keys
 
 logger = logging.getLogger(__name__)
 
@@ -21,13 +21,15 @@ def _validate_credentials(result: CredentialResult) -> Tuple[str, str]:
 
     if result.status is CredentialStatus.MISSING_PASSWORD:
         raise CredentialBootstrapError(
-            "Encrypted credentials are locked; set KRAKEN_BOT_SECRET_PW to the master password."
+            "Encrypted credentials are locked; set KRAKEN_BOT_SECRET_PW to the master "
+            "password."
         )
 
     if result.status is not CredentialStatus.LOADED:
         detail = result.validation_error or result.status.value
         raise CredentialBootstrapError(
-            f"Unable to load Kraken API credentials ({result.status.value}): {detail}"
+            "Unable to load Kraken API credentials "
+            f"({result.status.value}): {detail}"
         )
 
     if not result.api_key or not result.api_secret:

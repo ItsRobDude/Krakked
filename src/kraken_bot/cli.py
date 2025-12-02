@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import argparse
-from datetime import datetime
-from pathlib import Path
 import shutil
 import sqlite3
 import sys
+from datetime import datetime
+from pathlib import Path
 from typing import Callable
 
 from kraken_bot import secrets
@@ -26,8 +26,8 @@ from kraken_bot.portfolio.store import (
     ensure_portfolio_schema,
     ensure_portfolio_tables,
 )
-from kraken_bot.secrets import CredentialResult, CredentialStatus
 from kraken_bot.scripts import run_strategy_once
+from kraken_bot.secrets import CredentialResult, CredentialStatus
 
 DEFAULT_DB_PATH = "portfolio.db"
 
@@ -72,7 +72,10 @@ def _smoke_test_command(args: argparse.Namespace) -> int:
     if credential_result.status == CredentialStatus.MISSING_PASSWORD:
         print(
             credential_result.validation_error
-            or "Encrypted credentials are locked; set KRAKEN_BOT_SECRET_PW to the master password."
+            or (
+                "Encrypted credentials are locked; set KRAKEN_BOT_SECRET_PW to the "
+                "master password."
+            )
         )
         return 1
 
@@ -112,9 +115,7 @@ def _get_schema_version(db_path: str) -> int | None:
 
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
-    cursor.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='meta'"
-    )
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='meta'")
     has_meta = cursor.fetchone() is not None
 
     if not has_meta:
@@ -138,9 +139,7 @@ def run_migrate_db(db_path: str) -> SchemaStatus:
     """Run migrations for the SQLite portfolio store at ``db_path``."""
 
     with sqlite3.connect(db_path) as conn:
-        status = ensure_portfolio_schema(
-            conn, CURRENT_SCHEMA_VERSION, migrate=True
-        )
+        status = ensure_portfolio_schema(conn, CURRENT_SCHEMA_VERSION, migrate=True)
         ensure_portfolio_tables(conn)
         conn.commit()
 
@@ -151,9 +150,7 @@ def print_schema_version(db_path: str) -> SchemaStatus:
     """Ensure metadata exists and return the stored portfolio schema version."""
 
     with sqlite3.connect(db_path) as conn:
-        status = ensure_portfolio_schema(
-            conn, CURRENT_SCHEMA_VERSION, migrate=False
-        )
+        status = ensure_portfolio_schema(conn, CURRENT_SCHEMA_VERSION, migrate=False)
         conn.commit()
 
     return status
@@ -169,14 +166,16 @@ def _migrate_db_command(args: argparse.Namespace) -> int:
     except PortfolioSchemaError as exc:
         return _print_error(
             "Migration failed: "
-            f"stored schema version value {exc.found} is incompatible with expected {exc.expected}."
+            "stored schema version value {exc.found} is incompatible with "
+            f"expected {exc.expected}."
         )
     except Exception as exc:  # noqa: BLE001
         return _print_error(f"Migration failed: {exc}")
 
     version_text = stored_version if stored_version is not None else "unknown"
     print(
-        f"Stored schema version: {version_text}; target version: {CURRENT_SCHEMA_VERSION}"
+        "Stored schema version: "
+        f"{version_text}; target version: {CURRENT_SCHEMA_VERSION}"
     )
 
     try:
@@ -184,7 +183,8 @@ def _migrate_db_command(args: argparse.Namespace) -> int:
     except PortfolioSchemaError as exc:
         return _print_error(
             "Migration failed: "
-            f"stored schema version {exc.found} is incompatible with expected {exc.expected}."
+            "stored schema version {exc.found} is incompatible with "
+            f"expected {exc.expected}."
         )
     except Exception as exc:  # noqa: BLE001
         return _print_error(f"Migration failed: {exc}")
@@ -203,7 +203,8 @@ def _schema_version_command(args: argparse.Namespace) -> int:
     except PortfolioSchemaError as exc:
         return _print_error(
             "Failed to read schema version: "
-            f"stored value {exc.found} is incompatible with expected {exc.expected}."
+            "stored value {exc.found} is incompatible with expected "
+            f"{exc.expected}."
         )
     except Exception as exc:  # noqa: BLE001
         return _print_error(f"Failed to read schema version: {exc}")
@@ -284,7 +285,8 @@ def _db_info_command(args: argparse.Namespace) -> int:
     except PortfolioSchemaError as exc:
         return _print_error(
             "Failed to read schema version: "
-            f"stored value {exc.found} is incompatible with expected {exc.expected}."
+            "stored value {exc.found} is incompatible with expected "
+            f"{exc.expected}."
         )
     except sqlite3.OperationalError as exc:
         return _print_error(f"Failed to read schema version: {exc}")

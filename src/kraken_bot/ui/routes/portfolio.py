@@ -27,7 +27,9 @@ def _context(request: Request):
     return request.app.state.context
 
 
-def _build_position_payload(position: SpotPosition, price: float | None) -> PositionPayload:
+def _build_position_payload(
+    position: SpotPosition, price: float | None
+) -> PositionPayload:
     current_value: float | None = None
     unrealized: float | None = None
 
@@ -82,7 +84,9 @@ async def get_positions(request: Request) -> ApiEnvelope[List[PositionPayload]]:
             except Exception:
                 logger.debug(
                     "Price lookup failed",
-                    extra=build_request_log_extra(request, event="price_lookup_failed", pair=position.pair),
+                    extra=build_request_log_extra(
+                        request, event="price_lookup_failed", pair=position.pair
+                    ),
                 )
             positions.append(_build_position_payload(position, price))
 
@@ -179,7 +183,9 @@ async def create_snapshot(request: Request) -> ApiEnvelope[Dict[str, Any]]:
         snapshot = ctx.portfolio.create_snapshot()
         logger.info(
             "Created manual snapshot",
-            extra=build_request_log_extra(request, event="snapshot_created", timestamp=snapshot.timestamp),
+            extra=build_request_log_extra(
+                request, event="snapshot_created", timestamp=snapshot.timestamp
+            ),
         )
         data = {
             "timestamp": snapshot.timestamp,

@@ -21,18 +21,17 @@ class ExecutionAdapter(Protocol):
     client: KrakenRESTClient
     config: ExecutionConfig
 
-    def submit_order(self, order: LocalOrder) -> LocalOrder:
-        ...
+    def submit_order(self, order: LocalOrder) -> LocalOrder: ...
 
-    def cancel_order(self, order: LocalOrder) -> None:
-        ...
+    def cancel_order(self, order: LocalOrder) -> None: ...
 
-    def cancel_all_orders(self) -> None:
-        ...
+    def cancel_all_orders(self) -> None: ...
 
 
 class KrakenExecutionAdapter:
-    def __init__(self, client: KrakenRESTClient, config: Optional[ExecutionConfig] = None):
+    def __init__(
+        self, client: KrakenRESTClient, config: Optional[ExecutionConfig] = None
+    ):
         self.client = client
         self.config = config or ExecutionConfig()
 
@@ -61,9 +60,7 @@ class KrakenExecutionAdapter:
             notional = float(payload["volume"]) * float(price_for_notional)
             if notional < self.config.min_order_notional_usd:
                 order.status = "rejected"
-                order.last_error = (
-                    f"Order notional ${notional:.2f} below minimum ${self.config.min_order_notional_usd:.2f}"
-                )
+                order.last_error = f"Order notional ${notional:.2f} below minimum ${self.config.min_order_notional_usd:.2f}"
                 logger.error(
                     order.last_error,
                     extra=structured_log_extra(
@@ -89,7 +86,9 @@ class KrakenExecutionAdapter:
                 payload["expiretm"] = f"+{self.config.dead_man_switch_seconds}"
                 if hasattr(self.client, "cancel_all_orders_after"):
                     try:
-                        self.client.cancel_all_orders_after(self.config.dead_man_switch_seconds)
+                        self.client.cancel_all_orders_after(
+                            self.config.dead_man_switch_seconds
+                        )
                         logger.info(
                             "Dead man switch heartbeat set",
                             extra=structured_log_extra(
@@ -97,7 +96,9 @@ class KrakenExecutionAdapter:
                                 timeout_seconds=self.config.dead_man_switch_seconds,
                             ),
                         )
-                    except Exception as exc:  # pragma: no cover - passthrough for client errors
+                    except (
+                        Exception
+                    ) as exc:  # pragma: no cover - passthrough for client errors
                         logger.warning(
                             "Failed to refresh dead man switch heartbeat",
                             extra=structured_log_extra(
@@ -121,7 +122,9 @@ class KrakenExecutionAdapter:
                         event="dead_man_switch_skipped",
                         mode=self.config.mode,
                         validate_only=self.config.validate_only,
-                        allow_live_trading=getattr(self.config, "allow_live_trading", False),
+                        allow_live_trading=getattr(
+                            self.config, "allow_live_trading", False
+                        ),
                     ),
                 )
 
@@ -167,7 +170,9 @@ class KrakenExecutionAdapter:
                     )
                     raise ExecutionError(f"Failed to submit order: {exc}") from exc
 
-                sleep_seconds = backoff_seconds * (self.config.retry_backoff_factor ** (attempts - 1))
+                sleep_seconds = backoff_seconds * (
+                    self.config.retry_backoff_factor ** (attempts - 1)
+                )
                 logger.warning(
                     "Transient error submitting order; retrying",
                     extra=structured_log_extra(
@@ -297,9 +302,7 @@ class PaperExecutionAdapter:
             notional = float(payload["volume"]) * float(price_for_notional)
             if notional < self.config.min_order_notional_usd:
                 order.status = "rejected"
-                order.last_error = (
-                    f"Order notional ${notional:.2f} below minimum ${self.config.min_order_notional_usd:.2f}"
-                )
+                order.last_error = f"Order notional ${notional:.2f} below minimum ${self.config.min_order_notional_usd:.2f}"
                 logger.error(
                     order.last_error,
                     extra=structured_log_extra(

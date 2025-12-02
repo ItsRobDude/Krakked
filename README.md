@@ -102,6 +102,21 @@ If you are working outside Poetry, you can still get an editable install from th
 pip install -e .[tui]
 ```
 
+### 🔄 Pre-commit hooks
+
+Consistent formatting and linting are enforced by `pre-commit`. The CI workflow runs `poetry run pre-commit run --all-files` and will fail if hooks are not clean, so install them locally to avoid churn:
+
+```bash
+pip install pre-commit
+pre-commit install
+```
+
+Run the full suite locally any time with:
+
+```bash
+poetry run pre-commit run --all-files
+```
+
 ## ⚙️ Configuration
 
 The bot uses two configuration files stored in your OS-specific user configuration directory (handled via `appdirs`). Example files live in `config_examples/`, and the overlay/merging rules are documented in [`docs/CONFIG.md`](docs/CONFIG.md).

@@ -25,7 +25,11 @@ class MeanReversionStrategy(Strategy):
         super().__init__(base_cfg)
         params = base_cfg.params or {}
         pairs_param = params.get("pairs") or ["BTC/USD", "ETH/USD"]
-        pairs = list(pairs_param) if isinstance(pairs_param, list) else ["BTC/USD", "ETH/USD"]
+        pairs = (
+            list(pairs_param)
+            if isinstance(pairs_param, list)
+            else ["BTC/USD", "ETH/USD"]
+        )
         self.params = MeanReversionConfig(
             pairs=pairs,
             timeframe=params.get("timeframe", "1h"),
@@ -48,11 +52,15 @@ class MeanReversionStrategy(Strategy):
         pairs = self.params.pairs or ctx.universe
 
         positions = ctx.portfolio.get_positions() or []
-        positions_by_pair = {pos.pair: pos for pos in positions if getattr(pos, "base_size", 0) > 0}
+        positions_by_pair = {
+            pos.pair: pos for pos in positions if getattr(pos, "base_size", 0) > 0
+        }
         open_positions_count = self._count_open_positions(positions_by_pair.values())
 
         for pair in pairs:
-            ohlc = ctx.market_data.get_ohlc(pair, timeframe, lookback=self.params.lookback_bars)
+            ohlc = ctx.market_data.get_ohlc(
+                pair, timeframe, lookback=self.params.lookback_bars
+            )
             if not ohlc or len(ohlc) < self.params.lookback_bars:
                 continue
 

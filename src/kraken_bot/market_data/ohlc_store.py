@@ -1,25 +1,29 @@
 # src/kraken_bot/market_data/ohlc_store.py
 
-from typing import Protocol, List
-from pathlib import Path
-import pandas as pd
 import logging
-from kraken_bot.config import OHLCBar, MarketDataConfig, get_default_ohlc_store_config
+from pathlib import Path
+from typing import List, Protocol
+
+import pandas as pd
+
+from kraken_bot.config import MarketDataConfig, OHLCBar, get_default_ohlc_store_config
 
 logger = logging.getLogger(__name__)
+
 
 class OHLCStore(Protocol):
     """
     An interface for a time-series data store for OHLC bars.
     """
-    def append_bars(self, pair: str, timeframe: str, bars: List[OHLCBar]) -> None:
-        ...
 
-    def get_bars(self, pair: str, timeframe: str, lookback: int) -> List[OHLCBar]:
-        ...
+    def append_bars(self, pair: str, timeframe: str, bars: List[OHLCBar]) -> None: ...
 
-    def get_bars_since(self, pair: str, timeframe: str, since_ts: int) -> List[OHLCBar]:
-        ...
+    def get_bars(self, pair: str, timeframe: str, lookback: int) -> List[OHLCBar]: ...
+
+    def get_bars_since(
+        self, pair: str, timeframe: str, since_ts: int
+    ) -> List[OHLCBar]: ...
+
 
 class FileOHLCStore:
     """
@@ -27,6 +31,7 @@ class FileOHLCStore:
 
     The directory structure is: <root_dir>/<timeframe>/<pair>.parquet
     """
+
     def __init__(self, config: MarketDataConfig):
         default_config = get_default_ohlc_store_config()
         user_config = config.ohlc_store or {}
@@ -37,7 +42,9 @@ class FileOHLCStore:
         store_config = {**default_config, **user_config}
 
         if "root_dir" not in store_config:
-            raise ValueError("FileOHLCStore requires a 'root_dir' in the market_data.ohlc_store config.")
+            raise ValueError(
+                "FileOHLCStore requires a 'root_dir' in the market_data.ohlc_store config."
+            )
 
         self.root_dir = Path(store_config["root_dir"]).expanduser()
         self.backend = store_config.get("backend", "parquet")
@@ -45,7 +52,9 @@ class FileOHLCStore:
         self.root_dir.mkdir(parents=True, exist_ok=True)
 
         if self.backend not in ["parquet"]:
-            raise ValueError(f"Unsupported file backend: {self.backend}. Only 'parquet' is supported.")
+            raise ValueError(
+                f"Unsupported file backend: {self.backend}. Only 'parquet' is supported."
+            )
 
         logger.info(f"Initialized FileOHLCStore with root directory: {self.root_dir}")
 
@@ -69,14 +78,16 @@ class FileOHLCStore:
                 existing_df = pd.read_parquet(file_path)
                 combined_df = pd.concat([existing_df, new_df])
                 # Remove duplicates, keeping the last entry
-                combined_df = combined_df[~combined_df.index.duplicated(keep='last')]
+                combined_df = combined_df[~combined_df.index.duplicated(keep="last")]
                 combined_df.to_parquet(file_path)
                 logger.debug(f"Appended {len(new_df)} bars to {file_path}")
             except Exception as e:
                 logger.error(f"Error reading or writing to {file_path}: {e}")
         else:
             new_df.to_parquet(file_path)
-            logger.info(f"Created new OHLC store at {file_path} with {len(new_df)} bars.")
+            logger.info(
+                f"Created new OHLC store at {file_path} with {len(new_df)} bars."
+            )
 
     def get_bars(self, pair: str, timeframe: str, lookback: int) -> List[OHLCBar]:
         """Retrieves the last N (lookback) bars from the store."""
@@ -88,7 +99,7 @@ class FileOHLCStore:
             df = pd.read_parquet(file_path)
             # Ensure the data is sorted by timestamp before taking the last N rows
             df = df.sort_index().tail(lookback)
-            return [OHLCBar(**row) for row in df.reset_index().to_dict('records')]
+            return [OHLCBar(**row) for row in df.reset_index().to_dict("records")]
         except Exception as e:
             logger.error(f"Error reading from {file_path}: {e}")
             return []
@@ -102,7 +113,7 @@ class FileOHLCStore:
         try:
             df = pd.read_parquet(file_path)
             df = df[df.index >= since_ts].sort_index()
-            return [OHLCBar(**row) for row in df.reset_index().to_dict('records')]
+            return [OHLCBar(**row) for row in df.reset_index().to_dict("records")]
         except Exception as e:
             logger.error(f"Error reading from {file_path}: {e}")
             return []

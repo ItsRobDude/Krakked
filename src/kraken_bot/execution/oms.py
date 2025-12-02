@@ -1,17 +1,17 @@
 # src/kraken_bot/execution/oms.py
 
 import logging
-from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 from uuid import uuid4
-
-from kraken_bot.strategy.models import ExecutionPlan
-from kraken_bot.logging_config import structured_log_extra
 
 from kraken_bot.config import ExecutionConfig
 from kraken_bot.connection.rate_limiter import RateLimiter
-from kraken_bot.market_data.api import MarketDataAPI
 from kraken_bot.connection.rest_client import KrakenRESTClient
+from kraken_bot.logging_config import structured_log_extra
+from kraken_bot.market_data.api import MarketDataAPI
+from kraken_bot.strategy.models import ExecutionPlan
+
 from .adapter import ExecutionAdapter, get_execution_adapter
 from .exceptions import ExecutionError
 from .models import ExecutionResult, LocalOrder
@@ -89,9 +89,7 @@ class ExecutionService:
           later reconciliation via :meth:`refresh_open_orders` or
           :meth:`reconcile_orders`.
         """
-        result = ExecutionResult(
-            plan_id=plan.plan_id, started_at=datetime.now(UTC)
-        )
+        result = ExecutionResult(plan_id=plan.plan_id, started_at=datetime.now(UTC))
 
         adapter_config = getattr(self.adapter, "config", None)
         if adapter_config is None:
@@ -324,7 +322,9 @@ class ExecutionService:
             if self.store:
                 self.store.save_order(order)
 
-            result.errors.append(order.last_error or "execution concurrency limit reached")
+            result.errors.append(
+                order.last_error or "execution concurrency limit reached"
+            )
             result.orders.append(order)
 
         result.completed_at = datetime.now(UTC)
@@ -373,13 +373,17 @@ class ExecutionService:
             return []
         return self.recent_executions[-limit:]
 
-    def record_execution_result(self, result: ExecutionResult, max_records: int = 100) -> None:
+    def record_execution_result(
+        self, result: ExecutionResult, max_records: int = 100
+    ) -> None:
         """Append a completed execution result to the in-memory buffer."""
         self.recent_executions.append(result)
         if len(self.recent_executions) > max_records:
             self.recent_executions = self.recent_executions[-max_records:]
 
-    def update_order_status(self, local_id: str, status: str, kraken_order_id: Optional[str] = None) -> None:
+    def update_order_status(
+        self, local_id: str, status: str, kraken_order_id: Optional[str] = None
+    ) -> None:
         """Update the status of a tracked order and mirror the Kraken mapping."""
         order = self.open_orders.get(local_id)
         if not order:
@@ -408,7 +412,9 @@ class ExecutionService:
 
     def refresh_open_orders(self) -> None:
         """Pull open orders from Kraken and reconcile with local state."""
-        userrefs = {o.userref for o in self.open_orders.values() if o.userref is not None}
+        userrefs = {
+            o.userref for o in self.open_orders.values() if o.userref is not None
+        }
         params = {"userref": ",".join(str(u) for u in userrefs)} if userrefs else None
 
         try:
@@ -429,7 +435,9 @@ class ExecutionService:
         for kraken_id, payload in (remote.get("closed") or {}).items():
             self._sync_remote_order(kraken_id, payload, is_closed=True)
 
-    def _sync_remote_order(self, kraken_id: str, payload: dict, is_closed: bool) -> None:
+    def _sync_remote_order(
+        self, kraken_id: str, payload: dict, is_closed: bool
+    ) -> None:
         """Update a local order based on Kraken order payload."""
         userref = payload.get("userref")
         order = self._resolve_local_order(kraken_id, userref)
@@ -444,17 +452,29 @@ class ExecutionService:
 
         vol_exec = payload.get("vol_exec")
         try:
-            order.cumulative_base_filled = float(vol_exec) if vol_exec is not None else order.cumulative_base_filled
+            order.cumulative_base_filled = (
+                float(vol_exec)
+                if vol_exec is not None
+                else order.cumulative_base_filled
+            )
         except (TypeError, ValueError):
             pass
 
         price = payload.get("price") or payload.get("price_avg")
         try:
-            order.avg_fill_price = float(price) if price is not None else order.avg_fill_price
+            order.avg_fill_price = (
+                float(price) if price is not None else order.avg_fill_price
+            )
         except (TypeError, ValueError):
             pass
 
-        if is_closed or order.status in {"canceled", "closed", "expired", "rejected", "filled"}:
+        if is_closed or order.status in {
+            "canceled",
+            "closed",
+            "expired",
+            "rejected",
+            "filled",
+        }:
             self.open_orders.pop(order.local_id, None)
 
         logger.info(
@@ -482,7 +502,9 @@ class ExecutionService:
                 raw_response=order.raw_response,
             )
 
-    def _resolve_local_order(self, kraken_id: str, userref: Optional[int]) -> Optional[LocalOrder]:
+    def _resolve_local_order(
+        self, kraken_id: str, userref: Optional[int]
+    ) -> Optional[LocalOrder]:
         """Find or reload a LocalOrder using known references."""
         local_id = self.kraken_to_local.get(kraken_id)
         if local_id and local_id in self.open_orders:
@@ -495,7 +517,9 @@ class ExecutionService:
                     return order
 
         if self.store and hasattr(self.store, "get_order_by_reference"):
-            stored_order = self.store.get_order_by_reference(kraken_order_id=kraken_id, userref=userref)
+            stored_order = self.store.get_order_by_reference(
+                kraken_order_id=kraken_id, userref=userref
+            )
             if stored_order:
                 return stored_order
 
@@ -604,7 +628,9 @@ class ExecutionService:
         """Surface a readiness checklist before enabling live trading."""
 
         config = self.adapter.config
-        config_sane = bool(config.min_order_notional_usd and config.min_order_notional_usd > 0)
+        config_sane = bool(
+            config.min_order_notional_usd and config.min_order_notional_usd > 0
+        )
         reconciliation_available = self.store is not None
 
         logger.warning(
@@ -645,11 +671,17 @@ class ExecutionService:
 
         total_limit = getattr(config, "max_total_notional_usd", None)
         if total_limit is not None and total_target_notional > total_limit:
-            risk_status = metadata.get("risk_status") if isinstance(metadata, dict) else None
+            risk_status = (
+                metadata.get("risk_status") if isinstance(metadata, dict) else None
+            )
             total_pct = None
             if isinstance(risk_status, dict):
                 total_pct = risk_status.get("total_exposure_pct")
-            pct_context = f" (current total {total_pct:.2f}% of equity)" if total_pct is not None else ""
+            pct_context = (
+                f" (current total {total_pct:.2f}% of equity)"
+                if total_pct is not None
+                else ""
+            )
             return (
                 f"Projected aggregate notional ${total_target_notional:,.2f} exceeds "
                 f"max_total_notional_usd ${total_limit:,.2f}{pct_context}"

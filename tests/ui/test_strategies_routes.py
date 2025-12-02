@@ -36,7 +36,9 @@ def test_get_strategies_enveloped(client, strategy_context):
 
 @pytest.mark.parametrize("ui_read_only", [False])
 def test_set_strategy_enabled_updates_state(client, strategy_context):
-    strategy_context.strategy_engine.strategy_states["alpha"] = SimpleNamespace(enabled=False)
+    strategy_context.strategy_engine.strategy_states["alpha"] = SimpleNamespace(
+        enabled=False
+    )
     strategy_context.config.strategies.enabled = []
 
     response = client.patch("/api/strategies/alpha/enabled", json={"enabled": True})
@@ -51,7 +53,9 @@ def test_set_strategy_enabled_updates_state(client, strategy_context):
 
 @pytest.mark.parametrize("ui_read_only", [True])
 def test_set_strategy_enabled_blocked_read_only(client, strategy_context):
-    strategy_context.strategy_engine.strategy_states["alpha"] = SimpleNamespace(enabled=False)
+    strategy_context.strategy_engine.strategy_states["alpha"] = SimpleNamespace(
+        enabled=False
+    )
 
     response = client.patch("/api/strategies/alpha/enabled", json={"enabled": True})
 

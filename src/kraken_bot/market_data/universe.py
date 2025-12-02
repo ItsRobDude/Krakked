@@ -1,11 +1,13 @@
 # src/kraken_bot/market_data/universe.py
 
-from typing import Any, Dict, List
 import logging
-from kraken_bot.config import RegionProfile, UniverseConfig, PairMetadata
+from typing import Any, Dict, List
+
+from kraken_bot.config import PairMetadata, RegionProfile, UniverseConfig
 from kraken_bot.connection.rest_client import KrakenRESTClient
 
 logger = logging.getLogger(__name__)
+
 
 def _is_valid_usd_spot_pair(
     raw_name: str, pair_data: Dict[str, Any], region_profile: RegionProfile
@@ -30,6 +32,7 @@ def _is_valid_usd_spot_pair(
         return False
 
     return True
+
 
 def _create_pair_metadata(raw_name: str, pair_data: Dict[str, Any]) -> PairMetadata:
     """
@@ -67,10 +70,9 @@ def _create_pair_metadata(raw_name: str, pair_data: Dict[str, Any]) -> PairMetad
         status=status,
     )
 
+
 def _filter_by_volume(
-    client: KrakenRESTClient,
-    pairs: List[PairMetadata],
-    min_volume: float
+    client: KrakenRESTClient, pairs: List[PairMetadata], min_volume: float
 ) -> List[PairMetadata]:
     """
     Filters a list of pairs based on their 24-hour trading volume in USD.
@@ -78,24 +80,32 @@ def _filter_by_volume(
     if not pairs:
         return []
 
-    logger.info(f"Filtering {len(pairs)} pairs by minimum 24h volume: ${min_volume:,.2f}")
+    logger.info(
+        f"Filtering {len(pairs)} pairs by minimum 24h volume: ${min_volume:,.2f}"
+    )
 
     pair_names = [p.rest_symbol for p in pairs]
     try:
         # Kraken's Ticker endpoint accepts multiple pairs, comma-separated
-        ticker_response = client.get_public("Ticker", params={"pair": ",".join(pair_names)})
+        ticker_response = client.get_public(
+            "Ticker", params={"pair": ",".join(pair_names)}
+        )
     except Exception as e:
         logger.error(f"Failed to fetch ticker data for volume filtering: {e}")
-        return pairs # Return unfiltered list on error
+        return pairs  # Return unfiltered list on error
 
     retained_pairs = []
     for pair in pairs:
         # Kraken sometimes returns the raw name, sometimes the altname/rest_symbol.
         # Check both to be safe.
-        ticker_info = ticker_response.get(pair.raw_name) or ticker_response.get(pair.rest_symbol)
+        ticker_info = ticker_response.get(pair.raw_name) or ticker_response.get(
+            pair.rest_symbol
+        )
 
         if not ticker_info:
-            logger.warning(f"Could not find ticker info for {pair.canonical}. Retaining.")
+            logger.warning(
+                f"Could not find ticker info for {pair.canonical}. Retaining."
+            )
             retained_pairs.append(pair)
             continue
 
@@ -109,10 +119,13 @@ def _filter_by_volume(
             pair.liquidity_24h_usd = volume_24h_usd
             retained_pairs.append(pair)
         else:
-            logger.debug(f"Excluding {pair.canonical} due to low volume: ${volume_24h_usd:,.2f}")
+            logger.debug(
+                f"Excluding {pair.canonical} due to low volume: ${volume_24h_usd:,.2f}"
+            )
 
     logger.info(f"{len(retained_pairs)} pairs remain after volume filtering.")
     return retained_pairs
+
 
 def build_universe(
     client: KrakenRESTClient,
@@ -144,7 +157,9 @@ def build_universe(
             metadata = _create_pair_metadata(raw_name, pair_data)
             candidate_pairs[metadata.canonical] = metadata
 
-    logger.info(f"Found {len(candidate_pairs)} candidate USD spot pairs after initial filtering.")
+    logger.info(
+        f"Found {len(candidate_pairs)} candidate USD spot pairs after initial filtering."
+    )
 
     # 3. Apply include/exclude overrides with hard validity handling
     forced_includes = set()
@@ -155,7 +170,9 @@ def build_universe(
             raw_pair_entry = raw_pairs_by_altname.get(pair)
             if raw_pair_entry:
                 raw_name_for_alt, pair_data_for_alt = raw_pair_entry
-                if _is_valid_usd_spot_pair(raw_name_for_alt, pair_data_for_alt, region_profile):
+                if _is_valid_usd_spot_pair(
+                    raw_name_for_alt, pair_data_for_alt, region_profile
+                ):
                     forced_includes.add(pair)
                     universe_after_overrides.add(pair)
                 else:
@@ -172,14 +189,20 @@ def build_universe(
         forced_includes -= excluded
         universe_after_overrides -= excluded
 
-    logger.info(f"Universe size after include/exclude overrides: {len(universe_after_overrides)}")
+    logger.info(
+        f"Universe size after include/exclude overrides: {len(universe_after_overrides)}"
+    )
 
     # Create metadata objects for the pairs that will undergo soft filtering
-    pairs_to_filter = [candidate_pairs[p] for p in universe_after_overrides if p not in forced_includes]
+    pairs_to_filter = [
+        candidate_pairs[p] for p in universe_after_overrides if p not in forced_includes
+    ]
 
     # 4. Implement 24h volume filtering (soft filter)
     if universe_config.min_24h_volume_usd > 0:
-        filtered_pairs = _filter_by_volume(client, pairs_to_filter, universe_config.min_24h_volume_usd)
+        filtered_pairs = _filter_by_volume(
+            client, pairs_to_filter, universe_config.min_24h_volume_usd
+        )
     else:
         filtered_pairs = pairs_to_filter
 

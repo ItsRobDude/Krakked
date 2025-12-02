@@ -5,12 +5,13 @@ from typing import TYPE_CHECKING, Dict, List, Optional, Union
 
 from kraken_bot.config import AppConfig
 from kraken_bot.connection.rate_limiter import RateLimiter
-from kraken_bot.market_data.api import MarketDataAPI
 from kraken_bot.connection.rest_client import KrakenRESTClient
 from kraken_bot.logging_config import structured_log_extra
+from kraken_bot.market_data.api import MarketDataAPI
+
+from .models import CashFlowRecord, PortfolioSnapshot
 from .portfolio import Portfolio
 from .store import PortfolioStore, SQLitePortfolioStore
-from .models import CashFlowRecord, PortfolioSnapshot
 
 if TYPE_CHECKING:  # pragma: no cover
     from kraken_bot.strategy.models import DecisionRecord
@@ -30,17 +31,24 @@ class PortfolioService:
         self.config = config.portfolio
         self.app_config = config  # Keep full config if needed
         self.market_data = market_data
-        resolved_db_path = db_path or getattr(config.portfolio, "db_path", "portfolio.db")
+        resolved_db_path = db_path or getattr(
+            config.portfolio, "db_path", "portfolio.db"
+        )
         self.store: PortfolioStore = SQLitePortfolioStore(
-            db_path=resolved_db_path, auto_migrate_schema=self.config.auto_migrate_schema
+            db_path=resolved_db_path,
+            auto_migrate_schema=self.config.auto_migrate_schema,
         )
         self.rest_client = rest_client or KrakenRESTClient(
             rate_limiter=rate_limiter
         )  # Used for balance checks and ledger/trades fetching if not passed in
 
-        strategy_tags = {cfg.name: cfg.name for cfg in config.strategies.configs.values()}
+        strategy_tags = {
+            cfg.name: cfg.name for cfg in config.strategies.configs.values()
+        }
         userref_to_strategy = {
-            str(cfg.userref): cfg.name for cfg in config.strategies.configs.values() if cfg.userref is not None
+            str(cfg.userref): cfg.name
+            for cfg in config.strategies.configs.values()
+            if cfg.userref is not None
         }
 
         self.portfolio = Portfolio(
@@ -166,7 +174,9 @@ class PortfolioService:
         ledger_resp = self.rest_client.get_ledgers(params=ledger_params)
         ledger_entries = ledger_resp.get("ledger", {})
 
-        cash_flow_records = self.portfolio.ingest_cashflows(ledger_entries, persist=True)
+        cash_flow_records = self.portfolio.ingest_cashflows(
+            ledger_entries, persist=True
+        )
 
         # 3. Reconcile
         self._reconcile()
@@ -193,15 +203,26 @@ class PortfolioService:
         self.store.add_decision(record)
 
     def get_decisions(
-        self, plan_id: Optional[str] = None, since: Optional[int] = None, limit: Optional[int] = None, strategy_name: Optional[str] = None
+        self,
+        plan_id: Optional[str] = None,
+        since: Optional[int] = None,
+        limit: Optional[int] = None,
+        strategy_name: Optional[str] = None,
     ) -> List["DecisionRecord"]:
-        return self.store.get_decisions(plan_id=plan_id, since=since, limit=limit, strategy_name=strategy_name)
+        return self.store.get_decisions(
+            plan_id=plan_id, since=since, limit=limit, strategy_name=strategy_name
+        )
 
     def record_execution_plan(self, plan):
         """Persist a full execution plan for downstream execution services."""
         self.store.save_execution_plan(plan)
 
-    def get_execution_plans(self, plan_id: Optional[str] = None, since: Optional[int] = None, limit: Optional[int] = None):
+    def get_execution_plans(
+        self,
+        plan_id: Optional[str] = None,
+        since: Optional[int] = None,
+        limit: Optional[int] = None,
+    ):
         return self.store.get_execution_plans(plan_id=plan_id, since=since, limit=limit)
 
     def get_execution_plan(self, plan_id: str):
@@ -250,7 +271,9 @@ class PortfolioService:
         until: Optional[int] = None,
         ascending: bool = False,
     ) -> List[Dict]:
-        return self.portfolio.get_trade_history(pair=pair, limit=limit, since=since, until=until, ascending=ascending)
+        return self.portfolio.get_trade_history(
+            pair=pair, limit=limit, since=since, until=until, ascending=ascending
+        )
 
     def get_cash_flows(
         self,
@@ -260,7 +283,9 @@ class PortfolioService:
         until: Optional[int] = None,
         ascending: bool = False,
     ) -> List[CashFlowRecord]:
-        return self.portfolio.get_cash_flows(asset=asset, limit=limit, since=since, until=until, ascending=ascending)
+        return self.portfolio.get_cash_flows(
+            asset=asset, limit=limit, since=since, until=until, ascending=ascending
+        )
 
     def get_fee_summary(self) -> Dict[str, Union[Dict[str, float], float]]:
         return self.portfolio.get_fee_summary()
@@ -268,13 +293,19 @@ class PortfolioService:
     def get_asset_exposure(self, include_manual: Optional[bool] = None):
         return self.portfolio.get_asset_exposure(include_manual=include_manual)
 
-    def get_realized_pnl_by_strategy(self, include_manual: Optional[bool] = None) -> Dict[str, float]:
-        return self.portfolio.get_realized_pnl_by_strategy(include_manual=include_manual)
+    def get_realized_pnl_by_strategy(
+        self, include_manual: Optional[bool] = None
+    ) -> Dict[str, float]:
+        return self.portfolio.get_realized_pnl_by_strategy(
+            include_manual=include_manual
+        )
 
     def create_snapshot(self) -> PortfolioSnapshot:
         return self.portfolio.snapshot()
 
-    def get_snapshots(self, since: Optional[int] = None, limit: Optional[int] = None) -> List[PortfolioSnapshot]:
+    def get_snapshots(
+        self, since: Optional[int] = None, limit: Optional[int] = None
+    ) -> List[PortfolioSnapshot]:
         return self.portfolio.get_snapshots(since=since, limit=limit)
 
     def get_latest_snapshot(self) -> Optional[PortfolioSnapshot]:

@@ -1,7 +1,8 @@
 from datetime import datetime
-import pytest
 from types import SimpleNamespace
 from unittest.mock import MagicMock
+
+import pytest
 
 from kraken_bot.config import RiskConfig
 from kraken_bot.market_data.exceptions import DataStaleError
@@ -107,7 +108,9 @@ def test_kill_switch_handles_unexpected_price_errors():
         ]
     )
 
-    actions = engine._block_all_opens([_intent("s1", "ETHUSD", "enter")], ctx, "Kill Switch Active")
+    actions = engine._block_all_opens(
+        [_intent("s1", "ETHUSD", "enter")], ctx, "Kill Switch Active"
+    )
 
     assert len(actions) == 1
     assert actions[0].target_notional_usd == 0.0
@@ -116,7 +119,10 @@ def test_kill_switch_handles_unexpected_price_errors():
 
 def test_manual_positions_excluded_from_limits():
     market_data = MagicMock()
-    market_data.get_latest_price.side_effect = lambda pair: {"MANUSD": 50.0, "STRATUSD": 200.0}[pair]
+    market_data.get_latest_price.side_effect = lambda pair: {
+        "MANUSD": 50.0,
+        "STRATUSD": 200.0,
+    }[pair]
 
     portfolio = _build_portfolio_mock()
 

@@ -1,5 +1,6 @@
-import pytest
 from unittest.mock import MagicMock
+
+import pytest
 
 from kraken_bot.config import ExecutionConfig
 from kraken_bot.execution.adapter import KrakenExecutionAdapter
@@ -46,7 +47,9 @@ def test_build_order_payload_live_market_excludes_validate_and_price(sample_orde
 def test_submit_order_validate_only_sets_validated_status(sample_order):
     client = MagicMock()
     client.add_order.return_value = {"error": []}
-    adapter = KrakenExecutionAdapter(client, ExecutionConfig(validate_only=True, mode="paper"))
+    adapter = KrakenExecutionAdapter(
+        client, ExecutionConfig(validate_only=True, mode="paper")
+    )
 
     order = adapter.submit_order(sample_order)
 
@@ -60,7 +63,8 @@ def test_submit_order_live_success_sets_txid(sample_order):
     client = MagicMock()
     client.add_order.return_value = {"error": [], "txid": ["ABC123"]}
     adapter = KrakenExecutionAdapter(
-        client, ExecutionConfig(mode="live", validate_only=False, allow_live_trading=True)
+        client,
+        ExecutionConfig(mode="live", validate_only=False, allow_live_trading=True),
     )
 
     order = adapter.submit_order(sample_order)
@@ -112,7 +116,8 @@ def test_submit_order_rejected_raises(sample_order):
     client = MagicMock()
     client.add_order.return_value = {"error": ["EGeneral:failure"]}
     adapter = KrakenExecutionAdapter(
-        client, ExecutionConfig(mode="live", validate_only=False, allow_live_trading=True)
+        client,
+        ExecutionConfig(mode="live", validate_only=False, allow_live_trading=True),
     )
 
     with pytest.raises(OrderRejectedError, match="EGeneral:failure"):

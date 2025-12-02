@@ -33,7 +33,9 @@ def _fixed_datetimes(values: list[datetime]) -> Iterator[datetime]:
         yield value
 
 
-def test_db_info_reports_schema_and_counts(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_db_info_reports_schema_and_counts(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     db_path = tmp_path / "portfolio.db"
     _create_sample_db(db_path)
 
@@ -47,7 +49,9 @@ def test_db_info_reports_schema_and_counts(tmp_path: Path, capsys: pytest.Captur
     assert "cash_flows: 1 rows" in output
 
 
-def test_db_info_handles_missing_file(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_db_info_handles_missing_file(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     db_path = tmp_path / "missing.db"
 
     exit_code = cli.main(["db-info", "--db-path", str(db_path)])
@@ -70,8 +74,9 @@ def test_db_check_reports_integrity_status(
     assert "PRAGMA integrity_check: ok" in output
 
 
-
-def test_db_check_handles_invalid_file(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_db_check_handles_invalid_file(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     db_path = tmp_path / "not_a_db.db"
     db_path.write_bytes(b"this is not sqlite")
 
@@ -130,7 +135,9 @@ def test_db_backup_creates_file_and_prunes_old_backups(
     }
 
 
-def test_db_backup_reports_missing_file(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_db_backup_reports_missing_file(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     db_path = tmp_path / "missing.db"
 
     exit_code = cli.main(["db-backup", "--db-path", str(db_path)])

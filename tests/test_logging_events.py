@@ -25,7 +25,6 @@ from kraken_bot.ui.context import AppContext
 from tests.ui.conftest import build_test_context
 
 
-
 class _FakeAdapter(ExecutionAdapter):
     def __init__(self) -> None:
         # Minimal stub that satisfies the ExecutionAdapter Protocol
@@ -37,12 +36,13 @@ class _FakeAdapter(ExecutionAdapter):
         self.submit_order_calls.append(order)
         return order
 
-    def cancel_order(self, order: LocalOrder) -> None:  # pragma: no cover - not used here
+    def cancel_order(
+        self, order: LocalOrder
+    ) -> None:  # pragma: no cover - not used here
         return None
 
     def cancel_all_orders(self) -> None:  # pragma: no cover - not used here
         return None
-
 
 
 def _build_action(pair: str) -> RiskAdjustedAction:
@@ -101,14 +101,12 @@ def test_market_data_warning_emits_structured_event(caplog: pytest.LogCaptureFix
     )
 
     class _Metrics:
-        def update_market_data_status(self, **_kwargs):
-            ...
+        def update_market_data_status(self, **_kwargs): ...
 
         def record_market_data_error(self, message: str) -> None:
             self.last_error = message
 
-        def record_drift(self, *_args, **_kwargs):
-            ...
+        def record_drift(self, *_args, **_kwargs): ...
 
     class _Portfolio:
         def sync(self) -> None:  # pragma: no cover - not expected to run
@@ -119,6 +117,7 @@ def test_market_data_warning_emits_structured_event(caplog: pytest.LogCaptureFix
 
     def refresh_metrics() -> None:
         return None
+
     portfolio = cast(PortfolioService, _Portfolio())
     md = cast(MarketDataAPI, market_data)
     metrics_obj = cast(SystemMetrics, _Metrics())
@@ -193,7 +192,9 @@ def test_shutdown_logs_include_event(caplog):
     _shutdown(context, stop_event, ui_server=None, ui_thread=None, reason="test")
 
     records = [
-        record for record in caplog.records if getattr(record, "event", None) == "shutdown"
+        record
+        for record in caplog.records
+        if getattr(record, "event", None) == "shutdown"
     ]
 
     assert records, "Expected a shutdown log entry"
@@ -219,4 +220,3 @@ def test_ui_route_logs_request_event(caplog):
     assert records, "Expected cancel_order_blocked log entry"
     assert all(record.levelno == logging.WARNING for record in records)
     assert any(getattr(record, "local_id", None) == "local-123" for record in records)
-

@@ -7,8 +7,8 @@ from kraken_bot.config import AppConfig
 from kraken_bot.connection.rest_client import KrakenRESTClient
 from kraken_bot.execution.oms import ExecutionService
 from kraken_bot.market_data.api import MarketDataAPI
-from kraken_bot.portfolio.manager import PortfolioService
 from kraken_bot.metrics import SystemMetrics
+from kraken_bot.portfolio.manager import PortfolioService
 from kraken_bot.strategy.engine import StrategyEngine
 
 
@@ -36,7 +36,9 @@ def build_app_context(allow_interactive_setup: bool = True) -> AppContext:
         A fully initialized :class:`AppContext`.
     """
 
-    client, config, rate_limiter = bootstrap(allow_interactive_setup=allow_interactive_setup)
+    client, config, rate_limiter = bootstrap(
+        allow_interactive_setup=allow_interactive_setup
+    )
 
     market_data = MarketDataAPI(config, rate_limiter=rate_limiter)
     market_data.refresh_universe()

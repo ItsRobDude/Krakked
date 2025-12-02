@@ -7,7 +7,9 @@ from fastapi import Request
 from kraken_bot.logging_config import get_log_environment, structured_log_extra
 
 
-def build_request_log_extra(request: Request | None, event: str | None = None, **kwargs):
+def build_request_log_extra(
+    request: Request | None, event: str | None = None, **kwargs
+):
     """Build a structured ``extra`` payload for UI HTTP logs.
 
     Ensures that every log entry contains a ``request_id`` and ``event`` along with
