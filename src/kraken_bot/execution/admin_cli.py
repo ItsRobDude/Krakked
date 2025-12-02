@@ -22,7 +22,7 @@ def _build_service(db_path: str, allow_interactive_setup: bool) -> ExecutionServ
     if config.execution.mode == "live" or not config.execution.validate_only:
         client, config, rate_limiter = bootstrap(allow_interactive_setup=allow_interactive_setup)
 
-    store = SQLitePortfolioStore(db_path=db_path)
+    store = SQLitePortfolioStore(db_path=db_path, auto_migrate_schema=config.portfolio.auto_migrate_schema)
     service = ExecutionService(
         client=client,
         config=config.execution,

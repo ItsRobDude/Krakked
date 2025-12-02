@@ -93,6 +93,7 @@ class PortfolioConfig:
     snapshot_retention_days: int = 30
     reconciliation_tolerance: float = 1.0
     db_path: str = "portfolio.db"
+    auto_migrate_schema: bool = True
 
 @dataclass
 class RiskConfig:
@@ -258,6 +259,7 @@ def load_config(config_path: Optional[Path] = None, env: Optional[str] = None) -
             extra={"event": "config_invalid_portfolio", "config_path": str(config_path)},
         )
         portfolio_data = {}
+    default_auto_migrate_schema = effective_env != "live"
     portfolio_config = PortfolioConfig(
         base_currency=portfolio_data.get("base_currency", "USD"),
         valuation_pairs=portfolio_data.get("valuation_pairs", {}),
@@ -268,6 +270,9 @@ def load_config(config_path: Optional[Path] = None, env: Optional[str] = None) -
         snapshot_retention_days=portfolio_data.get("snapshot_retention_days", 30),
         reconciliation_tolerance=portfolio_data.get("reconciliation_tolerance", 1.0),
         db_path=portfolio_data.get("db_path", "portfolio.db"),
+        auto_migrate_schema=bool(
+            portfolio_data.get("auto_migrate_schema", default_auto_migrate_schema)
+        ),
     )
 
     # Parsing Risk Config with defaults
