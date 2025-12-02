@@ -96,6 +96,16 @@ export type SystemMetrics = {
   market_data_max_staleness: number | null;
 };
 
+export type StrategyRiskProfile = 'conservative' | 'balanced' | 'aggressive';
+
+export type StrategyState = {
+  strategy_id: string;
+  enabled: boolean;
+  last_intents_at: string | null;
+  last_actions_at: string | null;
+  params?: { risk_profile?: StrategyRiskProfile | null };
+};
+
 const API_BASE = import.meta.env.VITE_API_BASE || '/api';
 const API_TOKEN = import.meta.env.VITE_API_TOKEN;
 
@@ -144,6 +154,32 @@ export async function fetchSystemHealth(): Promise<SystemHealth | null> {
 
 export async function fetchSystemMetrics(): Promise<SystemMetrics | null> {
   return fetchJson<SystemMetrics>('/system/metrics');
+}
+
+export async function fetchStrategies(): Promise<StrategyState[] | null> {
+  return fetchJson<StrategyState[]>('/strategies');
+}
+
+export async function setStrategyEnabled(id: string, enabled: boolean): Promise<void> {
+  const result = await fetchJson<unknown>(`/strategies/${id}/enabled`, {
+    method: 'PATCH',
+    body: JSON.stringify({ enabled }),
+  });
+
+  if (result === null) {
+    throw new Error('Unable to update strategy state');
+  }
+}
+
+export async function patchStrategyConfig(id: string, patch: Record<string, unknown>): Promise<void> {
+  const result = await fetchJson<unknown>(`/strategies/${id}/config`, {
+    method: 'PATCH',
+    body: JSON.stringify(patch),
+  });
+
+  if (result === null) {
+    throw new Error('Unable to update strategy configuration');
+  }
 }
 
 export function getAppVersion(health: SystemHealth | null): string | null {

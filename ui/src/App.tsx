@@ -6,6 +6,7 @@ import { RiskPanel } from './components/RiskPanel';
 import { LogEntry, LogPanel } from './components/LogPanel';
 import { PositionRow, PositionsTable } from './components/PositionsTable';
 import { Sidebar } from './components/Sidebar';
+import { StrategiesPanel } from './components/StrategiesPanel';
 import { WalletRow, WalletTable } from './components/WalletTable';
 import {
   fetchExposure,
@@ -13,14 +14,19 @@ import {
   fetchPositions,
   fetchRecentExecutions,
   fetchSystemHealth,
+  fetchStrategies,
   getRiskStatus,
   ExposureBreakdown,
   PortfolioSummary,
   PositionPayload,
   RiskStatus,
   RecentExecution,
+  StrategyRiskProfile,
+  StrategyState,
   SystemHealth,
   setKillSwitch,
+  patchStrategyConfig,
+  setStrategyEnabled,
 } from './services/api';
 import { validateCredentials } from './services/credentials';
 
@@ -54,6 +60,9 @@ const formatTimestamp = (timestamp: string | null) => {
   if (Number.isNaN(parsed.getTime())) return 'Unknown';
   return parsed.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
 };
+
+const isRiskProfile = (value: unknown): value is StrategyRiskProfile =>
+  value === 'conservative' || value === 'balanced' || value === 'aggressive';
 
 const buildKpis = (summary: PortfolioSummary) => [
   {
@@ -119,6 +128,10 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
   const [risk, setRisk] = useState<RiskStatus | null>(null);
   const [riskBusy, setRiskBusy] = useState(false);
   const [riskFeedback, setRiskFeedback] = useState<{ tone: 'info' | 'error' | 'success'; message: string } | null>(null);
+  const [strategies, setStrategies] = useState<StrategyState[]>([]);
+  const [strategyRisk, setStrategyRisk] = useState<Record<string, StrategyRiskProfile>>({});
+  const [strategyBusy, setStrategyBusy] = useState<Set<string>>(new Set());
+  const [strategyFeedback, setStrategyFeedback] = useState<string | null>(null);
 
   const sidebarItems = [
     { label: 'Overview', description: 'KPIs & positions', active: true, badge: 'Live' },
@@ -193,10 +206,45 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
   }, []);
 
   useEffect(() => {
+    let cancelled = false;
+
+    const loadStrategies = async () => {
+      const data = await fetchStrategies();
+      if (cancelled) return;
+
+      if (data) {
+        setStrategies(data);
+        setStrategyRisk((previous) => {
+          const next = { ...previous };
+          data.forEach((strategy) => {
+            const riskProfile = strategy.params?.risk_profile;
+            if (isRiskProfile(riskProfile)) {
+              next[strategy.strategy_id] = riskProfile;
+            } else if (!next[strategy.strategy_id]) {
+              next[strategy.strategy_id] = 'balanced';
+            }
+          });
+          return next;
+        });
+      }
+    };
+
+    loadStrategies();
+    const interval = setInterval(loadStrategies, DASHBOARD_REFRESH_MS);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, []);
+
+  useEffect(() => {
     if (health?.ui_read_only) {
       setRiskFeedback({ tone: 'info', message: 'Backend is read-only. Kill switch changes are disabled.' });
+      setStrategyFeedback('Backend is read-only. Strategy controls are disabled.');
     } else {
       setRiskFeedback((current) => (current?.tone === 'info' ? null : current));
+      setStrategyFeedback((current) => (current === 'Backend is read-only. Strategy controls are disabled.' ? null : current));
     }
   }, [health?.ui_read_only]);
 
@@ -233,6 +281,66 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
     }
 
     setRiskBusy(false);
+  };
+
+  const setStrategyBusyState = (strategyId: string, busyState: boolean) => {
+    setStrategyBusy((previous) => {
+      const next = new Set(previous);
+      if (busyState) {
+        next.add(strategyId);
+      } else {
+        next.delete(strategyId);
+      }
+      return next;
+    });
+  };
+
+  const handleStrategyToggle = async (strategyId: string, enabled: boolean) => {
+    if (health?.ui_read_only) {
+      setStrategyFeedback('Backend is read-only. Strategy controls are disabled.');
+      return;
+    }
+
+    setStrategyFeedback(null);
+    setStrategyBusyState(strategyId, true);
+
+    const previousStrategies = strategies.map((strategy) => ({ ...strategy }));
+    setStrategies((current) =>
+      current.map((strategy) => (strategy.strategy_id === strategyId ? { ...strategy, enabled } : strategy)),
+    );
+
+    try {
+      await setStrategyEnabled(strategyId, enabled);
+      setStrategyFeedback(`Strategy ${strategyId} ${enabled ? 'enabled' : 'disabled'}.`);
+    } catch (error) {
+      setStrategies(previousStrategies);
+      setStrategyFeedback(`Unable to update ${strategyId}. Please try again.`);
+    } finally {
+      setStrategyBusyState(strategyId, false);
+    }
+  };
+
+  const handleRiskProfileChange = async (strategyId: string, profile: StrategyRiskProfile) => {
+    if (health?.ui_read_only) {
+      setStrategyFeedback('Backend is read-only. Strategy controls are disabled.');
+      return;
+    }
+
+    setStrategyFeedback(null);
+    setStrategyBusyState(strategyId, true);
+
+    const previousProfile = strategyRisk[strategyId];
+    setStrategyRisk((current) => ({ ...current, [strategyId]: profile }));
+
+    try {
+      await patchStrategyConfig(strategyId, { params: { risk_profile: profile } });
+      setStrategyFeedback(`Updated ${strategyId} risk profile to ${profile}.`);
+    } catch (error) {
+      setStrategyRisk((current) => ({ ...current, [strategyId]: previousProfile }));
+      setStrategyFeedback(`Unable to update risk profile for ${strategyId}.`);
+    } finally {
+      setStrategyBusyState(strategyId, false);
+    }
   };
 
   useEffect(() => {
@@ -288,6 +396,16 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
       </section>
 
       <RiskPanel status={risk} readOnly={Boolean(health?.ui_read_only)} busy={riskBusy} onToggle={handleToggleKillSwitch} feedback={riskFeedback} />
+
+      <StrategiesPanel
+        strategies={strategies}
+        riskSelections={strategyRisk}
+        busy={strategyBusy}
+        readOnly={Boolean(health?.ui_read_only)}
+        feedback={strategyFeedback}
+        onToggle={handleStrategyToggle}
+        onRiskProfileChange={handleRiskProfileChange}
+      />
 
       <KpiGrid items={kpis} />
 
