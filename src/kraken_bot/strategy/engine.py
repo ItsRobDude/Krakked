@@ -35,13 +35,13 @@ class StrategyEngine:
         self.config = config
         self.market_data = market_data
         self.portfolio = portfolio
-        strategy_userrefs = {name: cfg.userref for name, cfg in config.strategies.configs.items()}
+        strategy_userrefs = {cfg.name: cfg.userref for cfg in config.strategies.configs.values()}
         self.risk_engine = RiskEngine(
             config.risk,
             market_data,
             portfolio,
             strategy_userrefs=strategy_userrefs,
-            strategy_tags={name: name for name in config.strategies.configs.keys()},
+            strategy_tags={cfg.name: cfg.name for cfg in config.strategies.configs.values()},
         )
 
         self.strategies: Dict[str, Strategy] = {}
@@ -54,33 +54,44 @@ class StrategyEngine:
         )
         registry = _strategy_registry()
 
-        for name, strat_cfg in self.config.strategies.configs.items():
+        for config_key, strat_cfg in self.config.strategies.configs.items():
+            strategy_id = strat_cfg.name
+            if strategy_id != config_key:
+                logger.warning(
+                    "Strategy config key %s does not match declared name %s; using declared name",
+                    config_key,
+                    strategy_id,
+                    extra=structured_log_extra(
+                        event="strategy_key_mismatch", strategy_key=config_key, strategy_id=strategy_id
+                    ),
+                )
+
             if not strat_cfg.enabled:
                 logger.info(
-                    "Skipping disabled strategy %s", name,
-                    extra=structured_log_extra(event="strategy_disabled_skip", strategy_id=name),
+                    "Skipping disabled strategy %s", strategy_id,
+                    extra=structured_log_extra(event="strategy_disabled_skip", strategy_id=strategy_id),
                 )
                 continue
 
-            if name not in self.config.strategies.enabled:
+            if strategy_id not in self.config.strategies.enabled:
                 logger.info(
-                    "Strategy %s not in enabled list, skipping", name,
-                    extra=structured_log_extra(event="strategy_not_enabled", strategy_id=name),
+                    "Strategy %s not in enabled list, skipping", strategy_id,
+                    extra=structured_log_extra(event="strategy_not_enabled", strategy_id=strategy_id),
                 )
                 continue
 
             strat_class = registry.get(strat_cfg.type)
             if not strat_class:
                 logger.warning(
-                    "Unknown strategy type: %s for %s", strat_cfg.type, name,
-                    extra=structured_log_extra(event="strategy_unknown_type", strategy_id=name),
+                    "Unknown strategy type: %s for %s", strat_cfg.type, strategy_id,
+                    extra=structured_log_extra(event="strategy_unknown_type", strategy_id=strategy_id),
                 )
                 continue
 
             strategy = strat_class(strat_cfg)
-            self.strategies[name] = strategy
-            self.strategy_states[name] = StrategyState(
-                strategy_id=name,
+            self.strategies[strategy_id] = strategy
+            self.strategy_states[strategy_id] = StrategyState(
+                strategy_id=strategy_id,
                 enabled=True,
                 last_intents_at=None,
                 last_actions_at=None,
@@ -92,8 +103,8 @@ class StrategyEngine:
                 strategy.warmup(self.market_data, self.portfolio)
             except Exception as exc:  # pragma: no cover - defensive
                 logger.error(
-                    "Error warming up strategy %s: %s", name, exc,
-                    extra=structured_log_extra(event="strategy_warmup_error", strategy_id=name),
+                    "Error warming up strategy %s: %s", strategy_id, exc,
+                    extra=structured_log_extra(event="strategy_warmup_error", strategy_id=strategy_id),
                 )
 
         logger.info(
