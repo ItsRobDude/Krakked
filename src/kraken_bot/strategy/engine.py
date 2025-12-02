@@ -43,7 +43,10 @@ class StrategyEngine:
         self.config = config
         self.market_data = market_data
         self.portfolio = portfolio
-        strategy_userrefs = {cfg.name: cfg.userref for cfg in config.strategies.configs.values()}
+        strategy_userrefs = {
+            cfg.name: str(cfg.userref) if cfg.userref is not None else None
+            for cfg in config.strategies.configs.values()
+        }
         self.risk_engine = RiskEngine(
             config.risk,
             market_data,
@@ -148,6 +151,13 @@ class StrategyEngine:
                 context = self._build_context(now, strategy.config, timeframe)
                 try:
                     intents = strategy.generate_intents(context)
+                    for intent in intents:
+                        intent.strategy_id = name
+                        intent.metadata = intent.metadata or {}
+                        intent.metadata.setdefault("strategy_id", name)
+                        intent.metadata.setdefault("timeframe", timeframe)
+                        if strategy.config.userref is not None:
+                            intent.metadata.setdefault("userref", str(strategy.config.userref))
                     all_intents.extend(intents)
                     self.strategy_states[name].last_intents_at = now
                 except DataStaleError as exc:
@@ -184,7 +194,7 @@ class StrategyEngine:
         for action in risk_actions:
             strat_cfg = self.config.strategies.configs.get(action.strategy_id)
             if strat_cfg and strat_cfg.userref is not None:
-                action.userref = strat_cfg.userref
+                action.userref = str(strat_cfg.userref)
 
         self._persist_actions(plan_id, now, risk_actions)
 

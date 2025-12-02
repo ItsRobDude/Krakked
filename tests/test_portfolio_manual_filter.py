@@ -90,7 +90,25 @@ def portfolio(market_data_mock):
 @pytest.fixture
 def portfolio_with_manual_default(market_data_mock):
     config = PortfolioConfig(base_currency="USD", track_manual_trades=True)
-    return Portfolio(config, market_data_mock, InMemoryStore())
+    return Portfolio(
+        config,
+        market_data_mock,
+        InMemoryStore(),
+        strategy_tags={"trend_core": "trend_core"},
+        userref_to_strategy={"42": "trend_core"},
+    )
+
+
+@pytest.fixture
+def portfolio_with_strategy_tags(market_data_mock):
+    config = PortfolioConfig(base_currency="USD", track_manual_trades=True)
+    return Portfolio(
+        config,
+        market_data_mock,
+        InMemoryStore(),
+        strategy_tags={"trend_core": "trend_core"},
+        userref_to_strategy={"trend_core": "trend_core"},
+    )
 
 
 def test_manual_trades_respect_toggle_in_equity_view(portfolio):
@@ -144,12 +162,12 @@ def test_realized_pnl_tags_and_manual_filtering(portfolio):
 
     assert len(portfolio.realized_pnl_history) == 1
     record = portfolio.realized_pnl_history[0]
-    assert record.strategy_tag == "123"
+    assert record.strategy_tag is None
     assert record.raw_userref == "123"
     assert record.comment == "note"
 
     manual_filtered = portfolio.equity_view()
-    assert pytest.approx(manual_filtered.realized_pnl_base_total, rel=1e-6) == 10.0
+    assert pytest.approx(manual_filtered.realized_pnl_base_total, rel=1e-6) == 0.0
 
     include_manual = portfolio.equity_view(include_manual=True)
     assert pytest.approx(include_manual.realized_pnl_base_total, rel=1e-6) == 10.0
@@ -179,7 +197,7 @@ def test_manual_realized_pnl_filtered_by_config(portfolio):
 
     portfolio.ingest_trades([manual_buy, manual_sell], persist=False)
 
-    assert portfolio.realized_pnl_history[0].strategy_tag == "manual"
+    assert portfolio.realized_pnl_history[0].strategy_tag is None
 
     filtered_view = portfolio.equity_view()
     assert filtered_view.realized_pnl_base_total == 0
@@ -238,11 +256,11 @@ def test_realized_pnl_by_strategy_groups_manual_and_tagged(portfolio_with_manual
 
     grouped = portfolio_with_manual_default.get_realized_pnl_by_strategy()
 
-    assert pytest.approx(grouped["42"], rel=1e-6) == 20.0
+    assert pytest.approx(grouped["trend_core"], rel=1e-6) == 20.0
     assert pytest.approx(grouped["manual"], rel=1e-6) == 20.0
 
 
-def test_realized_pnl_by_strategy_respects_manual_flag(portfolio):
+def test_realized_pnl_by_strategy_respects_manual_flag(market_data_mock):
     manual_buy = {
         "id": "T1",
         "pair": "XBTUSD",
@@ -286,12 +304,52 @@ def test_realized_pnl_by_strategy_respects_manual_flag(portfolio):
         "userref": 99,
     }
 
-    portfolio.ingest_trades([manual_buy, manual_sell, strategy_buy, strategy_sell], persist=False)
+    strategy_portfolio = Portfolio(
+        PortfolioConfig(base_currency="USD", track_manual_trades=False),
+        market_data_mock,
+        InMemoryStore(),
+        strategy_tags={"trend_core": "trend_core"},
+        userref_to_strategy={"99": "trend_core"},
+    )
 
-    default_grouped = portfolio.get_realized_pnl_by_strategy()
+    strategy_portfolio.ingest_trades([manual_buy, manual_sell, strategy_buy, strategy_sell], persist=False)
+
+    default_grouped = strategy_portfolio.get_realized_pnl_by_strategy()
     assert "manual" not in default_grouped
-    assert pytest.approx(default_grouped["99"], rel=1e-6) == 10.0
+    assert pytest.approx(default_grouped["trend_core"], rel=1e-6) == 10.0
 
-    grouped_with_manual = portfolio.get_realized_pnl_by_strategy(include_manual=True)
+    grouped_with_manual = strategy_portfolio.get_realized_pnl_by_strategy(include_manual=True)
     assert pytest.approx(grouped_with_manual["manual"], rel=1e-6) == 20.0
-    assert pytest.approx(grouped_with_manual["99"], rel=1e-6) == 10.0
+    assert pytest.approx(grouped_with_manual["trend_core"], rel=1e-6) == 10.0
+
+
+def test_userref_mapping_sets_strategy_tag(portfolio_with_strategy_tags):
+    buy = {
+        "id": "T1",
+        "pair": "XBTUSD",
+        "time": 1,
+        "type": "buy",
+        "price": "100",
+        "cost": "100",
+        "fee": "0",
+        "vol": "1",
+        "userref": "trend_core:1h",
+    }
+    sell = {
+        "id": "T2",
+        "pair": "XBTUSD",
+        "time": 2,
+        "type": "sell",
+        "price": "110",
+        "cost": "110",
+        "fee": "0",
+        "vol": "1",
+        "userref": "trend_core:1h",
+    }
+
+    portfolio_with_strategy_tags.ingest_trades([buy, sell], persist=False)
+
+    assert portfolio_with_strategy_tags.realized_pnl_history[-1].strategy_tag == "trend_core"
+
+    pnl_by_strategy = portfolio_with_strategy_tags.get_realized_pnl_by_strategy(include_manual=True)
+    assert "trend_core" in pnl_by_strategy

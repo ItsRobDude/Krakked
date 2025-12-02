@@ -161,7 +161,7 @@ def migrate_4_to_5(conn: sqlite3.Connection) -> None:
             side TEXT NOT NULL,
             order_type TEXT,
             kraken_order_id TEXT,
-            userref INTEGER,
+            userref TEXT,
             requested_base_size REAL,
             requested_price REAL,
             status TEXT,

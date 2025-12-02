@@ -46,11 +46,15 @@ class Portfolio:
         market_data: MarketDataAPI,
         store: PortfolioStore,
         snapshot_interval_seconds: int = 3600,
+        strategy_tags: Optional[Dict[str, str]] = None,
+        userref_to_strategy: Optional[Dict[str, str]] = None,
     ):
         self.config = config
         self.market_data = market_data
         self.store = store
         self.snapshot_interval_seconds = snapshot_interval_seconds
+        self.strategy_tags = strategy_tags or {}
+        self.userref_to_strategy = userref_to_strategy or {}
 
         self.balances: Dict[str, AssetBalance] = {}
         self.positions: Dict[str, SpotPosition] = {}
@@ -341,19 +345,38 @@ class Portfolio:
     def _should_include_manual(self, include_manual: Optional[bool]) -> bool:
         return self.config.track_manual_trades if include_manual is None else include_manual
 
-    def _extract_trade_tags(self, trade: Dict) -> tuple[str, Optional[str], Optional[str]]:
+    def _extract_trade_tags(self, trade: Dict) -> tuple[Optional[str], Optional[str], Optional[str]]:
         raw_userref = str(trade["userref"]) if trade.get("userref") is not None else None
         comment = str(trade["comment"]) if trade.get("comment") else None
+        strategy_tag: Optional[str] = None
+
         if trade.get("strategy_tag"):
             strategy_tag = str(trade["strategy_tag"])
-        elif raw_userref is not None:
-            strategy_tag = raw_userref
-        elif comment is not None:
-            strategy_tag = comment
-        else:
-            strategy_tag = "manual"
+
+        if strategy_tag is None and raw_userref is not None:
+            strategy_tag = self._strategy_from_userref(raw_userref)
+
+        if strategy_tag is None and comment is not None and comment in self.strategy_tags:
+            strategy_tag = self.strategy_tags[comment]
 
         return strategy_tag, raw_userref, comment
+
+    def _strategy_from_userref(self, raw_userref: str) -> Optional[str]:
+        userref_key = str(raw_userref)
+        if userref_key in self.userref_to_strategy:
+            return self.userref_to_strategy[userref_key]
+
+        if userref_key in self.strategy_tags:
+            return userref_key
+
+        if ":" in userref_key:
+            prefix = userref_key.split(":", 1)[0]
+            if prefix in self.userref_to_strategy:
+                return self.userref_to_strategy[prefix]
+            if prefix in self.strategy_tags:
+                return prefix
+
+        return None
 
     @staticmethod
     def _is_manual_tag(strategy_tag: Optional[str]) -> bool:
@@ -536,13 +559,12 @@ class Portfolio:
     def _realized_pnl_by_strategy(self, include_manual: bool) -> Dict[str, float]:
         realized_by_strategy: Dict[str, float] = defaultdict(float)
         for record in self.realized_pnl_history:
-            strategy_tag = record.strategy_tag or "manual"
-            if self._is_manual_tag(strategy_tag):
+            if self._is_manual_tag(record.strategy_tag):
                 if not include_manual:
                     continue
                 strategy_key = "manual"
             else:
-                strategy_key = strategy_tag
+                strategy_key = cast(str, record.strategy_tag)
 
             realized_by_strategy[strategy_key] += record.pnl_quote
 
