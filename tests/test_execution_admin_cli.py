@@ -7,7 +7,9 @@ from kraken_bot.execution import admin_cli
 from kraken_bot.execution.models import LocalOrder
 
 
-def test_panic_cli_triggers_cancel_all(monkeypatch: pytest.MonkeyPatch, capsys: Any) -> None:
+def test_panic_cli_triggers_cancel_all(
+    monkeypatch: pytest.MonkeyPatch, capsys: Any
+) -> None:
     calls: list[str] = []
 
     class _DummyService:
@@ -16,7 +18,9 @@ def test_panic_cli_triggers_cancel_all(monkeypatch: pytest.MonkeyPatch, capsys: 
 
     dummy_service = _DummyService()
     monkeypatch.setattr(
-        admin_cli, "_build_service", lambda db_path, allow_interactive_setup: dummy_service
+        admin_cli,
+        "_build_service",
+        lambda db_path, allow_interactive_setup: dummy_service,
     )
 
     exit_code = admin_cli.main(["panic"])
@@ -27,7 +31,9 @@ def test_panic_cli_triggers_cancel_all(monkeypatch: pytest.MonkeyPatch, capsys: 
     assert calls == ["cancel_all"]
 
 
-def test_panic_cli_reconciles_and_persists(monkeypatch: pytest.MonkeyPatch, capsys: Any) -> None:
+def test_panic_cli_reconciles_and_persists(
+    monkeypatch: pytest.MonkeyPatch, capsys: Any
+) -> None:
     events: list[str] = []
 
     class _FakeClient:
@@ -54,7 +60,14 @@ def test_panic_cli_reconciles_and_persists(monkeypatch: pytest.MonkeyPatch, caps
         def __init__(self) -> None:
             self.events: list[str] = []
 
-        def update_order_status(self, *, local_id: str, status: str, kraken_order_id: Optional[str] = None, **_: Any) -> None:
+        def update_order_status(
+            self,
+            *,
+            local_id: str,
+            status: str,
+            kraken_order_id: Optional[str] = None,
+            **_: Any,
+        ) -> None:
             self.events.append(f"persist:{local_id}:{status}")
             events.append(f"persist:{status}")
 
@@ -76,7 +89,9 @@ def test_panic_cli_reconciles_and_persists(monkeypatch: pytest.MonkeyPatch, caps
     )
     service.register_order(order)
 
-    monkeypatch.setattr(admin_cli, "_build_service", lambda db_path, allow_interactive_setup: service)
+    monkeypatch.setattr(
+        admin_cli, "_build_service", lambda db_path, allow_interactive_setup: service
+    )
 
     exit_code = admin_cli.main(["panic"])
 

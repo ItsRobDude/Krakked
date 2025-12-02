@@ -27,7 +27,9 @@ class VolBreakoutStrategy(Strategy):
         self.params = VolBreakoutConfig(
             pairs=params.get("pairs", []),
             lookback_bars=max(int(params.get("lookback_bars", 20)), 5),
-            min_compression_bps=max(float(params.get("min_compression_bps", 10.0)), 0.0),
+            min_compression_bps=max(
+                float(params.get("min_compression_bps", 10.0)), 0.0
+            ),
             breakout_multiple=max(float(params.get("breakout_multiple", 1.5)), 0.0),
         )
 
@@ -42,7 +44,9 @@ class VolBreakoutStrategy(Strategy):
         pairs = self.params.pairs or ctx.universe
 
         for pair in pairs:
-            ohlc = ctx.market_data.get_ohlc(pair, tf, lookback=self.params.lookback_bars + 10)
+            ohlc = ctx.market_data.get_ohlc(
+                pair, tf, lookback=self.params.lookback_bars + 10
+            )
             if not ohlc or len(ohlc) < self.params.lookback_bars:
                 continue
 
@@ -59,7 +63,9 @@ class VolBreakoutStrategy(Strategy):
             high = float(high_series.max())
             low = float(low_series.min())
             last_close = float(close_series.iloc[-1])
-            compression_bps = ((high - low) / last_close) * 10_000 if last_close else 0.0
+            compression_bps = (
+                ((high - low) / last_close) * 10_000 if last_close else 0.0
+            )
 
             if compression_bps > self.params.min_compression_bps:
                 continue

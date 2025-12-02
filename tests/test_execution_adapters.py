@@ -15,7 +15,9 @@ from kraken_bot.execution.oms import ExecutionService
 from kraken_bot.strategy.models import ExecutionPlan, RiskAdjustedAction
 
 
-def _action(pair: str, base_size: float = 1.0, price: float = 30.0) -> RiskAdjustedAction:
+def _action(
+    pair: str, base_size: float = 1.0, price: float = 30.0
+) -> RiskAdjustedAction:
     return RiskAdjustedAction(
         pair=pair,
         strategy_id="test_strategy",
@@ -77,7 +79,9 @@ def test_execution_service_uses_kraken_adapter_for_live_mode():
     client.add_order.assert_called_once()
 
 
-def _local_order(pair: str = "XBTUSD", side: str = "buy", price: float = 25.0, volume: float = 1.0):
+def _local_order(
+    pair: str = "XBTUSD", side: str = "buy", price: float = 25.0, volume: float = 1.0
+):
     return LocalOrder(
         local_id="local",
         plan_id="plan",

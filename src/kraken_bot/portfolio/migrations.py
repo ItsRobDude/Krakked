@@ -5,7 +5,6 @@ from __future__ import annotations
 import sqlite3
 from typing import Callable, Dict
 
-
 Migration = Callable[[sqlite3.Connection], None]
 
 
@@ -42,6 +41,7 @@ def _set_schema_version(conn: sqlite3.Connection, version: int) -> None:
         (str(version),),
     )
     conn.commit()
+
 
 def migrate_1_to_2(conn: sqlite3.Connection) -> None:
     """Initial trade storage setup."""
@@ -93,7 +93,9 @@ def migrate_2_to_3(conn: sqlite3.Connection) -> None:
         """
     )
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_cash_flows_time ON cash_flows(time)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_cash_flows_asset ON cash_flows(asset)")
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_cash_flows_asset ON cash_flows(asset)"
+    )
 
     cursor.execute(
         """
@@ -105,7 +107,9 @@ def migrate_2_to_3(conn: sqlite3.Connection) -> None:
         )
         """
     )
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_snapshots_timestamp ON snapshots(timestamp)")
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_snapshots_timestamp ON snapshots(timestamp)"
+    )
 
 
 def migrate_3_to_4(conn: sqlite3.Connection) -> None:
@@ -129,7 +133,9 @@ def migrate_3_to_4(conn: sqlite3.Connection) -> None:
         """
     )
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_decisions_time ON decisions(time)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_decisions_plan_id ON decisions(plan_id)")
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_decisions_plan_id ON decisions(plan_id)"
+    )
 
 
 def migrate_4_to_5(conn: sqlite3.Connection) -> None:
@@ -215,7 +221,9 @@ def migrate_4_to_5(conn: sqlite3.Connection) -> None:
     )
 
 
-def run_migrations(conn: sqlite3.Connection, from_version: int, to_version: int) -> None:
+def run_migrations(
+    conn: sqlite3.Connection, from_version: int, to_version: int
+) -> None:
     """Run portfolio schema migrations sequentially."""
     if from_version == to_version:
         return
@@ -236,7 +244,9 @@ def run_migrations(conn: sqlite3.Connection, from_version: int, to_version: int)
     for version in range(from_version, to_version):
         migrate = migrations.get(version)
         if migrate is None:
-            raise ValueError(f"No migration path from version {version} to {version + 1}")
+            raise ValueError(
+                f"No migration path from version {version} to {version + 1}"
+            )
 
         migrate(conn)
         _set_schema_version(conn, version + 1)

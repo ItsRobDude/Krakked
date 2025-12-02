@@ -1,17 +1,23 @@
 # tests/test_strategy_engine.py
 
-from unittest.mock import MagicMock
 from datetime import datetime, timezone
+from unittest.mock import MagicMock
 
-from kraken_bot.config import AppConfig, StrategiesConfig, StrategyConfig, RiskConfig
-from kraken_bot.strategy.engine import StrategyRiskEngine
+from kraken_bot.config import AppConfig, RiskConfig, StrategiesConfig, StrategyConfig
 from kraken_bot.market_data.api import MarketDataAPI
 from kraken_bot.market_data.exceptions import DataStaleError
 from kraken_bot.portfolio.manager import PortfolioService
 from kraken_bot.portfolio.models import EquityView
-from kraken_bot.strategy.models import DecisionRecord, StrategyIntent, StrategyState, RiskStatus
 from kraken_bot.strategy.base import Strategy
-from kraken_bot.strategy.models import RiskAdjustedAction
+from kraken_bot.strategy.engine import StrategyRiskEngine
+from kraken_bot.strategy.models import (
+    DecisionRecord,
+    RiskAdjustedAction,
+    RiskStatus,
+    StrategyIntent,
+    StrategyState,
+)
+
 
 def test_engine_cycle():
     # Setup Config
@@ -49,7 +55,7 @@ def test_engine_cycle():
         cash_base=10000.0,
         realized_pnl_base_total=0.0,
         unrealized_pnl_base_total=0.0,
-        drift_flag=False
+        drift_flag=False,
     )
 
     portfolio.store = MagicMock()
@@ -59,6 +65,7 @@ def test_engine_cycle():
 
     # Mock OHLC for strategy
     from dataclasses import dataclass
+
     @dataclass
     class MockBar:
         close: float
@@ -70,7 +77,9 @@ def test_engine_cycle():
     # To trigger LONG: Fast > Slow.
     # Increasing price pattern.
     prices = [100 + i for i in range(30)]
-    market.get_ohlc.return_value = [MockBar(close=p, high=p+1, low=p-1) for p in prices]
+    market.get_ohlc.return_value = [
+        MockBar(close=p, high=p + 1, low=p - 1) for p in prices
+    ]
     market.get_latest_price.return_value = 130.0
 
     engine = StrategyRiskEngine(app_config, market, portfolio)
@@ -95,6 +104,7 @@ def test_engine_cycle():
 
     # Execution plan should be persisted for downstream services
     assert portfolio.record_execution_plan.called
+
 
 def test_engine_stale_data():
     app_config = MagicMock(spec=AppConfig)

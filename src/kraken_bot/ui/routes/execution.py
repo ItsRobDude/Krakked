@@ -59,7 +59,9 @@ def _serialize_execution_result(result: ExecutionResult) -> ExecutionResultPaylo
 async def get_open_orders(request: Request) -> ApiEnvelope[List[OpenOrderPayload]]:
     ctx = _context(request)
     try:
-        open_orders = [_serialize_order(order) for order in ctx.execution_service.get_open_orders()]
+        open_orders = [
+            _serialize_order(order) for order in ctx.execution_service.get_open_orders()
+        ]
         return ApiEnvelope(data=open_orders, error=None)
     except Exception as exc:  # pragma: no cover - defensive
         logger.exception(
@@ -69,8 +71,12 @@ async def get_open_orders(request: Request) -> ApiEnvelope[List[OpenOrderPayload
         return ApiEnvelope(data=None, error=str(exc))
 
 
-@router.get("/recent_executions", response_model=ApiEnvelope[List[ExecutionResultPayload]])
-async def get_recent_executions(request: Request) -> ApiEnvelope[List[ExecutionResultPayload]]:
+@router.get(
+    "/recent_executions", response_model=ApiEnvelope[List[ExecutionResultPayload]]
+)
+async def get_recent_executions(
+    request: Request,
+) -> ApiEnvelope[List[ExecutionResultPayload]]:
     ctx = _context(request)
     try:
         executions = [
@@ -144,14 +150,19 @@ async def cancel_order(local_id: str, request: Request) -> ApiEnvelope[bool]:
         logger.exception(
             "Failed to cancel order",
             extra=build_request_log_extra(
-                request, event="cancel_order_failed", local_id=local_id, plan_id=order.plan_id
+                request,
+                event="cancel_order_failed",
+                local_id=local_id,
+                plan_id=order.plan_id,
             ),
         )
         return ApiEnvelope(data=None, error=str(exc))
 
 
 @router.post("/flatten_all", response_model=ApiEnvelope[ExecutionResultPayload])
-async def flatten_all_positions(request: Request) -> ApiEnvelope[ExecutionResultPayload]:
+async def flatten_all_positions(
+    request: Request,
+) -> ApiEnvelope[ExecutionResultPayload]:
     ctx = _context(request)
     if ctx.config.ui.read_only:
         logger.warning(
@@ -176,9 +187,14 @@ async def flatten_all_positions(request: Request) -> ApiEnvelope[ExecutionResult
                 }
             )
 
-        plan = ctx.strategy_engine._build_flatten_plan(actions) if hasattr(ctx.strategy_engine, "_build_flatten_plan") else None
+        plan = (
+            ctx.strategy_engine._build_flatten_plan(actions)
+            if hasattr(ctx.strategy_engine, "_build_flatten_plan")
+            else None
+        )
         if plan is None:
             from datetime import datetime, timezone
+
             from kraken_bot.strategy.models import ExecutionPlan, RiskAdjustedAction
 
             now = datetime.now(timezone.utc)
@@ -199,7 +215,11 @@ async def flatten_all_positions(request: Request) -> ApiEnvelope[ExecutionResult
                 )
                 for item in actions
             ]
-            plan = ExecutionPlan(plan_id=f"flatten_{int(now.timestamp())}", generated_at=now, actions=risk_actions)
+            plan = ExecutionPlan(
+                plan_id=f"flatten_{int(now.timestamp())}",
+                generated_at=now,
+                actions=risk_actions,
+            )
 
         if plan is None:
             raise ValueError("No execution plan generated")

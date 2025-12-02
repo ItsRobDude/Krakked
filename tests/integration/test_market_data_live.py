@@ -1,14 +1,23 @@
 # tests/integration/test_market_data_live.py
 
-import pytest
 import os
 import time
-from kraken_bot.config import AppConfig, RegionProfile, RegionCapabilities, UniverseConfig, MarketDataConfig
+
+import pytest
+
+from kraken_bot.config import (
+    AppConfig,
+    MarketDataConfig,
+    RegionCapabilities,
+    RegionProfile,
+    UniverseConfig,
+)
 from kraken_bot.market_data.api import MarketDataAPI
+
 
 @pytest.mark.skipif(
     os.environ.get("KRAKEN_LIVE_TESTS") != "1",
-    reason="Skipping live integration tests (KRAKEN_LIVE_TESTS!=1)"
+    reason="Skipping live integration tests (KRAKEN_LIVE_TESTS!=1)",
 )
 def test_live_market_data_flow(tmp_path):
     """
@@ -23,19 +32,19 @@ def test_live_market_data_flow(tmp_path):
         region=RegionProfile(
             code="US_CA",
             capabilities=RegionCapabilities(False, False, False),
-            default_quote="USD"
+            default_quote="USD",
         ),
         universe=UniverseConfig(
-            include_pairs=["XBTUSD"], # Focus on a major pair
+            include_pairs=["XBTUSD"],  # Focus on a major pair
             exclude_pairs=[],
-            min_24h_volume_usd=0 # Don't filter by volume to keep it simple
+            min_24h_volume_usd=0,  # Don't filter by volume to keep it simple
         ),
         market_data=MarketDataConfig(
             ws={"stale_tolerance_seconds": 60},
             ohlc_store={"root_dir": str(ohlc_dir), "backend": "parquet"},
-            backfill_timeframes=[], # Disable auto-backfill on init
-            ws_timeframes=["1m"]
-        )
+            backfill_timeframes=[],  # Disable auto-backfill on init
+            ws_timeframes=["1m"],
+        ),
     )
 
     api = MarketDataAPI(config)
@@ -59,7 +68,7 @@ def test_live_market_data_flow(tmp_path):
         # 3. Backfill OHLC
         # Fetch a small amount of 1h data (e.g., last 24 hours)
         # We align 'since' to the top of the hour to reduce off-by-one errors due to boundary semantics.
-        interval = 3600 # 1h
+        interval = 3600  # 1h
         now = int(time.time())
         aligned_now = now - (now % interval)
         since = aligned_now - (48 * interval)
@@ -88,7 +97,9 @@ def test_live_market_data_flow(tmp_path):
         # We allow an off-by-one difference because Kraken's `since` semantics
         # (fetching based on ID/time) and our timestamp filter (>= since)
         # may not line up perfectly at the boundary.
-        assert abs(len(bars_since) - count) <= 1, f"Retrieved {len(bars_since)} bars, expected approx {count}"
+        assert (
+            abs(len(bars_since) - count) <= 1
+        ), f"Retrieved {len(bars_since)} bars, expected approx {count}"
 
         print("[Live Test] Success!")
 

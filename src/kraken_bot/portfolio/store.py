@@ -1,21 +1,22 @@
 # src/kraken_bot/portfolio/store.py
 
 import abc
-import sqlite3
 import json
 import logging
+import sqlite3
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
-from .models import AssetValuation, CashFlowRecord, PortfolioSnapshot
-from .exceptions import PortfolioSchemaError
-from .migrations import _ensure_meta_table, _set_schema_version, run_migrations
 from kraken_bot.logging_config import structured_log_extra
 
+from .exceptions import PortfolioSchemaError
+from .migrations import _ensure_meta_table, _set_schema_version, run_migrations
+from .models import AssetValuation, CashFlowRecord, PortfolioSnapshot
+
 if TYPE_CHECKING:
+    from kraken_bot.execution.models import ExecutionResult, LocalOrder
     from kraken_bot.strategy.models import DecisionRecord, ExecutionPlan
-    from kraken_bot.execution.models import LocalOrder, ExecutionResult
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +35,9 @@ class SchemaStatus:
 
 
 def ensure_portfolio_schema(
-    conn: sqlite3.Connection, target_version: int = CURRENT_SCHEMA_VERSION, migrate: bool = True
+    conn: sqlite3.Connection,
+    target_version: int = CURRENT_SCHEMA_VERSION,
+    migrate: bool = True,
 ) -> SchemaStatus:
     """Ensure the portfolio DB matches the expected schema version.
 
@@ -46,13 +49,17 @@ def ensure_portfolio_schema(
 
     _ensure_meta_table(conn)
     cursor = conn.cursor()
-    row = cursor.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()
+    row = cursor.execute(
+        "SELECT value FROM meta WHERE key = 'schema_version'"
+    ).fetchone()
 
     initialized = False
     if row is None:
         _set_schema_version(conn, target_version)
         initialized = True
-        return SchemaStatus(version=target_version, migrated=False, initialized=initialized)
+        return SchemaStatus(
+            version=target_version, migrated=False, initialized=initialized
+        )
 
     try:
         stored_version = int(row[0])
@@ -72,16 +79,24 @@ def ensure_portfolio_schema(
             run_migrations(conn, stored_version, target_version)
         except Exception as exc:  # noqa: BLE001
             logger.exception(
-                "Failed to run portfolio migrations from v%s to v%s", stored_version, target_version,
+                "Failed to run portfolio migrations from v%s to v%s",
+                stored_version,
+                target_version,
                 extra=structured_log_extra(
-                    event="portfolio_migration_failed", from_version=stored_version, to_version=target_version
+                    event="portfolio_migration_failed",
+                    from_version=stored_version,
+                    to_version=target_version,
                 ),
             )
-            raise PortfolioSchemaError(found=stored_version, expected=target_version) from exc
+            raise PortfolioSchemaError(
+                found=stored_version, expected=target_version
+            ) from exc
         migrated = True
         stored_version = target_version
 
-    return SchemaStatus(version=stored_version, migrated=migrated, initialized=initialized)
+    return SchemaStatus(
+        version=stored_version, migrated=migrated, initialized=initialized
+    )
 
 
 def assert_portfolio_schema(db_path: str) -> SchemaStatus:
@@ -97,7 +112,9 @@ def assert_portfolio_schema(db_path: str) -> SchemaStatus:
         conn.commit()
 
     if status.version < CURRENT_SCHEMA_VERSION:
-        raise PortfolioSchemaError(found=status.version, expected=CURRENT_SCHEMA_VERSION)
+        raise PortfolioSchemaError(
+            found=status.version, expected=CURRENT_SCHEMA_VERSION
+        )
 
     return status
 
@@ -159,7 +176,9 @@ def ensure_portfolio_tables(conn: sqlite3.Connection) -> None:
         """
     )
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_cash_flows_time ON cash_flows(time)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_cash_flows_asset ON cash_flows(asset)")
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_cash_flows_asset ON cash_flows(asset)"
+    )
 
     # Snapshots Table
     cursor.execute(
@@ -172,7 +191,9 @@ def ensure_portfolio_tables(conn: sqlite3.Connection) -> None:
         )
         """
     )
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_snapshots_timestamp ON snapshots(timestamp)")
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_snapshots_timestamp ON snapshots(timestamp)"
+    )
 
     cursor.execute(
         """
@@ -192,7 +213,9 @@ def ensure_portfolio_tables(conn: sqlite3.Connection) -> None:
         """
     )
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_decisions_time ON decisions(time)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_decisions_plan_id ON decisions(plan_id)")
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_decisions_plan_id ON decisions(plan_id)"
+    )
 
     # Execution Plans Table
     cursor.execute(
@@ -207,7 +230,9 @@ def ensure_portfolio_tables(conn: sqlite3.Connection) -> None:
         )
         """
     )
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_execution_plans_generated_at ON execution_plans(generated_at)")
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_execution_plans_generated_at ON execution_plans(generated_at)"
+    )
 
     cursor.execute(
         """
@@ -233,8 +258,12 @@ def ensure_portfolio_tables(conn: sqlite3.Connection) -> None:
         )
         """
     )
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_execution_orders_plan_id ON execution_orders(plan_id)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_execution_orders_kraken_id ON execution_orders(kraken_order_id)")
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_execution_orders_plan_id ON execution_orders(plan_id)"
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_execution_orders_kraken_id ON execution_orders(kraken_order_id)"
+    )
 
     cursor.execute(
         """
@@ -264,9 +293,12 @@ def ensure_portfolio_tables(conn: sqlite3.Connection) -> None:
         )
         """
     )
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_execution_results_started_at ON execution_results(started_at)")
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_execution_results_started_at ON execution_results(started_at)"
+    )
 
     conn.commit()
+
 
 class PortfolioStore(abc.ABC):
     @abc.abstractmethod
@@ -309,7 +341,9 @@ class PortfolioStore(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def get_snapshots(self, since: Optional[int] = None, limit: Optional[int] = None) -> List[PortfolioSnapshot]:
+    def get_snapshots(
+        self, since: Optional[int] = None, limit: Optional[int] = None
+    ) -> List[PortfolioSnapshot]:
         """Retrieves portfolio snapshots."""
         pass
 
@@ -325,7 +359,11 @@ class PortfolioStore(abc.ABC):
 
     @abc.abstractmethod
     def get_decisions(
-        self, plan_id: Optional[str] = None, since: Optional[int] = None, limit: Optional[int] = None, strategy_name: Optional[str] = None
+        self,
+        plan_id: Optional[str] = None,
+        since: Optional[int] = None,
+        limit: Optional[int] = None,
+        strategy_name: Optional[str] = None,
     ) -> List["DecisionRecord"]:
         """Retrieves strategy decision records."""
         pass
@@ -371,7 +409,10 @@ class PortfolioStore(abc.ABC):
 
     @abc.abstractmethod
     def get_execution_plans(
-        self, plan_id: Optional[str] = None, since: Optional[int] = None, limit: Optional[int] = None
+        self,
+        plan_id: Optional[str] = None,
+        since: Optional[int] = None,
+        limit: Optional[int] = None,
     ) -> List["ExecutionPlan"]:
         """Fetch stored execution plans."""
         pass
@@ -409,7 +450,9 @@ class SQLitePortfolioStore(PortfolioStore):
         conn = sqlite3.connect(self.db_path)
 
         try:
-            ensure_portfolio_schema(conn, CURRENT_SCHEMA_VERSION, migrate=self.auto_migrate_schema)
+            ensure_portfolio_schema(
+                conn, CURRENT_SCHEMA_VERSION, migrate=self.auto_migrate_schema
+            )
             ensure_portfolio_tables(conn)
         finally:
             conn.close()
@@ -422,7 +465,9 @@ class SQLitePortfolioStore(PortfolioStore):
         try:
             conn = self._get_conn()
             cursor = conn.cursor()
-            row = cursor.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()
+            row = cursor.execute(
+                "SELECT value FROM meta WHERE key = 'schema_version'"
+            ).fetchone()
             if row is None:
                 return None
 
@@ -430,7 +475,8 @@ class SQLitePortfolioStore(PortfolioStore):
                 return int(row[0])
             except (TypeError, ValueError):
                 logger.warning(
-                    "Non-integer schema version stored in portfolio DB", extra=structured_log_extra(event="schema_unknown")
+                    "Non-integer schema version stored in portfolio DB",
+                    extra=structured_log_extra(event="schema_unknown"),
                 )
                 return None
         except sqlite3.Error as exc:  # pragma: no cover - defensive logging
@@ -467,35 +513,38 @@ class SQLitePortfolioStore(PortfolioStore):
             elif trades_val is not None:
                 trades_csv = str(trades_val)
 
-            cursor.execute("""
+            cursor.execute(
+                """
                 INSERT OR IGNORE INTO trades (
                     id, ordertxid, pair, time, type, ordertype, price, cost, fee, vol,
                     margin, misc, posstatus, cprice, ccost, cfee, cvol, cmargin, net,
                     trades_csv, raw_json
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                trade.get("id"),
-                trade.get("ordertxid"),
-                trade.get("pair"),
-                trade.get("time"),
-                trade.get("type"),
-                trade.get("ordertype"),
-                float(trade.get("price", 0)),
-                float(trade.get("cost", 0)),
-                float(trade.get("fee", 0)),
-                float(trade.get("vol", 0)),
-                float(trade.get("margin", 0)),
-                trade.get("misc"),
-                trade.get("posstatus"),
-                float(trade.get("cprice", 0)) if trade.get("cprice") else None,
-                float(trade.get("ccost", 0)) if trade.get("ccost") else None,
-                float(trade.get("cfee", 0)) if trade.get("cfee") else None,
-                float(trade.get("cvol", 0)) if trade.get("cvol") else None,
-                float(trade.get("cmargin", 0)) if trade.get("cmargin") else None,
-                float(trade.get("net", 0)) if trade.get("net") else None,
-                trades_csv, # trades list CSV
-                raw_json
-            ))
+            """,
+                (
+                    trade.get("id"),
+                    trade.get("ordertxid"),
+                    trade.get("pair"),
+                    trade.get("time"),
+                    trade.get("type"),
+                    trade.get("ordertype"),
+                    float(trade.get("price", 0)),
+                    float(trade.get("cost", 0)),
+                    float(trade.get("fee", 0)),
+                    float(trade.get("vol", 0)),
+                    float(trade.get("margin", 0)),
+                    trade.get("misc"),
+                    trade.get("posstatus"),
+                    float(trade.get("cprice", 0)) if trade.get("cprice") else None,
+                    float(trade.get("ccost", 0)) if trade.get("ccost") else None,
+                    float(trade.get("cfee", 0)) if trade.get("cfee") else None,
+                    float(trade.get("cvol", 0)) if trade.get("cvol") else None,
+                    float(trade.get("cmargin", 0)) if trade.get("cmargin") else None,
+                    float(trade.get("net", 0)) if trade.get("net") else None,
+                    trades_csv,  # trades list CSV
+                    raw_json,
+                ),
+            )
         conn.commit()
         conn.close()
 
@@ -546,18 +595,21 @@ class SQLitePortfolioStore(PortfolioStore):
         cursor = conn.cursor()
 
         for record in records:
-            cursor.execute("""
+            cursor.execute(
+                """
                 INSERT OR IGNORE INTO cash_flows (
                     id, time, asset, amount, type, note
                 ) VALUES (?, ?, ?, ?, ?, ?)
-            """, (
-                record.id,
-                record.time,
-                record.asset,
-                record.amount,
-                record.type,
-                record.note
-            ))
+            """,
+                (
+                    record.id,
+                    record.time,
+                    record.asset,
+                    record.amount,
+                    record.type,
+                    record.note,
+                ),
+            )
         conn.commit()
         conn.close()
 
@@ -605,8 +657,9 @@ class SQLitePortfolioStore(PortfolioStore):
                 asset=row[2],
                 amount=row[3],
                 type=row[4],
-                note=row[5]
-            ) for row in rows
+                note=row[5],
+            )
+            for row in rows
         ]
 
     def save_snapshot(self, snapshot: PortfolioSnapshot):
@@ -628,23 +681,28 @@ class SQLitePortfolioStore(PortfolioStore):
             "realized_pnl_base_total": snapshot.realized_pnl_base_total,
             "unrealized_pnl_base_total": snapshot.unrealized_pnl_base_total,
             "realized_pnl_base_by_pair": snapshot.realized_pnl_base_by_pair,
-            "unrealized_pnl_base_by_pair": snapshot.unrealized_pnl_base_by_pair
+            "unrealized_pnl_base_by_pair": snapshot.unrealized_pnl_base_by_pair,
         }
 
-        cursor.execute("""
+        cursor.execute(
+            """
             INSERT OR REPLACE INTO snapshots (
                 timestamp, equity_base, cash_base, data_json
             ) VALUES (?, ?, ?, ?)
-        """, (
-            snapshot.timestamp,
-            snapshot.equity_base,
-            snapshot.cash_base,
-            json.dumps(data)
-        ))
+        """,
+            (
+                snapshot.timestamp,
+                snapshot.equity_base,
+                snapshot.cash_base,
+                json.dumps(data),
+            ),
+        )
         conn.commit()
         conn.close()
 
-    def get_snapshots(self, since: Optional[int] = None, limit: Optional[int] = None) -> List[PortfolioSnapshot]:
+    def get_snapshots(
+        self, since: Optional[int] = None, limit: Optional[int] = None
+    ) -> List[PortfolioSnapshot]:
         conn = self._get_conn()
         cursor = conn.cursor()
 
@@ -668,25 +726,27 @@ class SQLitePortfolioStore(PortfolioStore):
         snapshots = []
         for row in rows:
             data = json.loads(row[3])
-            snapshots.append(PortfolioSnapshot(
-                timestamp=row[0],
-                equity_base=row[1],
-                cash_base=row[2],
-                asset_valuations=[
-                    AssetValuation(
-                        asset=av.get("asset"),
-                        amount=av.get("amount", 0.0),
-                        value_base=av.get("value_base", 0.0),
-                        source_pair=av.get("source_pair"),
-                        valuation_status=av.get("valuation_status", "valued"),
-                    )
-                    for av in data["asset_valuations"]
-                ],
-                realized_pnl_base_total=data["realized_pnl_base_total"],
-                unrealized_pnl_base_total=data["unrealized_pnl_base_total"],
-                realized_pnl_base_by_pair=data["realized_pnl_base_by_pair"],
-                unrealized_pnl_base_by_pair=data["unrealized_pnl_base_by_pair"]
-            ))
+            snapshots.append(
+                PortfolioSnapshot(
+                    timestamp=row[0],
+                    equity_base=row[1],
+                    cash_base=row[2],
+                    asset_valuations=[
+                        AssetValuation(
+                            asset=av.get("asset"),
+                            amount=av.get("amount", 0.0),
+                            value_base=av.get("value_base", 0.0),
+                            source_pair=av.get("source_pair"),
+                            valuation_status=av.get("valuation_status", "valued"),
+                        )
+                        for av in data["asset_valuations"]
+                    ],
+                    realized_pnl_base_total=data["realized_pnl_base_total"],
+                    unrealized_pnl_base_total=data["unrealized_pnl_base_total"],
+                    realized_pnl_base_by_pair=data["realized_pnl_base_by_pair"],
+                    unrealized_pnl_base_by_pair=data["unrealized_pnl_base_by_pair"],
+                )
+            )
         return snapshots
 
     def prune_snapshots(self, older_than_ts: int):
@@ -700,23 +760,26 @@ class SQLitePortfolioStore(PortfolioStore):
         conn = self._get_conn()
         cursor = conn.cursor()
 
-        cursor.execute("""
+        cursor.execute(
+            """
             INSERT INTO decisions (
                 time, plan_id, strategy_name, pair, action_type,
                 target_position_usd, blocked, block_reason, kill_switch_active, raw_json
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            record.time,
-            record.plan_id,
-            record.strategy_name,
-            record.pair,
-            record.action_type,
-            record.target_position_usd,
-            1 if record.blocked else 0,
-            record.block_reason,
-            1 if record.kill_switch_active else 0,
-            record.raw_json
-        ))
+        """,
+            (
+                record.time,
+                record.plan_id,
+                record.strategy_name,
+                record.pair,
+                record.action_type,
+                record.target_position_usd,
+                1 if record.blocked else 0,
+                record.block_reason,
+                1 if record.kill_switch_active else 0,
+                record.raw_json,
+            ),
+        )
 
         conn.commit()
         conn.close()
@@ -725,12 +788,15 @@ class SQLitePortfolioStore(PortfolioStore):
         conn = self._get_conn()
         cursor = conn.cursor()
 
-        plan_json = json.dumps({
-            "plan_id": plan.plan_id,
-            "generated_at": plan.generated_at,
-            "actions": [asdict(a) for a in plan.actions],
-            "metadata": plan.metadata,
-        }, default=str)
+        plan_json = json.dumps(
+            {
+                "plan_id": plan.plan_id,
+                "generated_at": plan.generated_at,
+                "actions": [asdict(a) for a in plan.actions],
+                "metadata": plan.metadata,
+            },
+            default=str,
+        )
 
         cursor.execute(
             """
@@ -755,8 +821,16 @@ class SQLitePortfolioStore(PortfolioStore):
         conn = self._get_conn()
         cursor = conn.cursor()
 
-        created_ts = order.created_at.timestamp() if isinstance(order.created_at, datetime) else None
-        updated_ts = order.updated_at.timestamp() if isinstance(order.updated_at, datetime) else None
+        created_ts = (
+            order.created_at.timestamp()
+            if isinstance(order.created_at, datetime)
+            else None
+        )
+        updated_ts = (
+            order.updated_at.timestamp()
+            if isinstance(order.updated_at, datetime)
+            else None
+        )
 
         cursor.execute(
             """
@@ -783,8 +857,16 @@ class SQLitePortfolioStore(PortfolioStore):
                 order.cumulative_base_filled,
                 order.avg_fill_price,
                 order.last_error,
-                json.dumps(order.raw_request, default=str) if order.raw_request else None,
-                json.dumps(order.raw_response, default=str) if order.raw_response else None,
+                (
+                    json.dumps(order.raw_request, default=str)
+                    if order.raw_request
+                    else None
+                ),
+                (
+                    json.dumps(order.raw_response, default=str)
+                    if order.raw_response
+                    else None
+                ),
             ),
         )
 
@@ -800,7 +882,11 @@ class SQLitePortfolioStore(PortfolioStore):
                 updated_ts or created_ts or datetime.now(UTC).timestamp(),
                 order.status,
                 order.last_error,
-                json.dumps(order.raw_response, default=str) if order.raw_response else None,
+                (
+                    json.dumps(order.raw_response, default=str)
+                    if order.raw_response
+                    else None
+                ),
             ),
         )
 
@@ -821,7 +907,9 @@ class SQLitePortfolioStore(PortfolioStore):
         conn = self._get_conn()
         cursor = conn.cursor()
 
-        cursor.execute("SELECT plan_id FROM execution_orders WHERE local_id = ?", (local_id,))
+        cursor.execute(
+            "SELECT plan_id FROM execution_orders WHERE local_id = ?", (local_id,)
+        )
         order_row = cursor.fetchone()
 
         now_ts = datetime.now(UTC).timestamp()
@@ -843,7 +931,9 @@ class SQLitePortfolioStore(PortfolioStore):
 
         set_clause = ", ".join(f"{k} = ?" for k in updates)
         params = list(updates.values()) + [local_id]
-        cursor.execute(f"UPDATE execution_orders SET {set_clause} WHERE local_id = ?", params)
+        cursor.execute(
+            f"UPDATE execution_orders SET {set_clause} WHERE local_id = ?", params
+        )
 
         cursor.execute(
             """
@@ -857,7 +947,11 @@ class SQLitePortfolioStore(PortfolioStore):
                 now_ts,
                 status,
                 event_message or last_error,
-                json.dumps(raw_response, default=str) if raw_response is not None else None,
+                (
+                    json.dumps(raw_response, default=str)
+                    if raw_response is not None
+                    else None
+                ),
             ),
         )
 
@@ -879,7 +973,11 @@ class SQLitePortfolioStore(PortfolioStore):
                 result.started_at.timestamp() if result.started_at else None,
                 result.completed_at.timestamp() if result.completed_at else None,
                 1 if result.success else 0,
-                json.dumps(result.errors, default=str) if result.errors else json.dumps([]),
+                (
+                    json.dumps(result.errors, default=str)
+                    if result.errors
+                    else json.dumps([])
+                ),
             ),
         )
 
@@ -965,7 +1063,11 @@ class SQLitePortfolioStore(PortfolioStore):
         )
 
     def get_decisions(
-        self, plan_id: Optional[str] = None, since: Optional[int] = None, limit: Optional[int] = None, strategy_name: Optional[str] = None
+        self,
+        plan_id: Optional[str] = None,
+        since: Optional[int] = None,
+        limit: Optional[int] = None,
+        strategy_name: Optional[str] = None,
     ) -> List["DecisionRecord"]:
         from kraken_bot.strategy.models import DecisionRecord
 
@@ -1027,7 +1129,9 @@ class SQLitePortfolioStore(PortfolioStore):
         actions = [RiskAdjustedAction(**action) for action in actions_payload]
 
         generated_at = (
-            datetime.fromtimestamp(generated_at_ts) if isinstance(generated_at_ts, (int, float)) else datetime.fromisoformat(str(generated_at_ts))
+            datetime.fromtimestamp(generated_at_ts)
+            if isinstance(generated_at_ts, (int, float))
+            else datetime.fromisoformat(str(generated_at_ts))
         )
         metadata = json.loads(metadata_json) if metadata_json else {}
 
@@ -1039,7 +1143,10 @@ class SQLitePortfolioStore(PortfolioStore):
         )
 
     def get_execution_plans(
-        self, plan_id: Optional[str] = None, since: Optional[int] = None, limit: Optional[int] = None
+        self,
+        plan_id: Optional[str] = None,
+        since: Optional[int] = None,
+        limit: Optional[int] = None,
     ) -> List["ExecutionPlan"]:
         conn = self._get_conn()
         cursor = conn.cursor()
@@ -1111,7 +1218,9 @@ class SQLitePortfolioStore(PortfolioStore):
 
         orders: List[LocalOrder] = []
         for row in rows:
-            created_at = datetime.fromtimestamp(row[11]) if row[11] else datetime.now(UTC)
+            created_at = (
+                datetime.fromtimestamp(row[11]) if row[11] else datetime.now(UTC)
+            )
             updated_at = datetime.fromtimestamp(row[12]) if row[12] else created_at
             raw_request = json.loads(row[16]) if row[16] else {}
             raw_response = json.loads(row[17]) if row[17] else None

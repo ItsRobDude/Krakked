@@ -4,12 +4,18 @@ import sqlite3
 from datetime import datetime
 
 import pytest
+
 import kraken_bot.portfolio.store as store_module
 from kraken_bot.execution.models import ExecutionResult, LocalOrder
-from kraken_bot.portfolio.store import CURRENT_SCHEMA_VERSION, SQLitePortfolioStore
-from kraken_bot.portfolio.models import CashFlowRecord, PortfolioSnapshot, AssetValuation
 from kraken_bot.portfolio.exceptions import PortfolioSchemaError
+from kraken_bot.portfolio.models import (
+    AssetValuation,
+    CashFlowRecord,
+    PortfolioSnapshot,
+)
+from kraken_bot.portfolio.store import CURRENT_SCHEMA_VERSION, SQLitePortfolioStore
 from kraken_bot.strategy.models import DecisionRecord, ExecutionPlan, RiskAdjustedAction
+
 
 @pytest.fixture
 def store(tmp_path):
@@ -32,7 +38,9 @@ def test_schema_version_initialized(tmp_path):
     SQLitePortfolioStore(str(db_path))
 
     with sqlite3.connect(db_path) as conn:
-        row = conn.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()
+        row = conn.execute(
+            "SELECT value FROM meta WHERE key = 'schema_version'"
+        ).fetchone()
 
     assert row is not None
     assert int(row[0]) == CURRENT_SCHEMA_VERSION
@@ -64,7 +72,9 @@ def test_schema_version_mismatch_triggers_migration(tmp_path, monkeypatch):
     SQLitePortfolioStore(str(db_path))
 
     with sqlite3.connect(db_path) as conn:
-        row = conn.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()
+        row = conn.execute(
+            "SELECT value FROM meta WHERE key = 'schema_version'"
+        ).fetchone()
 
     assert row is not None
     assert int(row[0]) == CURRENT_SCHEMA_VERSION
@@ -78,52 +88,77 @@ def test_schema_version_ahead_raises(tmp_path):
     with pytest.raises(PortfolioSchemaError):
         SQLitePortfolioStore(str(db_path))
 
+
 def test_save_and_get_trades(store):
     trades = [
-        {"id": "T1", "pair": "XBTUSD", "time": 1000, "price": 50000, "vol": 1, "cost": 50000, "type": "buy"},
-        {"id": "T2", "pair": "XBTUSD", "time": 1001, "price": 51000, "vol": 0.5, "cost": 25500, "type": "sell"}
+        {
+            "id": "T1",
+            "pair": "XBTUSD",
+            "time": 1000,
+            "price": 50000,
+            "vol": 1,
+            "cost": 50000,
+            "type": "buy",
+        },
+        {
+            "id": "T2",
+            "pair": "XBTUSD",
+            "time": 1001,
+            "price": 51000,
+            "vol": 0.5,
+            "cost": 25500,
+            "type": "sell",
+        },
     ]
     store.save_trades(trades)
 
     fetched = store.get_trades()
     assert len(fetched) == 2
-    assert fetched[0]['id'] == "T2" # Descending order
-    assert fetched[1]['id'] == "T1"
+    assert fetched[0]["id"] == "T2"  # Descending order
+    assert fetched[1]["id"] == "T1"
 
     # Test filtering
     fetched_since = store.get_trades(since=1001)
     assert len(fetched_since) == 1
-    assert fetched_since[0]['id'] == "T2"
+    assert fetched_since[0]["id"] == "T2"
+
 
 def test_save_trades_with_list_field(store):
     # Regression test for 'InterfaceError' when 'trades' is a list
     trade_with_list = {
-        "id": "T3", "pair": "XBTUSD", "time": 1002, "type": "buy",
-        "price": 50000, "vol": 1, "cost": 50000,
-        "trades": ["TX1", "TX2"]
+        "id": "T3",
+        "pair": "XBTUSD",
+        "time": 1002,
+        "type": "buy",
+        "price": 50000,
+        "vol": 1,
+        "cost": 50000,
+        "trades": ["TX1", "TX2"],
     }
     store.save_trades([trade_with_list])
 
     fetched = store.get_trades(since=1002)
     assert len(fetched) == 1
-    assert fetched[0]['id'] == "T3"
+    assert fetched[0]["id"] == "T3"
     # Verify raw_json preserved the list
-    assert fetched[0]['trades'] == ["TX1", "TX2"]
+    assert fetched[0]["trades"] == ["TX1", "TX2"]
+
 
 def test_save_and_get_cash_flows(store):
     flows = [
         CashFlowRecord("C1", 1000, "USD", 1000.0, "deposit", "Initial"),
-        CashFlowRecord("C2", 1002, "USD", -50.0, "withdrawal", "Test")
+        CashFlowRecord("C2", 1002, "USD", -50.0, "withdrawal", "Test"),
     ]
     store.save_cash_flows(flows)
 
     fetched = store.get_cash_flows()
     assert len(fetched) == 2
-    assert fetched[0].id == "C2" # Descending
+    assert fetched[0].id == "C2"  # Descending
 
     fetched_since = store.get_cash_flows(since=1001)
     assert len(fetched_since) == 1
     assert fetched_since[0].id == "C2"
+
 
 def test_save_and_get_snapshots(store):
     s1 = PortfolioSnapshot(
@@ -134,7 +169,7 @@ def test_save_and_get_snapshots(store):
         realized_pnl_base_total=100.0,
         unrealized_pnl_base_total=200.0,
         realized_pnl_base_by_pair={"XBTUSD": 100.0},
-        unrealized_pnl_base_by_pair={"XBTUSD": 200.0}
+        unrealized_pnl_base_by_pair={"XBTUSD": 200.0},
     )
     store.save_snapshot(s1)
 
@@ -145,25 +180,26 @@ def test_save_and_get_snapshots(store):
 
     # Test update
     s2 = PortfolioSnapshot(
-        timestamp=1000, # Same timestamp
-        equity_base=11000.0, # Updated value
+        timestamp=1000,  # Same timestamp
+        equity_base=11000.0,  # Updated value
         cash_base=5000.0,
         asset_valuations=[],
         realized_pnl_base_total=0,
         unrealized_pnl_base_total=0,
         realized_pnl_base_by_pair={},
-        unrealized_pnl_base_by_pair={}
+        unrealized_pnl_base_by_pair={},
     )
     store.save_snapshot(s2)
     snapshots = store.get_snapshots()
     assert len(snapshots) == 1
     assert snapshots[0].equity_base == 11000.0
 
+
 def test_prune_snapshots(store):
     store.save_snapshot(PortfolioSnapshot(100, 0, 0, [], 0, 0, {}, {}))
     store.save_snapshot(PortfolioSnapshot(200, 0, 0, [], 0, 0, {}, {}))
 
-    store.prune_snapshots(150) # Remove older than 150 (i.e. 100)
+    store.prune_snapshots(150)  # Remove older than 150 (i.e. 100)
 
     snapshots = store.get_snapshots()
     assert len(snapshots) == 1
@@ -172,9 +208,33 @@ def test_prune_snapshots(store):
 
 def test_get_trades_with_until_and_ordering(store):
     trades = [
-        {"id": "T1", "pair": "XBTUSD", "time": 1000, "price": 50000, "vol": 1, "cost": 50000, "type": "buy"},
-        {"id": "T2", "pair": "XBTUSD", "time": 1005, "price": 52000, "vol": 1, "cost": 52000, "type": "buy"},
-        {"id": "T3", "pair": "ETHUSD", "time": 1010, "price": 3000, "vol": 2, "cost": 6000, "type": "sell"},
+        {
+            "id": "T1",
+            "pair": "XBTUSD",
+            "time": 1000,
+            "price": 50000,
+            "vol": 1,
+            "cost": 50000,
+            "type": "buy",
+        },
+        {
+            "id": "T2",
+            "pair": "XBTUSD",
+            "time": 1005,
+            "price": 52000,
+            "vol": 1,
+            "cost": 52000,
+            "type": "buy",
+        },
+        {
+            "id": "T3",
+            "pair": "ETHUSD",
+            "time": 1010,
+            "price": 3000,
+            "vol": 2,
+            "cost": 6000,
+            "type": "sell",
+        },
     ]
     store.save_trades(trades)
 
@@ -277,7 +337,10 @@ def test_save_and_load_local_order(store):
         avg_fill_price=24950.1,
         last_error="temporary glitch",
         raw_request={"price": "25000.5", "volume": "0.25", "validate": True},
-        raw_response={"descr": {"order": "buy 0.25 XBTUSD @ limit 25000.5"}, "txid": ["KRAKEN-1"]},
+        raw_response={
+            "descr": {"order": "buy 0.25 XBTUSD @ limit 25000.5"},
+            "txid": ["KRAKEN-1"],
+        },
     )
 
     store.save_order(order)
@@ -289,8 +352,15 @@ def test_save_and_load_local_order(store):
     assert loaded.status == "submitted"
     assert loaded.requested_price == 25000.5
     assert loaded.avg_fill_price == 24950.1
-    assert loaded.raw_request == {"price": "25000.5", "volume": "0.25", "validate": True}
-    assert loaded.raw_response == {"descr": {"order": "buy 0.25 XBTUSD @ limit 25000.5"}, "txid": ["KRAKEN-1"]}
+    assert loaded.raw_request == {
+        "price": "25000.5",
+        "volume": "0.25",
+        "validate": True,
+    }
+    assert loaded.raw_response == {
+        "descr": {"order": "buy 0.25 XBTUSD @ limit 25000.5"},
+        "txid": ["KRAKEN-1"],
+    }
     assert loaded.last_error == "temporary glitch"
 
     by_reference = store.get_order_by_reference(kraken_order_id="KRAKEN-1")

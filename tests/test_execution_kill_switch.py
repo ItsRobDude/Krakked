@@ -1,6 +1,6 @@
 from datetime import UTC, datetime
-from typing import List
 from types import SimpleNamespace
+from typing import List
 
 from kraken_bot.config import ExecutionConfig
 from kraken_bot.execution.models import LocalOrder
@@ -69,12 +69,17 @@ class ToggleableRiskEngine:
 
 def test_execute_plan_blocked_by_kill_switch():
     adapter = FakeAdapter()
-    service = ExecutionService(adapter=adapter, risk_status_provider=_kill_switch_provider)
+    service = ExecutionService(
+        adapter=adapter, risk_status_provider=_kill_switch_provider
+    )
 
     plan = ExecutionPlan(
         plan_id="plan_kill_switch",
         generated_at=datetime.now(UTC),
-        actions=[_build_action("XBTUSD"), _build_action("ETHUSD", target_base_size=2.0)],
+        actions=[
+            _build_action("XBTUSD"),
+            _build_action("ETHUSD", target_base_size=2.0),
+        ],
     )
 
     result = service.execute_plan(plan)
@@ -89,7 +94,9 @@ def test_execute_plan_blocked_by_kill_switch():
 
 def test_cancel_operations_allowed_with_kill_switch():
     adapter = FakeAdapter()
-    service = ExecutionService(adapter=adapter, risk_status_provider=_kill_switch_provider)
+    service = ExecutionService(
+        adapter=adapter, risk_status_provider=_kill_switch_provider
+    )
 
     order = LocalOrder(
         local_id="local-1",
@@ -109,7 +116,9 @@ def test_cancel_operations_allowed_with_kill_switch():
 
 def test_kill_switch_blocks_all_eligible_actions_with_truncation_config():
     adapter = FakeAdapter(config=ExecutionConfig(max_concurrent_orders=1))
-    service = ExecutionService(adapter=adapter, risk_status_provider=_kill_switch_provider)
+    service = ExecutionService(
+        adapter=adapter, risk_status_provider=_kill_switch_provider
+    )
 
     actions = [
         _build_action("XBTUSD", target_base_size=1.0),
@@ -125,7 +134,11 @@ def test_kill_switch_blocks_all_eligible_actions_with_truncation_config():
 
     result = service.execute_plan(plan)
 
-    eligible_orders = [a for a in actions if not a.blocked and (a.target_base_size - a.current_base_size) != 0]
+    eligible_orders = [
+        a
+        for a in actions
+        if not a.blocked and (a.target_base_size - a.current_base_size) != 0
+    ]
 
     assert len(result.orders) == len(eligible_orders)
     assert all(order.status == "rejected" for order in result.orders)
@@ -152,6 +165,4 @@ def test_risk_provider_follows_strategy_engine_kill_switch_state():
 
     assert not result.success
     assert adapter.submit_order_calls == []
-    assert all(
-        "kill_switch" in (order.last_error or "") for order in result.orders
-    )
+    assert all("kill_switch" in (order.last_error or "") for order in result.orders)

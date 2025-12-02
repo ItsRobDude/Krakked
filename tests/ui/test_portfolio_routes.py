@@ -19,7 +19,9 @@ def test_portfolio_summary_enveloped(client, portfolio_context):
         unrealized_pnl_base_total=25.0,
         drift_flag=True,
     )
-    portfolio_context.portfolio.get_latest_snapshot.return_value = SimpleNamespace(timestamp=123456)
+    portfolio_context.portfolio.get_latest_snapshot.return_value = SimpleNamespace(
+        timestamp=123456
+    )
 
     response = client.get("/api/portfolio/summary")
 
@@ -59,7 +61,9 @@ def test_positions_shape_matches_payload(client, portfolio_context):
 
 def test_exposure_breakdown_enveloped(client, portfolio_context):
     portfolio_context.portfolio.get_asset_exposure.return_value = [
-        AssetExposure(asset="BTC", amount=1.0, value_base=100.0, percentage_of_equity=0.1)
+        AssetExposure(
+            asset="BTC", amount=1.0, value_base=100.0, percentage_of_equity=0.1
+        )
     ]
     portfolio_context.strategy_engine.get_risk_status.return_value = SimpleNamespace(
         per_strategy_exposure_pct={"alpha": 5.0}

@@ -40,8 +40,7 @@ class StubPortfolioService:
             mismatched_assets=[],
         )
 
-    def initialize(self) -> None:
-        ...
+    def initialize(self) -> None: ...
 
     def sync(self) -> None:
         self.sync_calls += 1
@@ -75,8 +74,7 @@ class StubStrategyEngine:
         self.calls = []
         self.plan_counter = 0
 
-    def initialize(self) -> None:
-        ...
+    def initialize(self) -> None: ...
 
     def run_cycle(self, now: datetime) -> StubPlan:
         self.calls.append(now)
@@ -103,8 +101,7 @@ class StubExecutionService:
         self.plans.append(plan)
         return StubExecutionResult()
 
-    def cancel_all(self) -> None:
-        ...
+    def cancel_all(self) -> None: ...
 
     def get_open_orders(self):
         return list(self.open_orders)
@@ -228,13 +225,19 @@ def test_run_loop_iteration_executes_scheduled_work_and_updates_metrics():
         refresh_metrics_state=refresh_metrics,
     )
 
-    assert portfolio.sync_calls == 2, "portfolio sync should run according to configured interval"
+    assert (
+        portfolio.sync_calls == 2
+    ), "portfolio sync should run according to configured interval"
     assert [call.isoformat() for call in strategy_engine.calls] == [
         now.isoformat(),
         (now + timedelta(seconds=1)).isoformat(),
         (now + timedelta(seconds=2)).isoformat(),
     ]
-    assert [plan.plan_id for plan in execution_service.plans] == ["plan-1", "plan-2", "plan-3"]
+    assert [plan.plan_id for plan in execution_service.plans] == [
+        "plan-1",
+        "plan-2",
+        "plan-3",
+    ]
 
     assert metrics.plans_generated == 3
     assert metrics.plans_executed == 3
@@ -249,7 +252,9 @@ def test_run_loop_iteration_executes_scheduled_work_and_updates_metrics():
     }
     assert metrics.state_updates[-1] == expected_state
     assert all(update == expected_state for update in metrics.state_updates)
-    assert len(metrics.state_updates) == 5, "metrics should refresh after syncs and strategy cycles"
+    assert (
+        len(metrics.state_updates) == 5
+    ), "metrics should refresh after syncs and strategy cycles"
 
 
 def test_run_loop_iteration_updates_market_data_metrics_when_healthy():
@@ -302,7 +307,10 @@ def test_run_loop_iteration_counts_kill_switch_rejections_as_blocked_actions():
                 type(
                     "KillSwitchOrder",
                     (),
-                    {"status": "rejected", "last_error": "Execution blocked by kill switch (kill_switch_active)"},
+                    {
+                        "status": "rejected",
+                        "last_error": "Execution blocked by kill switch (kill_switch_active)",
+                    },
                 )()
             ]
 
@@ -401,7 +409,9 @@ def test_run_loop_iteration_flags_drift_and_enables_kill_switch():
 
     snapshot = metrics.snapshot()
     assert snapshot["drift_detected"] is True
-    assert snapshot["recent_errors"][0]["message"].startswith("Portfolio drift detected")
+    assert snapshot["recent_errors"][0]["message"].startswith(
+        "Portfolio drift detected"
+    )
     assert strategy_engine.kill_switch_calls == [True]
 
 
@@ -448,12 +458,16 @@ def test_run_loop_iteration_skips_strategy_when_market_data_unhealthy():
     assert metrics.state_updates[-1]["equity"] == 1200.0
 
 
-def test_run_loop_iteration_handles_unavailable_market_data_with_logging_and_metrics(caplog):
+def test_run_loop_iteration_handles_unavailable_market_data_with_logging_and_metrics(
+    caplog,
+):
     now = datetime(2024, 3, 5, tzinfo=timezone.utc)
     strategy_interval = 1
     portfolio_interval = 10
 
-    stale_status = MarketDataStatus(health="unavailable", max_staleness=45.0, reason="rest_down")
+    stale_status = MarketDataStatus(
+        health="unavailable", max_staleness=45.0, reason="rest_down"
+    )
     market_data = MagicMock()
     market_data.get_health_status.return_value = stale_status
 
@@ -512,13 +526,22 @@ def test_run_loop_iteration_handles_unavailable_market_data_with_logging_and_met
     strategy_engine.run_cycle.assert_not_called()
     execution_service.execute_plan.assert_not_called()
 
-    warning_records = [record for record in caplog.records if record.levelno == logging.WARNING]
-    assert any(getattr(record, "event", None) == "market_data_unavailable" for record in warning_records)
-    assert any(getattr(record, "reason", None) == "rest_down" for record in warning_records)
+    warning_records = [
+        record for record in caplog.records if record.levelno == logging.WARNING
+    ]
+    assert any(
+        getattr(record, "event", None) == "market_data_unavailable"
+        for record in warning_records
+    )
+    assert any(
+        getattr(record, "reason", None) == "rest_down" for record in warning_records
+    )
 
     assert metrics.market_data_errors == 1
     assert metrics.market_data_ok is False
-    assert metrics.market_data_error_messages[0].startswith("Market data unavailable (rest_down)")
+    assert metrics.market_data_error_messages[0].startswith(
+        "Market data unavailable (rest_down)"
+    )
     assert metrics.last_equity_usd == 900.0
 
 
@@ -562,7 +585,9 @@ def test_run_loop_iteration_skips_strategy_cycle_and_refreshes_metrics_when_stal
     assert refresh_called and refresh_called[-1] is True
     assert metrics.market_data_ok is False
     assert metrics.market_data_stale is True
-    assert metrics.market_data_error_messages[0].startswith("Market data unavailable (late_ticks)")
+    assert metrics.market_data_error_messages[0].startswith(
+        "Market data unavailable (late_ticks)"
+    )
     assert metrics.market_data_errors == 1
 
 
@@ -576,8 +601,7 @@ class DriftAwarePortfolio:
         )
         self.positions = ["SOL/USD"]
 
-    def sync(self) -> None:
-        ...
+    def sync(self) -> None: ...
 
     def get_drift_status(self) -> DriftStatus:
         return self.drift_status
@@ -618,14 +642,16 @@ class DriftAwareExecutionService:
         if self.strategy_engine.kill_switch_active:
             self.calls.append("blocked")
             blocked_order = SimpleNamespace(
-                status="rejected", last_error="Execution blocked by kill switch (kill_switch_active)"
+                status="rejected",
+                last_error="Execution blocked by kill switch (kill_switch_active)",
             )
-            return SimpleNamespace(errors=["Execution blocked by kill switch"], orders=[blocked_order])
+            return SimpleNamespace(
+                errors=["Execution blocked by kill switch"], orders=[blocked_order]
+            )
         self.calls.append("executed")
         return SimpleNamespace(errors=[], orders=[])
 
-    def cancel_all(self) -> None:
-        ...
+    def cancel_all(self) -> None: ...
 
     def get_open_orders(self):
         return []
@@ -668,7 +694,9 @@ def test_run_loop_iteration_triggers_kill_switch_on_drift_and_blocks_execution()
 
     assert strategy_engine.kill_switch_calls == [True]
     assert metrics.drift_records[0][0] is True
-    assert metrics.drift_records[0][1] and metrics.drift_records[0][1].startswith("Portfolio drift detected")
+    assert metrics.drift_records[0][1] and metrics.drift_records[0][1].startswith(
+        "Portfolio drift detected"
+    )
     assert metrics.blocked_actions >= 1
     assert execution_service.calls == ["blocked"]
 
@@ -710,7 +738,9 @@ def test_run_loop_iteration_records_drift_without_triggering_kill_switch_when_di
 
     assert strategy_engine.kill_switch_calls == []
     assert metrics.drift_records[0][0] is True
-    assert metrics.drift_records[0][1] and metrics.drift_records[0][1].startswith("Portfolio drift detected")
+    assert metrics.drift_records[0][1] and metrics.drift_records[0][1].startswith(
+        "Portfolio drift detected"
+    )
     assert execution_service.calls == ["executed"]
 
 
@@ -730,7 +760,9 @@ def test_system_metrics_snapshot_contains_all_recent_updates():
         open_positions_count=2,
     )
     metrics.record_drift(True, "drift detected")
-    metrics.update_market_data_status(ok=False, stale=True, reason="stale", max_staleness=12.5)
+    metrics.update_market_data_status(
+        ok=False, stale=True, reason="stale", max_staleness=12.5
+    )
 
     snapshot = metrics.snapshot()
 

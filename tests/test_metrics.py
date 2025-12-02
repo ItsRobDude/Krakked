@@ -186,4 +186,7 @@ def test_system_metrics_payload_accepts_snapshot(metrics: SystemMetrics):
     assert payload.market_data_stale is True
     assert payload.market_data_reason == "stale_data"
     assert payload.market_data_max_staleness == 5.5
-    assert payload.recent_errors[0].message in {"stale_data", "Portfolio drift detected"}
+    assert payload.recent_errors[0].message in {
+        "stale_data",
+        "Portfolio drift detected",
+    }

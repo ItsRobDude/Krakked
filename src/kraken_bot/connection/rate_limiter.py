@@ -1,12 +1,14 @@
 # src/kraken_bot/connection/rate_limiter.py
 
-import time
 import threading
+import time
+
 
 class RateLimiter:
     """
     A simple token bucket rate limiter.
     """
+
     def __init__(self, calls_per_second: float):
         if calls_per_second <= 0:
             raise ValueError("Rate must be positive")
@@ -28,6 +30,8 @@ class RateLimiter:
                 time.sleep(sleep_time)
                 # Anchor the next allowed time to the ideal schedule to avoid
                 # cumulative drift from shorter-than-expected sleeps.
-                self.last_call_time = max(self.last_call_time + self.interval, time.monotonic())
+                self.last_call_time = max(
+                    self.last_call_time + self.interval, time.monotonic()
+                )
             else:
                 self.last_call_time = now

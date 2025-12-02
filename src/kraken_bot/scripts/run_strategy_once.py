@@ -36,7 +36,6 @@ class _WsStub:
     last_ohlc_update_ts: dict = {}
 
 
-
 def _ensure_safe_execution(config: AppConfig) -> AppConfig:
     """Force execution settings into paper/validation mode for safety."""
 
@@ -50,15 +49,15 @@ def _ensure_safe_execution(config: AppConfig) -> AppConfig:
     return safe_config
 
 
-
-def _backfill_pairs(market_data: MarketDataAPI, pairs: Iterable[str], timeframes: Iterable[str]) -> None:
+def _backfill_pairs(
+    market_data: MarketDataAPI, pairs: Iterable[str], timeframes: Iterable[str]
+) -> None:
     for pair in pairs:
         for timeframe in timeframes:
             try:
                 market_data.backfill_ohlc(pair, timeframe)
             except Exception as exc:  # pragma: no cover - defensive logging only
                 logger.warning("Failed to backfill %s %s: %s", pair, timeframe, exc)
-
 
 
 def run_strategy_once() -> None:
@@ -112,10 +111,17 @@ def run_strategy_once() -> None:
             es_kwargs["rate_limiter"] = rate_limiter
         execution_service = ExecutionService(**es_kwargs)
     except (ValueError, TypeError):
-        execution_service = ExecutionService(client=client, config=safe_config.execution)
+        execution_service = ExecutionService(
+            client=client, config=safe_config.execution
+        )
     result = execution_service.execute_plan(plan)
 
-    logger.info("Plan %s executed. success=%s errors=%s", plan.plan_id, result.success, result.errors)
+    logger.info(
+        "Plan %s executed. success=%s errors=%s",
+        plan.plan_id,
+        result.success,
+        result.errors,
+    )
 
 
 if __name__ == "__main__":

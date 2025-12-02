@@ -9,11 +9,17 @@ from uuid import uuid4
 from fastapi import APIRouter, FastAPI, Request
 from fastapi.middleware import Middleware
 from fastapi.responses import JSONResponse
-from starlette.middleware.base import BaseHTTPMiddleware
 
 from kraken_bot.ui.context import AppContext
 from kraken_bot.ui.logging import build_request_log_extra
-from kraken_bot.ui.routes import execution_router, portfolio_router, risk_router, strategies_router, system_router
+from kraken_bot.ui.routes import (
+    execution_router,
+    portfolio_router,
+    risk_router,
+    strategies_router,
+    system_router,
+)
+from starlette.middleware.base import BaseHTTPMiddleware
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +36,9 @@ class AuthMiddleware(BaseHTTPMiddleware):
             auth_header = request.headers.get("Authorization")
             expected = f"Bearer {self._token}" if self._token else ""
             if auth_header != expected:
-                return JSONResponse({"data": None, "error": "Unauthorized"}, status_code=401)
+                return JSONResponse(
+                    {"data": None, "error": "Unauthorized"}, status_code=401
+                )
         return await call_next(request)
 
 
@@ -72,7 +80,12 @@ def create_api(context: AppContext) -> FastAPI:
 
     logger.info(
         "UI API initialized",
-        extra=build_request_log_extra(None, event="ui_initialized", base_path=base_path or "/", auth=auth_config.enabled),
+        extra=build_request_log_extra(
+            None,
+            event="ui_initialized",
+            base_path=base_path or "/",
+            auth=auth_config.enabled,
+        ),
     )
     return app
 

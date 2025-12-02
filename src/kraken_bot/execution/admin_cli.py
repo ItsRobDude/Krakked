@@ -20,9 +20,13 @@ def _build_service(db_path: str, allow_interactive_setup: bool) -> ExecutionServ
     rate_limiter = None
 
     if config.execution.mode == "live" or not config.execution.validate_only:
-        client, config, rate_limiter = bootstrap(allow_interactive_setup=allow_interactive_setup)
+        client, config, rate_limiter = bootstrap(
+            allow_interactive_setup=allow_interactive_setup
+        )
 
-    store = SQLitePortfolioStore(db_path=db_path, auto_migrate_schema=config.portfolio.auto_migrate_schema)
+    store = SQLitePortfolioStore(
+        db_path=db_path, auto_migrate_schema=config.portfolio.auto_migrate_schema
+    )
     service = ExecutionService(
         client=client,
         config=config.execution,
@@ -93,8 +97,12 @@ def _filter_orders(service: ExecutionService, args: argparse.Namespace) -> List:
 
 
 def cancel_orders(args: argparse.Namespace) -> int:
-    if not args.all and not any([args.plan_id, args.strategy_id, args.kraken_id, args.local_id]):
-        print("Refusing to cancel without a filter; pass --all to cancel every open order.")
+    if not args.all and not any(
+        [args.plan_id, args.strategy_id, args.kraken_id, args.local_id]
+    ):
+        print(
+            "Refusing to cancel without a filter; pass --all to cancel every open order."
+        )
         return 1
 
     service = _build_service(args.db_path, args.allow_interactive_setup)
@@ -124,7 +132,9 @@ def panic(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Execution admin helpers")
-    parser.add_argument("--db-path", default="portfolio.db", help="Path to the SQLite portfolio store")
+    parser.add_argument(
+        "--db-path", default="portfolio.db", help="Path to the SQLite portfolio store"
+    )
     parser.add_argument(
         "--allow-interactive-setup",
         action="store_true",
@@ -133,22 +143,38 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub = parser.add_subparsers(dest="command", required=True)
 
-    open_parser = sub.add_parser("list-open", help="List open/pending orders from SQLite and memory")
+    open_parser = sub.add_parser(
+        "list-open", help="List open/pending orders from SQLite and memory"
+    )
     open_parser.set_defaults(func=list_open_orders)
 
-    executions_parser = sub.add_parser("recent-executions", help="Show recent execution results")
-    executions_parser.add_argument("--limit", type=int, default=10, help="Number of execution results to display")
+    executions_parser = sub.add_parser(
+        "recent-executions", help="Show recent execution results"
+    )
+    executions_parser.add_argument(
+        "--limit", type=int, default=10, help="Number of execution results to display"
+    )
     executions_parser.set_defaults(func=show_recent_executions)
 
-    cancel_parser = sub.add_parser("cancel", help="Cancel open orders for a plan or strategy")
-    cancel_parser.add_argument("--plan-id", help="Restrict cancellations to a specific plan id")
-    cancel_parser.add_argument("--strategy-id", help="Restrict cancellations to a specific strategy id")
+    cancel_parser = sub.add_parser(
+        "cancel", help="Cancel open orders for a plan or strategy"
+    )
+    cancel_parser.add_argument(
+        "--plan-id", help="Restrict cancellations to a specific plan id"
+    )
+    cancel_parser.add_argument(
+        "--strategy-id", help="Restrict cancellations to a specific strategy id"
+    )
     cancel_parser.add_argument("--kraken-id", help="Cancel a specific Kraken order id")
     cancel_parser.add_argument("--local-id", help="Cancel a specific local order id")
-    cancel_parser.add_argument("--all", action="store_true", help="Cancel all open orders that match filters")
+    cancel_parser.add_argument(
+        "--all", action="store_true", help="Cancel all open orders that match filters"
+    )
     cancel_parser.set_defaults(func=cancel_orders)
 
-    panic_parser = sub.add_parser("panic", help="Cancel all open orders after refreshing state")
+    panic_parser = sub.add_parser(
+        "panic", help="Cancel all open orders after refreshing state"
+    )
     panic_parser.set_defaults(func=panic)
 
     return parser

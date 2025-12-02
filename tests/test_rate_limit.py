@@ -1,8 +1,11 @@
 # tests/test_rate_limit.py
 
 import time
+
 import pytest
+
 from kraken_bot.connection.rate_limiter import RateLimiter
+
 
 def test_rate_limiter_enforces_delay():
     """
@@ -25,16 +28,17 @@ def test_rate_limiter_enforces_delay():
     # We use a small tolerance to account for timing inaccuracies.
     assert duration >= 4 * 0.1 - 0.01
 
+
 def test_rate_limiter_no_delay_for_slow_calls():
     """
     Tests that if calls are naturally slower than the limit, no extra delay is added.
     """
-    limiter = RateLimiter(calls_per_second=5) # 0.2s interval
+    limiter = RateLimiter(calls_per_second=5)  # 0.2s interval
 
     start_time = time.monotonic()
 
     limiter.wait()
-    time.sleep(0.3) # Sleep longer than the interval
+    time.sleep(0.3)  # Sleep longer than the interval
     limiter.wait()
 
     end_time = time.monotonic()
@@ -44,6 +48,7 @@ def test_rate_limiter_no_delay_for_slow_calls():
     # The duration should be dominated by the sleep, not additional limiter delay.
     # It should be around 0.3s with small tolerance for scheduling jitter.
     assert 0.29 <= duration < 0.40
+
 
 def test_rate_limiter_init_with_zero_rate():
     """

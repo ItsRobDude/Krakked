@@ -51,8 +51,7 @@ def test_vol_breakout_strategy_handles_compression_and_breakout():
     ctx, market = _build_context()
 
     compressed_skip_bars = [
-        _make_bar(ts, 100 + ts * 0.01, 0.05, 0.05)
-        for ts in range(12)
+        _make_bar(ts, 100 + ts * 0.01, 0.05, 0.05) for ts in range(12)
     ]
     market.get_ohlc.return_value = compressed_skip_bars
 
@@ -60,7 +59,9 @@ def test_vol_breakout_strategy_handles_compression_and_breakout():
 
     assert intents == []
 
-    compressed_breakout_bars = [_make_bar(ts, 100.001, 0.0005, 0.0005) for ts in range(11)]
+    compressed_breakout_bars = [
+        _make_bar(ts, 100.001, 0.0005, 0.0005) for ts in range(11)
+    ]
     compressed_breakout_bars.append(_make_bar(11, 100.0035, 0.0002, 0.0006))
     market.get_ohlc.return_value = compressed_breakout_bars
 

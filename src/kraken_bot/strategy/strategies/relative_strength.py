@@ -25,15 +25,21 @@ class RelativeStrengthStrategy(Strategy):
         super().__init__(base_cfg)
         params = base_cfg.params or {}
         pairs_param = params.get("pairs") or ["BTC/USD", "ETH/USD"]
-        pairs = list(pairs_param) if isinstance(pairs_param, list) else [str(pairs_param)]
+        pairs = (
+            list(pairs_param) if isinstance(pairs_param, list) else [str(pairs_param)]
+        )
 
         self.params = RelativeStrengthConfig(
             pairs=pairs,
             lookback_bars=max(int(params.get("lookback_bars", 24)), 2),
             timeframe=params.get("timeframe", "4h"),
-            rebalance_interval_hours=max(int(params.get("rebalance_interval_hours", 24)), 1),
+            rebalance_interval_hours=max(
+                int(params.get("rebalance_interval_hours", 24)), 1
+            ),
             top_n=max(int(params.get("top_n", 2)), 1),
-            total_allocation_pct=max(float(params.get("total_allocation_pct", 10.0)), 0.0),
+            total_allocation_pct=max(
+                float(params.get("total_allocation_pct", 10.0)), 0.0
+            ),
         )
         self._last_rebalance: Optional[datetime] = None
 
@@ -47,18 +53,22 @@ class RelativeStrengthStrategy(Strategy):
         elapsed = now - self._last_rebalance
         return elapsed >= timedelta(hours=self.params.rebalance_interval_hours)
 
-    def _compute_returns(self, ctx: StrategyContext, timeframe: str) -> Dict[str, float]:
+    def _compute_returns(
+        self, ctx: StrategyContext, timeframe: str
+    ) -> Dict[str, float]:
         returns: Dict[str, float] = {}
         for pair in self.params.pairs or ctx.universe:
             try:
-                ohlc = ctx.market_data.get_ohlc(pair, timeframe, lookback=self.params.lookback_bars)
+                ohlc = ctx.market_data.get_ohlc(
+                    pair, timeframe, lookback=self.params.lookback_bars
+                )
             except DataStaleError:
                 continue
 
             if not ohlc or len(ohlc) < self.params.lookback_bars:
                 continue
 
-            closes = [bar.close for bar in ohlc[-self.params.lookback_bars:]]
+            closes = [bar.close for bar in ohlc[-self.params.lookback_bars :]]
             first_close = closes[0]
             last_close = closes[-1]
             if first_close <= 0:
@@ -67,7 +77,9 @@ class RelativeStrengthStrategy(Strategy):
             returns[pair] = (last_close - first_close) / first_close
         return returns
 
-    def _current_exposure_usd(self, pair: str, positions_by_pair: Dict[str, Any], ctx: StrategyContext) -> float:
+    def _current_exposure_usd(
+        self, pair: str, positions_by_pair: Dict[str, Any], ctx: StrategyContext
+    ) -> float:
         position = positions_by_pair.get(pair)
         if not position or position.base_size <= 0:
             return 0.0
@@ -100,7 +112,9 @@ class RelativeStrengthStrategy(Strategy):
             self._last_rebalance = ctx.now
             return []
 
-        total_target_allocation = equity_view.equity_base * (self.params.total_allocation_pct / 100.0)
+        total_target_allocation = equity_view.equity_base * (
+            self.params.total_allocation_pct / 100.0
+        )
         if total_target_allocation <= 0:
             self._last_rebalance = ctx.now
             return []
@@ -111,7 +125,8 @@ class RelativeStrengthStrategy(Strategy):
         positions_by_pair = {
             pos.pair: pos
             for pos in positions
-            if getattr(pos, "strategy_tag", None) == self.id and getattr(pos, "base_size", 0) > 0
+            if getattr(pos, "strategy_tag", None) == self.id
+            and getattr(pos, "base_size", 0) > 0
         }
 
         intents: List[StrategyIntent] = []

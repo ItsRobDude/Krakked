@@ -1,10 +1,20 @@
 # tests/test_portfolio_service.py
 
-import pytest
 from unittest.mock import MagicMock
-from kraken_bot.config import AppConfig, PortfolioConfig, RegionProfile, RegionCapabilities, UniverseConfig, MarketDataConfig
+
+import pytest
+
+from kraken_bot.config import (
+    AppConfig,
+    MarketDataConfig,
+    PortfolioConfig,
+    RegionCapabilities,
+    RegionProfile,
+    UniverseConfig,
+)
 from kraken_bot.portfolio.manager import PortfolioService
 from kraken_bot.portfolio.models import SpotPosition
+
 
 @pytest.fixture
 def mock_config():
@@ -12,8 +22,9 @@ def mock_config():
         region=RegionProfile("US", RegionCapabilities(False, False, False)),
         universe=UniverseConfig([], [], 0),
         market_data=MarketDataConfig({}, {}, [], []),
-        portfolio=PortfolioConfig()
+        portfolio=PortfolioConfig(),
     )
+
 
 @pytest.fixture
 def mock_market_data():
@@ -29,6 +40,7 @@ def mock_market_data():
     md.get_latest_price.side_effect = lambda pair: 50000.0 if "XBT" in pair else 1.0
     return md
 
+
 @pytest.fixture
 def service(mock_config, mock_market_data, tmp_path):
     # Use memory DB or temp file
@@ -39,15 +51,27 @@ def service(mock_config, mock_market_data, tmp_path):
     svc.rest_client = MagicMock()
     return svc
 
+
 def test_process_trade_buy(service):
     trade = {
-        "id": "T1", "ordertxid": "O1", "pair": "XBTUSD", "time": 1000,
-        "type": "buy", "ordertype": "limit", "price": 50000, "cost": 50000,
-        "fee": 100, "vol": 1.0, "margin": 0, "misc": ""
+        "id": "T1",
+        "ordertxid": "O1",
+        "pair": "XBTUSD",
+        "time": 1000,
+        "type": "buy",
+        "ordertype": "limit",
+        "price": 50000,
+        "cost": 50000,
+        "fee": 100,
+        "vol": 1.0,
+        "margin": 0,
+        "misc": "",
     }
 
     # Setup Market Data for fee conversion (USD fee -> USD)
-    service.market_data.get_latest_price.return_value = 1.0 # USDUSD? No, fee is usually Quote (USD)
+    service.market_data.get_latest_price.return_value = (
+        1.0  # USDUSD? No, fee is usually Quote (USD)
+    )
 
     service.portfolio.ingest_trades([trade], persist=False)
 
@@ -56,20 +80,39 @@ def test_process_trade_buy(service):
     assert pos.avg_entry_price == 50000.0
     assert pos.fees_paid_base == 100.0
 
+
 def test_process_trade_sell_pnl(service):
     # 1. Buy 1 BTC @ 50k
     buy = {
-        "id": "T1", "ordertxid": "O1", "pair": "XBTUSD", "time": 1000,
-        "type": "buy", "ordertype": "limit", "price": 50000, "cost": 50000,
-        "fee": 0, "vol": 1.0, "margin": 0, "misc": ""
+        "id": "T1",
+        "ordertxid": "O1",
+        "pair": "XBTUSD",
+        "time": 1000,
+        "type": "buy",
+        "ordertype": "limit",
+        "price": 50000,
+        "cost": 50000,
+        "fee": 0,
+        "vol": 1.0,
+        "margin": 0,
+        "misc": "",
     }
     service.portfolio.ingest_trades([buy], persist=False)
 
     # 2. Sell 0.5 BTC @ 60k
     sell = {
-        "id": "T2", "ordertxid": "O2", "pair": "XBTUSD", "time": 1001,
-        "type": "sell", "ordertype": "limit", "price": 60000, "cost": 30000,
-        "fee": 10, "vol": 0.5, "margin": 0, "misc": ""
+        "id": "T2",
+        "ordertxid": "O2",
+        "pair": "XBTUSD",
+        "time": 1001,
+        "type": "sell",
+        "ordertype": "limit",
+        "price": 60000,
+        "cost": 30000,
+        "fee": 10,
+        "vol": 0.5,
+        "margin": 0,
+        "misc": "",
     }
 
     service.portfolio.ingest_trades([sell], persist=False)
@@ -86,6 +129,7 @@ def test_process_trade_sell_pnl(service):
     assert len(service.realized_pnl_history) == 1
     rec = service.realized_pnl_history[0]
     assert rec.pnl_quote == 4990.0
+
 
 def test_reconciliation_drift(service):
     # Setup internal state
@@ -104,15 +148,19 @@ def test_reconciliation_drift(service):
     service._reconcile()
     assert service.drift_flag
 
+
 def test_get_equity(service):
     # Setup balances
     from kraken_bot.portfolio.models import AssetBalance
+
     service.balances = {
         "USD": AssetBalance("USD", 10000, 0, 10000),
-        "XBT": AssetBalance("XBT", 1.0, 0, 1.0)
+        "XBT": AssetBalance("XBT", 1.0, 0, 1.0),
     }
     # Mock prices: BTC=50k
-    service.market_data.get_latest_price.side_effect = lambda p: 50000.0 if "XBT" in p else 1.0
+    service.market_data.get_latest_price.side_effect = lambda p: (
+        50000.0 if "XBT" in p else 1.0
+    )
 
     equity = service.get_equity()
     # 10k USD + 1 BTC(50k) = 60k

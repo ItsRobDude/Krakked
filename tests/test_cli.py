@@ -1,15 +1,15 @@
 from __future__ import annotations
 
-from typing import Any
-from types import SimpleNamespace
 import sqlite3
+from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
 from kraken_bot import cli
-from kraken_bot.secrets import CredentialResult, CredentialStatus
-from kraken_bot.portfolio.store import CURRENT_SCHEMA_VERSION
 from kraken_bot.portfolio.exceptions import PortfolioSchemaError
+from kraken_bot.portfolio.store import CURRENT_SCHEMA_VERSION
+from kraken_bot.secrets import CredentialResult, CredentialStatus
 
 
 class _DummyClient:
@@ -46,7 +46,9 @@ def test_setup_runs_interactive(monkeypatch: pytest.MonkeyPatch) -> None:
     assert exit_code == 0
 
 
-def test_smoke_test_uses_credentials_and_client(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_smoke_test_uses_credentials_and_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(
         cli.secrets,
         "load_api_keys",
@@ -66,7 +68,9 @@ def test_smoke_test_uses_credentials_and_client(monkeypatch: pytest.MonkeyPatch)
     assert dummy_client.called is True
 
 
-def test_smoke_test_handles_missing_credentials(monkeypatch: pytest.MonkeyPatch, capsys: Any) -> None:
+def test_smoke_test_handles_missing_credentials(
+    monkeypatch: pytest.MonkeyPatch, capsys: Any
+) -> None:
     monkeypatch.setattr(
         cli.secrets,
         "load_api_keys",
@@ -86,7 +90,9 @@ def test_smoke_test_handles_missing_credentials(monkeypatch: pytest.MonkeyPatch,
 
 def test_run_once_forces_paper_and_validation(monkeypatch: pytest.MonkeyPatch) -> None:
     original_config = SimpleNamespace(
-        execution=SimpleNamespace(mode="live", validate_only=False, allow_live_trading=True),
+        execution=SimpleNamespace(
+            mode="live", validate_only=False, allow_live_trading=True
+        ),
         market_data=SimpleNamespace(backfill_timeframes=["1h"]),
     )
     captured_execution_config: dict[str, Any] = {}
@@ -146,7 +152,9 @@ def test_run_once_forces_paper_and_validation(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setattr(cli.run_strategy_once, "MarketDataAPI", _DummyMarketData)
     monkeypatch.setattr(cli.run_strategy_once, "PortfolioService", _DummyPortfolio)
     monkeypatch.setattr(cli.run_strategy_once, "StrategyEngine", _DummyStrategyEngine)
-    monkeypatch.setattr(cli.run_strategy_once, "ExecutionService", _DummyExecutionService)
+    monkeypatch.setattr(
+        cli.run_strategy_once, "ExecutionService", _DummyExecutionService
+    )
 
     exit_code = cli.main(["run-once"])
 
@@ -168,7 +176,9 @@ def test_migrate_db_subcommand_upgrades_outdated_schema(tmp_path, capsys: Any) -
 
     assert exit_code == 0
     with sqlite3.connect(db_path) as conn:
-        row = conn.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()
+        row = conn.execute(
+            "SELECT value FROM meta WHERE key = 'schema_version'"
+        ).fetchone()
 
     assert row is not None
     assert int(row[0]) == CURRENT_SCHEMA_VERSION

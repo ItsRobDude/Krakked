@@ -7,7 +7,12 @@ import logging
 from fastapi import APIRouter, Request
 
 from kraken_bot.ui.logging import build_request_log_extra
-from kraken_bot.ui.models import ApiEnvelope, KillSwitchPayload, RiskConfigPayload, RiskStatusPayload
+from kraken_bot.ui.models import (
+    ApiEnvelope,
+    KillSwitchPayload,
+    RiskConfigPayload,
+    RiskStatusPayload,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -73,10 +78,14 @@ async def update_risk_config(request: Request) -> ApiEnvelope[RiskConfigPayload]
         if updated_fields:
             logger.info(
                 "Updated risk config",
-                extra=build_request_log_extra(request, event="risk_config_updated", fields=updated_fields),
+                extra=build_request_log_extra(
+                    request, event="risk_config_updated", fields=updated_fields
+                ),
             )
 
-        return ApiEnvelope(data=RiskConfigPayload(**ctx.config.risk.__dict__), error=None)
+        return ApiEnvelope(
+            data=RiskConfigPayload(**ctx.config.risk.__dict__), error=None
+        )
     except Exception as exc:  # pragma: no cover - defensive
         logger.exception(
             "Failed to update risk config",

@@ -3,8 +3,12 @@ from types import SimpleNamespace
 import pytest
 from starlette.testclient import TestClient
 
-from kraken_bot.connection.exceptions import AuthError, KrakenAPIError, ServiceUnavailableError
 from kraken_bot.connection import rest_client
+from kraken_bot.connection.exceptions import (
+    AuthError,
+    KrakenAPIError,
+    ServiceUnavailableError,
+)
 from kraken_bot.market_data.api import MarketDataStatus
 from kraken_bot.metrics import SystemMetrics
 
@@ -242,7 +246,9 @@ def test_auth_middleware_allows_valid_token(client, ui_auth_token):
 
 
 @pytest.mark.parametrize("ui_auth_enabled", [True])
-def test_credential_validation_auth_and_missing_fields(monkeypatch, client, ui_auth_token):
+def test_credential_validation_auth_and_missing_fields(
+    monkeypatch, client, ui_auth_token
+):
     headers = {"Authorization": "Bearer wrong"}
 
     unauthorized = client.post(
@@ -274,7 +280,9 @@ def test_credential_validation_auth_and_missing_fields(monkeypatch, client, ui_a
                 raise self.exc
             return {}
 
-    monkeypatch.setattr(rest_client, "KrakenRESTClient", lambda *_, **__: FakeClient(None))
+    monkeypatch.setattr(
+        rest_client, "KrakenRESTClient", lambda *_, **__: FakeClient(None)
+    )
     success = client.post(
         "/api/system/credentials/validate",
         json={"apiKey": "k", "apiSecret": "s", "region": "r"},
@@ -282,7 +290,9 @@ def test_credential_validation_auth_and_missing_fields(monkeypatch, client, ui_a
     )
     assert success.json() == {"data": {"valid": True}, "error": None}
 
-    monkeypatch.setattr(rest_client, "KrakenRESTClient", lambda *_, **__: FakeClient(AuthError("bad")))
+    monkeypatch.setattr(
+        rest_client, "KrakenRESTClient", lambda *_, **__: FakeClient(AuthError("bad"))
+    )
     auth_failure = client.post(
         "/api/system/credentials/validate",
         json={"apiKey": "k", "apiSecret": "s", "region": "r"},
@@ -294,7 +304,9 @@ def test_credential_validation_auth_and_missing_fields(monkeypatch, client, ui_a
     }
 
     monkeypatch.setattr(
-        rest_client, "KrakenRESTClient", lambda *_, **__: FakeClient(ServiceUnavailableError("down"))
+        rest_client,
+        "KrakenRESTClient",
+        lambda *_, **__: FakeClient(ServiceUnavailableError("down")),
     )
     unavailable = client.post(
         "/api/system/credentials/validate",
@@ -306,7 +318,11 @@ def test_credential_validation_auth_and_missing_fields(monkeypatch, client, ui_a
         "error": "Kraken is unavailable or could not be reached. Please retry.",
     }
 
-    monkeypatch.setattr(rest_client, "KrakenRESTClient", lambda *_, **__: FakeClient(KrakenAPIError("err")))
+    monkeypatch.setattr(
+        rest_client,
+        "KrakenRESTClient",
+        lambda *_, **__: FakeClient(KrakenAPIError("err")),
+    )
     api_error = client.post(
         "/api/system/credentials/validate",
         json={"apiKey": "k", "apiSecret": "s", "region": "r"},

@@ -1,24 +1,27 @@
 # src/kraken_bot/connection/rest_client.py
 
-import time
-import urllib.parse
+import base64
 import hashlib
 import hmac
-import base64
+import time
+import urllib.parse
 from typing import Any, Dict, Optional
-from requests import HTTPError, RequestException, Timeout
+
 import requests
-from .rate_limiter import RateLimiter
-from .nonce import NonceGenerator
+from requests import HTTPError, RequestException, Timeout
+
 from .exceptions import (
-    KrakenAPIError,
     AuthError,
+    KrakenAPIError,
     RateLimitError,
     ServiceUnavailableError,
 )
+from .nonce import NonceGenerator
+from .rate_limiter import RateLimiter
 
 KRAKEN_API_URL = "https://api.kraken.com"
 API_VERSION = "0"
+
 
 class KrakenRESTClient:
     def __init__(
@@ -39,9 +42,7 @@ class KrakenRESTClient:
         self.request_timeout = request_timeout
 
         self.session = requests.Session()
-        self.session.headers.update(
-            {"User-Agent": "KrakenTradingBot/0.1.0"}
-        )
+        self.session.headers.update({"User-Agent": "KrakenTradingBot/0.1.0"})
 
         self.nonce_generator = NonceGenerator()
 
@@ -49,7 +50,9 @@ class KrakenRESTClient:
         access_type = "private" if private else "public"
         return f"{self.api_url}/{API_VERSION}/{access_type}/{endpoint}"
 
-    def _generate_signature(self, urlpath: str, data: Dict[str, Any], nonce: int) -> str:
+    def _generate_signature(
+        self, urlpath: str, data: Dict[str, Any], nonce: int
+    ) -> str:
         """
         Generates the API signature for private requests.
         API-Sign = Message signature using HMAC-SHA512 of (URI path + SHA256(nonce + POST data)) and base64 decoded secret API key
@@ -83,7 +86,9 @@ class KrakenRESTClient:
 
         if private:
             if not self.api_key or not self.api_secret:
-                raise AuthError("API key and secret are required for private endpoints.")
+                raise AuthError(
+                    "API key and secret are required for private endpoints."
+                )
 
             nonce = self.nonce_generator.generate()
             data["nonce"] = nonce
@@ -111,7 +116,9 @@ class KrakenRESTClient:
                 raise RateLimitError("Rate limit exceeded")
 
             if 500 <= response.status_code < 600:
-                raise ServiceUnavailableError(f"Kraken API Service Error: HTTP {response.status_code}")
+                raise ServiceUnavailableError(
+                    f"Kraken API Service Error: HTTP {response.status_code}"
+                )
 
             response.raise_for_status()
             response_json = response.json()
@@ -122,7 +129,7 @@ class KrakenRESTClient:
 
                 # Categorize errors
                 if "EAPI:Rate limit exceeded" in error_msg:
-                    time.sleep(1) # Backoff slightly
+                    time.sleep(1)  # Backoff slightly
                     raise RateLimitError(error_msg)
                 elif (
                     "EAPI:Invalid key" in error_msg
@@ -130,7 +137,9 @@ class KrakenRESTClient:
                     or "EAPI:Invalid nonce" in error_msg
                 ):
                     raise AuthError(error_msg)
-                elif "EService:Unavailable" in error_msg or "EService:Busy" in error_msg:
+                elif (
+                    "EService:Unavailable" in error_msg or "EService:Busy" in error_msg
+                ):
                     raise ServiceUnavailableError(error_msg)
                 else:
                     raise KrakenAPIError(error_msg)
@@ -149,11 +158,15 @@ class KrakenRESTClient:
         except RequestException as e:
             raise ServiceUnavailableError(f"Network Error: {e}") from e
 
-    def get_public(self, endpoint: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    def get_public(
+        self, endpoint: str, params: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
         """Makes a GET request to a public Kraken API endpoint."""
         return self._request(endpoint, params=params, private=False)
 
-    def get_private(self, endpoint: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    def get_private(
+        self, endpoint: str, params: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
         """
         Makes a POST request to a private Kraken API endpoint (most private endpoints use POST).
         """
@@ -178,11 +191,15 @@ class KrakenRESTClient:
         """
         return self.get_private("Ledgers", params=params)
 
-    def get_open_orders(self, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    def get_open_orders(
+        self, params: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
         """Retrieves currently open orders. Endpoint: OpenOrders"""
         return self.get_private("OpenOrders", params=params)
 
-    def get_closed_orders(self, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    def get_closed_orders(
+        self, params: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
         """
         Retrieves information about closed orders.
         Endpoint: ClosedOrders

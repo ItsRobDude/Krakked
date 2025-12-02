@@ -1,7 +1,9 @@
 # tests/test_nonce.py
 
 import time
+
 from kraken_bot.connection.nonce import NonceGenerator
+
 
 def test_nonce_monotonicity():
     """Ensure generated nonces are strictly increasing."""
@@ -12,6 +14,7 @@ def test_nonce_monotonicity():
 
     assert nonce2 > nonce1
 
+
 def test_nonce_collision_avoidance():
     """Ensure nonces are increasing even if called faster than 1ms."""
     generator = NonceGenerator()
@@ -21,7 +24,8 @@ def test_nonce_collision_avoidance():
 
     # Verify strict increase
     for i in range(len(nonces) - 1):
-        assert nonces[i+1] > nonces[i]
+        assert nonces[i + 1] > nonces[i]
+
 
 def test_nonce_format():
     """Ensure nonce is an integer (epoch milliseconds)."""
@@ -31,4 +35,4 @@ def test_nonce_format():
 
     # Sanity check: nonce should be close to current time in ms
     now_ms = int(time.time() * 1000)
-    assert abs(nonce - now_ms) < 1000 # Within 1 second
+    assert abs(nonce - now_ms) < 1000  # Within 1 second

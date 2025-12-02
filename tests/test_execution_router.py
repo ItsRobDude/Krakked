@@ -1,8 +1,8 @@
 from datetime import datetime, timezone
 
 from kraken_bot.config import ExecutionConfig
-from kraken_bot.strategy.models import ExecutionPlan, RiskAdjustedAction
 from kraken_bot.execution.router import build_order_from_plan_action
+from kraken_bot.strategy.models import ExecutionPlan, RiskAdjustedAction
 
 
 def test_local_order_preserves_strategy_id_and_userref():
@@ -28,7 +28,9 @@ def test_local_order_preserves_strategy_id_and_userref():
         metadata={"order_type": "market"},
     )
 
-    order, warning = build_order_from_plan_action(action, plan, market_data=None, config=ExecutionConfig())
+    order, warning = build_order_from_plan_action(
+        action, plan, market_data=None, config=ExecutionConfig()
+    )
 
     assert warning is None
     assert order.strategy_id == "trend_core"

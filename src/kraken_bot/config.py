@@ -11,11 +11,13 @@ import yaml  # type: ignore[import-untyped]
 
 from kraken_bot.strategy.catalog import CANONICAL_STRATEGIES
 
+
 @dataclass
 class RegionCapabilities:
     supports_margin: bool
     supports_futures: bool
     supports_staking: bool
+
 
 @dataclass
 class RegionProfile:
@@ -23,11 +25,13 @@ class RegionProfile:
     capabilities: RegionCapabilities
     default_quote: str = "USD"
 
+
 @dataclass
 class UniverseConfig:
     include_pairs: list[str]
     exclude_pairs: list[str]
     min_24h_volume_usd: float
+
 
 @dataclass
 class MarketDataConfig:
@@ -95,6 +99,7 @@ class PortfolioConfig:
     db_path: str = "portfolio.db"
     auto_migrate_schema: bool = True
 
+
 @dataclass
 class RiskConfig:
     max_risk_per_trade_pct: float = 1.0
@@ -108,6 +113,7 @@ class RiskConfig:
     volatility_lookback_bars: int = 20
     min_liquidity_24h_usd: float = 100000.0
 
+
 @dataclass
 class StrategyConfig:
     name: str
@@ -118,10 +124,12 @@ class StrategyConfig:
     # Explicit userref to ensure consistent PnL tracking
     userref: Optional[int] = None
 
+
 @dataclass
 class StrategiesConfig:
     enabled: List[str] = field(default_factory=list)
     configs: Dict[str, StrategyConfig] = field(default_factory=dict)
+
 
 @dataclass
 class AppConfig:
@@ -151,18 +159,24 @@ def get_default_ohlc_store_config() -> Dict[str, str]:
     return {"root_dir": str(default_root), "backend": "parquet"}
 
 
-def load_config(config_path: Optional[Path] = None, env: Optional[str] = None) -> AppConfig:
+def load_config(
+    config_path: Optional[Path] = None, env: Optional[str] = None
+) -> AppConfig:
     """
     Loads the main application configuration from the default location or a specified path.
     """
     logger = logging.getLogger(__name__)
 
-    def _validated_int(value: Any, default: int, field_name: str, min_value: int = 1) -> int:
+    def _validated_int(
+        value: Any, default: int, field_name: str, min_value: int = 1
+    ) -> int:
         if isinstance(value, int) and value >= min_value:
             return value
 
         logger.warning(
-            "%s is invalid; using default", field_name, extra={"event": field_name, "config_path": str(config_path)}
+            "%s is invalid; using default",
+            field_name,
+            extra={"event": field_name, "config_path": str(config_path)},
         )
         return default
 
@@ -201,10 +215,16 @@ def load_config(config_path: Optional[Path] = None, env: Optional[str] = None) -
         )
         raw_config = {}
 
-    def _deep_merge_dicts(base: Dict[str, Any], overlay: Dict[str, Any]) -> Dict[str, Any]:
+    def _deep_merge_dicts(
+        base: Dict[str, Any], overlay: Dict[str, Any]
+    ) -> Dict[str, Any]:
         merged = base.copy()
         for key, value in overlay.items():
-            if key in merged and isinstance(merged[key], dict) and isinstance(value, dict):
+            if (
+                key in merged
+                and isinstance(merged[key], dict)
+                and isinstance(value, dict)
+            ):
                 merged[key] = _deep_merge_dicts(merged[key], value)
             else:
                 merged[key] = value
@@ -218,7 +238,10 @@ def load_config(config_path: Optional[Path] = None, env: Optional[str] = None) -
         if not isinstance(env_config, dict):
             logger.warning(
                 "Environment config is not a mapping; skipping env overlay",
-                extra={"event": "config_invalid_env_file", "config_path": str(env_config_path)},
+                extra={
+                    "event": "config_invalid_env_file",
+                    "config_path": str(env_config_path),
+                },
             )
             env_config = {}
 
@@ -247,7 +270,10 @@ def load_config(config_path: Optional[Path] = None, env: Optional[str] = None) -
     if not isinstance(capabilities_data, dict):
         logger.warning(
             "Region capabilities config is not a mapping; defaulting to conservative capabilities",
-            extra={"event": "config_invalid_capabilities", "config_path": str(config_path)},
+            extra={
+                "event": "config_invalid_capabilities",
+                "config_path": str(config_path),
+            },
         )
         capabilities_data = {}
 
@@ -256,7 +282,10 @@ def load_config(config_path: Optional[Path] = None, env: Optional[str] = None) -
     if not isinstance(portfolio_data, dict):
         logger.warning(
             "Portfolio config is not a mapping; using defaults",
-            extra={"event": "config_invalid_portfolio", "config_path": str(config_path)},
+            extra={
+                "event": "config_invalid_portfolio",
+                "config_path": str(config_path),
+            },
         )
         portfolio_data = {}
     default_auto_migrate_schema = effective_env != "live"
@@ -289,7 +318,10 @@ def load_config(config_path: Optional[Path] = None, env: Optional[str] = None) -
     if not isinstance(strategies_data, dict):
         logger.warning(
             "Strategies config is not a mapping; using defaults",
-            extra={"event": "config_invalid_strategies", "config_path": str(config_path)},
+            extra={
+                "event": "config_invalid_strategies",
+                "config_path": str(config_path),
+            },
         )
         strategies_data = {}
     strategy_configs: Dict[str, StrategyConfig] = {}
@@ -299,7 +331,10 @@ def load_config(config_path: Optional[Path] = None, env: Optional[str] = None) -
     if not isinstance(raw_strategy_configs, dict):
         logger.warning(
             "Strategy configs section is not a mapping; skipping strategy-specific configs",
-            extra={"event": "config_invalid_strategy_configs", "config_path": str(config_path)},
+            extra={
+                "event": "config_invalid_strategy_configs",
+                "config_path": str(config_path),
+            },
         )
         raw_strategy_configs = {}
     for config_key, cfg in raw_strategy_configs.items():
@@ -332,7 +367,9 @@ def load_config(config_path: Optional[Path] = None, env: Optional[str] = None) -
             cfg_name = config_key
 
         canonical_def = CANONICAL_STRATEGIES.get(cfg_name)
-        s_type = cfg_copy.pop("type", canonical_def.type if canonical_def else "unknown")
+        s_type = cfg_copy.pop(
+            "type", canonical_def.type if canonical_def else "unknown"
+        )
         if canonical_def and s_type != canonical_def.type:
             logger.warning(
                 "Strategy %s type '%s' does not match canonical '%s'; forcing canonical type",
@@ -365,14 +402,17 @@ def load_config(config_path: Optional[Path] = None, env: Optional[str] = None) -
             type=s_type,
             enabled=s_enabled,
             userref=userref,
-            params=params
+            params=params,
         )
 
     raw_enabled = strategies_data.get("enabled", [])
     if not isinstance(raw_enabled, list):
         logger.warning(
             "Enabled strategies should be a list; defaulting to empty",
-            extra={"event": "config_invalid_strategy_enabled", "config_path": str(config_path)},
+            extra={
+                "event": "config_invalid_strategy_enabled",
+                "config_path": str(config_path),
+            },
         )
         raw_enabled = []
 
@@ -392,15 +432,17 @@ def load_config(config_path: Optional[Path] = None, env: Optional[str] = None) -
         normalized_enabled.append(strategy_id)
 
     strategies_config = StrategiesConfig(
-        enabled=normalized_enabled,
-        configs=strategy_configs
+        enabled=normalized_enabled, configs=strategy_configs
     )
 
     raw_strategy_limits = risk_data.get("max_per_strategy_pct", {})
     if not isinstance(raw_strategy_limits, dict):
         logger.warning(
             "max_per_strategy_pct should be a mapping; defaulting to empty",
-            extra={"event": "config_invalid_strategy_limits", "config_path": str(config_path)},
+            extra={
+                "event": "config_invalid_strategy_limits",
+                "config_path": str(config_path),
+            },
         )
         raw_strategy_limits = {}
 
@@ -408,7 +450,8 @@ def load_config(config_path: Optional[Path] = None, env: Optional[str] = None) -
     for strategy_id, pct_limit in raw_strategy_limits.items():
         if strategy_id not in strategy_configs:
             logger.warning(
-                "Risk limit references unknown strategy %s; skipping", strategy_id,
+                "Risk limit references unknown strategy %s; skipping",
+                strategy_id,
                 extra={
                     "event": "config_unknown_strategy_limit",
                     "config_path": str(config_path),
@@ -428,7 +471,7 @@ def load_config(config_path: Optional[Path] = None, env: Optional[str] = None) -
         kill_switch_on_drift=risk_data.get("kill_switch_on_drift", True),
         include_manual_positions=risk_data.get("include_manual_positions", True),
         volatility_lookback_bars=risk_data.get("volatility_lookback_bars", 20),
-        min_liquidity_24h_usd=risk_data.get("min_liquidity_24h_usd", 100000.0)
+        min_liquidity_24h_usd=risk_data.get("min_liquidity_24h_usd", 100000.0),
     )
 
     universe_data = raw_config.get("universe") or {}
@@ -443,7 +486,10 @@ def load_config(config_path: Optional[Path] = None, env: Optional[str] = None) -
     if not isinstance(market_data, dict):
         logger.warning(
             "Market data config is not a mapping; using defaults",
-            extra={"event": "config_invalid_market_data", "config_path": str(config_path)},
+            extra={
+                "event": "config_invalid_market_data",
+                "config_path": str(config_path),
+            },
         )
         market_data = {}
 
@@ -452,7 +498,10 @@ def load_config(config_path: Optional[Path] = None, env: Optional[str] = None) -
     if not isinstance(ohlc_store_config, dict):
         logger.warning(
             "OHLC store config is not a mapping; using defaults",
-            extra={"event": "config_invalid_ohlc_store", "config_path": str(config_path)},
+            extra={
+                "event": "config_invalid_ohlc_store",
+                "config_path": str(config_path),
+            },
         )
         ohlc_store_config = {}
     merged_ohlc_store = {**default_ohlc_store, **ohlc_store_config}
@@ -461,7 +510,10 @@ def load_config(config_path: Optional[Path] = None, env: Optional[str] = None) -
     if not isinstance(execution_data, dict):
         logger.warning(
             "Execution config is not a mapping; using defaults",
-            extra={"event": "config_invalid_execution", "config_path": str(config_path)},
+            extra={
+                "event": "config_invalid_execution",
+                "config_path": str(config_path),
+            },
         )
         execution_data = {}
 
@@ -474,7 +526,10 @@ def load_config(config_path: Optional[Path] = None, env: Optional[str] = None) -
         logger.warning(
             "Invalid execution mode '%s'; defaulting to 'paper'",
             execution_mode,
-            extra={"event": "config_invalid_execution_mode", "config_path": str(config_path)},
+            extra={
+                "event": "config_invalid_execution_mode",
+                "config_path": str(config_path),
+            },
         )
         execution_mode = "paper"
 
@@ -490,7 +545,9 @@ def load_config(config_path: Optional[Path] = None, env: Optional[str] = None) -
         max_slippage_bps=execution_data.get(
             "max_slippage_bps", default_execution.max_slippage_bps
         ),
-        time_in_force=execution_data.get("time_in_force", default_execution.time_in_force),
+        time_in_force=execution_data.get(
+            "time_in_force", default_execution.time_in_force
+        ),
         post_only=execution_data.get("post_only", default_execution.post_only),
         validate_only=validate_only,
         allow_live_trading=execution_data.get(
@@ -524,7 +581,10 @@ def load_config(config_path: Optional[Path] = None, env: Optional[str] = None) -
     ):
         logger.warning(
             "Live mode requested without allow_live_trading; forcing validate_only",
-            extra={"event": "config_live_without_allow_live", "config_path": str(config_path)},
+            extra={
+                "event": "config_live_without_allow_live",
+                "config_path": str(config_path),
+            },
         )
         execution_config.validate_only = True
     elif (
@@ -534,7 +594,10 @@ def load_config(config_path: Optional[Path] = None, env: Optional[str] = None) -
     ):
         logger.info(
             "Live mode with trading enabled; fully live trading is active",
-            extra={"event": "config_live_trading_enabled", "config_path": str(config_path)},
+            extra={
+                "event": "config_live_trading_enabled",
+                "config_path": str(config_path),
+            },
         )
 
     ui_data = raw_config.get("ui") or {}
@@ -557,7 +620,10 @@ def load_config(config_path: Optional[Path] = None, env: Optional[str] = None) -
     if not isinstance(refresh_data, dict):
         logger.warning(
             "UI refresh intervals config is not a mapping; using defaults",
-            extra={"event": "config_invalid_ui_refresh", "config_path": str(config_path)},
+            extra={
+                "event": "config_invalid_ui_refresh",
+                "config_path": str(config_path),
+            },
         )
         refresh_data = {}
 
@@ -569,13 +635,19 @@ def load_config(config_path: Optional[Path] = None, env: Optional[str] = None) -
 
     refresh_config = UIRefreshConfig(
         dashboard_ms=_validated_int(
-            refresh_data.get("dashboard_ms"), default_ui.refresh_intervals.dashboard_ms, "config_ui_dashboard_ms"
+            refresh_data.get("dashboard_ms"),
+            default_ui.refresh_intervals.dashboard_ms,
+            "config_ui_dashboard_ms",
         ),
         orders_ms=_validated_int(
-            refresh_data.get("orders_ms"), default_ui.refresh_intervals.orders_ms, "config_ui_orders_ms"
+            refresh_data.get("orders_ms"),
+            default_ui.refresh_intervals.orders_ms,
+            "config_ui_orders_ms",
         ),
         strategies_ms=_validated_int(
-            refresh_data.get("strategies_ms"), default_ui.refresh_intervals.strategies_ms, "config_ui_strategies_ms"
+            refresh_data.get("strategies_ms"),
+            default_ui.refresh_intervals.strategies_ms,
+            "config_ui_strategies_ms",
         ),
     )
 
@@ -583,7 +655,10 @@ def load_config(config_path: Optional[Path] = None, env: Optional[str] = None) -
     if not isinstance(base_path, str):
         logger.warning(
             "UI base_path is not a string; using default",
-            extra={"event": "config_invalid_ui_base_path", "config_path": str(config_path)},
+            extra={
+                "event": "config_invalid_ui_base_path",
+                "config_path": str(config_path),
+            },
         )
         base_path = default_ui.base_path
     if not base_path.startswith("/"):
@@ -599,9 +674,11 @@ def load_config(config_path: Optional[Path] = None, env: Optional[str] = None) -
 
     ui_config = UIConfig(
         enabled=ui_data.get("enabled", default_ui.enabled),
-        host=ui_data.get("host", default_ui.host)
-        if isinstance(ui_data.get("host", default_ui.host), str)
-        else default_ui.host,
+        host=(
+            ui_data.get("host", default_ui.host)
+            if isinstance(ui_data.get("host", default_ui.host), str)
+            else default_ui.host
+        ),
         port=ui_port,
         base_path=base_path,
         auth=auth_config,
@@ -613,11 +690,19 @@ def load_config(config_path: Optional[Path] = None, env: Optional[str] = None) -
         region=RegionProfile(
             code=region_data.get("code", default_region.code),
             capabilities=RegionCapabilities(
-                supports_margin=capabilities_data.get("supports_margin", default_region.capabilities.supports_margin),
-                supports_futures=capabilities_data.get("supports_futures", default_region.capabilities.supports_futures),
-                supports_staking=capabilities_data.get("supports_staking", default_region.capabilities.supports_staking),
+                supports_margin=capabilities_data.get(
+                    "supports_margin", default_region.capabilities.supports_margin
+                ),
+                supports_futures=capabilities_data.get(
+                    "supports_futures", default_region.capabilities.supports_futures
+                ),
+                supports_staking=capabilities_data.get(
+                    "supports_staking", default_region.capabilities.supports_staking
+                ),
             ),
-            default_quote=region_data.get("default_quote", default_region.default_quote),
+            default_quote=region_data.get(
+                "default_quote", default_region.default_quote
+            ),
         ),
         universe=UniverseConfig(
             include_pairs=universe_data.get("include_pairs", []),
@@ -627,7 +712,9 @@ def load_config(config_path: Optional[Path] = None, env: Optional[str] = None) -
         market_data=MarketDataConfig(
             ws=market_data.get("ws", {}),
             ohlc_store=merged_ohlc_store,
-            backfill_timeframes=market_data.get("backfill_timeframes", ["1d", "4h", "1h"]),
+            backfill_timeframes=market_data.get(
+                "backfill_timeframes", ["1d", "4h", "1h"]
+            ),
             ws_timeframes=market_data.get("ws_timeframes", ["1m"]),
             metadata_path=market_data.get("metadata_path"),
         ),
@@ -637,6 +724,7 @@ def load_config(config_path: Optional[Path] = None, env: Optional[str] = None) -
         strategies=strategies_config,
         ui=ui_config,
     )
+
 
 @dataclass
 class PairMetadata:
@@ -653,6 +741,7 @@ class PairMetadata:
     status: str
     liquidity_24h_usd: float | None = None
 
+
 @dataclass
 class OHLCBar:
     timestamp: int
@@ -661,6 +750,7 @@ class OHLCBar:
     low: float
     close: float
     volume: float
+
 
 @dataclass
 class ConnectionStatus:

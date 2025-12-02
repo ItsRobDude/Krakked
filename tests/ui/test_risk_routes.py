@@ -27,6 +27,7 @@ from kraken_bot.strategy.models import ExecutionPlan, RiskAdjustedAction
 from kraken_bot.ui.api import create_api
 from kraken_bot.ui.context import AppContext
 
+
 @pytest.fixture
 def risk_context(client: TestClient):
     return client.context  # type: ignore[attr-defined]
@@ -66,7 +67,8 @@ class StubStrategyEngine:
 
     def get_risk_status(self) -> SimpleNamespace:
         return SimpleNamespace(
-            kill_switch_active=self._kill_switch_active or self._manual_kill_switch_active,
+            kill_switch_active=self._kill_switch_active
+            or self._manual_kill_switch_active,
             daily_drawdown_pct=0.0,
             drift_flag=False,
             total_exposure_pct=0.0,
@@ -112,7 +114,11 @@ def _build_app_config_for_risk() -> AppConfig:
             include_pairs=[], exclude_pairs=[], min_24h_volume_usd=0.0
         ),
         market_data=MarketDataConfig(
-            ws={}, ohlc_store={}, backfill_timeframes=[], ws_timeframes=[], metadata_path=None
+            ws={},
+            ohlc_store={},
+            backfill_timeframes=[],
+            ws_timeframes=[],
+            metadata_path=None,
         ),
         portfolio=PortfolioConfig(),
         execution=ExecutionConfig(),
@@ -179,7 +185,10 @@ def test_get_risk_config_enveloped(client, risk_context):
     assert response.status_code == 200
     payload = response.json()
     assert payload["error"] is None
-    assert payload["data"]["max_open_positions"] == risk_context.config.risk.max_open_positions
+    assert (
+        payload["data"]["max_open_positions"]
+        == risk_context.config.risk.max_open_positions
+    )
 
 
 @pytest.mark.parametrize("ui_read_only", [False])
@@ -200,7 +209,9 @@ def test_update_risk_config_mutates_context(client, risk_context):
 def test_update_risk_config_blocked_in_read_only(client, risk_context):
     original = risk_context.config.risk.max_open_positions
 
-    response = client.patch("/api/risk/config", json={"max_open_positions": original + 1})
+    response = client.patch(
+        "/api/risk/config", json={"max_open_positions": original + 1}
+    )
 
     assert response.status_code == 200
     assert response.json() == {"data": None, "error": "UI is in read-only mode"}

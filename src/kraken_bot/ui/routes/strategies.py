@@ -22,7 +22,10 @@ def _context(request: Request):
 async def get_strategies(request: Request) -> ApiEnvelope[list[StrategyStatePayload]]:
     ctx = _context(request)
     try:
-        strategies = [StrategyStatePayload(**state.__dict__) for state in ctx.strategy_engine.get_strategy_state()]
+        strategies = [
+            StrategyStatePayload(**state.__dict__)
+            for state in ctx.strategy_engine.get_strategy_state()
+        ]
         return ApiEnvelope(data=strategies, error=None)
     except Exception as exc:  # pragma: no cover - defensive
         logger.exception(
@@ -64,20 +67,29 @@ async def set_strategy_enabled(strategy_id: str, request: Request) -> ApiEnvelop
         logger.info(
             "Strategy enable state updated",
             extra=build_request_log_extra(
-                request, event="strategy_enabled_updated", strategy_id=strategy_id, enabled=bool(enabled)
+                request,
+                event="strategy_enabled_updated",
+                strategy_id=strategy_id,
+                enabled=bool(enabled),
             ),
         )
-        return ApiEnvelope(data={"strategy_id": strategy_id, "enabled": bool(enabled)}, error=None)
+        return ApiEnvelope(
+            data={"strategy_id": strategy_id, "enabled": bool(enabled)}, error=None
+        )
     except Exception as exc:  # pragma: no cover - defensive
         logger.exception(
             "Failed to update strategy enabled state",
-            extra=build_request_log_extra(request, event="strategy_toggle_failed", strategy_id=strategy_id),
+            extra=build_request_log_extra(
+                request, event="strategy_toggle_failed", strategy_id=strategy_id
+            ),
         )
         return ApiEnvelope(data=None, error=str(exc))
 
 
 @router.patch("/{strategy_id}/config", response_model=ApiEnvelope[dict])
-async def update_strategy_config(strategy_id: str, request: Request) -> ApiEnvelope[dict]:
+async def update_strategy_config(
+    strategy_id: str, request: Request
+) -> ApiEnvelope[dict]:
     ctx = _context(request)
     if ctx.config.ui.read_only:
         logger.warning(
@@ -104,7 +116,9 @@ async def update_strategy_config(strategy_id: str, request: Request) -> ApiEnvel
                 strat_cfg.params.update(value)
                 updated_fields[field] = value
                 if strategy_id in ctx.strategy_engine.strategy_states:
-                    ctx.strategy_engine.strategy_states[strategy_id].params.update(value)
+                    ctx.strategy_engine.strategy_states[strategy_id].params.update(
+                        value
+                    )
             elif hasattr(strat_cfg, field) and field not in {"name", "type"}:
                 setattr(strat_cfg, field, value)
                 updated_fields[field] = value
