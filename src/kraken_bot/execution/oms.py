@@ -132,7 +132,7 @@ class ExecutionService:
                     pair=action.pair,
                     side=side,
                     order_type=plan.metadata.get("order_type", ""),
-                    userref=action.userref,
+                    userref=int(action.userref) if action.userref is not None else None,
                     requested_base_size=volume,
                     requested_price=plan.metadata.get("requested_price"),
                     status="rejected",
@@ -311,7 +311,7 @@ class ExecutionService:
                 pair=action.pair,
                 side=side,
                 order_type=plan.metadata.get("order_type", ""),
-                userref=action.userref,
+                userref=int(action.userref) if action.userref is not None else None,
                 requested_base_size=volume,
                 requested_price=plan.metadata.get("requested_price"),
                 status="rejected",
@@ -482,7 +482,7 @@ class ExecutionService:
                 raw_response=order.raw_response,
             )
 
-    def _resolve_local_order(self, kraken_id: str, userref: Optional[str]) -> Optional[LocalOrder]:
+    def _resolve_local_order(self, kraken_id: str, userref: Optional[int]) -> Optional[LocalOrder]:
         """Find or reload a LocalOrder using known references."""
         local_id = self.kraken_to_local.get(kraken_id)
         if local_id and local_id in self.open_orders:

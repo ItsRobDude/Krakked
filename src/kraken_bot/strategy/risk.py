@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -62,8 +62,15 @@ class RiskContext:
     manual_positions: List[Any]
     manual_positions_included: bool
     drift_flag: bool
-    drift_status: DriftStatus
     daily_drawdown_pct: float
+    drift_status: DriftStatus = field(
+        default_factory=lambda: DriftStatus(
+            drift_flag=False,
+            expected_position_value_base=0.0,
+            actual_balance_value_base=0.0,
+            tolerance_base=0.0,
+        )
+    )
 
 
 class RiskEngine:
@@ -120,22 +127,42 @@ class RiskEngine:
             else:
                 strategy_positions.append(pos)
 
-        total_exposure_usd = sum(pos.current_value_base for pos in positions)
+        # Always track manual exposure separately
+        manual_exposure_usd = sum(pos.current_value_base for pos in manual_positions)
+
+        # Depending on config, include or exclude manual positions from risk budgets
+        if self.config.include_manual_positions:
+            exposure_positions = positions
+        else:
+            exposure_positions = strategy_positions
+
+        total_exposure_usd = sum(pos.current_value_base for pos in exposure_positions)
         total_exposure_pct = (
             total_exposure_usd / equity_view.equity_base * 100.0
         ) if equity_view.equity_base else 0.0
 
-        manual_exposure_usd = sum(pos.current_value_base for pos in manual_positions)
-        manual_exposure_pct = (manual_exposure_usd / equity_view.equity_base * 100.0) if equity_view.equity_base else 0.0
+        manual_exposure_pct = (
+            manual_exposure_usd / equity_view.equity_base * 100.0
+        ) if equity_view.equity_base else 0.0
 
         per_strategy_exposure_usd: Dict[str, float] = {}
         per_strategy_exposure_pct: Dict[str, float] = {}
         for pos in strategy_positions:
             strategy_key = pos.strategy_tag or "unattributed"
-            per_strategy_exposure_usd[strategy_key] = per_strategy_exposure_usd.get(strategy_key, 0.0) + pos.current_value_base
+            per_strategy_exposure_usd[strategy_key] = (
+                per_strategy_exposure_usd.get(strategy_key, 0.0) + pos.current_value_base
+            )
+
+        # When manual positions participate in budgets, expose them as a synthetic "manual" strategy
+        if self.config.include_manual_positions and manual_exposure_usd > 0.0:
+            per_strategy_exposure_usd["manual"] = manual_exposure_usd
 
         if equity_view.equity_base:
             for strategy_key, usd in per_strategy_exposure_usd.items():
+                if strategy_key == "manual":
+                    # Manual exposure is tracked separately via manual_exposure_pct
+                    # and should not appear in per_strategy_exposure_pct.
+                    continue
                 per_strategy_exposure_pct[strategy_key] = (usd / equity_view.equity_base) * 100.0
 
         now_ts = int(datetime.now(timezone.utc).timestamp())
