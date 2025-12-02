@@ -352,10 +352,11 @@ def run(allow_interactive_setup: bool = True) -> int:
         )
     except PortfolioSchemaError as exc:
         logger.critical(
-            "Portfolio store schema check failed: %s",
-            exc,
+            "Portfolio schema mismatch: expected %s but found %s",
+            exc.expected,
+            exc.found,
             extra=structured_log_extra(
-                event="schema_guard_failed",
+                event="schema_mismatch",
                 expected_schema=exc.expected,
                 found_schema=exc.found,
                 db_path=db_path,
