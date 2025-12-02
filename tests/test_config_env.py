@@ -157,3 +157,21 @@ execution:
     assert app_config.execution.mode == "live"
     assert app_config.execution.allow_live_trading is False
     assert app_config.execution.validate_only is True
+
+
+def test_portfolio_auto_migrate_defaults_follow_env(monkeypatch, tmp_path: Path):
+    config_dir = tmp_path / "config"
+    data_dir = tmp_path / "data"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(appdirs, "user_config_dir", lambda appname: config_dir)
+    monkeypatch.setattr(appdirs, "user_data_dir", lambda appname: data_dir)
+
+    monkeypatch.setenv("KRAKEN_BOT_ENV", "live")
+    live_config = load_config()
+    assert live_config.portfolio.auto_migrate_schema is False
+
+    monkeypatch.setenv("KRAKEN_BOT_ENV", "paper")
+    paper_config = load_config()
+    assert paper_config.portfolio.auto_migrate_schema is True

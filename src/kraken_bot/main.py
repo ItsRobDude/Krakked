@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import sqlite3
 import signal
 import threading
 from dataclasses import asdict
@@ -20,7 +21,12 @@ from kraken_bot.metrics import SystemMetrics
 from kraken_bot.portfolio.manager import PortfolioService
 from kraken_bot.portfolio.models import DriftStatus
 from kraken_bot.portfolio.exceptions import PortfolioSchemaError
-from kraken_bot.portfolio.store import assert_portfolio_schema
+from kraken_bot.portfolio.store import (
+    CURRENT_SCHEMA_VERSION,
+    assert_portfolio_schema,
+    ensure_portfolio_schema,
+    ensure_portfolio_tables,
+)
 from kraken_bot.ui.api import create_api
 from kraken_bot.ui.context import AppContext
 from kraken_bot.strategy.engine import StrategyEngine
@@ -287,12 +293,22 @@ def run(allow_interactive_setup: bool = True) -> int:
     configure_logging(level=logging.INFO)
     stop_event = threading.Event()
     db_path = "portfolio.db"
+    schema_status = None
 
     try:
         client, config, rate_limiter = bootstrap(allow_interactive_setup=allow_interactive_setup)
 
         db_path = getattr(getattr(config, "portfolio", None), "db_path", "portfolio.db")
-        assert_portfolio_schema(db_path)
+
+        if config.portfolio.auto_migrate_schema:
+            with sqlite3.connect(db_path) as conn:
+                schema_status = ensure_portfolio_schema(
+                    conn, CURRENT_SCHEMA_VERSION, migrate=True
+                )
+                ensure_portfolio_tables(conn)
+                conn.commit()
+        else:
+            schema_status = assert_portfolio_schema(db_path)
 
         market_data = MarketDataAPI(config, rest_client=client, rate_limiter=rate_limiter)
         market_data.initialize()
@@ -301,6 +317,15 @@ def run(allow_interactive_setup: bool = True) -> int:
             config, market_data, db_path=db_path, rest_client=client, rate_limiter=rate_limiter
         )
         portfolio.initialize()
+
+        logger.info(
+            "Portfolio schema ready",
+            extra=structured_log_extra(
+                event="schema_status",
+                env=get_log_environment(),
+                schema_version=portfolio.store.get_schema_version(),
+            ),
+        )
 
         strategy_engine = StrategyEngine(config, market_data, portfolio)
         strategy_engine.initialize()
@@ -346,7 +371,8 @@ def run(allow_interactive_setup: bool = True) -> int:
             app_version=APP_VERSION,
             execution_mode=getattr(config.execution, "mode", "unknown"),
             portfolio_db_path=getattr(portfolio.store, "db_path", None),
-            schema_version=getattr(portfolio.store, "get_schema_version", lambda: None)(),
+            schema_version=getattr(schema_status, "version", None)
+            or getattr(portfolio.store, "get_schema_version", lambda: None)(),
         ),
     )
 

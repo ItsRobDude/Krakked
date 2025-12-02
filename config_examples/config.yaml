@@ -37,6 +37,7 @@ portfolio:
   track_manual_trades: true
   snapshot_retention_days: 30
   reconciliation_tolerance: 1.0
+  auto_migrate_schema: true
 
 execution:
   mode: "paper"

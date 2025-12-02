@@ -6,6 +6,8 @@ class _DummyConfig:
     def __init__(self):
         class Portfolio:
             sync_interval_seconds = 300
+            auto_migrate_schema = True
+            db_path = "portfolio.db"
 
         class Strategies:
             loop_interval_seconds = 60

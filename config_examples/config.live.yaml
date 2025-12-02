@@ -5,6 +5,9 @@ execution:
   allow_live_trading: false  # Flip to true only after manual verification
   paper_tests_completed: true
 
+portfolio:
+  auto_migrate_schema: false
+
 ui:
   read_only: true
 

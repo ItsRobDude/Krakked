@@ -400,15 +400,16 @@ class PortfolioStore(abc.ABC):
 
 
 class SQLitePortfolioStore(PortfolioStore):
-    def __init__(self, db_path: str = "portfolio.db"):
+    def __init__(self, db_path: str = "portfolio.db", auto_migrate_schema: bool = True):
         self.db_path = db_path
+        self.auto_migrate_schema = auto_migrate_schema
         self._init_db()
 
     def _init_db(self):
         conn = sqlite3.connect(self.db_path)
 
         try:
-            ensure_portfolio_schema(conn, CURRENT_SCHEMA_VERSION, migrate=True)
+            ensure_portfolio_schema(conn, CURRENT_SCHEMA_VERSION, migrate=self.auto_migrate_schema)
             ensure_portfolio_tables(conn)
         finally:
             conn.close()
