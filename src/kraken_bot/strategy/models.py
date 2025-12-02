@@ -57,11 +57,11 @@ class RiskStatus:
     kill_switch_active: bool
     daily_drawdown_pct: float
     drift_flag: bool
-    drift_info: Optional[Dict[str, Any]]
     total_exposure_pct: float
     manual_exposure_pct: float
     per_asset_exposure_pct: Dict[str, float]
     per_strategy_exposure_pct: Dict[str, float]
+    # Optional extra detail about drift for logging / future UI
     drift_info: Optional[Dict[str, Any]] = None
 
 @dataclass
