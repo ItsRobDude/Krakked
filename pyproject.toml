@@ -83,6 +83,5 @@ exclude = [
   ".venv",
   "build",
   "dist",
-  "typings",
-  "ui/node_modules",
+  "E701",
 ]
