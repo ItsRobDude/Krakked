@@ -19,6 +19,7 @@ from .risk import RiskEngine
 from .strategies.demo_strategy import TrendFollowingStrategy
 from .strategies.dca_rebalance import DcaRebalanceStrategy
 from .strategies.mean_reversion import MeanReversionStrategy
+from .strategies.relative_strength import RelativeStrengthStrategy
 from .strategies.vol_breakout import VolBreakoutStrategy
 
 logger = logging.getLogger(__name__)
@@ -31,6 +32,7 @@ def _strategy_registry() -> Dict[str, Type[Strategy]]:
         "dca_rebalance": DcaRebalanceStrategy,
         "mean_reversion": MeanReversionStrategy,
         "vol_breakout": VolBreakoutStrategy,
+        "relative_strength": RelativeStrengthStrategy,
     }
 
 

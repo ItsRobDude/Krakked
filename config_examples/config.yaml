@@ -64,6 +64,7 @@ risk:
     dca_overlay: 20.0
     vol_breakout: 10.0
     majors_mean_rev: 10.0
+    rs_rotation: 20.0
     manual: 20.0
   max_daily_drawdown_pct: 10.0
   kill_switch_on_drift: true
@@ -128,6 +129,20 @@ strategies:
         band_width_bps: 150
         max_positions: 2
       userref: 1004
+
+    rs_rotation:
+      name: "rs_rotation"
+      type: "relative_strength"
+      enabled: false
+      params:
+        risk_profile: "balanced"
+        pairs: ["BTC/USD", "ETH/USD", "SOL/USD", "ADA/USD"]
+        lookback_bars: 42
+        timeframe: "4h"
+        rebalance_interval_hours: 24
+        top_n: 2
+        total_allocation_pct: 20.0
+      userref: 1005
 
 ui:
   enabled: true
