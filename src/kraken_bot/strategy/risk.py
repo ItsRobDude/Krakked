@@ -159,6 +159,10 @@ class RiskEngine:
 
         if equity_view.equity_base:
             for strategy_key, usd in per_strategy_exposure_usd.items():
+                if strategy_key == "manual":
+                    # Manual exposure is tracked separately via manual_exposure_pct
+                    # and should not appear in per_strategy_exposure_pct.
+                    continue
                 per_strategy_exposure_pct[strategy_key] = (usd / equity_view.equity_base) * 100.0
 
         now_ts = int(datetime.now(timezone.utc).timestamp())
