@@ -1,5 +1,7 @@
 # src/kraken_bot/config.py
 
+from __future__ import annotations
+
 import logging
 import os
 from dataclasses import dataclass, field
@@ -10,6 +12,9 @@ import appdirs  # type: ignore[import-untyped]
 import yaml  # type: ignore[import-untyped]
 
 from kraken_bot.strategy.catalog import CANONICAL_STRATEGIES
+
+
+RUNTIME_OVERRIDES_FILENAME = "config.runtime.yaml"
 
 
 @dataclass
@@ -163,6 +168,40 @@ def get_default_ohlc_store_config() -> Dict[str, str]:
     return {"root_dir": str(default_root), "backend": "parquet"}
 
 
+def _load_runtime_overrides(config_dir: Path) -> dict:
+    path = config_dir / RUNTIME_OVERRIDES_FILENAME
+    if not path.exists():
+        return {}
+    with open(path, "r") as f:
+        data = yaml.safe_load(f) or {}
+    return data if isinstance(data, dict) else {}
+
+
+def dump_runtime_overrides(config: AppConfig, config_dir: Path | None = None) -> None:
+    config_dir = config_dir or get_config_dir()
+    path = config_dir / RUNTIME_OVERRIDES_FILENAME
+
+    data = {
+        "risk": {
+            "max_risk_per_trade_pct": config.risk.max_risk_per_trade_pct,
+            "max_portfolio_risk_pct": config.risk.max_portfolio_risk_pct,
+            "max_per_strategy_pct": config.risk.max_per_strategy_pct,
+        },
+        "strategies": {
+            "enabled": config.strategies.enabled,
+            "configs": {
+                sid: {"params": cfg.params, "enabled": cfg.enabled}
+                for sid, cfg in config.strategies.configs.items()
+            },
+        },
+        "ui": {"refresh_intervals": config.ui.refresh_intervals.__dict__},
+    }
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w") as f:
+        yaml.safe_dump(data, f)
+
+
 def load_config(
     config_path: Optional[Path] = None, env: Optional[str] = None
 ) -> AppConfig:
@@ -250,6 +289,10 @@ def load_config(
             env_config = {}
 
         raw_config = _deep_merge_dicts(raw_config, env_config)
+
+    config_dir = get_config_dir()
+    runtime_overrides = _load_runtime_overrides(config_dir)
+    raw_config = _deep_merge_dicts(raw_config, runtime_overrides)
 
     default_region = RegionProfile(
         code="US_CA",
