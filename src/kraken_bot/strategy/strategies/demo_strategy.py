@@ -8,6 +8,7 @@ from kraken_bot.market_data.api import MarketDataAPI
 from kraken_bot.portfolio.manager import PortfolioService
 from kraken_bot.strategy.base import Strategy, StrategyContext
 from kraken_bot.strategy.models import StrategyIntent
+from kraken_bot.strategy.regime import MarketRegime
 
 
 @dataclass
@@ -112,10 +113,20 @@ class TrendFollowingStrategy(Strategy):
 
             strength_bps = trend_strength_bps(fast_ma, slow_ma)
 
+            regime_type = None
+            if ctx.regime:
+                regime_type = ctx.regime.per_pair.get(pair)
+
+            threshold = self.params.min_trend_strength_bps
+            if regime_type == MarketRegime.CHOPPY:
+                threshold *= 1.5
+            elif regime_type == MarketRegime.MEAN_REVERTING:
+                threshold *= 1.25
+            elif regime_type == MarketRegime.PANIC:
+                threshold *= 2.0
+
             higher_tf_uptrend = regime_ma > 0 and regime_closes[-1] > regime_ma
-            local_uptrend = (
-                fast_ma > slow_ma and strength_bps >= self.params.min_trend_strength_bps
-            )
+            local_uptrend = fast_ma > slow_ma and strength_bps >= threshold
 
             side = "long" if higher_tf_uptrend and local_uptrend else "flat"
 
@@ -158,6 +169,7 @@ class TrendFollowingStrategy(Strategy):
                         "regime_trend": "uptrend" if higher_tf_uptrend else "neutral",
                         "risk_profile": self.params.risk_profile,
                         "regime_timeframe": self.params.regime_timeframe,
+                        "regime": regime_type.value if regime_type else None,
                     },
                 )
             )

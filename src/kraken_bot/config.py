@@ -112,6 +112,10 @@ class RiskConfig:
     include_manual_positions: bool = True
     volatility_lookback_bars: int = 20
     min_liquidity_24h_usd: float = 100000.0
+    dynamic_allocation_enabled: bool = False
+    dynamic_allocation_lookback_hours: int = 72
+    min_strategy_weight_pct: float = 0.0
+    max_strategy_weight_pct: float = 50.0
 
 
 @dataclass
@@ -472,6 +476,12 @@ def load_config(
         include_manual_positions=risk_data.get("include_manual_positions", True),
         volatility_lookback_bars=risk_data.get("volatility_lookback_bars", 20),
         min_liquidity_24h_usd=risk_data.get("min_liquidity_24h_usd", 100000.0),
+        dynamic_allocation_enabled=risk_data.get("dynamic_allocation_enabled", False),
+        dynamic_allocation_lookback_hours=risk_data.get(
+            "dynamic_allocation_lookback_hours", 72
+        ),
+        min_strategy_weight_pct=risk_data.get("min_strategy_weight_pct", 0.0),
+        max_strategy_weight_pct=risk_data.get("max_strategy_weight_pct", 50.0),
     )
 
     universe_data = raw_config.get("universe") or {}
