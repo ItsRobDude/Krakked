@@ -93,3 +93,30 @@ def test_update_strategy_config_blocked(client, strategy_context):
     assert response.status_code == 200
     assert response.json() == {"data": None, "error": "UI is in read-only mode"}
     assert strategy_context.config.strategies.configs["alpha"].enabled is True
+
+
+@pytest.mark.parametrize("ui_read_only", [False])
+def test_update_strategy_config_updates_risk_profile(client, strategy_context):
+    strategy_context.config.strategies.configs["alpha"] = StrategyConfig(
+        name="Alpha", type="grid", enabled=True, params={}
+    )
+
+    response = client.patch(
+        "/api/strategies/alpha/config",
+        json={"params": {"risk_profile": "aggressive"}},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["error"] is None
+    assert (
+        strategy_context.config.risk.max_per_strategy_pct["alpha"]
+        == pytest.approx(20.0)
+    )
+    assert (
+        strategy_context.strategy_engine.risk_engine.config.max_per_strategy_pct[
+            "alpha"
+        ]
+        == pytest.approx(20.0)
+    )
+    assert payload["data"]["params"]["risk_profile"] == "aggressive"
