@@ -55,7 +55,9 @@ class MarketDataAPI:
         rate_limiter: Optional[RateLimiter] = None,
     ):
         self._config = config
-        self._rest_client = rest_client or KrakenRESTClient(rate_limiter=rate_limiter)
+        self._rest_client: Optional[KrakenRESTClient] = rest_client or KrakenRESTClient(
+            rate_limiter=rate_limiter
+        )
         self._ohlc_store: OHLCStore = FileOHLCStore(config.market_data)
         metadata_path = (
             Path(config.market_data.metadata_path).expanduser()
@@ -78,6 +80,7 @@ class MarketDataAPI:
         client, and optionally backfills historical data.
         """
         logger.info("Initializing MarketDataAPI...")
+        assert self._rest_client is not None
         # 1. Build the pair universe
         self.refresh_universe()
 
@@ -111,6 +114,7 @@ class MarketDataAPI:
 
     def refresh_universe(self):
         """Re-fetches the asset pairs and rebuilds the universe."""
+        assert self._rest_client is not None
         self._universe = build_universe(
             self._rest_client, self._config.region, self._config.universe
         )
@@ -229,6 +233,7 @@ class MarketDataAPI:
         return None
 
     def _get_rest_ticker_price(self, pair: str) -> Optional[float]:
+        assert self._rest_client is not None
         try:
             result = self._rest_client.get_public("Ticker", params={"pair": pair})
         except Exception as exc:
@@ -317,6 +322,7 @@ class MarketDataAPI:
 
         # 1. Check REST API reachability
         rest_ok = False
+        assert self._rest_client is not None
         try:
             # A lightweight endpoint to check connectivity
             self._rest_client.get_public("SystemStatus")

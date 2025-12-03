@@ -417,6 +417,9 @@ class ExecutionService:
         }
         params = {"userref": ",".join(str(u) for u in userrefs)} if userrefs else None
 
+        if self.adapter.client is None:
+            return
+
         try:
             remote = self.adapter.client.get_open_orders(params=params)
         except Exception:
@@ -427,6 +430,9 @@ class ExecutionService:
 
     def reconcile_orders(self) -> None:
         """Pull closed orders from Kraken and mark any matching local orders finalized."""
+        if self.adapter.client is None:
+            return
+
         try:
             remote = self.adapter.client.get_closed_orders()
         except Exception:

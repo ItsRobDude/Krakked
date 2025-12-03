@@ -7,9 +7,10 @@ import logging
 import tempfile
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Callable, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from kraken_bot.config import AppConfig, ConnectionStatus, OHLCBar, PairMetadata
+from kraken_bot.connection.rest_client import KrakenRESTClient
 from kraken_bot.execution.adapter import SimulationExecutionAdapter
 from kraken_bot.execution.oms import ExecutionService
 from kraken_bot.execution.models import ExecutionResult, LocalOrder
@@ -47,8 +48,8 @@ class BacktestMarketData(MarketDataAPI):
         end: datetime,
     ):
         super().__init__(config, rest_client=None, rate_limiter=None)
-        self._rest_client = None
-        self._ws_client = None
+        self._rest_client: Optional[KrakenRESTClient] = None
+        self._ws_client: Optional[Any] = None
         self._ohlc_store = FileOHLCStore(config.market_data)
 
         self._timeframes = list(timeframes)
@@ -70,7 +71,7 @@ class BacktestMarketData(MarketDataAPI):
                 ]
                 self._bar_cache[(pair, timeframe)] = bounded
 
-        timestamps = set()
+        timestamps: set[int] = set()
         for bars in self._bar_cache.values():
             timestamps.update(int(bar.timestamp) for bar in bars)
         self._timeline = sorted(ts for ts in timestamps if self._start_ts <= ts <= self._end_ts)

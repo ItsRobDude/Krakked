@@ -65,7 +65,7 @@ class TrendFollowingStrategy(Strategy):
     def generate_intents(self, ctx: StrategyContext) -> List[StrategyIntent]:
         intents = []
 
-        tf = ctx.timeframe
+        tf = ctx.timeframe or "1h"
         pairs = self.params.pairs or ctx.universe
 
         def sma(data: List[float], period: int) -> float:

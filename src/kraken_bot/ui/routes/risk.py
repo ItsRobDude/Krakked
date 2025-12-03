@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Any, Dict
 
 from fastapi import APIRouter, Request
 
@@ -20,7 +21,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 # TODO: Populate from configuration or a presets module when available.
-PRESET_PROFILES = {}
+PRESET_PROFILES: Dict[str, Dict[str, Any]] = {}
 
 
 def _context(request: Request):

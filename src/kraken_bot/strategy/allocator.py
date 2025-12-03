@@ -24,7 +24,7 @@ def _dominant_regime(regime: RegimeSnapshot) -> MarketRegime:
     for value in regime.per_pair.values():
         counts[value] = counts.get(value, 0) + 1
 
-    return max(counts, key=counts.get)
+    return max(counts, key=lambda regime: counts[regime])
 
 
 def _preferred_regime(strategy_id: str) -> MarketRegime | None:

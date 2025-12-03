@@ -40,7 +40,7 @@ class VolBreakoutStrategy(Strategy):
     def generate_intents(self, ctx: StrategyContext) -> list[StrategyIntent]:
         intents: list[StrategyIntent] = []
 
-        tf = ctx.timeframe
+        tf = ctx.timeframe or "1h"
         pairs = self.params.pairs or ctx.universe
 
         for pair in pairs:
