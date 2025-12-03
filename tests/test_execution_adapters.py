@@ -5,10 +5,7 @@ import pytest
 
 from kraken_bot.config import ExecutionConfig
 from kraken_bot.connection.exceptions import RateLimitError, ServiceUnavailableError
-from kraken_bot.execution.adapter import (
-    KrakenExecutionAdapter,
-    PaperExecutionAdapter,
-)
+from kraken_bot.execution.adapter import KrakenExecutionAdapter, PaperExecutionAdapter
 from kraken_bot.execution.exceptions import ExecutionError, OrderRejectedError
 from kraken_bot.execution.models import LocalOrder
 from kraken_bot.execution.oms import ExecutionService

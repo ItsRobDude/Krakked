@@ -511,4 +511,3 @@ Phase 2 is considered complete when:
 * [ ] Live data APIs respect `stale_tolerance_seconds` and clearly signal stale or missing data.
 * [ ] A small, well‑defined public API is exposed: universe, metadata, OHLC, live prices, and data status.
 * [ ] The pytest suite passes and covers universe filtering, OHLC loading, WS message handling, and rate limiting.
-

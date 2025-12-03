@@ -3818,5 +3818,3 @@ Phase 7 is complete when:
 	•	Dead-man switch is supported and wired to ExecutionService when configured.
 
 At that point, Krakked isn’t just “a fancy script” — it’s a deployable trading system with real ops, safety rails, and a path to long-term maintenance and iteration.
-
-
