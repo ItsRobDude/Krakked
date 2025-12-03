@@ -878,7 +878,7 @@ It is **not** responsible for:
 
 Assumptions:
 
-* **Spot only**, no leverage, no futures (`RegionProfile(code="US_CA", supports_margin=False, supports_futures=False)`). 
+* **Spot only**, no leverage, no futures (`RegionProfile(code="US_CA", supports_margin=False, supports_futures=False)`).
 * The bot may co‑exist with **manual trading** on the same account; the engine must handle both and keep equity reporting correct.
 
 Phase 3 must deliver a **clean contract** the Phase 4 risk/strategy engine can trust: if Phase 3 says “equity is X” and “this position is Y% of equity,” Phase 4 treats that as ground truth.
@@ -891,7 +891,7 @@ Phase 3 must deliver a **clean contract** the Phase 4 risk/strategy engine can t
 
 Phase 3 depends on:
 
-1. **Phase 1 – Connection & Region** 
+1. **Phase 1 – Connection & Region**
 
    * `KrakenRESTClient` for private endpoints:
 
@@ -904,7 +904,7 @@ Phase 3 depends on:
      * `supports_staking` as defined in Phase 1.
      * `default_quote="USD"`.
 
-2. **Phase 2 – Market Data & Universe** 
+2. **Phase 2 – Market Data & Universe**
 
    * `MarketDataAPI`:
 
@@ -3818,5 +3818,3 @@ Phase 7 is complete when:
 	•	Dead-man switch is supported and wired to ExecutionService when configured.
 
 At that point, Krakked isn’t just “a fancy script” — it’s a deployable trading system with real ops, safety rails, and a path to long-term maintenance and iteration.
-
-

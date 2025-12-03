@@ -17,9 +17,7 @@ class DataFrame:
         dtype: Any | None = ...,
         copy: bool = ...,
     ) -> None: ...
-
     def __len__(self) -> int: ...
-
     def set_index(
         self,
         keys: Any,
@@ -28,7 +26,6 @@ class DataFrame:
         inplace: bool = ...,
         verify_integrity: bool = ...,
     ) -> DataFrame: ...
-
     def sort_index(
         self,
         axis: int | str = ...,
@@ -41,7 +38,6 @@ class DataFrame:
         ignore_index: bool = ...,
         key: Any = ...,
     ) -> DataFrame: ...
-
     def reset_index(
         self,
         level: Any = ...,
@@ -52,13 +48,15 @@ class DataFrame:
         names: Any = ...,
         allow_duplicates: bool = ...,
     ) -> DataFrame: ...
-
     def to_dict(self, orient: str = ..., into: Any = ...) -> Any: ...
     def to_parquet(self, path: Any, *args: Any, **kwargs: Any) -> None: ...
     def tail(self, n: int = ...) -> DataFrame: ...
     def __getitem__(self, key: Any) -> DataFrame: ...
 
-
 def read_parquet(path: Any, *args: Any, **kwargs: Any) -> DataFrame: ...
-
-def concat(objs: Sequence[DataFrame] | Iterable[DataFrame], axis: int | str = ..., *args: Any, **kwargs: Any) -> DataFrame: ...
+def concat(
+    objs: Sequence[DataFrame] | Iterable[DataFrame],
+    axis: int | str = ...,
+    *args: Any,
+    **kwargs: Any,
+) -> DataFrame: ...
