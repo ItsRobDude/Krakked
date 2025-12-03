@@ -1,11 +1,11 @@
 from __future__ import annotations
 
+import importlib.util
 import logging
 import os
-import importlib.util
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Protocol, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Protocol
 
 import requests
 
@@ -14,13 +14,13 @@ TEXTUAL_AVAILABLE = importlib.util.find_spec("textual") is not None
 if TYPE_CHECKING:
     from textual.app import App, ComposeResult
     from textual.containers import Horizontal, Vertical
-    from textual.widgets import Static, DataTable, Footer
     from textual.reactive import Reactive, reactive
+    from textual.widgets import DataTable, Footer, Static
 elif TEXTUAL_AVAILABLE:
     from textual.app import App, ComposeResult
     from textual.containers import Horizontal, Vertical
-    from textual.widgets import Static, DataTable, Footer
-    from textual.reactive import reactive, Reactive
+    from textual.reactive import Reactive, reactive
+    from textual.widgets import DataTable, Footer, Static
 
 if not TEXTUAL_AVAILABLE:
     _TEXTUAL_MESSAGE = (
@@ -96,32 +96,23 @@ class RiskStatus:
 
 
 class BackendProtocol(Protocol):
-    def get_summary(self) -> PortfolioSummary:
-        ...
+    def get_summary(self) -> PortfolioSummary: ...
 
-    def get_positions(self) -> List[PositionRow]:
-        ...
+    def get_positions(self) -> List[PositionRow]: ...
 
-    def get_assets(self) -> List[AssetRow]:
-        ...
+    def get_assets(self) -> List[AssetRow]: ...
 
-    def get_logs(self) -> List[LogEntry]:
-        ...
+    def get_logs(self) -> List[LogEntry]: ...
 
-    def get_risk_status(self) -> RiskStatus:
-        ...
+    def get_risk_status(self) -> RiskStatus: ...
 
-    def set_kill_switch(self, active: bool) -> Optional[str]:
-        ...
+    def set_kill_switch(self, active: bool) -> Optional[str]: ...
 
-    def sync_portfolio(self) -> None:
-        ...
+    def sync_portfolio(self) -> None: ...
 
-    def halt_strategies(self) -> None:
-        ...
+    def halt_strategies(self) -> None: ...
 
-    def emergency_stop(self) -> None:
-        ...
+    def emergency_stop(self) -> None: ...
 
 
 # ---------------------------------------------------------------------------
@@ -211,15 +202,17 @@ class HttpBackend:
     """HTTP-backed implementation that talks to the Krakked API."""
 
     def __init__(self, base_url: Optional[str] = None) -> None:
-        self.base_url = (base_url or os.environ.get("KRAKKED_API_URL") or "http://localhost:8000").rstrip(
-            "/"
-        )
+        self.base_url = (
+            base_url or os.environ.get("KRAKKED_API_URL") or "http://localhost:8000"
+        ).rstrip("/")
         self.session = requests.Session()
         token = os.environ.get("KRAKKED_API_TOKEN")
         if token:
             self.session.headers.update({"Authorization": f"Bearer {token}"})
 
-    def _extract_error_message(self, response: Optional[requests.Response]) -> Optional[str]:
+    def _extract_error_message(
+        self, response: Optional[requests.Response]
+    ) -> Optional[str]:
         if response is None:
             return None
         try:
@@ -237,7 +230,9 @@ class HttpBackend:
         payload_data = response.json()
         if isinstance(payload_data, dict) and payload_data.get("error"):
             raise RuntimeError(str(payload_data["error"]))
-        return payload_data.get("data") if isinstance(payload_data, dict) else payload_data
+        return (
+            payload_data.get("data") if isinstance(payload_data, dict) else payload_data
+        )
 
     def _get(self, path: str) -> Any:
         return self._request("GET", path)
@@ -637,7 +632,10 @@ class KrakkedDashboard(App):
             live_backend = HttpBackend()
             # Probe the API to confirm availability; fall back if it fails.
             live_backend.get_summary()
-            logger.info("Using HttpBackend for dashboard data", extra={"base_url": live_backend.base_url})
+            logger.info(
+                "Using HttpBackend for dashboard data",
+                extra={"base_url": live_backend.base_url},
+            )
             return live_backend
         except Exception as exc:  # pragma: no cover - defensive fallback
             logger.info("Falling back to DummyBackend: %s", exc)
@@ -680,12 +678,16 @@ class KrakkedDashboard(App):
                     with Horizontal(id="risk_tables"):
                         with Vertical(id="risk_asset_block"):
                             yield Static("PER-ASSET EXPOSURE", classes="block-title")
-                            self.risk_asset_table = RiskExposureTable(zebra_stripes=True)
+                            self.risk_asset_table = RiskExposureTable(
+                                zebra_stripes=True
+                            )
                             yield self.risk_asset_table
 
                         with Vertical(id="risk_strategy_block"):
                             yield Static("PER-STRATEGY EXPOSURE", classes="block-title")
-                            self.risk_strategy_table = RiskExposureTable(zebra_stripes=True)
+                            self.risk_strategy_table = RiskExposureTable(
+                                zebra_stripes=True
+                            )
                             yield self.risk_strategy_table
 
         yield Footer()
@@ -697,7 +699,11 @@ class KrakkedDashboard(App):
 
     def _controls_enabled(self) -> bool:
         summary = self.status_panel.summary
-        return bool(summary and not summary.ui_read_only and summary.system_mode.lower() == "live")
+        return bool(
+            summary
+            and not summary.ui_read_only
+            and summary.system_mode.lower() == "live"
+        )
 
     # ------------------------------------------------------------------
     # View switching
@@ -735,14 +741,18 @@ class KrakkedDashboard(App):
 
     def action_halt_strategies(self) -> None:
         if not self._controls_enabled():
-            logger.info("Halt strategies blocked: controls disabled (read-only or non-live mode)")
+            logger.info(
+                "Halt strategies blocked: controls disabled (read-only or non-live mode)"
+            )
             return
         self.backend.halt_strategies()
         self.refresh_all()
 
     def action_emergency_stop(self) -> None:
         if not self._controls_enabled():
-            logger.info("Emergency stop blocked: controls disabled (read-only or non-live mode)")
+            logger.info(
+                "Emergency stop blocked: controls disabled (read-only or non-live mode)"
+            )
             return
         self.backend.emergency_stop()
         self.refresh_all()
@@ -761,10 +771,16 @@ class KrakkedDashboard(App):
             return
 
         target_state = not risk.kill_switch_active
-        prompt = "Activate kill switch? (y/N): " if target_state else "Deactivate kill switch? (y/N): "
+        prompt = (
+            "Activate kill switch? (y/N): "
+            if target_state
+            else "Deactivate kill switch? (y/N): "
+        )
         console = getattr(self, "console", None)
         try:
-            response = (console.input(prompt) if console else input(prompt)).strip().lower()
+            response = (
+                (console.input(prompt) if console else input(prompt)).strip().lower()
+            )
         except Exception:
             response = ""
 
