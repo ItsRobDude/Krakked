@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 
 class ExecutionAdapter(Protocol):
-    client: KrakenRESTClient
+    client: Optional[KrakenRESTClient]
     config: ExecutionConfig
 
     def submit_order(self, order: LocalOrder) -> LocalOrder: ...
@@ -33,7 +33,7 @@ class KrakenExecutionAdapter:
     def __init__(
         self, client: KrakenRESTClient, config: Optional[ExecutionConfig] = None
     ):
-        self.client = client
+        self.client: Optional[KrakenRESTClient] = client
         self.config = config or ExecutionConfig()
 
         if self.config.mode == "live" and not self.config.validate_only:
@@ -55,6 +55,8 @@ class KrakenExecutionAdapter:
         """
         payload: Dict[str, Any] = build_order_payload(order, self.config)
         order.raw_request = payload
+
+        assert self.client is not None
 
         price_for_notional = payload.get("price") or order.requested_price
         if price_for_notional is not None:
@@ -264,6 +266,7 @@ class KrakenExecutionAdapter:
         if not order.kraken_order_id:
             raise ExecutionError("Cannot cancel order without a Kraken order id")
 
+        assert self.client is not None
         try:
             resp = self.client.cancel_order(order.kraken_order_id)
         except Exception as exc:  # pragma: no cover - passthrough for client errors
@@ -275,6 +278,7 @@ class KrakenExecutionAdapter:
 
     def cancel_all_orders(self) -> None:
         """Cancel all open orders for the authenticated Kraken account."""
+        assert self.client is not None
         try:
             resp = self.client.cancel_all_orders()
         except Exception as exc:  # pragma: no cover - passthrough for client errors
@@ -292,7 +296,9 @@ class PaperExecutionAdapter:
         rate_limiter: Optional[RateLimiter] = None,
     ):
         self.config = config or ExecutionConfig()
-        self.client = KrakenRESTClient(rate_limiter=rate_limiter)
+        self.client: Optional[KrakenRESTClient] = KrakenRESTClient(
+            rate_limiter=rate_limiter
+        )
 
     def submit_order(self, order: LocalOrder) -> LocalOrder:
         payload: Dict[str, Any] = build_order_payload(order, self.config)
@@ -347,7 +353,7 @@ class SimulationExecutionAdapter:
         fill_callback: Optional[Callable[[LocalOrder], None]] = None,
     ):
         self.config = config or ExecutionConfig()
-        self.client = None
+        self.client: Optional[KrakenRESTClient] = None
         self._fill_callback = fill_callback
 
     def submit_order(self, order: LocalOrder) -> LocalOrder:

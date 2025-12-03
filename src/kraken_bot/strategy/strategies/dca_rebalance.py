@@ -84,6 +84,7 @@ class DcaRebalanceStrategy(Strategy):
                 return []
 
         intents: List[StrategyIntent] = []
+        tf = ctx.timeframe or "1h"
 
         equity_view = ctx.portfolio.get_equity()
         equity = equity_view.equity_base
@@ -136,7 +137,7 @@ class DcaRebalanceStrategy(Strategy):
                         intent_type=intent_type,
                         desired_exposure_usd=new_target,
                         confidence=min(1.0, abs(deviation_pct) / 100),
-                        timeframe=ctx.timeframe,
+                        timeframe=tf,
                         generated_at=ctx.now,
                         metadata=metadata,
                     )
@@ -154,7 +155,7 @@ class DcaRebalanceStrategy(Strategy):
                             intent_type="exit",
                             desired_exposure_usd=0.0,
                             confidence=min(1.0, abs(deviation_pct) / 100),
-                            timeframe=ctx.timeframe,
+                            timeframe=tf,
                             generated_at=ctx.now,
                             metadata=metadata,
                         )
@@ -168,7 +169,7 @@ class DcaRebalanceStrategy(Strategy):
                             intent_type="reduce",
                             desired_exposure_usd=new_target,
                             confidence=min(1.0, abs(deviation_pct) / 100),
-                            timeframe=ctx.timeframe,
+                            timeframe=tf,
                             generated_at=ctx.now,
                             metadata=metadata,
                         )
