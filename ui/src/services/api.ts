@@ -113,6 +113,7 @@ export type SystemMetrics = {
   market_data_max_staleness: number | null;
 };
 
+export type ExecutionMode = 'paper' | 'live';
 export type StrategyRiskProfile = 'conservative' | 'balanced' | 'aggressive';
 export type RiskPresetName = 'conservative' | 'balanced' | 'aggressive' | 'degen';
 
@@ -133,8 +134,6 @@ export type StrategyPerformance = {
   win_rate: number;
   max_drawdown_pct: number;
 };
-
-export type ExecutionMode = 'paper' | 'live';
 
 const API_BASE = import.meta.env.VITE_API_BASE || '/api';
 const API_TOKEN = import.meta.env.VITE_API_TOKEN;
@@ -205,17 +204,6 @@ export async function updateRiskConfig(patch: Partial<RiskConfig>): Promise<Risk
   });
 }
 
-export async function setExecutionMode(mode: ExecutionMode): Promise<void> {
-  const result = await fetchJson<unknown>('/system/mode', {
-    method: 'POST',
-    body: JSON.stringify({ mode }),
-  });
-
-  if (result === null) {
-    throw new Error('Unable to update execution mode');
-  }
-}
-
 export async function applyRiskPreset(name: RiskPresetName): Promise<RiskConfig | null> {
   return fetchJson<RiskConfig>(`/risk/preset/${name}`, { method: 'POST' });
 }
@@ -246,8 +234,9 @@ export function getAppVersion(health: SystemHealth | null): string | null {
   return health?.app_version ?? null;
 }
 
-export function getExecutionMode(health: SystemHealth | null): string | null {
-  return health?.execution_mode ?? health?.current_mode ?? null;
+export function getExecutionMode(health: SystemHealth | null): ExecutionMode | null {
+  const mode = health?.execution_mode ?? health?.current_mode ?? null;
+  return mode === 'paper' || mode === 'live' ? mode : null;
 }
 
 export function getKillSwitchState(health: SystemHealth | null): boolean | null {
@@ -263,6 +252,21 @@ export async function setKillSwitch(active: boolean): Promise<RiskStatus | null>
     method: 'POST',
     body: JSON.stringify({ active }),
   });
+}
+
+export async function setExecutionMode(
+  mode: ExecutionMode,
+): Promise<{ mode: ExecutionMode; validate_only: boolean }> {
+  const result = await fetchJson<{ mode: ExecutionMode; validate_only: boolean }>('/system/mode', {
+    method: 'POST',
+    body: JSON.stringify({ mode }),
+  });
+
+  if (result === null) {
+    throw new Error('Unable to update execution mode');
+  }
+
+  return result;
 }
 
 export async function flattenAllPositions(): Promise<void> {

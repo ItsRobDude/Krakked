@@ -16,49 +16,6 @@ from kraken_bot.strategy.catalog import CANONICAL_STRATEGIES
 
 RUNTIME_OVERRIDES_FILENAME = "config.runtime.yaml"
 
-PRESET_PROFILES = {
-    "conservative": {
-        "risk": {
-            "max_risk_per_trade_pct": 0.25,
-            "max_portfolio_risk_pct": 5.0,
-            "max_open_positions": 5,
-            "max_per_asset_pct": 2.5,
-            "max_daily_drawdown_pct": 5.0,
-        },
-        "per_strategy": {"default": {"risk_profile": "conservative", "cap_pct": 10.0}},
-    },
-    "balanced": {
-        "risk": {
-            "max_risk_per_trade_pct": 1.0,
-            "max_portfolio_risk_pct": 10.0,
-            "max_open_positions": 10,
-            "max_per_asset_pct": 5.0,
-            "max_daily_drawdown_pct": 10.0,
-        },
-        "per_strategy": {"default": {"risk_profile": "balanced", "cap_pct": 20.0}},
-    },
-    "aggressive": {
-        "risk": {
-            "max_risk_per_trade_pct": 2.0,
-            "max_portfolio_risk_pct": 15.0,
-            "max_open_positions": 15,
-            "max_per_asset_pct": 7.5,
-            "max_daily_drawdown_pct": 15.0,
-        },
-        "per_strategy": {"default": {"risk_profile": "aggressive", "cap_pct": 30.0}},
-    },
-    "degen": {
-        "risk": {
-            "max_risk_per_trade_pct": 5.0,
-            "max_portfolio_risk_pct": 25.0,
-            "max_open_positions": 25,
-            "max_per_asset_pct": 10.0,
-            "max_daily_drawdown_pct": 25.0,
-        },
-        "per_strategy": {"default": {"risk_profile": "aggressive", "cap_pct": 40.0}},
-    },
-}
-
 
 @dataclass
 class RegionCapabilities:
@@ -228,18 +185,7 @@ def dump_runtime_overrides(config: AppConfig, config_dir: Path | None = None) ->
         "risk": {
             "max_risk_per_trade_pct": config.risk.max_risk_per_trade_pct,
             "max_portfolio_risk_pct": config.risk.max_portfolio_risk_pct,
-            "max_open_positions": config.risk.max_open_positions,
             "max_per_strategy_pct": config.risk.max_per_strategy_pct,
-            "max_per_asset_pct": config.risk.max_per_asset_pct,
-            "max_daily_drawdown_pct": config.risk.max_daily_drawdown_pct,
-            "kill_switch_on_drift": config.risk.kill_switch_on_drift,
-            "include_manual_positions": config.risk.include_manual_positions,
-            "volatility_lookback_bars": config.risk.volatility_lookback_bars,
-            "min_liquidity_24h_usd": config.risk.min_liquidity_24h_usd,
-            "dynamic_allocation_enabled": config.risk.dynamic_allocation_enabled,
-            "dynamic_allocation_lookback_hours": config.risk.dynamic_allocation_lookback_hours,
-            "min_strategy_weight_pct": config.risk.min_strategy_weight_pct,
-            "max_strategy_weight_pct": config.risk.max_strategy_weight_pct,
         },
         "strategies": {
             "enabled": config.strategies.enabled,
