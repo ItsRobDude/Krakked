@@ -1,4 +1,8 @@
-import type { StrategyRiskProfile, StrategyState } from '../services/api';
+import type {
+  StrategyPerformance,
+  StrategyRiskProfile,
+  StrategyState,
+} from '../services/api';
 
 const riskProfiles: StrategyRiskProfile[] = ['conservative', 'balanced', 'aggressive'];
 
@@ -11,6 +15,7 @@ const formatTimestamp = (timestamp: string | null) => {
 
 export type StrategiesPanelProps = {
   strategies: StrategyState[];
+  performance: Record<string, StrategyPerformance>;
   riskSelections: Record<string, StrategyRiskProfile>;
   busy: Set<string>;
   readOnly: boolean;
@@ -21,6 +26,7 @@ export type StrategiesPanelProps = {
 
 export function StrategiesPanel({
   strategies,
+  performance,
   riskSelections,
   busy,
   readOnly,
@@ -28,6 +34,23 @@ export function StrategiesPanel({
   onToggle,
   onRiskProfileChange,
 }: StrategiesPanelProps) {
+  const formatPnl = (value?: number) => {
+    if (value === undefined) return '—';
+    return value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  };
+
+  const formatWinRate = (value?: number) => {
+    if (value === undefined) return '—';
+    return `${Math.round(value * 100)}%`;
+  };
+
+  const drawdownBadge = (value?: number) => {
+    if (value === undefined) return { label: 'Unknown', tone: 'pill--neutral' as const };
+    if (value < 10) return { label: 'OK', tone: 'pill--long' as const };
+    if (value < 25) return { label: 'Cooling', tone: 'pill--warning' as const };
+    return { label: 'In trouble', tone: 'pill--danger' as const };
+  };
+
   return (
     <section className="panel strategy-panel" aria-live="polite">
       <div className="panel__header">
@@ -43,6 +66,9 @@ export function StrategiesPanel({
           <span role="columnheader">Strategy</span>
           <span role="columnheader">Enabled</span>
           <span role="columnheader">Last action</span>
+          <span role="columnheader">72h PnL</span>
+          <span role="columnheader">Win rate</span>
+          <span role="columnheader">Drawdown</span>
           <span role="columnheader">Risk profile</span>
         </div>
         <div className="table__body">
@@ -50,6 +76,8 @@ export function StrategiesPanel({
             const isBusy = busy.has(strategy.strategy_id);
             const riskProfile = riskSelections[strategy.strategy_id] ?? 'balanced';
             const lastAction = strategy.last_actions_at || strategy.last_intents_at;
+            const perf = performance[strategy.strategy_id];
+            const drawdown = drawdownBadge(perf?.max_drawdown_pct);
 
             return (
               <div key={strategy.strategy_id} className="table__row" role="row">
@@ -70,6 +98,15 @@ export function StrategiesPanel({
                 </span>
                 <span role="cell" className="strategy__meta">
                   {formatTimestamp(lastAction)}
+                </span>
+                <span role="cell" className="strategy__meta">
+                  {perf ? formatPnl(perf.realized_pnl_quote) : 'No trades'}
+                </span>
+                <span role="cell" className="strategy__meta">
+                  {perf ? formatWinRate(perf.win_rate) : '—'}
+                </span>
+                <span role="cell">
+                  <span className={`pill ${drawdown.tone}`}>{perf ? drawdown.label : 'No data'}</span>
                 </span>
                 <span role="cell">
                   <select

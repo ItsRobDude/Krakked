@@ -13,7 +13,9 @@ from kraken_bot.logging_config import structured_log_extra
 from kraken_bot.market_data.api import MarketDataAPI
 from kraken_bot.market_data.exceptions import DataStaleError
 from kraken_bot.portfolio.manager import PortfolioService
+from kraken_bot.strategy.regime import RegimeSnapshot, infer_regime
 
+from .allocator import StrategyWeights, compute_weights
 from .base import Strategy, StrategyContext
 from .models import (
     DecisionRecord,
@@ -175,6 +177,17 @@ class StrategyEngine:
                 metadata={"error": "Market data unavailable"},
             )
 
+        regime = infer_regime(
+            self.market_data, list(self.config.universe.include_pairs)
+        )
+
+        weights: StrategyWeights | None = None
+        if self.config.risk.dynamic_allocation_enabled:
+            performance = self.portfolio.get_strategy_performance(
+                window_hours=self.config.risk.dynamic_allocation_lookback_hours
+            )
+            weights = compute_weights(performance, regime, self.config.risk)
+
         all_intents: List[StrategyIntent] = []
         for name, strategy in self.strategies.items():
             configured_timeframes = strategy.config.params.get("timeframes")
@@ -187,7 +200,7 @@ class StrategyEngine:
                 timeframes = [single_timeframe] if single_timeframe else ["1h"]
 
             for timeframe in timeframes:
-                context = self._build_context(now, strategy.config, timeframe)
+                context = self._build_context(now, strategy.config, timeframe, regime)
                 try:
                     intents = strategy.generate_intents(context)
                     for intent in intents:
@@ -195,6 +208,10 @@ class StrategyEngine:
                         intent.metadata = intent.metadata or {}
                         intent.metadata.setdefault("strategy_id", name)
                         intent.metadata.setdefault("timeframe", timeframe)
+                        if weights:
+                            weight_hint = weights.per_strategy_pct.get(name)
+                            if weight_hint is not None:
+                                intent.metadata.setdefault("weight_hint_pct", weight_hint)
                         if strategy.config.userref is not None:
                             intent.metadata.setdefault(
                                 "userref", str(strategy.config.userref)
@@ -233,7 +250,7 @@ class StrategyEngine:
                         ),
                     )
 
-        risk_actions = self.risk_engine.process_intents(all_intents)
+        risk_actions = self.risk_engine.process_intents(all_intents, weights=weights)
 
         for action in risk_actions:
             strat_cfg = self.config.strategies.configs.get(action.strategy_id)
@@ -299,7 +316,11 @@ class StrategyEngine:
         return True
 
     def _build_context(
-        self, now: datetime, strategy_config: StrategyConfig, timeframe: str
+        self,
+        now: datetime,
+        strategy_config: StrategyConfig,
+        timeframe: str,
+        regime: RegimeSnapshot,
     ) -> StrategyContext:
         universe = self.config.universe.include_pairs
         return StrategyContext(
@@ -308,6 +329,7 @@ class StrategyEngine:
             market_data=self.market_data,
             portfolio=self.portfolio,
             timeframe=timeframe,
+            regime=regime,
         )
 
     def _persist_actions(

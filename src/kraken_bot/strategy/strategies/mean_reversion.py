@@ -9,6 +9,7 @@ from pandas import Series  # type: ignore[attr-defined]
 from kraken_bot.config import StrategyConfig
 from kraken_bot.strategy.base import Strategy, StrategyContext
 from kraken_bot.strategy.models import StrategyIntent
+from kraken_bot.strategy.regime import MarketRegime
 
 
 @dataclass
@@ -72,6 +73,10 @@ class MeanReversionStrategy(Strategy):
             if ma <= 0:
                 continue
 
+            pair_regime = None
+            if ctx.regime:
+                pair_regime = ctx.regime.per_pair.get(pair)
+
             band = ma * (self.params.band_width_bps / 10_000)
             upper_band = ma + band
             lower_band = ma - band
@@ -83,7 +88,11 @@ class MeanReversionStrategy(Strategy):
             if not has_long and open_positions_count >= self.params.max_positions:
                 continue
 
-            if last_close < lower_band and not has_long:
+            if (
+                last_close < lower_band
+                and not has_long
+                and (pair_regime is None or pair_regime == MarketRegime.MEAN_REVERTING)
+            ):
                 confidence = min(1.0, (lower_band - last_close) / ma)
                 intents.append(
                     StrategyIntent(
@@ -101,6 +110,7 @@ class MeanReversionStrategy(Strategy):
                             "upper_band": upper_band,
                             "lower_band": lower_band,
                             "last_close": last_close,
+                            "regime": pair_regime.value if pair_regime else None,
                         },
                     )
                 )
@@ -125,6 +135,7 @@ class MeanReversionStrategy(Strategy):
                             "upper_band": upper_band,
                             "lower_band": lower_band,
                             "last_close": last_close,
+                            "regime": pair_regime.value if pair_regime else None,
                         },
                     )
                 )

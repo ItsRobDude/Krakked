@@ -79,6 +79,10 @@ class RiskConfigPayload(BaseModel):
     include_manual_positions: bool
     volatility_lookback_bars: int
     min_liquidity_24h_usd: float
+    dynamic_allocation_enabled: bool
+    dynamic_allocation_lookback_hours: int
+    min_strategy_weight_pct: float
+    max_strategy_weight_pct: float
 
 
 class StrategyPosition(BaseModel):
@@ -104,6 +108,16 @@ class StrategyStatePayload(BaseModel):
     current_positions: List[StrategyPosition]
     pnl_summary: Dict[str, float]
     params: Dict[str, Any] = Field(default_factory=dict)
+
+
+class StrategyPerformancePayload(BaseModel):
+    strategy_id: str
+    realized_pnl_quote: float
+    window_start: datetime
+    window_end: datetime
+    trade_count: int
+    win_rate: float
+    max_drawdown_pct: float
 
 
 class OpenOrderPayload(BaseModel):
