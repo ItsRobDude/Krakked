@@ -6,8 +6,13 @@ import logging
 
 from fastapi import APIRouter, Request
 
+from kraken_bot.config import dump_runtime_overrides
 from kraken_bot.ui.logging import build_request_log_extra
-from kraken_bot.ui.models import ApiEnvelope, StrategyStatePayload
+from kraken_bot.ui.models import (
+    ApiEnvelope,
+    StrategyPerformancePayload,
+    StrategyStatePayload,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +36,30 @@ async def get_strategies(request: Request) -> ApiEnvelope[list[StrategyStatePayl
         logger.exception(
             "Failed to fetch strategies",
             extra=build_request_log_extra(request, event="strategies_fetch_failed"),
+        )
+        return ApiEnvelope(data=None, error=str(exc))
+
+
+@router.get(
+    "/performance", response_model=ApiEnvelope[list[StrategyPerformancePayload]]
+)
+async def get_strategy_performance(
+    request: Request,
+) -> ApiEnvelope[list[StrategyPerformancePayload]]:
+    ctx = _context(request)
+    try:
+        perf = ctx.portfolio.get_strategy_performance()
+        payload = [
+            StrategyPerformancePayload(**record.__dict__)
+            for record in perf.values()
+        ]
+        return ApiEnvelope(data=payload, error=None)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.exception(
+            "Failed to fetch strategy performance",
+            extra=build_request_log_extra(
+                request, event="strategy_performance_fetch_failed"
+            ),
         )
         return ApiEnvelope(data=None, error=str(exc))
 
@@ -64,6 +93,7 @@ async def set_strategy_enabled(strategy_id: str, request: Request) -> ApiEnvelop
         elif enabled and strategy_id not in ctx.config.strategies.enabled:
             ctx.config.strategies.enabled.append(strategy_id)
 
+        dump_runtime_overrides(ctx.config)
         logger.info(
             "Strategy enable state updated",
             extra=build_request_log_extra(
@@ -123,6 +153,7 @@ async def update_strategy_config(
                 setattr(strat_cfg, field, value)
                 updated_fields[field] = value
 
+        dump_runtime_overrides(ctx.config)
         logger.info(
             "Strategy config updated",
             extra=build_request_log_extra(

@@ -49,6 +49,10 @@ export type RiskConfig = {
   include_manual_positions: boolean;
   volatility_lookback_bars: number;
   min_liquidity_24h_usd: number;
+  dynamic_allocation_enabled: boolean;
+  dynamic_allocation_lookback_hours: number;
+  min_strategy_weight_pct: number;
+  max_strategy_weight_pct: number;
 };
 
 export type RecentExecution = {
@@ -110,6 +114,7 @@ export type SystemMetrics = {
 };
 
 export type StrategyRiskProfile = 'conservative' | 'balanced' | 'aggressive';
+export type RiskPresetName = 'conservative' | 'balanced' | 'aggressive' | 'degen';
 
 export type StrategyState = {
   strategy_id: string;
@@ -118,6 +123,18 @@ export type StrategyState = {
   last_actions_at: string | null;
   params?: { risk_profile?: StrategyRiskProfile | null };
 };
+
+export type StrategyPerformance = {
+  strategy_id: string;
+  realized_pnl_quote: number;
+  window_start: string;
+  window_end: string;
+  trade_count: number;
+  win_rate: number;
+  max_drawdown_pct: number;
+};
+
+export type ExecutionMode = 'paper' | 'live';
 
 const API_BASE = import.meta.env.VITE_API_BASE || '/api';
 const API_TOKEN = import.meta.env.VITE_API_TOKEN;
@@ -173,6 +190,10 @@ export async function fetchStrategies(): Promise<StrategyState[] | null> {
   return fetchJson<StrategyState[]>('/strategies');
 }
 
+export async function fetchStrategyPerformance(): Promise<StrategyPerformance[] | null> {
+  return fetchJson<StrategyPerformance[]>('/strategies/performance');
+}
+
 export async function fetchRiskConfig(): Promise<RiskConfig | null> {
   return fetchJson<RiskConfig>('/risk/config');
 }
@@ -182,6 +203,21 @@ export async function updateRiskConfig(patch: Partial<RiskConfig>): Promise<Risk
     method: 'PATCH',
     body: JSON.stringify(patch),
   });
+}
+
+export async function setExecutionMode(mode: ExecutionMode): Promise<void> {
+  const result = await fetchJson<unknown>('/system/mode', {
+    method: 'POST',
+    body: JSON.stringify({ mode }),
+  });
+
+  if (result === null) {
+    throw new Error('Unable to update execution mode');
+  }
+}
+
+export async function applyRiskPreset(name: RiskPresetName): Promise<RiskConfig | null> {
+  return fetchJson<RiskConfig>(`/risk/preset/${name}`, { method: 'POST' });
 }
 
 export async function setStrategyEnabled(id: string, enabled: boolean): Promise<void> {
@@ -227,4 +263,14 @@ export async function setKillSwitch(active: boolean): Promise<RiskStatus | null>
     method: 'POST',
     body: JSON.stringify({ active }),
   });
+}
+
+export async function flattenAllPositions(): Promise<void> {
+  const result = await fetchJson<unknown>('/execution/flatten_all', {
+    method: 'POST',
+  });
+
+  if (result === null) {
+    throw new Error('Unable to flatten positions');
+  }
 }
