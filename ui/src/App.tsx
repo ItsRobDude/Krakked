@@ -13,6 +13,7 @@ import {
   fetchPortfolioSummary,
   fetchPositions,
   fetchRecentExecutions,
+  fetchRiskDecisions,
   fetchSystemHealth,
   fetchStrategies,
   fetchStrategyPerformance,
@@ -25,6 +26,7 @@ import {
   RiskConfig,
   RiskStatus,
   RecentExecution,
+  RiskDecision,
   RiskPresetName,
   StrategyRiskProfile,
   StrategyPerformance,
@@ -111,7 +113,8 @@ const transformBalances = (exposure: ExposureBreakdown) =>
 const transformLogs = (executions: RecentExecution[]) =>
   executions.map((execution) => {
     const source = execution.errors[0] || execution.warnings[0] || 'Execution summary';
-    const timestamp = formatTimestamp(execution.completed_at || execution.started_at);
+    const completedAt = execution.completed_at || execution.started_at;
+    const timestamp = formatTimestamp(completedAt);
     const message = `${execution.plan_id} ${execution.success ? 'succeeded' : 'failed'} (${execution.orders.length} orders)`;
     const level: LogEntry['level'] = execution.success ? 'info' : 'error';
 
@@ -120,8 +123,33 @@ const transformLogs = (executions: RecentExecution[]) =>
       message,
       timestamp,
       source,
+      sortKey: completedAt ? new Date(completedAt).getTime() : undefined,
     };
   });
+
+const transformRiskDecisions = (decisions: RiskDecision[]) =>
+  decisions
+    .filter((decision) => decision.blocked || decision.kill_switch_active)
+    .map((decision) => {
+      const timestamp = formatTimestamp(decision.decided_at);
+      const reasons = decision.block_reasons.length
+        ? decision.block_reasons.join(', ')
+        : decision.kill_switch_active
+          ? 'Kill switch active'
+          : '';
+      const message = `${decision.pair}: ${decision.blocked ? 'blocked' : 'allowed'} ${decision.action_type}${
+        reasons ? ` (${reasons})` : ''
+      }`;
+      const level: LogEntry['level'] = decision.blocked ? 'warning' : 'info';
+
+      return {
+        level,
+        message,
+        timestamp,
+        source: decision.strategy_id || 'Risk',
+        sortKey: new Date(decision.decided_at).getTime(),
+      };
+    });
 
 type ValidationErrors = Partial<typeof initialState>;
 
@@ -137,6 +165,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [connectionState, setConnectionState] = useState<'connected' | 'degraded'>('degraded');
   const [health, setHealth] = useState<SystemHealth | null>(null);
+  const [summary, setSummary] = useState<PortfolioSummary | null>(null);
   const [risk, setRisk] = useState<RiskStatus | null>(null);
   const [riskBusy, setRiskBusy] = useState(false);
   const [riskFeedback, setRiskFeedback] = useState<{ tone: 'info' | 'error' | 'success'; message: string } | null>(null);
@@ -171,7 +200,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
     let cancelled = false;
 
     const loadDashboard = async () => {
-      const [summary, exposure, systemHealth, riskStatus] = await Promise.all([
+      const [portfolioSummary, exposure, systemHealth, riskStatus] = await Promise.all([
         fetchPortfolioSummary(),
         fetchExposure(),
         fetchSystemHealth(),
@@ -179,8 +208,9 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
       ]);
       if (cancelled) return;
 
-      if (summary) {
-        setKpis(buildKpis(summary));
+      if (portfolioSummary) {
+        setSummary(portfolioSummary);
+        setKpis(buildKpis(portfolioSummary));
       }
 
       if (systemHealth) {
@@ -206,6 +236,26 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
       clearInterval(interval);
     };
   }, []);
+
+  useEffect(() => {
+    if (!health || !summary) return;
+
+    const baseKpis = buildKpis(summary);
+    const extra: Kpi[] = [
+      {
+        label: 'Market data',
+        value: health.market_data_ok ? 'OK' : 'Degraded',
+        hint: health.market_data_reason ?? '',
+      },
+      {
+        label: 'Execution',
+        value: health.execution_mode ?? 'dry-run',
+        hint: health.rest_api_reachable ? 'API reachable' : 'API degraded',
+      },
+    ];
+
+    setKpis([...baseKpis, ...extra]);
+  }, [health, summary]);
 
   useEffect(() => {
     let cancelled = false;
@@ -523,9 +573,19 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
     let cancelled = false;
 
     const loadExecutions = async () => {
-      const data = await fetchRecentExecutions();
+      const [executions, decisions] = await Promise.all([
+        fetchRecentExecutions(),
+        fetchRiskDecisions(50),
+      ]);
       if (cancelled) return;
-      if (data) setLogs(transformLogs(data));
+
+      const executionLogs = executions ? transformLogs(executions) : [];
+      const decisionLogs = decisions ? transformRiskDecisions(decisions) : [];
+      const merged = [...executionLogs, ...decisionLogs].sort(
+        (a, b) => (b.sortKey ?? 0) - (a.sortKey ?? 0),
+      );
+
+      setLogs(merged);
     };
 
     loadExecutions();

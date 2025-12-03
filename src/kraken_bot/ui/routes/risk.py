@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import logging
-from typing import Any, Dict
+from datetime import datetime, timezone
+from typing import Any, Dict, List
 
 from fastapi import APIRouter, Request
 
@@ -12,6 +14,7 @@ from kraken_bot.ui.logging import build_request_log_extra
 from kraken_bot.ui.models import (
     ApiEnvelope,
     KillSwitchPayload,
+    RiskDecisionPayload,
     RiskConfigPayload,
     RiskStatusPayload,
 )
@@ -28,6 +31,32 @@ def _context(request: Request):
     return request.app.state.context
 
 
+def _serialize_decision(record) -> RiskDecisionPayload:
+    try:
+        raw_data = json.loads(record.raw_json) if record.raw_json else {}
+    except Exception:
+        raw_data = {}
+
+    block_reasons: List[str] = []
+    if raw_data.get("blocked_reasons"):
+        block_reasons = [str(reason) for reason in raw_data["blocked_reasons"]]
+    elif record.block_reason:
+        block_reasons = [r for r in record.block_reason.split(";") if r]
+
+    decided_at = datetime.fromtimestamp(record.time, tz=timezone.utc)
+
+    return RiskDecisionPayload(
+        decided_at=decided_at,
+        plan_id=record.plan_id,
+        strategy_id=record.strategy_name,
+        pair=record.pair,
+        action_type=record.action_type,
+        blocked=record.blocked,
+        block_reasons=block_reasons,
+        kill_switch_active=record.kill_switch_active,
+    )
+
+
 @router.get("/status", response_model=ApiEnvelope[RiskStatusPayload])
 async def get_risk_status(request: Request) -> ApiEnvelope[RiskStatusPayload]:
     ctx = _context(request)
@@ -39,6 +68,23 @@ async def get_risk_status(request: Request) -> ApiEnvelope[RiskStatusPayload]:
         logger.exception(
             "Failed to fetch risk status",
             extra=build_request_log_extra(request, event="risk_status_failed"),
+        )
+        return ApiEnvelope(data=None, error=str(exc))
+
+
+@router.get("/decisions", response_model=ApiEnvelope[List[RiskDecisionPayload]])
+async def get_risk_decisions(
+    request: Request, limit: int = 50
+) -> ApiEnvelope[List[RiskDecisionPayload]]:
+    ctx = _context(request)
+    try:
+        decisions = ctx.portfolio.get_decisions(limit=limit)
+        payload = [_serialize_decision(record) for record in decisions]
+        return ApiEnvelope(data=payload, error=None)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.exception(
+            "Failed to fetch risk decisions",
+            extra=build_request_log_extra(request, event="risk_decisions_failed"),
         )
         return ApiEnvelope(data=None, error=str(exc))
 

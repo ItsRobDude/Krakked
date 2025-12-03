@@ -4,6 +4,9 @@ from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
+import json
+from datetime import datetime, timezone
+
 from starlette.testclient import TestClient
 
 from kraken_bot.config import (
@@ -23,7 +26,7 @@ from kraken_bot.config import (
 from kraken_bot.execution.models import LocalOrder
 from kraken_bot.execution.oms import ExecutionService
 from kraken_bot.metrics import SystemMetrics
-from kraken_bot.strategy.models import ExecutionPlan, RiskAdjustedAction
+from kraken_bot.strategy.models import DecisionRecord, ExecutionPlan, RiskAdjustedAction
 from kraken_bot.ui.api import create_api
 from kraken_bot.ui.context import AppContext
 
@@ -189,6 +192,32 @@ def test_get_risk_config_enveloped(client, risk_context):
         payload["data"]["max_open_positions"]
         == risk_context.config.risk.max_open_positions
     )
+
+
+def test_get_risk_decisions(client, risk_context):
+    decision = DecisionRecord(
+        time=int(datetime.now(tz=timezone.utc).timestamp()),
+        plan_id="plan-1",
+        strategy_name="alpha",
+        pair="XBTUSD",
+        action_type="open",
+        target_position_usd=100.0,
+        blocked=True,
+        block_reason="max_per_strategy",
+        kill_switch_active=False,
+        raw_json=json.dumps({"blocked_reasons": ["max_per_strategy_pct"], "action_type": "open"}),
+    )
+
+    risk_context.portfolio.get_decisions.return_value = [decision]
+
+    response = client.get("/api/risk/decisions", params={"limit": 5})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["error"] is None
+    assert payload["data"][0]["plan_id"] == "plan-1"
+    assert payload["data"][0]["block_reasons"] == ["max_per_strategy_pct"]
+    risk_context.portfolio.get_decisions.assert_called_with(limit=5)
 
 
 @pytest.mark.parametrize("ui_read_only", [False])
