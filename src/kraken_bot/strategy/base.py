@@ -3,11 +3,12 @@
 import abc
 from dataclasses import dataclass
 from datetime import datetime
-from typing import List
+from typing import List, Optional
 
 from kraken_bot.config import StrategyConfig
 from kraken_bot.market_data.api import MarketDataAPI
 from kraken_bot.portfolio.manager import PortfolioService
+from kraken_bot.strategy.regime import RegimeSnapshot
 
 from .models import StrategyIntent
 
@@ -18,7 +19,8 @@ class StrategyContext:
     universe: List[str]  # pairs this strategy is allowed to trade
     market_data: MarketDataAPI  # for pulling OHLC and prices
     portfolio: PortfolioService  # for current positions and exposures
-    timeframe: str  # the timeframe for this decision cycle ("1h", etc.)
+    timeframe: Optional[str] = None  # the timeframe for this decision cycle ("1h", etc.)
+    regime: Optional[RegimeSnapshot] = None
 
 
 class Strategy(abc.ABC):

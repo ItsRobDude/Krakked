@@ -106,6 +106,16 @@ class StrategyStatePayload(BaseModel):
     params: Dict[str, Any] = Field(default_factory=dict)
 
 
+class StrategyPerformancePayload(BaseModel):
+    strategy_id: str
+    realized_pnl_quote: float
+    window_start: datetime
+    window_end: datetime
+    trade_count: int
+    win_rate: float
+    max_drawdown_pct: float
+
+
 class OpenOrderPayload(BaseModel):
     local_id: str
     plan_id: Optional[str]
