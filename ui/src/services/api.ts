@@ -49,6 +49,10 @@ export type RiskConfig = {
   include_manual_positions: boolean;
   volatility_lookback_bars: number;
   min_liquidity_24h_usd: number;
+  dynamic_allocation_enabled: boolean;
+  dynamic_allocation_lookback_hours: number;
+  min_strategy_weight_pct: number;
+  max_strategy_weight_pct: number;
 };
 
 export type RecentExecution = {
@@ -110,6 +114,7 @@ export type SystemMetrics = {
 };
 
 export type StrategyRiskProfile = 'conservative' | 'balanced' | 'aggressive';
+export type RiskPresetName = 'conservative' | 'balanced' | 'aggressive' | 'degen';
 
 export type StrategyState = {
   strategy_id: string;
@@ -196,6 +201,10 @@ export async function updateRiskConfig(patch: Partial<RiskConfig>): Promise<Risk
     method: 'PATCH',
     body: JSON.stringify(patch),
   });
+}
+
+export async function applyRiskPreset(name: RiskPresetName): Promise<RiskConfig | null> {
+  return fetchJson<RiskConfig>(`/risk/preset/${name}`, { method: 'POST' });
 }
 
 export async function setStrategyEnabled(id: string, enabled: boolean): Promise<void> {

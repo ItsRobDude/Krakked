@@ -17,6 +17,7 @@ import {
   fetchStrategies,
   fetchStrategyPerformance,
   fetchRiskConfig,
+  applyRiskPreset,
   getRiskStatus,
   ExposureBreakdown,
   PortfolioSummary,
@@ -24,6 +25,7 @@ import {
   RiskConfig,
   RiskStatus,
   RecentExecution,
+  RiskPresetName,
   StrategyRiskProfile,
   StrategyPerformance,
   StrategyState,
@@ -68,6 +70,8 @@ const formatTimestamp = (timestamp: string | null) => {
 
 const isRiskProfile = (value: unknown): value is StrategyRiskProfile =>
   value === 'conservative' || value === 'balanced' || value === 'aggressive';
+
+const RISK_PRESET_OPTIONS: RiskPresetName[] = ['conservative', 'balanced', 'aggressive', 'degen'];
 
 const buildKpis = (summary: PortfolioSummary) => [
   {
@@ -410,6 +414,59 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
     }
   };
 
+  const handlePresetChange = async (preset: RiskPresetName) => {
+    if (health?.ui_read_only) {
+      setRiskConfigError('Backend is read-only. Risk config changes are disabled.');
+      return;
+    }
+
+    setRiskConfigBusy(true);
+    setRiskConfigError(null);
+    try {
+      const updated = await applyRiskPreset(preset);
+
+      if (!updated) {
+        setRiskConfigError('Unable to apply preset. Restored prior values.');
+        return;
+      }
+
+      setRiskConfig(updated);
+      setRiskFeedback({ tone: 'success', message: `Applied ${preset} preset.` });
+
+      const [strategiesData, perf, status] = await Promise.all([
+        fetchStrategies(),
+        fetchStrategyPerformance(),
+        getRiskStatus(),
+      ]);
+
+      if (status) setRisk(status);
+
+      if (strategiesData) {
+        setStrategies(strategiesData);
+        setStrategyRisk((previous) => {
+          const next = { ...previous };
+          strategiesData.forEach((strategy) => {
+            const riskProfile = strategy.params?.risk_profile;
+            if (isRiskProfile(riskProfile)) {
+              next[strategy.strategy_id] = riskProfile;
+            }
+          });
+          return next;
+        });
+      }
+
+      if (perf) {
+        const byId: Record<string, StrategyPerformance> = {};
+        perf.forEach((entry) => {
+          byId[entry.strategy_id] = entry;
+        });
+        setStrategyPerformance(byId);
+      }
+    } finally {
+      setRiskConfigBusy(false);
+    }
+  };
+
   useEffect(() => {
     let cancelled = false;
 
@@ -462,7 +519,16 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
         </ul>
       </section>
 
-      <RiskPanel status={risk} readOnly={Boolean(health?.ui_read_only)} busy={riskBusy} onToggle={handleToggleKillSwitch} feedback={riskFeedback} />
+      <RiskPanel
+        status={risk}
+        readOnly={Boolean(health?.ui_read_only)}
+        busy={riskBusy}
+        presetBusy={riskConfigBusy}
+        presetOptions={RISK_PRESET_OPTIONS}
+        onPresetChange={handlePresetChange}
+        onToggle={handleToggleKillSwitch}
+        feedback={riskFeedback}
+      />
 
       {riskConfig ? (
         <section className="panel">

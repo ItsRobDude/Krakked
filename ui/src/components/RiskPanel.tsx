@@ -1,10 +1,13 @@
 import type { ReactNode } from 'react';
-import type { RiskStatus } from '../services/api';
+import type { RiskPresetName, RiskStatus } from '../services/api';
 
 export type RiskPanelProps = {
   status: RiskStatus | null;
   readOnly: boolean;
   onToggle: () => void;
+  presetOptions: RiskPresetName[];
+  onPresetChange: (name: RiskPresetName) => void;
+  presetBusy?: boolean;
   busy?: boolean;
   feedback?: { tone: 'info' | 'error' | 'success'; message: ReactNode } | null;
 };
@@ -27,7 +30,16 @@ const statusCopy = {
   },
 };
 
-export function RiskPanel({ status, readOnly, onToggle, busy = false, feedback }: RiskPanelProps) {
+export function RiskPanel({
+  status,
+  readOnly,
+  onToggle,
+  presetOptions,
+  onPresetChange,
+  presetBusy = false,
+  busy = false,
+  feedback,
+}: RiskPanelProps) {
   const killSwitchState = status ? (status.kill_switch_active ? statusCopy.on : statusCopy.off) : statusCopy.unknown;
   const buttonLabel = status?.kill_switch_active ? 'Disable kill switch' : 'Activate kill switch';
   const buttonDisabled = busy || readOnly || !status;
@@ -39,6 +51,31 @@ export function RiskPanel({ status, readOnly, onToggle, busy = false, feedback }
         <span className={`pill ${killSwitchState.tone}`}>{killSwitchState.label}</span>
       </div>
       <p className="panel__description">{killSwitchState.description}</p>
+
+      <div className="field risk-panel__preset">
+        <label htmlFor="risk-preset">Portfolio preset</label>
+        <select
+          id="risk-preset"
+          defaultValue=""
+          disabled={readOnly || presetBusy}
+          onChange={(event) => {
+            const value = event.target.value as RiskPresetName | '';
+            if (!value) return;
+            onPresetChange(value);
+            event.currentTarget.value = '';
+          }}
+        >
+          <option value="" disabled>
+            Select a preset…
+          </option>
+          {presetOptions.map((preset) => (
+            <option key={preset} value={preset}>
+              {preset.charAt(0).toUpperCase() + preset.slice(1)}
+            </option>
+          ))}
+        </select>
+        <p className="field__hint">Apply a saved profile to risk budgets and strategy aggressiveness.</p>
+      </div>
 
       <div className="risk-panel__controls">
         <div className="risk-panel__meta">
