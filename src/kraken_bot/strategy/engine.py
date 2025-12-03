@@ -181,6 +181,7 @@ class StrategyEngine:
             self.market_data, list(self.config.universe.include_pairs)
         )
 
+        weights: StrategyWeights | None = None
         all_intents: List[StrategyIntent] = []
         for name, strategy in self.strategies.items():
             configured_timeframes = strategy.config.params.get("timeframes")
