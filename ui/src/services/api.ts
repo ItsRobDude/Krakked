@@ -119,6 +119,16 @@ export type StrategyState = {
   params?: { risk_profile?: StrategyRiskProfile | null };
 };
 
+export type StrategyPerformance = {
+  strategy_id: string;
+  realized_pnl_quote: number;
+  window_start: string;
+  window_end: string;
+  trade_count: number;
+  win_rate: number;
+  max_drawdown_pct: number;
+};
+
 const API_BASE = import.meta.env.VITE_API_BASE || '/api';
 const API_TOKEN = import.meta.env.VITE_API_TOKEN;
 
@@ -171,6 +181,10 @@ export async function fetchSystemMetrics(): Promise<SystemMetrics | null> {
 
 export async function fetchStrategies(): Promise<StrategyState[] | null> {
   return fetchJson<StrategyState[]>('/strategies');
+}
+
+export async function fetchStrategyPerformance(): Promise<StrategyPerformance[] | null> {
+  return fetchJson<StrategyPerformance[]>('/strategies/performance');
 }
 
 export async function fetchRiskConfig(): Promise<RiskConfig | null> {

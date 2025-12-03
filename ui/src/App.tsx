@@ -15,6 +15,7 @@ import {
   fetchRecentExecutions,
   fetchSystemHealth,
   fetchStrategies,
+  fetchStrategyPerformance,
   fetchRiskConfig,
   getRiskStatus,
   ExposureBreakdown,
@@ -24,6 +25,7 @@ import {
   RiskStatus,
   RecentExecution,
   StrategyRiskProfile,
+  StrategyPerformance,
   StrategyState,
   SystemHealth,
   updateRiskConfig,
@@ -135,6 +137,9 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
   const [riskConfigBusy, setRiskConfigBusy] = useState(false);
   const [riskConfigError, setRiskConfigError] = useState<string | null>(null);
   const [strategies, setStrategies] = useState<StrategyState[]>([]);
+  const [strategyPerformance, setStrategyPerformance] = useState<
+    Record<string, StrategyPerformance>
+  >({});
   const [strategyRisk, setStrategyRisk] = useState<Record<string, StrategyRiskProfile>>({});
   const [strategyBusy, setStrategyBusy] = useState<Set<string>>(new Set());
   const [strategyFeedback, setStrategyFeedback] = useState<string | null>(null);
@@ -231,7 +236,10 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
     let cancelled = false;
 
     const loadStrategies = async () => {
-      const data = await fetchStrategies();
+      const [data, perf] = await Promise.all([
+        fetchStrategies(),
+        fetchStrategyPerformance(),
+      ]);
       if (cancelled) return;
 
       if (data) {
@@ -248,6 +256,14 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
           });
           return next;
         });
+      }
+
+      if (perf) {
+        const byId: Record<string, StrategyPerformance> = {};
+        perf.forEach((entry) => {
+          byId[entry.strategy_id] = entry;
+        });
+        setStrategyPerformance(byId);
       }
     };
 
@@ -479,6 +495,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
 
       <StrategiesPanel
         strategies={strategies}
+        performance={strategyPerformance}
         riskSelections={strategyRisk}
         busy={strategyBusy}
         readOnly={Boolean(health?.ui_read_only)}

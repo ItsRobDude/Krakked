@@ -13,6 +13,7 @@ from kraken_bot.logging_config import structured_log_extra
 from kraken_bot.market_data.api import MarketDataAPI
 from kraken_bot.market_data.exceptions import DataStaleError
 from kraken_bot.portfolio.manager import PortfolioService
+from kraken_bot.strategy.regime import RegimeSnapshot, infer_regime
 
 from .base import Strategy, StrategyContext
 from .models import (
@@ -175,6 +176,10 @@ class StrategyEngine:
                 metadata={"error": "Market data unavailable"},
             )
 
+        regime = infer_regime(
+            self.market_data, list(self.config.universe.include_pairs)
+        )
+
         all_intents: List[StrategyIntent] = []
         for name, strategy in self.strategies.items():
             configured_timeframes = strategy.config.params.get("timeframes")
@@ -187,7 +192,7 @@ class StrategyEngine:
                 timeframes = [single_timeframe] if single_timeframe else ["1h"]
 
             for timeframe in timeframes:
-                context = self._build_context(now, strategy.config, timeframe)
+                context = self._build_context(now, strategy.config, timeframe, regime)
                 try:
                     intents = strategy.generate_intents(context)
                     for intent in intents:
@@ -299,7 +304,11 @@ class StrategyEngine:
         return True
 
     def _build_context(
-        self, now: datetime, strategy_config: StrategyConfig, timeframe: str
+        self,
+        now: datetime,
+        strategy_config: StrategyConfig,
+        timeframe: str,
+        regime: RegimeSnapshot,
     ) -> StrategyContext:
         universe = self.config.universe.include_pairs
         return StrategyContext(
@@ -308,6 +317,7 @@ class StrategyEngine:
             market_data=self.market_data,
             portfolio=self.portfolio,
             timeframe=timeframe,
+            regime=regime,
         )
 
     def _persist_actions(
