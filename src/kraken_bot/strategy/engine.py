@@ -6,7 +6,7 @@ import json
 import logging
 from dataclasses import asdict
 from datetime import datetime, timezone
-from typing import Dict, List, Optional, Type
+from typing import Any, Dict, List, Optional, Type
 
 from kraken_bot.config import AppConfig, StrategyConfig
 from kraken_bot.logging_config import structured_log_extra
@@ -134,6 +134,7 @@ class StrategyEngine:
                 last_actions_at=None,
                 current_positions=[],
                 pnl_summary={},
+                last_intents=None,
                 params=dict(strat_cfg.params),
             )
 
@@ -183,6 +184,7 @@ class StrategyEngine:
 
         weights: StrategyWeights | None = None
         all_intents: List[StrategyIntent] = []
+        intent_summaries: Dict[str, List[Dict[str, Any]]] = {}
         for name, strategy in self.strategies.items():
             configured_timeframes = strategy.config.params.get("timeframes")
             if isinstance(configured_timeframes, (list, tuple)):
@@ -209,6 +211,18 @@ class StrategyEngine:
                         if strategy.config.userref is not None:
                             intent.metadata.setdefault(
                                 "userref", str(strategy.config.userref)
+                            )
+                        summary = intent_summaries.setdefault(name, [])
+                        if len(summary) < 10:
+                            summary.append(
+                                {
+                                    "pair": intent.pair,
+                                    "side": intent.side,
+                                    "intent_type": intent.intent_type,
+                                    "desired_exposure_usd": intent.desired_exposure_usd,
+                                    "confidence": intent.confidence,
+                                    "timeframe": timeframe,
+                                }
                             )
                     all_intents.extend(intents)
                     self.strategy_states[name].last_intents_at = now
@@ -252,6 +266,18 @@ class StrategyEngine:
                 action.userref = str(strat_cfg.userref)
 
         self._persist_actions(plan_id, now, risk_actions)
+
+        ctx = self.risk_engine.build_risk_context()
+        per_strategy_pnl = self.portfolio.get_realized_pnl_by_strategy(
+            include_manual=False
+        )
+
+        for strategy_id, state in self.strategy_states.items():
+            state.pnl_summary = {
+                "realized_pnl_usd": per_strategy_pnl.get(strategy_id, 0.0),
+                "exposure_pct": ctx.per_strategy_exposure_pct.get(strategy_id, 0.0),
+            }
+            state.last_intents = intent_summaries.get(strategy_id, [])
 
         plan = ExecutionPlan(
             plan_id=plan_id,

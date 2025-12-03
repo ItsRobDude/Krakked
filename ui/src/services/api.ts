@@ -38,6 +38,17 @@ export type RiskStatus = {
   per_strategy_exposure_pct: Record<string, number>;
 };
 
+export type RiskDecision = {
+  decided_at: string;
+  plan_id: string;
+  strategy_id?: string | null;
+  pair: string;
+  action_type: string;
+  blocked: boolean;
+  block_reasons: string[];
+  kill_switch_active: boolean;
+};
+
 export type RiskConfig = {
   max_risk_per_trade_pct: number;
   max_portfolio_risk_pct: number;
@@ -117,11 +128,22 @@ export type ExecutionMode = 'paper' | 'live';
 export type StrategyRiskProfile = 'conservative' | 'balanced' | 'aggressive';
 export type RiskPresetName = 'conservative' | 'balanced' | 'aggressive' | 'degen';
 
+export type StrategyIntentPreview = {
+  pair: string;
+  side: string;
+  intent_type: string;
+  desired_exposure_usd: number | null;
+  confidence: number;
+  timeframe: string;
+};
+
 export type StrategyState = {
   strategy_id: string;
   enabled: boolean;
   last_intents_at: string | null;
   last_actions_at: string | null;
+  pnl_summary: { realized_pnl_usd?: number; exposure_pct?: number };
+  last_intents?: StrategyIntentPreview[] | null;
   params?: { risk_profile?: StrategyRiskProfile | null };
 };
 
@@ -195,6 +217,10 @@ export async function fetchStrategyPerformance(): Promise<StrategyPerformance[] 
 
 export async function fetchRiskConfig(): Promise<RiskConfig | null> {
   return fetchJson<RiskConfig>('/risk/config');
+}
+
+export async function fetchRiskDecisions(limit = 50): Promise<RiskDecision[] | null> {
+  return fetchJson<RiskDecision[]>(`/risk/decisions?limit=${limit}`);
 }
 
 export async function updateRiskConfig(patch: Partial<RiskConfig>): Promise<RiskConfig | null> {

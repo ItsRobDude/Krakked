@@ -64,6 +64,17 @@ class RiskStatusPayload(BaseModel):
     per_strategy_exposure_pct: Dict[str, float]
 
 
+class RiskDecisionPayload(BaseModel):
+    decided_at: datetime
+    plan_id: str
+    strategy_id: Optional[str]
+    pair: str
+    action_type: str
+    blocked: bool
+    block_reasons: List[str]
+    kill_switch_active: bool
+
+
 class KillSwitchPayload(BaseModel):
     active: bool
 
@@ -107,6 +118,7 @@ class StrategyStatePayload(BaseModel):
     last_actions_at: Optional[datetime]
     current_positions: List[StrategyPosition]
     pnl_summary: Dict[str, float]
+    last_intents: Optional[list[dict[str, Any]]] = None
     params: Dict[str, Any] = Field(default_factory=dict)
 
 

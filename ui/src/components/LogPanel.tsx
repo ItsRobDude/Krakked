@@ -3,6 +3,7 @@ export type LogEntry = {
   message: string;
   timestamp: string;
   source?: string;
+  sortKey?: number;
 };
 
 export type LogPanelProps = {

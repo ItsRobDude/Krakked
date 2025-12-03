@@ -299,6 +299,33 @@ p {
   gap: var(--space-3);
 }
 
+.risk-kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: var(--space-3);
+  margin: 0;
+}
+
+.risk-kpi {
+  padding: var(--space-2);
+  border-radius: var(--radius-sm);
+  background: rgba(148, 163, 184, 0.08);
+  display: grid;
+  gap: 0.35rem;
+}
+
+.risk-kpi dt {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+.risk-kpi dd {
+  margin: 0;
+  font-weight: 800;
+  color: #e2e8f0;
+}
+
 .risk-panel--readonly {
   border-color: rgba(148, 163, 184, 0.4);
   background: linear-gradient(180deg, rgba(148, 163, 184, 0.08), rgba(15, 23, 42, 0.8));
@@ -336,6 +363,33 @@ p {
 .risk-panel__hint {
   margin: 0;
   color: var(--text-muted);
+}
+
+.risk-panel__list {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.risk-panel__list h3 {
+  margin: 0;
+}
+
+.risk-panel__list ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.risk-panel__list-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem 1rem;
+  border-radius: var(--radius-sm);
+  background: rgba(148, 163, 184, 0.06);
+  font-weight: 700;
 }
 
 .placeholder-list {
