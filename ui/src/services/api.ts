@@ -117,11 +117,22 @@ export type ExecutionMode = 'paper' | 'live';
 export type StrategyRiskProfile = 'conservative' | 'balanced' | 'aggressive';
 export type RiskPresetName = 'conservative' | 'balanced' | 'aggressive' | 'degen';
 
+export type StrategyIntentPreview = {
+  pair: string;
+  side: string;
+  intent_type: string;
+  desired_exposure_usd: number | null;
+  confidence: number;
+  timeframe: string;
+};
+
 export type StrategyState = {
   strategy_id: string;
   enabled: boolean;
   last_intents_at: string | null;
   last_actions_at: string | null;
+  pnl_summary: { realized_pnl_usd?: number; exposure_pct?: number };
+  last_intents?: StrategyIntentPreview[] | null;
   params?: { risk_profile?: StrategyRiskProfile | null };
 };
 

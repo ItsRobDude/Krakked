@@ -39,6 +39,11 @@ export function StrategiesPanel({
     return value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   };
 
+  const formatExposure = (value?: number) => {
+    if (value === undefined) return '—';
+    return `${value.toFixed(2)}%`;
+  };
+
   const formatWinRate = (value?: number) => {
     if (value === undefined) return '—';
     return `${Math.round(value * 100)}%`;
@@ -66,6 +71,9 @@ export function StrategiesPanel({
           <span role="columnheader">Strategy</span>
           <span role="columnheader">Enabled</span>
           <span role="columnheader">Last action</span>
+          <span role="columnheader">Exposure</span>
+          <span role="columnheader">Realized PnL</span>
+          <span role="columnheader">Latest signal</span>
           <span role="columnheader">72h PnL</span>
           <span role="columnheader">Win rate</span>
           <span role="columnheader">Drawdown</span>
@@ -78,6 +86,7 @@ export function StrategiesPanel({
             const lastAction = strategy.last_actions_at || strategy.last_intents_at;
             const perf = performance[strategy.strategy_id];
             const drawdown = drawdownBadge(perf?.max_drawdown_pct);
+            const latestIntent = strategy.last_intents?.[0];
 
             return (
               <div key={strategy.strategy_id} className="table__row" role="row">
@@ -98,6 +107,17 @@ export function StrategiesPanel({
                 </span>
                 <span role="cell" className="strategy__meta">
                   {formatTimestamp(lastAction)}
+                </span>
+                <span role="cell" className="strategy__meta">
+                  {formatExposure(strategy.pnl_summary?.exposure_pct)}
+                </span>
+                <span role="cell" className="strategy__meta">
+                  {formatPnl(strategy.pnl_summary?.realized_pnl_usd)}
+                </span>
+                <span role="cell" className="strategy__meta" title={latestIntent ? JSON.stringify(latestIntent) : undefined}>
+                  {latestIntent
+                    ? `${latestIntent.side} ${latestIntent.pair} (${latestIntent.timeframe})`
+                    : 'No recent signals'}
                 </span>
                 <span role="cell" className="strategy__meta">
                   {perf ? formatPnl(perf.realized_pnl_quote) : 'No trades'}

@@ -107,6 +107,7 @@ class StrategyStatePayload(BaseModel):
     last_actions_at: Optional[datetime]
     current_positions: List[StrategyPosition]
     pnl_summary: Dict[str, float]
+    last_intents: Optional[list[dict[str, Any]]] = None
     params: Dict[str, Any] = Field(default_factory=dict)
 
 
