@@ -1,7 +1,7 @@
 # tests/test_portfolio_store.py
 
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timezone
 
 import pytest
 
@@ -283,7 +283,7 @@ def test_decision_and_execution_plan_retrieval(store):
 
     plan = ExecutionPlan(
         plan_id="PLAN-1",
-        generated_at=datetime.utcfromtimestamp(1700000000),
+        generated_at=datetime.fromtimestamp(1700000000, tz=timezone.utc),
         actions=[
             RiskAdjustedAction(
                 pair="XBTUSD",

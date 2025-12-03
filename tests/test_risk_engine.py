@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -57,7 +57,7 @@ def _intent(strategy_id: str, pair: str, intent_type: str, desired_usd: float = 
         desired_exposure_usd=desired_usd,
         confidence=1.0,
         timeframe="1h",
-        generated_at=datetime.utcnow(),
+        generated_at=datetime.now(timezone.utc),
     )
 
 

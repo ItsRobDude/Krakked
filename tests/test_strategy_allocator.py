@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from kraken_bot.config import RiskConfig
 from kraken_bot.strategy.allocator import compute_weights
@@ -7,7 +7,7 @@ from kraken_bot.strategy.regime import MarketRegime, RegimeSnapshot
 
 
 def _perf(strategy_id: str, pnl: float) -> StrategyPerformance:
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     return StrategyPerformance(
         strategy_id=strategy_id,
         realized_pnl_quote=pnl,

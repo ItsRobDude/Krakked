@@ -19,6 +19,9 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+# TODO: Populate from configuration or a presets module when available.
+PRESET_PROFILES = {}
+
 
 def _context(request: Request):
     return request.app.state.context
