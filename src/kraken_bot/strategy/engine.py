@@ -182,7 +182,7 @@ class StrategyEngine:
             self.market_data, list(self.config.universe.include_pairs)
         )
 
-        weights: StrategyWeights | None = None
+        weights = self._compute_strategy_weights(regime)
         all_intents: List[StrategyIntent] = []
         intent_summaries: Dict[str, List[Dict[str, Any]]] = {}
         for name, strategy in self.strategies.items():
@@ -297,6 +297,28 @@ class StrategyEngine:
             ),
         )
         return plan
+
+    def _compute_strategy_weights(
+        self, regime: RegimeSnapshot
+    ) -> StrategyWeights | None:
+        """Compute dynamic strategy weights from performance and regime context."""
+
+        if not self.config.risk.dynamic_allocation_enabled:
+            return None
+
+        try:
+            performance = self.portfolio.get_strategy_performance(
+                self.config.risk.dynamic_allocation_lookback_hours
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.error(
+                "Failed to compute strategy performance for weighting: %s",
+                exc,
+                extra=structured_log_extra(event="strategy_weight_error"),
+            )
+            return None
+
+        return compute_weights(performance, regime, self.config.risk)
 
     def _data_ready(self) -> bool:
         try:

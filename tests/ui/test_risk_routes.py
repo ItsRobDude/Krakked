@@ -1,11 +1,10 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timezone
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
 import json
-from datetime import datetime, timezone
 
 from starlette.testclient import TestClient
 
