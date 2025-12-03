@@ -181,28 +181,7 @@ class StrategyEngine:
             self.market_data, list(self.config.universe.include_pairs)
         )
 
-        # Optional dynamic strategy allocation based on recent performance.
         weights: StrategyWeights | None = None
-        if getattr(self.config.risk, "dynamic_allocation_enabled", False):
-            try:
-                lookback = getattr(
-                    self.config.risk, "dynamic_allocation_lookback_hours", 72
-                )
-                performance = self.portfolio.get_strategy_performance(
-                    window_hours=lookback
-                )
-                weights = compute_weights(performance, regime, self.config.risk)
-            except Exception as exc:  # pragma: no cover - defensive
-                logger.error(
-                    "Error computing strategy weights: %s",
-                    exc,
-                    extra=structured_log_extra(
-                        event="strategy_weight_error",
-                        plan_id=plan_id,
-                    ),
-                )
-                weights = None
-
         all_intents: List[StrategyIntent] = []
         for name, strategy in self.strategies.items():
             configured_timeframes = strategy.config.params.get("timeframes")
