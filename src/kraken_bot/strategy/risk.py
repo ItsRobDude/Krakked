@@ -17,6 +17,7 @@ from kraken_bot.market_data.exceptions import DataStaleError
 from kraken_bot.portfolio.manager import PortfolioService
 from kraken_bot.portfolio.models import DriftStatus
 
+from .allocator import StrategyWeights
 from .models import RiskAdjustedAction, RiskStatus, StrategyIntent
 
 Series = Any
@@ -212,9 +213,13 @@ class RiskEngine:
         )
 
     def process_intents(
-        self, intents: List[StrategyIntent]
+        self,
+        intents: List[StrategyIntent],
+        weights: StrategyWeights | None = None,
     ) -> List[RiskAdjustedAction]:
         ctx = self.build_risk_context()
+
+        per_strategy_caps = self._build_effective_caps(weights)
 
         kill_switch_reasons: List[str] = []
         kill_switch_active = self._manual_kill_switch_active
@@ -259,7 +264,9 @@ class RiskEngine:
             intents_by_pair.setdefault(intent.pair, []).append(intent)
 
         actions = [
-            self._process_pair_intents(pair, pair_intents, ctx)
+            self._process_pair_intents(
+                pair, pair_intents, ctx, per_strategy_caps=per_strategy_caps
+            )
             for pair, pair_intents in intents_by_pair.items()
         ]
         return actions
@@ -366,7 +373,11 @@ class RiskEngine:
         return actions
 
     def _process_pair_intents(
-        self, pair: str, intents: List[StrategyIntent], ctx: RiskContext
+        self,
+        pair: str,
+        intents: List[StrategyIntent],
+        ctx: RiskContext,
+        per_strategy_caps: Dict[str, float],
     ) -> RiskAdjustedAction:
         price = self.market_data.get_latest_price(pair)
         if not price or price <= 0:
@@ -423,7 +434,10 @@ class RiskEngine:
                 )
 
         adjusted_targets, limit_reasons = self._apply_limits(
-            target_usd_by_strategy, current_by_strategy, ctx
+            target_usd_by_strategy,
+            current_by_strategy,
+            ctx,
+            per_strategy_caps=per_strategy_caps,
         )
         blocked_reasons.extend(limit_reasons)
         target_usd = sum(adjusted_targets.values())
@@ -460,11 +474,31 @@ class RiskEngine:
             risk_limits_snapshot=asdict(self.config),
         )
 
+    def _build_effective_caps(
+        self, weights: StrategyWeights | None
+    ) -> Dict[str, float]:
+        caps = dict(self.config.max_per_strategy_pct)
+
+        if not weights:
+            return caps
+
+        for strategy_id, pct in weights.per_strategy_pct.items():
+            bounded_pct = min(
+                max(pct, self.config.min_strategy_weight_pct),
+                self.config.max_strategy_weight_pct,
+            )
+            if strategy_id in caps:
+                caps[strategy_id] = min(caps[strategy_id], bounded_pct)
+            else:
+                caps[strategy_id] = bounded_pct
+        return caps
+
     def _apply_limits(
         self,
         target_by_strategy: Dict[str, float],
         current_by_strategy: Dict[str, float],
         ctx: RiskContext,
+        per_strategy_caps: Dict[str, float],
     ) -> tuple[Dict[str, float], List[str]]:
         blocked_reasons: List[str] = []
 
@@ -500,7 +534,7 @@ class RiskEngine:
         total_target_usd = sum(target_by_strategy.values())
         current_usd = sum(current_by_strategy.values())
 
-        for strategy_id, pct_limit in self.config.max_per_strategy_pct.items():
+        for strategy_id, pct_limit in per_strategy_caps.items():
             if strategy_id == "manual" and not ctx.manual_positions_included:
                 continue
 

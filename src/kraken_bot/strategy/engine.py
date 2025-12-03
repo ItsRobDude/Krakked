@@ -15,6 +15,7 @@ from kraken_bot.market_data.exceptions import DataStaleError
 from kraken_bot.portfolio.manager import PortfolioService
 from kraken_bot.strategy.regime import RegimeSnapshot, infer_regime
 
+from .allocator import StrategyWeights, compute_weights
 from .base import Strategy, StrategyContext
 from .models import (
     DecisionRecord,
@@ -200,6 +201,10 @@ class StrategyEngine:
                         intent.metadata = intent.metadata or {}
                         intent.metadata.setdefault("strategy_id", name)
                         intent.metadata.setdefault("timeframe", timeframe)
+                        if weights:
+                            weight_hint = weights.per_strategy_pct.get(name)
+                            if weight_hint is not None:
+                                intent.metadata.setdefault("weight_hint_pct", weight_hint)
                         if strategy.config.userref is not None:
                             intent.metadata.setdefault(
                                 "userref", str(strategy.config.userref)
@@ -238,7 +243,7 @@ class StrategyEngine:
                         ),
                     )
 
-        risk_actions = self.risk_engine.process_intents(all_intents)
+        risk_actions = self.risk_engine.process_intents(all_intents, weights=weights)
 
         for action in risk_actions:
             strat_cfg = self.config.strategies.configs.get(action.strategy_id)
