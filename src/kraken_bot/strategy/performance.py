@@ -1,6 +1,6 @@
 # src/kraken_bot/strategy/performance.py
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List
 
 from kraken_bot.portfolio.models import RealizedPnLRecord
@@ -38,13 +38,13 @@ def compute_strategy_performance(
 ) -> Dict[str, StrategyPerformance]:
     """Aggregate recent realized PnL into per-strategy performance metrics."""
 
-    window_end = datetime.utcnow()
+    window_end = datetime.now(timezone.utc)
     window_start = window_end - window
 
     records_by_strategy: Dict[str, List[RealizedPnLRecord]] = {}
 
     for record in portfolio.realized_pnl_history:
-        record_time = datetime.utcfromtimestamp(record.time)
+        record_time = datetime.fromtimestamp(record.time, tz=timezone.utc)
         if record_time < window_start or record_time > window_end:
             continue
 
