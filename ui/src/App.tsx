@@ -595,6 +595,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
 
       <RiskPanel
         status={risk}
+        riskConfig={riskConfig}
         readOnly={Boolean(health?.ui_read_only)}
         busy={riskBusy}
         presetBusy={riskConfigBusy}

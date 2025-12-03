@@ -1,8 +1,9 @@
 import type { ReactNode } from 'react';
-import type { RiskPresetName, RiskStatus } from '../services/api';
+import type { RiskConfig, RiskPresetName, RiskStatus } from '../services/api';
 
 export type RiskPanelProps = {
   status: RiskStatus | null;
+  riskConfig?: RiskConfig | null;
   readOnly: boolean;
   onToggle: () => void;
   presetOptions: RiskPresetName[];
@@ -32,6 +33,7 @@ const statusCopy = {
 
 export function RiskPanel({
   status,
+  riskConfig,
   readOnly,
   onToggle,
   presetOptions,
@@ -42,7 +44,28 @@ export function RiskPanel({
 }: RiskPanelProps) {
   const killSwitchState = status ? (status.kill_switch_active ? statusCopy.on : statusCopy.off) : statusCopy.unknown;
   const buttonLabel = status?.kill_switch_active ? 'Resume trading' : 'Pause trading';
-  const buttonDisabled = busy || readOnly || !status;
+  const drawdownLimit = riskConfig?.max_daily_drawdown_pct;
+  const drawdownGuard = Boolean(
+    status && typeof drawdownLimit === 'number' && status.daily_drawdown_pct >= drawdownLimit,
+  );
+  const driftGuard = Boolean(status?.drift_flag);
+  const isResume = Boolean(status?.kill_switch_active);
+  const disableReason = !status
+    ? 'Awaiting latest risk status.'
+    : readOnly
+      ? 'Backend read-only: changes are simulated only.'
+      : isResume && drawdownGuard
+        ? `Daily drawdown ${status.daily_drawdown_pct.toFixed(1)}% exceeds limit.`
+        : isResume && driftGuard
+          ? 'Price drift detected. Risk controls locked.'
+          : undefined;
+  const buttonDisabled = busy || readOnly || !status || (isResume && (drawdownGuard || driftGuard));
+  const hotStrategies = status
+    ? Object.entries(status.per_strategy_exposure_pct)
+        .filter(([, value]) => value > 0)
+        .sort(([, a], [, b]) => b - a)
+        .slice(0, 5)
+    : [];
 
   return (
     <section className={`panel risk-panel${readOnly ? ' risk-panel--readonly' : ''}`} aria-live="polite">
@@ -50,6 +73,23 @@ export function RiskPanel({
         <h2>Risk controls</h2>
         <span className={`pill ${killSwitchState.tone}`}>{killSwitchState.label}</span>
       </div>
+      {readOnly ? <p className="panel__hint">Backend read-only: changes are simulated only.</p> : null}
+      {status ? (
+        <dl className="risk-kpis">
+          <div className="risk-kpi">
+            <dt>Total exposure</dt>
+            <dd>{status.total_exposure_pct.toFixed(1)}%</dd>
+          </div>
+          <div className="risk-kpi">
+            <dt>Manual exposure</dt>
+            <dd>{status.manual_exposure_pct.toFixed(1)}%</dd>
+          </div>
+          <div className="risk-kpi">
+            <dt>Daily drawdown</dt>
+            <dd>{status.daily_drawdown_pct.toFixed(1)}%</dd>
+          </div>
+        </dl>
+      ) : null}
       <p className="panel__description">{killSwitchState.description}</p>
 
       <div className="field risk-panel__preset">
@@ -91,11 +131,26 @@ export function RiskPanel({
           className="primary-button"
           disabled={buttonDisabled}
           aria-busy={busy}
+          title={disableReason}
           onClick={onToggle}
         >
           {busy ? 'Updating…' : buttonLabel}
         </button>
       </div>
+
+      {hotStrategies.length > 0 ? (
+        <div className="risk-panel__list">
+          <h3>Top strategy exposure</h3>
+          <ul>
+            {hotStrategies.map(([strategyId, pct]) => (
+              <li key={strategyId} className="risk-panel__list-item">
+                <span>{strategyId}</span>
+                <span>{pct.toFixed(1)}%</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
 
       {feedback ? <div className={`feedback feedback--${feedback.tone}`}>{feedback.message}</div> : null}
     </section>
