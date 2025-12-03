@@ -181,13 +181,6 @@ class StrategyEngine:
             self.market_data, list(self.config.universe.include_pairs)
         )
 
-        weights: StrategyWeights | None = None
-        if self.config.risk.dynamic_allocation_enabled:
-            performance = self.portfolio.get_strategy_performance(
-                window_hours=self.config.risk.dynamic_allocation_lookback_hours
-            )
-            weights = compute_weights(performance, regime, self.config.risk)
-
         all_intents: List[StrategyIntent] = []
         for name, strategy in self.strategies.items():
             configured_timeframes = strategy.config.params.get("timeframes")
