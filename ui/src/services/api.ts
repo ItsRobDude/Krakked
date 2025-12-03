@@ -134,8 +134,6 @@ export type StrategyPerformance = {
   max_drawdown_pct: number;
 };
 
-export type ExecutionMode = 'paper' | 'live';
-
 const API_BASE = import.meta.env.VITE_API_BASE || '/api';
 const API_TOKEN = import.meta.env.VITE_API_TOKEN;
 
@@ -203,17 +201,6 @@ export async function updateRiskConfig(patch: Partial<RiskConfig>): Promise<Risk
     method: 'PATCH',
     body: JSON.stringify(patch),
   });
-}
-
-export async function setExecutionMode(mode: ExecutionMode): Promise<void> {
-  const result = await fetchJson<unknown>('/system/mode', {
-    method: 'POST',
-    body: JSON.stringify({ mode }),
-  });
-
-  if (result === null) {
-    throw new Error('Unable to update execution mode');
-  }
 }
 
 export async function applyRiskPreset(name: RiskPresetName): Promise<RiskConfig | null> {
