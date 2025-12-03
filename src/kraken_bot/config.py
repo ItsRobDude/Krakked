@@ -1,5 +1,7 @@
 # src/kraken_bot/config.py
 
+from __future__ import annotations
+
 import logging
 import os
 from dataclasses import dataclass, field
@@ -10,6 +12,52 @@ import appdirs  # type: ignore[import-untyped]
 import yaml  # type: ignore[import-untyped]
 
 from kraken_bot.strategy.catalog import CANONICAL_STRATEGIES
+
+
+RUNTIME_OVERRIDES_FILENAME = "config.runtime.yaml"
+
+PRESET_PROFILES = {
+    "conservative": {
+        "risk": {
+            "max_risk_per_trade_pct": 0.25,
+            "max_portfolio_risk_pct": 5.0,
+            "max_open_positions": 5,
+            "max_per_asset_pct": 2.5,
+            "max_daily_drawdown_pct": 5.0,
+        },
+        "per_strategy": {"default": {"risk_profile": "conservative", "cap_pct": 10.0}},
+    },
+    "balanced": {
+        "risk": {
+            "max_risk_per_trade_pct": 1.0,
+            "max_portfolio_risk_pct": 10.0,
+            "max_open_positions": 10,
+            "max_per_asset_pct": 5.0,
+            "max_daily_drawdown_pct": 10.0,
+        },
+        "per_strategy": {"default": {"risk_profile": "balanced", "cap_pct": 20.0}},
+    },
+    "aggressive": {
+        "risk": {
+            "max_risk_per_trade_pct": 2.0,
+            "max_portfolio_risk_pct": 15.0,
+            "max_open_positions": 15,
+            "max_per_asset_pct": 7.5,
+            "max_daily_drawdown_pct": 15.0,
+        },
+        "per_strategy": {"default": {"risk_profile": "aggressive", "cap_pct": 30.0}},
+    },
+    "degen": {
+        "risk": {
+            "max_risk_per_trade_pct": 5.0,
+            "max_portfolio_risk_pct": 25.0,
+            "max_open_positions": 25,
+            "max_per_asset_pct": 10.0,
+            "max_daily_drawdown_pct": 25.0,
+        },
+        "per_strategy": {"default": {"risk_profile": "aggressive", "cap_pct": 40.0}},
+    },
+}
 
 
 @dataclass
@@ -112,6 +160,10 @@ class RiskConfig:
     include_manual_positions: bool = True
     volatility_lookback_bars: int = 20
     min_liquidity_24h_usd: float = 100000.0
+    dynamic_allocation_enabled: bool = False
+    dynamic_allocation_lookback_hours: int = 72
+    min_strategy_weight_pct: float = 0.0
+    max_strategy_weight_pct: float = 50.0
 
 
 @dataclass
@@ -157,6 +209,51 @@ def get_default_ohlc_store_config() -> Dict[str, str]:
     """
     default_root = Path(appdirs.user_data_dir("kraken_bot")) / "ohlc"
     return {"root_dir": str(default_root), "backend": "parquet"}
+
+
+def _load_runtime_overrides(config_dir: Path) -> dict:
+    path = config_dir / RUNTIME_OVERRIDES_FILENAME
+    if not path.exists():
+        return {}
+    with open(path, "r") as f:
+        data = yaml.safe_load(f) or {}
+    return data if isinstance(data, dict) else {}
+
+
+def dump_runtime_overrides(config: AppConfig, config_dir: Path | None = None) -> None:
+    config_dir = config_dir or get_config_dir()
+    path = config_dir / RUNTIME_OVERRIDES_FILENAME
+
+    data = {
+        "risk": {
+            "max_risk_per_trade_pct": config.risk.max_risk_per_trade_pct,
+            "max_portfolio_risk_pct": config.risk.max_portfolio_risk_pct,
+            "max_open_positions": config.risk.max_open_positions,
+            "max_per_strategy_pct": config.risk.max_per_strategy_pct,
+            "max_per_asset_pct": config.risk.max_per_asset_pct,
+            "max_daily_drawdown_pct": config.risk.max_daily_drawdown_pct,
+            "kill_switch_on_drift": config.risk.kill_switch_on_drift,
+            "include_manual_positions": config.risk.include_manual_positions,
+            "volatility_lookback_bars": config.risk.volatility_lookback_bars,
+            "min_liquidity_24h_usd": config.risk.min_liquidity_24h_usd,
+            "dynamic_allocation_enabled": config.risk.dynamic_allocation_enabled,
+            "dynamic_allocation_lookback_hours": config.risk.dynamic_allocation_lookback_hours,
+            "min_strategy_weight_pct": config.risk.min_strategy_weight_pct,
+            "max_strategy_weight_pct": config.risk.max_strategy_weight_pct,
+        },
+        "strategies": {
+            "enabled": config.strategies.enabled,
+            "configs": {
+                sid: {"params": cfg.params, "enabled": cfg.enabled}
+                for sid, cfg in config.strategies.configs.items()
+            },
+        },
+        "ui": {"refresh_intervals": config.ui.refresh_intervals.__dict__},
+    }
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w") as f:
+        yaml.safe_dump(data, f)
 
 
 def load_config(
@@ -246,6 +343,10 @@ def load_config(
             env_config = {}
 
         raw_config = _deep_merge_dicts(raw_config, env_config)
+
+    config_dir = get_config_dir()
+    runtime_overrides = _load_runtime_overrides(config_dir)
+    raw_config = _deep_merge_dicts(raw_config, runtime_overrides)
 
     default_region = RegionProfile(
         code="US_CA",
@@ -472,6 +573,12 @@ def load_config(
         include_manual_positions=risk_data.get("include_manual_positions", True),
         volatility_lookback_bars=risk_data.get("volatility_lookback_bars", 20),
         min_liquidity_24h_usd=risk_data.get("min_liquidity_24h_usd", 100000.0),
+        dynamic_allocation_enabled=risk_data.get("dynamic_allocation_enabled", False),
+        dynamic_allocation_lookback_hours=risk_data.get(
+            "dynamic_allocation_lookback_hours", 72
+        ),
+        min_strategy_weight_pct=risk_data.get("min_strategy_weight_pct", 0.0),
+        max_strategy_weight_pct=risk_data.get("max_strategy_weight_pct", 50.0),
     )
 
     universe_data = raw_config.get("universe") or {}

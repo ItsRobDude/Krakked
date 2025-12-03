@@ -15,7 +15,9 @@ import {
   fetchRecentExecutions,
   fetchSystemHealth,
   fetchStrategies,
+  fetchStrategyPerformance,
   fetchRiskConfig,
+  applyRiskPreset,
   getRiskStatus,
   ExposureBreakdown,
   PortfolioSummary,
@@ -23,13 +25,18 @@ import {
   RiskConfig,
   RiskStatus,
   RecentExecution,
+  RiskPresetName,
   StrategyRiskProfile,
+  StrategyPerformance,
   StrategyState,
   SystemHealth,
   updateRiskConfig,
   setKillSwitch,
   patchStrategyConfig,
   setStrategyEnabled,
+  setExecutionMode,
+  ExecutionMode,
+  flattenAllPositions,
 } from './services/api';
 import { validateCredentials } from './services/credentials';
 
@@ -66,6 +73,8 @@ const formatTimestamp = (timestamp: string | null) => {
 
 const isRiskProfile = (value: unknown): value is StrategyRiskProfile =>
   value === 'conservative' || value === 'balanced' || value === 'aggressive';
+
+const RISK_PRESET_OPTIONS: RiskPresetName[] = ['conservative', 'balanced', 'aggressive', 'degen'];
 
 const buildKpis = (summary: PortfolioSummary) => [
   {
@@ -135,9 +144,14 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
   const [riskConfigBusy, setRiskConfigBusy] = useState(false);
   const [riskConfigError, setRiskConfigError] = useState<string | null>(null);
   const [strategies, setStrategies] = useState<StrategyState[]>([]);
+  const [strategyPerformance, setStrategyPerformance] = useState<
+    Record<string, StrategyPerformance>
+  >({});
   const [strategyRisk, setStrategyRisk] = useState<Record<string, StrategyRiskProfile>>({});
   const [strategyBusy, setStrategyBusy] = useState<Set<string>>(new Set());
   const [strategyFeedback, setStrategyFeedback] = useState<string | null>(null);
+  const [systemMessage, setSystemMessage] = useState<{ tone: 'info' | 'error' | 'success'; message: string } | null>(null);
+  const [modeBusy, setModeBusy] = useState(false);
 
   const sidebarItems = [
     { label: 'Overview', description: 'KPIs & positions', active: true, badge: 'Live' },
@@ -231,7 +245,10 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
     let cancelled = false;
 
     const loadStrategies = async () => {
-      const data = await fetchStrategies();
+      const [data, perf] = await Promise.all([
+        fetchStrategies(),
+        fetchStrategyPerformance(),
+      ]);
       if (cancelled) return;
 
       if (data) {
@@ -248,6 +265,14 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
           });
           return next;
         });
+      }
+
+      if (perf) {
+        const byId: Record<string, StrategyPerformance> = {};
+        perf.forEach((entry) => {
+          byId[entry.strategy_id] = entry;
+        });
+        setStrategyPerformance(byId);
       }
     };
 
@@ -303,6 +328,53 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
     }
 
     setRiskBusy(false);
+  };
+
+  const handleModeChange = async (mode: ExecutionMode) => {
+    if (!health) return;
+
+    if (health.ui_read_only) {
+      setSystemMessage({ tone: 'error', message: 'Execution mode is locked while the backend is read-only.' });
+      return;
+    }
+
+    if (!health.execution_ok) {
+      setSystemMessage({ tone: 'error', message: 'Execution is unavailable. Check connectivity before switching modes.' });
+      return;
+    }
+
+    setModeBusy(true);
+    try {
+      await setExecutionMode(mode);
+      const latestHealth = await fetchSystemHealth();
+      if (latestHealth) setHealth(latestHealth);
+      setSystemMessage({ tone: 'success', message: `Execution mode set to ${mode}.` });
+    } catch (error) {
+      console.error(error);
+      setSystemMessage({ tone: 'error', message: 'Unable to update execution mode. Please try again.' });
+    } finally {
+      setModeBusy(false);
+    }
+  };
+
+  const handleFlattenAll = async () => {
+    if (health?.ui_read_only) {
+      setSystemMessage({ tone: 'error', message: 'Read-only mode prevents flattening positions.' });
+      return;
+    }
+
+    const confirmed = window.confirm(
+      'Send flatten-all orders? This will attempt to close every open position immediately.',
+    );
+    if (!confirmed) return;
+
+    try {
+      await flattenAllPositions();
+      setSystemMessage({ tone: 'success', message: 'Flatten-all request submitted.' });
+    } catch (error) {
+      console.error(error);
+      setSystemMessage({ tone: 'error', message: 'Unable to flatten positions. Please retry.' });
+    }
   };
 
   const setStrategyBusyState = (strategyId: string, busyState: boolean) => {
@@ -394,6 +466,59 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
     }
   };
 
+  const handlePresetChange = async (preset: RiskPresetName) => {
+    if (health?.ui_read_only) {
+      setRiskConfigError('Backend is read-only. Risk config changes are disabled.');
+      return;
+    }
+
+    setRiskConfigBusy(true);
+    setRiskConfigError(null);
+    try {
+      const updated = await applyRiskPreset(preset);
+
+      if (!updated) {
+        setRiskConfigError('Unable to apply preset. Restored prior values.');
+        return;
+      }
+
+      setRiskConfig(updated);
+      setRiskFeedback({ tone: 'success', message: `Applied ${preset} preset.` });
+
+      const [strategiesData, perf, status] = await Promise.all([
+        fetchStrategies(),
+        fetchStrategyPerformance(),
+        getRiskStatus(),
+      ]);
+
+      if (status) setRisk(status);
+
+      if (strategiesData) {
+        setStrategies(strategiesData);
+        setStrategyRisk((previous) => {
+          const next = { ...previous };
+          strategiesData.forEach((strategy) => {
+            const riskProfile = strategy.params?.risk_profile;
+            if (isRiskProfile(riskProfile)) {
+              next[strategy.strategy_id] = riskProfile;
+            }
+          });
+          return next;
+        });
+      }
+
+      if (perf) {
+        const byId: Record<string, StrategyPerformance> = {};
+        perf.forEach((entry) => {
+          byId[entry.strategy_id] = entry;
+        });
+        setStrategyPerformance(byId);
+      }
+    } finally {
+      setRiskConfigBusy(false);
+    }
+  };
+
   useEffect(() => {
     let cancelled = false;
 
@@ -418,9 +543,14 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
       subtitle="Live data with automatic refresh."
       sidebar={<Sidebar items={sidebarItems} footer={{ label: 'Session', value: connectionState === 'connected' ? 'Connected' : 'Degraded' }} />}
       actions={
-        <button type="button" className="ghost-button" onClick={onLogout}>
-          Log out
-        </button>
+        <div className="layout__action-buttons">
+          <button type="button" className="ghost-button" onClick={handleFlattenAll}>
+            Flatten all positions
+          </button>
+          <button type="button" className="ghost-button" onClick={onLogout}>
+            Log out
+          </button>
+        </div>
       }
       footer={<FooterHotkeys hotkeys={hotkeys} />}
     >
@@ -434,6 +564,23 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
         <p className="panel__description">
           Data refreshes automatically every {Math.round(DASHBOARD_REFRESH_MS / 1000)}s. Controls respect read-only mode and execution mode reported by the backend.
         </p>
+        <div className="field" style={{ maxWidth: '280px' }}>
+          <label className="field__label-row" htmlFor="execution-mode">
+            <span>Execution mode</span>
+            {modeBusy ? <span className="pill pill--info">Updating…</span> : null}
+          </label>
+          <select
+            id="execution-mode"
+            value={health?.current_mode ?? 'paper'}
+            onChange={(event) => handleModeChange(event.target.value as ExecutionMode)}
+            disabled={modeBusy || !health || health.ui_read_only || !health.execution_ok}
+          >
+            <option value="paper">Paper</option>
+            <option value="live">Live</option>
+          </select>
+          <p className="field__hint">Live mode requires backend approval and is blocked while read-only.</p>
+        </div>
+        {systemMessage ? <div className={`feedback feedback--${systemMessage.tone}`}>{systemMessage.message}</div> : null}
         <ul className="placeholder-list">
           <li>KPIs and balances poll the portfolio endpoints.</li>
           <li>Recent executions stream into the log panel.</li>
@@ -446,7 +593,16 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
         </ul>
       </section>
 
-      <RiskPanel status={risk} readOnly={Boolean(health?.ui_read_only)} busy={riskBusy} onToggle={handleToggleKillSwitch} feedback={riskFeedback} />
+      <RiskPanel
+        status={risk}
+        readOnly={Boolean(health?.ui_read_only)}
+        busy={riskBusy}
+        presetBusy={riskConfigBusy}
+        presetOptions={RISK_PRESET_OPTIONS}
+        onPresetChange={handlePresetChange}
+        onToggle={handleToggleKillSwitch}
+        feedback={riskFeedback}
+      />
 
       {riskConfig ? (
         <section className="panel">
@@ -479,6 +635,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
 
       <StrategiesPanel
         strategies={strategies}
+        performance={strategyPerformance}
         riskSelections={strategyRisk}
         busy={strategyBusy}
         readOnly={Boolean(health?.ui_read_only)}

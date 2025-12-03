@@ -2,7 +2,8 @@
 
 import logging
 import time
-from typing import Any, Dict, Optional, Protocol
+from datetime import UTC, datetime
+from typing import Any, Callable, Dict, Optional, Protocol
 
 from kraken_bot.config import ExecutionConfig
 from kraken_bot.connection.exceptions import RateLimitError, ServiceUnavailableError
@@ -339,6 +340,47 @@ class PaperExecutionAdapter:
         return None
 
 
+class SimulationExecutionAdapter:
+    def __init__(
+        self,
+        config: Optional[ExecutionConfig] = None,
+        fill_callback: Optional[Callable[[LocalOrder], None]] = None,
+    ):
+        self.config = config or ExecutionConfig()
+        self.client = None
+        self._fill_callback = fill_callback
+
+    def submit_order(self, order: LocalOrder) -> LocalOrder:
+        price = order.requested_price
+        order.kraken_order_id = order.kraken_order_id or f"sim-{order.local_id}"
+        order.status = "filled"
+        order.cumulative_base_filled = order.requested_base_size
+        order.avg_fill_price = price
+        order.updated_at = datetime.now(UTC)
+        order.raw_response = {
+            "result": "success",
+            "txid": [order.kraken_order_id],
+            "filled": order.cumulative_base_filled,
+            "avg_fill_price": order.avg_fill_price,
+            "simulated": True,
+        }
+
+        if self._fill_callback:
+            try:
+                self._fill_callback(order)
+            except Exception:  # pragma: no cover - defensive logging
+                logger.exception("Simulation fill callback failed")
+
+        return order
+
+    def cancel_order(self, order: LocalOrder) -> None:
+        order.status = "canceled"
+        order.updated_at = datetime.now(UTC)
+
+    def cancel_all_orders(self) -> None:
+        return None
+
+
 def get_execution_adapter(
     client: Optional[KrakenRESTClient],
     config: ExecutionConfig,
@@ -348,5 +390,8 @@ def get_execution_adapter(
         if client is None:
             raise ExecutionError("Live execution requires a KrakenRESTClient")
         return KrakenExecutionAdapter(client=client, config=config)
+
+    if config.mode == "simulation":
+        return SimulationExecutionAdapter(config=config)
 
     return PaperExecutionAdapter(config=config, rate_limiter=rate_limiter)
