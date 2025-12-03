@@ -6,6 +6,7 @@ import logging
 
 from fastapi import APIRouter, Request
 
+from kraken_bot.config import dump_runtime_overrides
 from kraken_bot.ui.logging import build_request_log_extra
 from kraken_bot.ui.models import (
     ApiEnvelope,
@@ -76,6 +77,7 @@ async def update_risk_config(request: Request) -> ApiEnvelope[RiskConfigPayload]
                 updated_fields[field] = value
 
         if updated_fields:
+            dump_runtime_overrides(ctx.config)
             logger.info(
                 "Updated risk config",
                 extra=build_request_log_extra(

@@ -1,6 +1,7 @@
 # src/kraken_bot/portfolio/manager.py
 
 import logging
+from datetime import timedelta
 from typing import TYPE_CHECKING, Dict, List, Optional, Union
 
 from kraken_bot.config import AppConfig
@@ -8,6 +9,7 @@ from kraken_bot.connection.rate_limiter import RateLimiter
 from kraken_bot.connection.rest_client import KrakenRESTClient
 from kraken_bot.logging_config import structured_log_extra
 from kraken_bot.market_data.api import MarketDataAPI
+from kraken_bot.strategy.performance import compute_strategy_performance
 
 from .models import CashFlowRecord, PortfolioSnapshot
 from .portfolio import Portfolio
@@ -299,6 +301,10 @@ class PortfolioService:
         return self.portfolio.get_realized_pnl_by_strategy(
             include_manual=include_manual
         )
+
+    def get_strategy_performance(self, window_hours: int = 72):
+        window = timedelta(hours=window_hours)
+        return compute_strategy_performance(self.portfolio, window)
 
     def create_snapshot(self) -> PortfolioSnapshot:
         return self.portfolio.snapshot()
