@@ -14,13 +14,13 @@ export type RiskPanelProps = {
 
 const statusCopy = {
   on: {
-    label: 'Kill switch active',
-    description: 'Trading is halted until the kill switch is disabled.',
+    label: 'Trading paused',
+    description: 'Kill switch is active. Orders will not be sent until trading is resumed.',
     tone: 'pill--danger',
   },
   off: {
-    label: 'Kill switch inactive',
-    description: 'Orders may route normally unless other limits block them.',
+    label: 'Trading live (subject to mode)',
+    description: 'Kill switch is off. Execution still obeys paper/live mode and risk caps.',
     tone: 'pill--long',
   },
   unknown: {
@@ -41,7 +41,7 @@ export function RiskPanel({
   feedback,
 }: RiskPanelProps) {
   const killSwitchState = status ? (status.kill_switch_active ? statusCopy.on : statusCopy.off) : statusCopy.unknown;
-  const buttonLabel = status?.kill_switch_active ? 'Disable kill switch' : 'Activate kill switch';
+  const buttonLabel = status?.kill_switch_active ? 'Resume trading' : 'Pause trading';
   const buttonDisabled = busy || readOnly || !status;
 
   return (
@@ -79,8 +79,8 @@ export function RiskPanel({
 
       <div className="risk-panel__controls">
         <div className="risk-panel__meta">
-          <p className="risk-panel__label">Kill switch</p>
-          <p className="risk-panel__status">{status ? (status.kill_switch_active ? 'Enabled' : 'Disabled') : 'Loading…'}</p>
+          <p className="risk-panel__label">Start / Stop trading</p>
+          <p className="risk-panel__status">{status ? (status.kill_switch_active ? 'Paused' : 'Active') : 'Loading…'}</p>
           {readOnly ? <span className="pill pill--warning">Read-only mode</span> : null}
           <p className="risk-panel__hint">
             Toggle requires backend write access and updates alongside other dashboard refreshes.

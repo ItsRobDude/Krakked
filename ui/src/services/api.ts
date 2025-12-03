@@ -251,3 +251,13 @@ export async function setKillSwitch(active: boolean): Promise<RiskStatus | null>
     body: JSON.stringify({ active }),
   });
 }
+
+export async function flattenAllPositions(): Promise<void> {
+  const result = await fetchJson<unknown>('/execution/flatten_all', {
+    method: 'POST',
+  });
+
+  if (result === null) {
+    throw new Error('Unable to flatten positions');
+  }
+}
