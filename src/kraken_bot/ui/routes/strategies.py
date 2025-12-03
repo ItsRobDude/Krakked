@@ -7,6 +7,7 @@ import logging
 from fastapi import APIRouter, Request
 
 from kraken_bot.config import dump_runtime_overrides
+from kraken_bot.strategy.risk_profiles import profile_to_definition
 from kraken_bot.ui.logging import build_request_log_extra
 from kraken_bot.ui.models import (
     ApiEnvelope,
@@ -152,6 +153,19 @@ async def update_strategy_config(
             elif hasattr(strat_cfg, field) and field not in {"name", "type"}:
                 setattr(strat_cfg, field, value)
                 updated_fields[field] = value
+
+        params = payload.get("params") or {}
+        profile = params.get("risk_profile")
+        if profile:
+            rp = profile_to_definition(profile)
+
+            ctx.config.risk.max_per_strategy_pct[strategy_id] = rp.max_per_strategy_pct
+            ctx.strategy_engine.risk_engine.config.max_per_strategy_pct = dict(
+                ctx.config.risk.max_per_strategy_pct
+            )
+
+            updated_fields["risk_profile"] = profile
+            updated_fields["max_per_strategy_pct"] = rp.max_per_strategy_pct
 
         dump_runtime_overrides(ctx.config)
         logger.info(

@@ -1,6 +1,7 @@
 # tests/test_strategy_engine.py
 
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 from kraken_bot.config import AppConfig, RiskConfig, StrategiesConfig, StrategyConfig
@@ -41,6 +42,7 @@ def test_engine_cycle():
     # Mock Services
     market = MagicMock(spec=MarketDataAPI)
     portfolio = MagicMock(spec=PortfolioService)
+    portfolio.get_realized_pnl_by_strategy.return_value = {}
 
     market.get_data_status.return_value = MagicMock(
         rest_api_reachable=True,
@@ -178,6 +180,10 @@ def test_data_stale_error_skips_timeframe():
         per_asset_exposure_pct={},
         per_strategy_exposure_pct={},
     )
+    engine.risk_engine.build_risk_context.return_value = SimpleNamespace(
+        per_strategy_exposure_pct={}
+    )
+    portfolio.get_realized_pnl_by_strategy.return_value = {}
 
     fake_strategy = FakeStrategy(strat_config)
     engine.strategies = {"fake": fake_strategy}
@@ -201,6 +207,10 @@ def test_data_stale_error_skips_timeframe():
 
     assert plan.actions == []
     assert "risk_status" in plan.metadata
+    state = engine.strategy_states["fake"]
+    assert state.last_intents and state.last_intents[0]["timeframe"] == "4h"
+    assert state.pnl_summary["exposure_pct"] == 0.0
+    assert state.pnl_summary["realized_pnl_usd"] == 0.0
 
 
 def test_actions_inherit_userref_and_persist_in_execution_plan():
@@ -261,6 +271,9 @@ def test_actions_inherit_userref_and_persist_in_execution_plan():
         manual_exposure_pct=0.0,
         per_asset_exposure_pct={},
         per_strategy_exposure_pct={},
+    )
+    engine.risk_engine.build_risk_context.return_value = SimpleNamespace(
+        per_strategy_exposure_pct={}
     )
 
     fake_action = RiskAdjustedAction(
