@@ -1303,6 +1303,51 @@ input[aria-invalid='true'] {
   gap: var(--space-2);
 }
 
+.startup {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: clamp(1.5rem, 3vw, 2.5rem);
+  position: relative;
+}
+
+.startup__panel {
+  width: min(720px, 100%);
+  background: var(--surface-dark);
+  border: 1px solid var(--border-subtle);
+  border-radius: 20px;
+  padding: clamp(1.5rem, 3vw, 2.5rem);
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.35);
+  display: grid;
+  gap: var(--space-4);
+}
+
+.startup__brand {
+  display: flex;
+  gap: var(--space-3);
+  align-items: center;
+}
+
+.startup__mark {
+  width: 52px;
+  height: 52px;
+  border-radius: 16px;
+  background: linear-gradient(135deg, #8b5cf6, #2563eb);
+  box-shadow: 0 10px 30px var(--glow);
+}
+
+.startup__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: var(--space-4);
+}
+
+.startup__actions {
+  display: flex;
+  gap: var(--space-2);
+  justify-content: flex-start;
+}
+
 @media (max-width: 960px) {
   .layout {
     grid-template-columns: 1fr;

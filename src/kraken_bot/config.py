@@ -92,6 +92,26 @@ class UIConfig:
 
 
 @dataclass
+class ProfileConfig:
+    name: str
+    description: str = ""
+    config_path: str = ""
+    credentials_path: str = ""
+    default_mode: str = "paper"
+    default_loop_interval_sec: float = 15.0
+    default_ml_enabled: bool = True
+
+
+@dataclass
+class SessionConfig:
+    active: bool = False
+    profile_name: Optional[str] = None
+    mode: str = "paper"
+    loop_interval_sec: float = 15.0
+    ml_enabled: bool = True
+
+
+@dataclass
 class PortfolioConfig:
     base_currency: str = "USD"
     valuation_pairs: Dict[str, str] = field(default_factory=dict)
@@ -150,6 +170,8 @@ class AppConfig:
     risk: RiskConfig = field(default_factory=RiskConfig)
     strategies: StrategiesConfig = field(default_factory=StrategiesConfig)
     ui: UIConfig = field(default_factory=UIConfig)
+    profiles: Dict[str, ProfileConfig] = field(default_factory=dict)
+    session: SessionConfig = field(default_factory=SessionConfig)
 
 
 def get_config_dir() -> Path:
@@ -177,9 +199,15 @@ def _load_runtime_overrides(config_dir: Path) -> dict:
     return data if isinstance(data, dict) else {}
 
 
-def dump_runtime_overrides(config: AppConfig, config_dir: Path | None = None) -> None:
+def dump_runtime_overrides(
+    config: AppConfig,
+    config_dir: Path | None = None,
+    session: SessionConfig | None = None,
+) -> None:
     config_dir = config_dir or get_config_dir()
     path = config_dir / RUNTIME_OVERRIDES_FILENAME
+
+    session_config = session or getattr(config, "session", None)
 
     data = {
         "risk": {
@@ -196,6 +224,14 @@ def dump_runtime_overrides(config: AppConfig, config_dir: Path | None = None) ->
         },
         "ui": {"refresh_intervals": config.ui.refresh_intervals.__dict__},
     }
+
+    if session_config:
+        data["session"] = {
+            "profile_name": session_config.profile_name,
+            "mode": session_config.mode,
+            "loop_interval_sec": session_config.loop_interval_sec,
+            "ml_enabled": session_config.ml_enabled,
+        }
 
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w") as f:
@@ -527,6 +563,68 @@ def load_config(
         max_strategy_weight_pct=risk_data.get("max_strategy_weight_pct", 50.0),
     )
 
+    profiles_data = raw_config.get("profiles") or {}
+    profiles: Dict[str, ProfileConfig] = {}
+    if not isinstance(profiles_data, dict):
+        logger.warning(
+            "Profiles config is not a mapping; defaulting to empty profiles",
+            extra={"event": "config_invalid_profiles", "config_path": str(config_path)},
+        )
+        profiles_data = {}
+
+    for profile_name, profile_cfg in profiles_data.items():
+        if not isinstance(profile_cfg, dict):
+            logger.warning(
+                "Profile %s config is not a mapping; skipping",
+                profile_name,
+                extra={
+                    "event": "config_invalid_profile_entry",
+                    "config_path": str(config_path),
+                    "profile": profile_name,
+                },
+            )
+            continue
+
+        profiles[profile_name] = ProfileConfig(
+            name=profile_cfg.get("name", profile_name),
+            description=profile_cfg.get("description", ""),
+            config_path=profile_cfg.get("config_path", ""),
+            credentials_path=profile_cfg.get("credentials_path", ""),
+            default_mode=profile_cfg.get("default_mode", "paper"),
+            default_loop_interval_sec=float(
+                profile_cfg.get("default_loop_interval_sec", 15.0)
+            ),
+            default_ml_enabled=bool(profile_cfg.get("default_ml_enabled", True)),
+        )
+
+    session_data = raw_config.get("session") or {}
+    if not isinstance(session_data, dict):
+        logger.warning(
+            "Session config is not a mapping; using defaults",
+            extra={"event": "config_invalid_session", "config_path": str(config_path)},
+        )
+        session_data = {}
+
+    session_loop_seconds = session_data.get("loop_interval_sec", 15.0)
+    if not isinstance(session_loop_seconds, (int, float)) or session_loop_seconds <= 0:
+        logger.warning(
+            "Session loop_interval_sec invalid; using default",
+            extra={
+                "event": "config_invalid_session_loop_interval",
+                "config_path": str(config_path),
+                "loop_interval": session_loop_seconds,
+            },
+        )
+        session_loop_seconds = 15.0
+
+    session_config = SessionConfig(
+        active=bool(session_data.get("active", False)),
+        profile_name=session_data.get("profile_name"),
+        mode=session_data.get("mode", "paper"),
+        loop_interval_sec=float(session_loop_seconds),
+        ml_enabled=bool(session_data.get("ml_enabled", True)),
+    )
+
     universe_data = raw_config.get("universe") or {}
     if not isinstance(universe_data, dict):
         logger.warning(
@@ -776,6 +874,8 @@ def load_config(
         risk=risk_config,
         strategies=strategies_config,
         ui=ui_config,
+        profiles=profiles,
+        session=session_config,
     )
 
 

@@ -8,6 +8,7 @@ import { PositionRow, PositionsTable } from './components/PositionsTable';
 import { Sidebar } from './components/Sidebar';
 import { StrategiesPanel } from './components/StrategiesPanel';
 import { WalletRow, WalletTable } from './components/WalletTable';
+import { StartupScreen } from './components/StartupScreen';
 import {
   fetchExposure,
   fetchPortfolioSummary,
@@ -15,12 +16,15 @@ import {
   fetchRecentExecutions,
   fetchRiskDecisions,
   fetchSystemHealth,
+  fetchSessionState,
+  fetchProfiles,
   fetchStrategies,
   fetchStrategyPerformance,
   fetchRiskConfig,
   applyRiskPreset,
   getRiskStatus,
   ExposureBreakdown,
+  ProfileSummary,
   PortfolioSummary,
   PositionPayload,
   RiskConfig,
@@ -32,11 +36,16 @@ import {
   StrategyPerformance,
   StrategyState,
   SystemHealth,
+  SessionStateResponse,
+  SessionConfigRequest,
+  SessionMode,
   updateRiskConfig,
   setKillSwitch,
   patchStrategyConfig,
   setStrategyEnabled,
   setExecutionMode,
+  startSession,
+  stopSession,
   ExecutionMode,
   flattenAllPositions,
   downloadRuntimeConfig,
@@ -187,6 +196,10 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
   const [strategyFeedback, setStrategyFeedback] = useState<string | null>(null);
   const [systemMessage, setSystemMessage] = useState<{ tone: 'info' | 'error' | 'success'; message: string } | null>(null);
   const [modeBusy, setModeBusy] = useState(false);
+  const [session, setSession] = useState<SessionStateResponse | null>(null);
+  const [sessionLoading, setSessionLoading] = useState(true);
+  const [profiles, setProfiles] = useState<ProfileSummary[]>([]);
+  const [loopIntervalDraft, setLoopIntervalDraft] = useState<number>(15);
 
   const mlEnabled = useMemo(
     () =>
@@ -212,6 +225,41 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
   ];
 
   useEffect(() => {
+    let cancelled = false;
+
+    const loadSession = async () => {
+      const [sessionState, profileSummaries] = await Promise.all([
+        fetchSessionState(),
+        fetchProfiles(),
+      ]);
+
+      if (cancelled) return;
+
+      if (sessionState) {
+        setSession(sessionState);
+        setLoopIntervalDraft(sessionState.loop_interval_sec);
+      }
+
+      setProfiles(profileSummaries);
+      setSessionLoading(false);
+    };
+
+    loadSession();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (session?.loop_interval_sec) {
+      setLoopIntervalDraft(session.loop_interval_sec);
+    }
+  }, [session?.loop_interval_sec]);
+
+  useEffect(() => {
+    if (!session?.active) return;
+
     let cancelled = false;
 
     const loadDashboard = async () => {
@@ -250,7 +298,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
       cancelled = true;
       clearInterval(interval);
     };
-  }, []);
+  }, [session?.active]);
 
   useEffect(() => {
     if (!health || !summary) return;
@@ -273,6 +321,8 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
   }, [health, summary]);
 
   useEffect(() => {
+    if (!session?.active) return;
+
     let cancelled = false;
 
     const loadRiskConfig = async () => {
@@ -286,9 +336,11 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [session?.active]);
 
   useEffect(() => {
+    if (!session?.active) return;
+
     let cancelled = false;
 
     const loadPositions = async () => {
@@ -304,9 +356,11 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
       cancelled = true;
       clearInterval(interval);
     };
-  }, []);
+  }, [session?.active]);
 
   useEffect(() => {
+    if (!session?.active) return;
+
     let cancelled = false;
 
     const loadStrategies = async () => {
@@ -360,7 +414,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
       cancelled = true;
       clearInterval(interval);
     };
-  }, []);
+  }, [session?.active]);
 
   useEffect(() => {
     if (health?.ui_read_only) {
@@ -371,6 +425,60 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
       setStrategyFeedback((current) => (current === 'Backend is read-only. Strategy controls are disabled.' ? null : current));
     }
   }, [health?.ui_read_only]);
+
+  const handleStartSession = async (config: SessionConfigRequest) => {
+    const next = await startSession(config);
+    if (!next) {
+      throw new Error('Unable to start session.');
+    }
+
+    setSession(next);
+    setLoopIntervalDraft(next.loop_interval_sec);
+
+    const [systemHealth, riskStatus] = await Promise.all([
+      fetchSystemHealth(),
+      getRiskStatus(),
+    ]);
+
+    if (systemHealth) {
+      setHealth(systemHealth);
+      const healthy = systemHealth.market_data_ok && systemHealth.execution_ok;
+      setConnectionState(healthy ? 'connected' : 'degraded');
+    }
+
+    if (riskStatus) {
+      setRisk(riskStatus);
+    }
+  };
+
+  const handleStopSession = async () => {
+    const next = await stopSession();
+    if (next) {
+      setSession(next);
+      setConnectionState('degraded');
+    }
+  };
+
+  const handleLoopIntervalUpdate = async () => {
+    if (!session) return;
+
+    if (health?.ui_read_only) {
+      setSystemMessage({ tone: 'error', message: 'Loop frequency is locked while the backend is read-only.' });
+      return;
+    }
+
+    const updated = await startSession({
+      profile_name: session.profile_name ?? 'default',
+      mode: session.mode as SessionMode,
+      loop_interval_sec: loopIntervalDraft,
+      ml_enabled: session.ml_enabled,
+    });
+
+    if (updated) {
+      setSession(updated);
+      setLoopIntervalDraft(updated.loop_interval_sec);
+    }
+  };
 
   const handleToggleKillSwitch = async () => {
     if (!risk) {
@@ -733,6 +841,8 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
   };
 
   useEffect(() => {
+    if (!session?.active) return;
+
     let cancelled = false;
 
     const loadExecutions = async () => {
@@ -758,7 +868,22 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
       cancelled = true;
       clearInterval(interval);
     };
-  }, []);
+  }, [session?.active]);
+
+  if (sessionLoading) {
+    return (
+      <div className="app-shell">
+        <div className="background" aria-hidden="true" />
+        <div className="layout__status-row" style={{ gap: '0.5rem' }}>
+          <span className="pill pill--muted">Loading session…</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (!session?.active) {
+    return <StartupScreen profiles={profiles} onStart={handleStartSession} />;
+  }
 
   return (
     <Layout
@@ -767,11 +892,11 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
         <div className="layout__status-row">
           <span className="pill pill--muted">
             Mode:{' '}
-            {health?.current_mode === 'live'
+            {session?.mode === 'live'
               ? 'Live'
-              : health?.current_mode === 'paper'
+              : session?.mode === 'paper'
                 ? 'Paper / Test'
-                : 'Unknown'}
+                : 'Test'}
           </span>
 
           <span
@@ -802,6 +927,8 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
           <span className={mlEnabled ? 'pill pill--info' : 'pill pill--muted'}>
             ML: {mlEnabled ? 'On' : 'Off'}
           </span>
+
+          <span className="pill pill--muted">Loop: {session.loop_interval_sec.toFixed(1)}s</span>
         </div>
       }
       sidebar={
@@ -832,6 +959,14 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
             disabled={health?.ui_read_only}
           >
             Flatten all positions
+          </button>
+          <button
+            type="button"
+            className="ghost-button"
+            onClick={handleStopSession}
+            disabled={health?.ui_read_only}
+          >
+            Stop session
           </button>
           <button type="button" className="ghost-button" onClick={onLogout}>
             Log out
@@ -865,6 +1000,29 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
             <option value="live">Live</option>
           </select>
           <p className="field__hint">Live mode requires backend approval and is blocked while read-only.</p>
+        </div>
+        <div className="field" style={{ maxWidth: '280px' }}>
+          <label className="field__label-row" htmlFor="loop-interval">
+            <span>Loop frequency (seconds)</span>
+            <span className="pill pill--muted">Current: {loopIntervalDraft.toFixed(1)}s</span>
+          </label>
+          <input
+            id="loop-interval"
+            type="number"
+            min={1}
+            max={300}
+            value={loopIntervalDraft}
+            onChange={(event) => setLoopIntervalDraft(Number(event.target.value))}
+            disabled={health?.ui_read_only}
+          />
+          <button
+            type="button"
+            className="ghost-button"
+            onClick={handleLoopIntervalUpdate}
+            disabled={health?.ui_read_only}
+          >
+            Apply frequency
+          </button>
         </div>
         {systemMessage ? <div className={`feedback feedback--${systemMessage.tone}`}>{systemMessage.message}</div> : null}
         <ul className="placeholder-list">
