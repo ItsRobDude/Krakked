@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse
 from kraken_bot.ui.context import AppContext
 from kraken_bot.ui.logging import build_request_log_extra
 from kraken_bot.ui.routes import (
+    config_router,
     execution_router,
     portfolio_router,
     risk_router,
@@ -60,6 +61,7 @@ def create_api(context: AppContext) -> FastAPI:
     app.include_router(strategies_router, prefix=f"{base_path}/api/strategies")
     app.include_router(execution_router, prefix=f"{base_path}/api/execution")
     app.include_router(system_router, prefix=f"{base_path}/api/system")
+    app.include_router(config_router, prefix=f"{base_path}/api/config")
 
     @app.middleware("http")
     async def inject_request_id(request: Request, call_next):

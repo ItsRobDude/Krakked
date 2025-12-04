@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 
 export type LayoutProps = {
   title: string;
-  subtitle?: string;
+  subtitle?: ReactNode;
   sidebar: ReactNode;
   actions?: ReactNode;
   children: ReactNode;
@@ -21,8 +21,8 @@ export function Layout({ title, subtitle, sidebar, actions, children, footer }: 
           <header className="layout__header">
             <div>
               <p className="eyebrow">Kraken Bot</p>
-              <h1>{title}</h1>
-              {subtitle ? <p className="subtitle">{subtitle}</p> : null}
+              <h1 className="title">{title}</h1>
+              {subtitle ? <div className="subtitle">{subtitle}</div> : null}
             </div>
             {actions ? <div className="layout__actions">{actions}</div> : null}
           </header>

@@ -310,3 +310,19 @@ export async function flattenAllPositions(): Promise<void> {
     throw new Error('Unable to flatten positions');
   }
 }
+
+export async function downloadRuntimeConfig(): Promise<Blob | null> {
+  const headers: Record<string, string> = {};
+  if (API_TOKEN) headers.Authorization = `Bearer ${API_TOKEN}`;
+
+  const response = await fetch(`${API_BASE}/config/runtime`, {
+    method: 'GET',
+    headers,
+  });
+
+  if (!response.ok) {
+    return null;
+  }
+
+  return response.blob();
+}

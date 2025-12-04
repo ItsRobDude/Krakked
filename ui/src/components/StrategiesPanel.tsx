@@ -3,6 +3,7 @@ import type {
   StrategyRiskProfile,
   StrategyState,
 } from '../services/api';
+import { STRATEGY_TAGS } from '../constants/strategies';
 
 const riskProfiles: StrategyRiskProfile[] = ['conservative', 'balanced', 'aggressive'];
 
@@ -112,7 +113,12 @@ export function StrategiesPanel({
             return (
               <div key={strategy.strategy_id} className="table__row" role="row">
                 <span role="cell" className="strategy__label">
-                  {strategy.strategy_id}
+                  <span className="strategy__name">{strategy.strategy_id}</span>
+                  {STRATEGY_TAGS[strategy.strategy_id] ? (
+                    <span className="pill pill--muted strategy__tag">
+                      {STRATEGY_TAGS[strategy.strategy_id]}
+                    </span>
+                  ) : null}
                 </span>
                 <span role="cell">
                   <label className="strategy-toggle__label">
