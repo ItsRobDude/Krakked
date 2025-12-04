@@ -23,8 +23,84 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# TODO: Populate from configuration or a presets module when available.
-PRESET_PROFILES: Dict[str, Dict[str, Any]] = {}
+# These presets are applied by /risk/preset/{name} and surfaced in the UI.
+# Adjust values to suit deployment risk tolerances.
+PRESET_PROFILES: Dict[str, Dict[str, Any]] = {
+    "conservative": {
+        "risk": {
+            "max_risk_per_trade_pct": 0.5,
+            "max_portfolio_risk_pct": 5.0,
+            "max_daily_drawdown_pct": 5.0,
+        },
+        "per_strategy": {
+            "default": {"risk_profile": "conservative"},
+            "trend_core": {"risk_profile": "conservative", "cap_pct": 25.0},
+            "dca_overlay": {"risk_profile": "conservative", "cap_pct": 10.0},
+            "vol_breakout": {"risk_profile": "conservative", "cap_pct": 5.0},
+            "majors_mean_rev": {"risk_profile": "conservative", "cap_pct": 5.0},
+            "rs_rotation": {"risk_profile": "conservative", "cap_pct": 10.0},
+            "ai_predictor": {"risk_profile": "conservative", "cap_pct": 5.0},
+            "ai_predictor_alt": {"risk_profile": "conservative", "cap_pct": 2.5},
+            "ai_regression": {"risk_profile": "conservative", "cap_pct": 2.5},
+        },
+    },
+    "balanced": {
+        "risk": {
+            "max_risk_per_trade_pct": 1.0,
+            "max_portfolio_risk_pct": 10.0,
+            "max_daily_drawdown_pct": 10.0,
+        },
+        "per_strategy": {
+            "default": {"risk_profile": "balanced"},
+            "trend_core": {"risk_profile": "balanced", "cap_pct": 40.0},
+            "dca_overlay": {"risk_profile": "balanced", "cap_pct": 20.0},
+            "vol_breakout": {"risk_profile": "balanced", "cap_pct": 10.0},
+            "majors_mean_rev": {"risk_profile": "balanced", "cap_pct": 10.0},
+            "rs_rotation": {"risk_profile": "balanced", "cap_pct": 20.0},
+            "ai_predictor": {"risk_profile": "balanced", "cap_pct": 10.0},
+            "ai_predictor_alt": {"risk_profile": "balanced", "cap_pct": 5.0},
+            "ai_regression": {"risk_profile": "balanced", "cap_pct": 5.0},
+        },
+    },
+    "aggressive": {
+        "risk": {
+            "max_risk_per_trade_pct": 1.5,
+            "max_portfolio_risk_pct": 15.0,
+            "max_daily_drawdown_pct": 15.0,
+        },
+        "per_strategy": {
+            "default": {"risk_profile": "aggressive"},
+            "trend_core": {"risk_profile": "aggressive", "cap_pct": 50.0},
+            "dca_overlay": {"risk_profile": "aggressive", "cap_pct": 25.0},
+            "vol_breakout": {"risk_profile": "aggressive", "cap_pct": 15.0},
+            "majors_mean_rev": {"risk_profile": "aggressive", "cap_pct": 15.0},
+            "rs_rotation": {"risk_profile": "aggressive", "cap_pct": 25.0},
+            "ai_predictor": {"risk_profile": "aggressive", "cap_pct": 15.0},
+            "ai_predictor_alt": {"risk_profile": "aggressive", "cap_pct": 10.0},
+            "ai_regression": {"risk_profile": "aggressive", "cap_pct": 10.0},
+        },
+    },
+    "degen": {
+        "risk": {
+            "max_risk_per_trade_pct": 2.0,
+            "max_portfolio_risk_pct": 25.0,
+            "max_daily_drawdown_pct": 25.0,
+        },
+        "per_strategy": {
+            # degen still uses the "aggressive" risk_profile definition under the hood,
+            # it just gives the spicy stuff more headroom.
+            "default": {"risk_profile": "aggressive"},
+            "trend_core": {"risk_profile": "aggressive", "cap_pct": 50.0},
+            "dca_overlay": {"risk_profile": "aggressive", "cap_pct": 25.0},
+            "vol_breakout": {"risk_profile": "aggressive", "cap_pct": 20.0},
+            "majors_mean_rev": {"risk_profile": "aggressive", "cap_pct": 15.0},
+            "rs_rotation": {"risk_profile": "aggressive", "cap_pct": 25.0},
+            "ai_predictor": {"risk_profile": "aggressive", "cap_pct": 20.0},
+            "ai_predictor_alt": {"risk_profile": "aggressive", "cap_pct": 15.0},
+            "ai_regression": {"risk_profile": "aggressive", "cap_pct": 15.0},
+        },
+    },
+}
 
 
 def _context(request: Request):

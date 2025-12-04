@@ -77,6 +77,8 @@ const isRiskProfile = (value: unknown): value is StrategyRiskProfile =>
   value === 'conservative' || value === 'balanced' || value === 'aggressive';
 
 const RISK_PRESET_OPTIONS: RiskPresetName[] = ['conservative', 'balanced', 'aggressive', 'degen'];
+const ML_STRATEGY_IDS = ['ai_predictor', 'ai_predictor_alt', 'ai_regression'] as const;
+type MlStrategyId = (typeof ML_STRATEGY_IDS)[number];
 
 const buildKpis = (summary: PortfolioSummary) => [
   {
@@ -182,6 +184,15 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
   const [strategyFeedback, setStrategyFeedback] = useState<string | null>(null);
   const [systemMessage, setSystemMessage] = useState<{ tone: 'info' | 'error' | 'success'; message: string } | null>(null);
   const [modeBusy, setModeBusy] = useState(false);
+
+  const mlEnabled = useMemo(
+    () =>
+      strategies.some(
+        (strategy) =>
+          ML_STRATEGY_IDS.includes(strategy.strategy_id as MlStrategyId) && strategy.enabled,
+      ),
+    [strategies],
+  );
 
   const sidebarItems = [
     { label: 'Overview', description: 'KPIs & positions', active: true, badge: 'Live' },
@@ -477,6 +488,43 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
     }
   };
 
+  const handleMlToggle = async (enabled: boolean) => {
+    if (health?.ui_read_only) {
+      setStrategyFeedback('Backend is read-only. Strategy controls are disabled.');
+      return;
+    }
+
+    const mlIds = strategies
+      .filter((strategy) => ML_STRATEGY_IDS.includes(strategy.strategy_id as MlStrategyId))
+      .map((strategy) => strategy.strategy_id);
+
+    if (mlIds.length === 0) {
+      setStrategyFeedback('No ML strategies are configured.');
+      return;
+    }
+
+    setStrategyFeedback(null);
+
+    const previousStrategies = strategies.map((strategy) => ({ ...strategy }));
+    mlIds.forEach((id) => setStrategyBusyState(id, true));
+
+    setStrategies((current) =>
+      current.map((strategy) =>
+        mlIds.includes(strategy.strategy_id) ? { ...strategy, enabled } : strategy,
+      ),
+    );
+
+    try {
+      await Promise.all(mlIds.map((id) => setStrategyEnabled(id, enabled)));
+      setStrategyFeedback(`Machine learning strategies ${enabled ? 'enabled' : 'disabled'}.`);
+    } catch (error) {
+      setStrategies(previousStrategies);
+      setStrategyFeedback('Unable to update ML strategies. Restored previous state.');
+    } finally {
+      mlIds.forEach((id) => setStrategyBusyState(id, false));
+    }
+  };
+
   const handlePerStrategyBudgetChange = async (strategyId: string, valuePct: number) => {
     if (health?.ui_read_only) {
       setRiskConfigError('Backend is read-only. Risk config changes are disabled.');
@@ -499,6 +547,35 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
     if (!updated) {
       setRiskConfigError('Unable to update risk config. Restored prior values.');
       setRiskConfig(riskConfig);
+    } else {
+      setRiskConfig(updated);
+    }
+
+    setRiskConfigBusy(false);
+  };
+
+  const handleRiskConfigFieldChange = async (
+    field: keyof RiskConfig,
+    value: number | boolean,
+  ) => {
+    if (health?.ui_read_only) {
+      setRiskConfigError('Backend is read-only. Risk config changes are disabled.');
+      return;
+    }
+    if (!riskConfig) return;
+
+    const previous = riskConfig;
+    const patch: Partial<RiskConfig> = { [field]: value } as Partial<RiskConfig>;
+
+    setRiskConfig({ ...riskConfig, [field]: value });
+    setRiskConfigBusy(true);
+    setRiskConfigError(null);
+
+    const updated = await updateRiskConfig(patch);
+
+    if (!updated) {
+      setRiskConfigError('Unable to update risk config. Restored prior values.');
+      setRiskConfig(previous);
     } else {
       setRiskConfig(updated);
     }
@@ -654,7 +731,25 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
       sidebar={<Sidebar items={sidebarItems} footer={{ label: 'Session', value: connectionState === 'connected' ? 'Connected' : 'Degraded' }} />}
       actions={
         <div className="layout__action-buttons">
-          <button type="button" className="ghost-button" onClick={handleFlattenAll}>
+          <button
+            type="button"
+            className="primary-button"
+            disabled={riskBusy || !risk || health?.ui_read_only}
+            aria-busy={riskBusy}
+            onClick={handleToggleKillSwitch}
+          >
+            {riskBusy
+              ? 'Updating…'
+              : risk?.kill_switch_active
+                ? 'Start bot'
+                : 'Stop bot'}
+          </button>
+          <button
+            type="button"
+            className="ghost-button"
+            onClick={handleFlattenAll}
+            disabled={health?.ui_read_only}
+          >
             Flatten all positions
           </button>
           <button type="button" className="ghost-button" onClick={onLogout}>
@@ -685,7 +780,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
             onChange={(event) => handleModeChange(event.target.value as ExecutionMode)}
             disabled={modeBusy || !health || health.ui_read_only || !health.execution_ok}
           >
-            <option value="paper">Paper</option>
+            <option value="paper">Paper / Test</option>
             <option value="live">Live</option>
           </select>
           <p className="field__hint">Live mode requires backend approval and is blocked while read-only.</p>
@@ -718,15 +813,157 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
       {riskConfig ? (
         <section className="panel">
           <div className="panel__header">
-            <h2>Risk budgets</h2>
+            <h2>Risk settings & budgets</h2>
             {riskConfigBusy ? <span className="pill pill--info">Saving…</span> : null}
           </div>
           <p className="panel__description">
-            Per-strategy maximum share of portfolio risk. Changes apply immediately.
+            Global risk limits and per-strategy caps. Changes apply immediately.
           </p>
 
           {riskConfigError ? <p className="field__error">{riskConfigError}</p> : null}
 
+          <div className="risk-config__grid risk-config__grid--global">
+            <div className="field">
+              <label>Max risk per trade (%)</label>
+              <input
+                type="number"
+                min={0}
+                max={100}
+                value={riskConfig.max_risk_per_trade_pct}
+                onChange={(e) => handleRiskConfigFieldChange('max_risk_per_trade_pct', Number(e.target.value))}
+              />
+            </div>
+
+            <div className="field">
+              <label>Max portfolio risk (%)</label>
+              <input
+                type="number"
+                min={0}
+                max={100}
+                value={riskConfig.max_portfolio_risk_pct}
+                onChange={(e) => handleRiskConfigFieldChange('max_portfolio_risk_pct', Number(e.target.value))}
+              />
+            </div>
+
+            <div className="field">
+              <label>Max daily drawdown (%)</label>
+              <input
+                type="number"
+                min={0}
+                max={100}
+                value={riskConfig.max_daily_drawdown_pct}
+                onChange={(e) => handleRiskConfigFieldChange('max_daily_drawdown_pct', Number(e.target.value))}
+              />
+            </div>
+
+            <div className="field">
+              <label>Max open positions</label>
+              <input
+                type="number"
+                min={0}
+                value={riskConfig.max_open_positions}
+                onChange={(e) => handleRiskConfigFieldChange('max_open_positions', Number(e.target.value))}
+              />
+            </div>
+
+            <div className="field">
+              <label>Max per-asset exposure (%)</label>
+              <input
+                type="number"
+                min={0}
+                max={100}
+                value={riskConfig.max_per_asset_pct}
+                onChange={(e) => handleRiskConfigFieldChange('max_per_asset_pct', Number(e.target.value))}
+              />
+            </div>
+
+            <div className="field">
+              <label>Min 24h liquidity (USD)</label>
+              <input
+                type="number"
+                min={0}
+                value={riskConfig.min_liquidity_24h_usd}
+                onChange={(e) => handleRiskConfigFieldChange('min_liquidity_24h_usd', Number(e.target.value))}
+              />
+            </div>
+
+            <div className="field field--checkbox">
+              <label>
+                <input
+                  type="checkbox"
+                  checked={riskConfig.kill_switch_on_drift}
+                  onChange={(e) => handleRiskConfigFieldChange('kill_switch_on_drift', e.target.checked)}
+                />
+                Kill switch on drift
+              </label>
+            </div>
+
+            <div className="field field--checkbox">
+              <label>
+                <input
+                  type="checkbox"
+                  checked={riskConfig.include_manual_positions}
+                  onChange={(e) => handleRiskConfigFieldChange('include_manual_positions', e.target.checked)}
+                />
+                Include manual positions in risk
+              </label>
+            </div>
+
+            <div className="field">
+              <label>Volatility lookback (bars)</label>
+              <input
+                type="number"
+                min={1}
+                value={riskConfig.volatility_lookback_bars}
+                onChange={(e) => handleRiskConfigFieldChange('volatility_lookback_bars', Number(e.target.value))}
+              />
+            </div>
+
+            <div className="field field--checkbox">
+              <label>
+                <input
+                  type="checkbox"
+                  checked={riskConfig.dynamic_allocation_enabled}
+                  onChange={(e) => handleRiskConfigFieldChange('dynamic_allocation_enabled', e.target.checked)}
+                />
+                Dynamic strategy weighting
+              </label>
+            </div>
+
+            <div className="field">
+              <label>Dynamic allocation lookback (hours)</label>
+              <input
+                type="number"
+                min={1}
+                value={riskConfig.dynamic_allocation_lookback_hours}
+                onChange={(e) => handleRiskConfigFieldChange('dynamic_allocation_lookback_hours', Number(e.target.value))}
+              />
+            </div>
+
+            <div className="field">
+              <label>Min strategy weight (%)</label>
+              <input
+                type="number"
+                min={0}
+                max={100}
+                value={riskConfig.min_strategy_weight_pct}
+                onChange={(e) => handleRiskConfigFieldChange('min_strategy_weight_pct', Number(e.target.value))}
+              />
+            </div>
+
+            <div className="field">
+              <label>Max strategy weight (%)</label>
+              <input
+                type="number"
+                min={0}
+                max={100}
+                value={riskConfig.max_strategy_weight_pct}
+                onChange={(e) => handleRiskConfigFieldChange('max_strategy_weight_pct', Number(e.target.value))}
+              />
+            </div>
+          </div>
+
+          <h3>Per-strategy caps</h3>
           <div className="risk-config__grid">
             {Object.entries(riskConfig.max_per_strategy_pct).map(([strategyId, pct]) => (
               <div key={strategyId} className="field">
@@ -755,6 +992,8 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
         onToggle={handleStrategyToggle}
         onRiskProfileChange={handleRiskProfileChange}
         onLearningToggle={handleLearningToggle}
+        mlEnabled={mlEnabled}
+        onMlToggle={handleMlToggle}
       />
 
       <KpiGrid items={kpis} />
