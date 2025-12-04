@@ -62,14 +62,16 @@ risk:
   max_portfolio_risk_pct: 10.0
   max_open_positions: 10
   max_per_asset_pct: 5.0
-    max_per_strategy_pct:
-      trend_core: 40.0
-      dca_overlay: 20.0
-      vol_breakout: 10.0
-      majors_mean_rev: 10.0
-      rs_rotation: 20.0
-      ai_predictor: 10.0
-      manual: 20.0
+  max_per_strategy_pct:
+    trend_core: 40.0
+    dca_overlay: 20.0
+    vol_breakout: 10.0
+    majors_mean_rev: 10.0
+    rs_rotation: 20.0
+    ai_predictor: 10.0
+    ai_predictor_alt: 5.0
+    ai_regression: 5.0
+    manual: 20.0
   max_daily_drawdown_pct: 10.0
   kill_switch_on_drift: true
   include_manual_positions: true
@@ -83,6 +85,8 @@ strategies:
     - "vol_breakout"
     - "majors_mean_rev"
     - "ai_predictor"
+    # - "ai_predictor_alt"
+    # - "ai_regression"
   configs:
     trend_core:
       name: "trend_core"
@@ -164,6 +168,21 @@ strategies:
         continuous_learning: true
         max_positions: 2
       userref: 1101
+
+    ai_regression:
+      name: "ai_regression"
+      type: "machine_learning_regression"
+      enabled: false
+      params:
+        pairs: []                # full discovered universe
+        timeframe: "1h"
+        lookback_bars: 60
+        short_window: 5
+        long_window: 20
+        target_exposure_usd: null
+        continuous_learning: true
+        max_positions: 2
+      userref: 1102
 
     rs_rotation:
       name: "rs_rotation"

@@ -29,6 +29,8 @@ from .risk import RiskEngine
 from .strategies.dca_rebalance import DcaRebalanceStrategy
 from .strategies.demo_strategy import TrendFollowingStrategy
 from .strategies.ml_strategy import AIPredictorStrategy
+from .strategies.ml_alt_strategy import AIPredictorAltStrategy
+from .strategies.ml_regression_strategy import AIRegressionStrategy
 from .strategies.mean_reversion import MeanReversionStrategy
 from .strategies.relative_strength import RelativeStrengthStrategy
 from .strategies.vol_breakout import VolBreakoutStrategy
@@ -45,6 +47,8 @@ def _strategy_registry() -> Dict[str, Type[Strategy]]:
         "vol_breakout": VolBreakoutStrategy,
         "relative_strength": RelativeStrengthStrategy,
         "machine_learning": AIPredictorStrategy,
+        "machine_learning_alt": AIPredictorAltStrategy,
+        "machine_learning_regression": AIRegressionStrategy,
     }
 
 
