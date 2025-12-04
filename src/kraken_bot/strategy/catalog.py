@@ -41,6 +41,16 @@ CANONICAL_STRATEGIES: Dict[str, StrategyDefinition] = {
         type="relative_strength",
         label="Relative Strength Rotation",
     ),
+    "ai_predictor": StrategyDefinition(
+        strategy_id="ai_predictor",
+        type="machine_learning",
+        label="AI Predictor",
+    ),
+    "ai_predictor_alt": StrategyDefinition(
+        strategy_id="ai_predictor_alt",
+        type="machine_learning_alt",
+        label="AI Predictor (Alt)",
+    ),
 }
 
 CANONICAL_STRATEGY_TYPES = {
