@@ -214,23 +214,42 @@ async def start_session(
         )
         return ApiEnvelope(data=None, error="UI is in read-only mode")
 
+    execution_config = ctx.config.execution
+    new_mode = payload.mode.lower()
+
+    if new_mode == "live" and not getattr(
+        execution_config, "allow_live_trading", False
+    ):
+        logger.warning(
+            "Session start blocked: live trading not permitted by configuration",
+            extra=build_request_log_extra(
+                request,
+                event="session_start_blocked_live",
+                requested_mode=new_mode,
+            ),
+        )
+        return ApiEnvelope(
+            data=None, error="Live trading not permitted by configuration"
+        )
+
     session = ctx.session
     session.active = True
-    session.mode = payload.mode
+    session.mode = new_mode
     session.loop_interval_sec = payload.loop_interval_sec
     session.profile_name = payload.profile_name
     session.ml_enabled = payload.ml_enabled
 
     ctx.config.session.active = True
-    ctx.config.session.mode = payload.mode
+    ctx.config.session.mode = new_mode
     ctx.config.session.loop_interval_sec = payload.loop_interval_sec
     ctx.config.session.profile_name = payload.profile_name
     ctx.config.session.ml_enabled = payload.ml_enabled
 
-    execution_config = ctx.config.execution
-    execution_config.mode = payload.mode
-    execution_config.validate_only = payload.mode != "live"
-    ctx.execution_service.adapter.config.mode = payload.mode
+    effective_mode = new_mode if new_mode in {"paper", "live"} else "paper"
+
+    execution_config.mode = effective_mode
+    execution_config.validate_only = effective_mode != "live"
+    ctx.execution_service.adapter.config.mode = effective_mode
     ctx.execution_service.adapter.config.validate_only = execution_config.validate_only
 
     dump_runtime_overrides(ctx.config, session=ctx.session)
@@ -241,7 +260,8 @@ async def start_session(
             request,
             event="session_started",
             profile=payload.profile_name,
-            mode=payload.mode,
+            mode=new_mode,
+            effective_mode=effective_mode,
             loop_interval=payload.loop_interval_sec,
             ml_enabled=payload.ml_enabled,
         ),
