@@ -1,6 +1,7 @@
 """UI application context helpers."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Optional
 
 from kraken_bot.bootstrap import bootstrap
 from kraken_bot.config import AppConfig
@@ -10,6 +11,17 @@ from kraken_bot.market_data.api import MarketDataAPI
 from kraken_bot.metrics import SystemMetrics
 from kraken_bot.portfolio.manager import PortfolioService
 from kraken_bot.strategy.engine import StrategyEngine
+
+
+@dataclass
+class SessionState:
+    """Runtime session state controlling the trading loop and mode."""
+
+    active: bool = False
+    mode: str = "paper"
+    loop_interval_sec: float = 15.0
+    profile_name: Optional[str] = None
+    ml_enabled: bool = True
 
 
 @dataclass
@@ -23,6 +35,7 @@ class AppContext:
     strategy_engine: StrategyEngine
     execution_service: ExecutionService
     metrics: SystemMetrics
+    session: SessionState = field(default_factory=SessionState)
 
 
 def build_app_context(allow_interactive_setup: bool = True) -> AppContext:
@@ -62,6 +75,14 @@ def build_app_context(allow_interactive_setup: bool = True) -> AppContext:
 
     metrics = SystemMetrics()
 
+    session = SessionState(
+        active=config.session.active,
+        mode=config.session.mode,
+        loop_interval_sec=config.session.loop_interval_sec,
+        profile_name=config.session.profile_name,
+        ml_enabled=config.session.ml_enabled,
+    )
+
     return AppContext(
         config=config,
         client=client,
@@ -70,6 +91,7 @@ def build_app_context(allow_interactive_setup: bool = True) -> AppContext:
         strategy_engine=strategy_engine,
         execution_service=execution_service,
         metrics=metrics,
+        session=session,
     )
 
 

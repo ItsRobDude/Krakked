@@ -127,6 +127,7 @@ export type SystemMetrics = {
 export type ExecutionMode = 'paper' | 'live';
 export type StrategyRiskProfile = 'conservative' | 'balanced' | 'aggressive';
 export type RiskPresetName = 'conservative' | 'balanced' | 'aggressive' | 'degen';
+export type SessionMode = 'paper' | 'live' | 'test';
 
 export type StrategyIntentPreview = {
   pair: string;
@@ -161,6 +162,26 @@ export type StrategyPerformance = {
   trade_count: number;
   win_rate: number;
   max_drawdown_pct: number;
+};
+
+export type SessionStateResponse = {
+  active: boolean;
+  mode: SessionMode;
+  loop_interval_sec: number;
+  profile_name: string | null;
+  ml_enabled: boolean;
+};
+
+export type SessionConfigRequest = {
+  profile_name: string;
+  mode: SessionMode;
+  loop_interval_sec: number;
+  ml_enabled: boolean;
+};
+
+export type ProfileSummary = {
+  name: string;
+  description: string;
 };
 
 const API_BASE = import.meta.env.VITE_API_BASE || '/api';
@@ -211,6 +232,30 @@ export async function fetchSystemHealth(): Promise<SystemHealth | null> {
 
 export async function fetchSystemMetrics(): Promise<SystemMetrics | null> {
   return fetchJson<SystemMetrics>('/system/metrics');
+}
+
+export async function fetchSessionState(): Promise<SessionStateResponse | null> {
+  return fetchJson<SessionStateResponse>('/system/session');
+}
+
+export async function startSession(
+  config: SessionConfigRequest,
+): Promise<SessionStateResponse | null> {
+  return fetchJson<SessionStateResponse>('/system/session/start', {
+    method: 'POST',
+    body: JSON.stringify(config),
+  });
+}
+
+export async function stopSession(): Promise<SessionStateResponse | null> {
+  return fetchJson<SessionStateResponse>('/system/session/stop', {
+    method: 'POST',
+  });
+}
+
+export async function fetchProfiles(): Promise<ProfileSummary[]> {
+  const profiles = await fetchJson<ProfileSummary[]>('/system/profiles');
+  return profiles ?? [];
 }
 
 export async function fetchStrategies(): Promise<StrategyState[] | null> {

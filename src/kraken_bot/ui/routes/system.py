@@ -5,11 +5,13 @@ from __future__ import annotations
 import binascii
 import logging
 from dataclasses import asdict
+from typing import Optional
 
 from fastapi import APIRouter, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from kraken_bot import APP_VERSION
+from kraken_bot.config import dump_runtime_overrides
 from kraken_bot.connection import rest_client
 from kraken_bot.connection.exceptions import (
     AuthError,
@@ -39,6 +41,32 @@ class ModeChangePayload(BaseModel):
     mode: str
 
 
+class SessionConfigPayload(BaseModel):
+    """Payload for starting or updating a trading session."""
+
+    profile_name: str
+    mode: str = Field(..., pattern="^(paper|live|test)$")
+    loop_interval_sec: float = Field(15.0, ge=1.0, le=300.0)
+    ml_enabled: bool = True
+
+
+class SessionStatePayload(BaseModel):
+    """Response payload describing the current session state."""
+
+    active: bool
+    mode: str
+    loop_interval_sec: float
+    profile_name: Optional[str]
+    ml_enabled: bool
+
+
+class ProfileSummaryPayload(BaseModel):
+    """Simplified profile metadata for UI selection."""
+
+    name: str
+    description: str
+
+
 def _context(request: Request):
     return request.app.state.context
 
@@ -50,6 +78,17 @@ def _redacted_config(config) -> dict:
     if isinstance(auth_config, dict) and "token" in auth_config:
         auth_config["token"] = "***"
     return config_dict
+
+
+def _session_payload(ctx) -> SessionStatePayload:
+    session = ctx.session
+    return SessionStatePayload(
+        active=session.active,
+        mode=session.mode,
+        loop_interval_sec=session.loop_interval_sec,
+        profile_name=session.profile_name,
+        ml_enabled=session.ml_enabled,
+    )
 
 
 @router.get("/health", response_model=ApiEnvelope[SystemHealthPayload])
@@ -145,6 +184,111 @@ async def system_health(request: Request) -> ApiEnvelope[SystemHealthPayload]:
         logger.exception(
             "Failed to fetch system health",
             extra=build_request_log_extra(request, event="system_health_failed"),
+        )
+        return ApiEnvelope(data=None, error=str(exc))
+
+
+@router.get("/session", response_model=ApiEnvelope[SessionStatePayload])
+async def get_session_state(request: Request) -> ApiEnvelope[SessionStatePayload]:
+    try:
+        ctx = _context(request)
+        return ApiEnvelope(data=_session_payload(ctx), error=None)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.exception(
+            "Failed to fetch session state",
+            extra=build_request_log_extra(request, event="session_state_failed"),
+        )
+        return ApiEnvelope(data=None, error=str(exc))
+
+
+@router.post("/session/start", response_model=ApiEnvelope[SessionStatePayload])
+async def start_session(
+    payload: SessionConfigPayload, request: Request
+) -> ApiEnvelope[SessionStatePayload]:
+    ctx = _context(request)
+
+    if ctx.config.ui.read_only:
+        logger.warning(
+            "Session start blocked: UI read-only",
+            extra=build_request_log_extra(request, event="session_start_blocked"),
+        )
+        return ApiEnvelope(data=None, error="UI is in read-only mode")
+
+    session = ctx.session
+    session.active = True
+    session.mode = payload.mode
+    session.loop_interval_sec = payload.loop_interval_sec
+    session.profile_name = payload.profile_name
+    session.ml_enabled = payload.ml_enabled
+
+    ctx.config.session.active = True
+    ctx.config.session.mode = payload.mode
+    ctx.config.session.loop_interval_sec = payload.loop_interval_sec
+    ctx.config.session.profile_name = payload.profile_name
+    ctx.config.session.ml_enabled = payload.ml_enabled
+
+    execution_config = ctx.config.execution
+    execution_config.mode = payload.mode
+    execution_config.validate_only = payload.mode != "live"
+    ctx.execution_service.adapter.config.mode = payload.mode
+    ctx.execution_service.adapter.config.validate_only = execution_config.validate_only
+
+    dump_runtime_overrides(ctx.config, session=ctx.session)
+
+    logger.info(
+        "Session started",
+        extra=build_request_log_extra(
+            request,
+            event="session_started",
+            profile=payload.profile_name,
+            mode=payload.mode,
+            loop_interval=payload.loop_interval_sec,
+            ml_enabled=payload.ml_enabled,
+        ),
+    )
+
+    return ApiEnvelope(data=_session_payload(ctx), error=None)
+
+
+@router.post("/session/stop", response_model=ApiEnvelope[SessionStatePayload])
+async def stop_session(request: Request) -> ApiEnvelope[SessionStatePayload]:
+    ctx = _context(request)
+
+    if ctx.config.ui.read_only:
+        logger.warning(
+            "Session stop blocked: UI read-only",
+            extra=build_request_log_extra(request, event="session_stop_blocked"),
+        )
+        return ApiEnvelope(data=None, error="UI is in read-only mode")
+
+    ctx.session.active = False
+    ctx.config.session.active = False if hasattr(ctx.config, "session") else False
+
+    dump_runtime_overrides(ctx.config, session=ctx.session)
+
+    logger.info(
+        "Session stopped",
+        extra=build_request_log_extra(request, event="session_stopped"),
+    )
+
+    return ApiEnvelope(data=_session_payload(ctx), error=None)
+
+
+@router.get(
+    "/profiles", response_model=ApiEnvelope[list[ProfileSummaryPayload]]
+)
+async def list_profiles(request: Request) -> ApiEnvelope[list[ProfileSummaryPayload]]:
+    try:
+        ctx = _context(request)
+        profiles = [
+            ProfileSummaryPayload(name=name, description=cfg.description)
+            for name, cfg in ctx.config.profiles.items()
+        ]
+        return ApiEnvelope(data=profiles, error=None)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.exception(
+            "Failed to list profiles",
+            extra=build_request_log_extra(request, event="profiles_fetch_failed"),
         )
         return ApiEnvelope(data=None, error=str(exc))
 
