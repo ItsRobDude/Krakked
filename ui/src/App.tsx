@@ -177,6 +177,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
     Record<string, StrategyPerformance>
   >({});
   const [strategyRisk, setStrategyRisk] = useState<Record<string, StrategyRiskProfile>>({});
+  const [strategyLearning, setStrategyLearning] = useState<Record<string, boolean>>({});
   const [strategyBusy, setStrategyBusy] = useState<Set<string>>(new Set());
   const [strategyFeedback, setStrategyFeedback] = useState<string | null>(null);
   const [systemMessage, setSystemMessage] = useState<{ tone: 'info' | 'error' | 'success'; message: string } | null>(null);
@@ -311,6 +312,18 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
               next[strategy.strategy_id] = riskProfile;
             } else if (!next[strategy.strategy_id]) {
               next[strategy.strategy_id] = 'balanced';
+            }
+          });
+          return next;
+        });
+        setStrategyLearning((previous) => {
+          const next = { ...previous };
+          data.forEach((strategy) => {
+            const learning = strategy.params?.continuous_learning;
+            if (typeof learning === 'boolean') {
+              next[strategy.strategy_id] = learning;
+            } else if (next[strategy.strategy_id] === undefined) {
+              next[strategy.strategy_id] = true;
             }
           });
           return next;
@@ -516,6 +529,43 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
     }
   };
 
+  const handleLearningToggle = async (strategyId: string, enabled: boolean) => {
+    if (health?.ui_read_only) {
+      setStrategyFeedback('Backend is read-only. Strategy controls are disabled.');
+      return;
+    }
+
+    setStrategyFeedback(null);
+    setStrategyBusyState(strategyId, true);
+
+    const previous = strategyLearning[strategyId];
+    setStrategyLearning((current) => ({ ...current, [strategyId]: enabled }));
+    setStrategies((current) =>
+      current.map((strategy) =>
+        strategy.strategy_id === strategyId
+          ? { ...strategy, params: { ...strategy.params, continuous_learning: enabled } }
+          : strategy,
+      ),
+    );
+
+    try {
+      await patchStrategyConfig(strategyId, { params: { continuous_learning: enabled } });
+      setStrategyFeedback(`Updated ${strategyId} learning ${enabled ? 'on' : 'off'}.`);
+    } catch (error) {
+      setStrategyLearning((current) => ({ ...current, [strategyId]: previous }));
+      setStrategies((current) =>
+        current.map((strategy) =>
+          strategy.strategy_id === strategyId
+            ? { ...strategy, params: { ...strategy.params, continuous_learning: previous } }
+            : strategy,
+        ),
+      );
+      setStrategyFeedback(`Unable to update learning for ${strategyId}.`);
+    } finally {
+      setStrategyBusyState(strategyId, false);
+    }
+  };
+
   const handlePresetChange = async (preset: RiskPresetName) => {
     if (health?.ui_read_only) {
       setRiskConfigError('Backend is read-only. Risk config changes are disabled.');
@@ -698,11 +748,13 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
         strategies={strategies}
         performance={strategyPerformance}
         riskSelections={strategyRisk}
+        learningSelections={strategyLearning}
         busy={strategyBusy}
         readOnly={Boolean(health?.ui_read_only)}
         feedback={strategyFeedback}
         onToggle={handleStrategyToggle}
         onRiskProfileChange={handleRiskProfileChange}
+        onLearningToggle={handleLearningToggle}
       />
 
       <KpiGrid items={kpis} />

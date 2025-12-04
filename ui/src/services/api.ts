@@ -137,6 +137,12 @@ export type StrategyIntentPreview = {
   timeframe: string;
 };
 
+export type StrategyParams = {
+  risk_profile?: StrategyRiskProfile | null;
+  continuous_learning?: boolean;
+  [key: string]: unknown;
+};
+
 export type StrategyState = {
   strategy_id: string;
   enabled: boolean;
@@ -144,7 +150,7 @@ export type StrategyState = {
   last_actions_at: string | null;
   pnl_summary: { realized_pnl_usd?: number; exposure_pct?: number };
   last_intents?: StrategyIntentPreview[] | null;
-  params?: { risk_profile?: StrategyRiskProfile | null };
+  params?: StrategyParams;
 };
 
 export type StrategyPerformance = {
