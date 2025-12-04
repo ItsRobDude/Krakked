@@ -8,9 +8,11 @@ region:
   default_quote: "USD"
 
 universe:
-  include_pairs:
-    - "ETH/USD"
-    - "BTC/USD"
+  # Empty list (or omit) means let universe discovery include everything that
+  # meets the liquidity filter for the region/profile.
+  include_pairs: []
+
+  # Keep empty for US_CA if you want the broadest possible coverage.
   exclude_pairs: []
   min_24h_volume_usd: 100000.0
 
@@ -87,6 +89,8 @@ strategies:
       type: "trend_following"
       enabled: true
       params:
+        # Empty => use full discovered universe
+        pairs: []
         risk_profile: "balanced"
         timeframes: ["1h", "4h"]
         ma_fast: 10
@@ -114,7 +118,7 @@ strategies:
       type: "vol_breakout"
       enabled: false   # off by default; user can turn on later
       params:
-        pairs: ["BTC/USD", "ETH/USD"]
+        pairs: []                # full universe
         timeframes: ["15m", "1h"]
         lookback_bars: 20
         min_compression_bps: 10.0
@@ -136,7 +140,7 @@ strategies:
       type: "machine_learning"
       enabled: true
       params:
-        pairs: ["BTC/USD", "ETH/USD"]
+        pairs: []                # full discovered universe
         timeframe: "1h"
         lookback_bars: 60
         short_window: 5
@@ -151,7 +155,7 @@ strategies:
       type: "machine_learning_alt"
       enabled: false
       params:
-        pairs: ["BTC/USD", "ETH/USD"]
+        pairs: []                # full discovered universe
         timeframe: "1h"
         lookback_bars: 60
         short_window: 5
