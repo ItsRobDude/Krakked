@@ -67,7 +67,6 @@ risk:
       majors_mean_rev: 10.0
       rs_rotation: 20.0
       ai_predictor: 10.0
-      ai_predictor_alt: 10.0
       manual: 20.0
   max_daily_drawdown_pct: 10.0
   kill_switch_on_drift: true
@@ -82,7 +81,6 @@ strategies:
     - "vol_breakout"
     - "majors_mean_rev"
     - "ai_predictor"
-    - "ai_predictor_alt"
   configs:
     trend_core:
       name: "trend_core"
