@@ -400,7 +400,17 @@ class RiskEngine:
             exposure = intent.desired_exposure_usd
             if exposure is None:
                 exposure = self._size_by_volatility(pair, intent.timeframe, price, ctx)
-            target_usd_by_strategy[intent.strategy_id] = exposure or 0.0
+            exposure = exposure or 0.0
+
+            confidence = intent.confidence
+            if confidence < 0.0:
+                confidence = 0.0
+            elif confidence > 1.0:
+                confidence = 1.0
+
+            exposure *= confidence
+
+            target_usd_by_strategy[intent.strategy_id] = exposure
 
         current_by_strategy: Dict[str, float] = {}
         pair_positions = [p for p in ctx.open_positions if p.pair == pair]

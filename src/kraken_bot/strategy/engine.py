@@ -162,6 +162,30 @@ class StrategyEngine:
             ),
         )
 
+    def _score_intent(
+        self,
+        intent: StrategyIntent,
+        weights: Optional[StrategyWeights],
+    ) -> float:
+        """
+        Compute a decision score for an intent based on:
+        - Strategy-level weight (dynamic allocation)
+        - Per-intent confidence
+        """
+
+        base = intent.confidence
+
+        if not weights:
+            return base
+
+        weight_pct = weights.per_strategy_pct.get(intent.strategy_id)
+        if weight_pct is None:
+            weight_factor = 1.0
+        else:
+            weight_factor = weight_pct / 100.0
+
+        return base * weight_factor
+
     def run_cycle(self, now: Optional[datetime] = None) -> ExecutionPlan:
         """Run a full decision cycle and persist the resulting execution plan."""
         now = now or datetime.now(timezone.utc)
@@ -260,7 +284,25 @@ class StrategyEngine:
                         ),
                     )
 
-        risk_actions = self.risk_engine.process_intents(all_intents, weights=weights)
+        scored: List[tuple[StrategyIntent, float]] = []
+        for intent in all_intents:
+            score = self._score_intent(intent, weights)
+            scored.append((intent, score))
+
+        MIN_SCORE = 0.05
+        filtered_scored = [(intent, score) for intent, score in scored if score >= MIN_SCORE]
+        filtered = [intent for intent, _ in filtered_scored]
+
+        MAX_INTENTS_PER_CYCLE = 500
+        if len(filtered) > MAX_INTENTS_PER_CYCLE:
+            filtered = [
+                intent
+                for intent, score in sorted(
+                    filtered_scored, key=lambda t: t[1], reverse=True
+                )[:MAX_INTENTS_PER_CYCLE]
+            ]
+
+        risk_actions = self.risk_engine.process_intents(filtered, weights=weights)
 
         for action in risk_actions:
             strat_cfg = self.config.strategies.configs.get(action.strategy_id)
