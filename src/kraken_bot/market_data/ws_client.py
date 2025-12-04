@@ -31,6 +31,8 @@ class KrakenWSClientV2:
         self._timeframes = timeframes
         self._running = False
         self._thread: Optional[threading.Thread] = None
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._main_task: Optional[asyncio.Task] = None
         self._websocket: Optional[WebSocketClientProtocol] = None
 
         # In-memory cache
@@ -63,10 +65,12 @@ class KrakenWSClientV2:
     def stop(self):
         """Stops the WebSocket client."""
         self._running = False
+        if self._loop and self._loop.is_running():
+            self._loop.call_soon_threadsafe(self._request_shutdown)
         if self._thread and self._thread.is_alive():
-            # The async loop will break on the next iteration when _running is cleared,
-            # so joining here ensures we don't leave the background thread alive.
-            self._thread.join(timeout=5)
+            # Allow a short grace period for the background thread to exit after
+            # cancellation is requested.
+            self._thread.join(timeout=2)
         logger.info("WebSocket client stopped.")
 
     def _get_canonical_from_ws_symbol(self, ws_symbol: str) -> Optional[str]:
@@ -193,9 +197,13 @@ class KrakenWSClientV2:
     def _run(self):
         """The main run loop with reconnection logic."""
         loop = asyncio.new_event_loop()
+        self._loop = loop
         asyncio.set_event_loop(loop)
         try:
-            loop.run_until_complete(self._connect_and_listen())
+            self._main_task = loop.create_task(self._connect_and_listen())
+            loop.run_until_complete(self._main_task)
+        except asyncio.CancelledError:
+            logger.debug("WebSocket run loop cancelled during shutdown.")
         except RuntimeError as exc:
             error_message = str(exc)
             is_loop_shutdown = (
@@ -212,6 +220,17 @@ class KrakenWSClientV2:
             else:
                 logger.error("WebSocket run loop error: %s", exc)
         finally:
+            pending = [
+                task
+                for task in asyncio.all_tasks(loop)
+                if task is not asyncio.current_task(loop) and not task.done()
+            ]
+            for task in pending:
+                task.cancel()
+            if pending:
+                loop.run_until_complete(
+                    asyncio.gather(*pending, return_exceptions=True)
+                )
             try:
                 loop.close()
             except RuntimeError:
@@ -221,46 +240,67 @@ class KrakenWSClientV2:
         """Manages the connection and listens for messages."""
         backoff_delay = 1
         max_backoff = 60
-        while self._running:
-            try:
-                async with connect(self._url) as ws:
-                    self._websocket = ws
-                    logger.info("WebSocket connection established.")
-                    backoff_delay = 1  # Reset backoff on successful connection
-                    self.subscription_status.clear()
-                    await self._subscribe()
+        try:
+            while self._running:
+                try:
+                    async with connect(self._url) as ws:
+                        self._websocket = ws
+                        logger.info("WebSocket connection established.")
+                        backoff_delay = 1  # Reset backoff on successful connection
+                        self.subscription_status.clear()
+                        await self._subscribe()
 
-                    while self._running:
-                        try:
-                            message = await asyncio.wait_for(ws.recv(), timeout=15)
-                            if isinstance(message, bytes):
-                                message = message.decode("utf-8")
-                            await self._handle_message(message)
-                        except asyncio.TimeoutError:
-                            # No message received, send a ping to keep connection alive
+                        while self._running:
                             try:
-                                await ws.ping()
-                            except Exception:
-                                logger.warning("WebSocket ping failed. Reconnecting.")
+                                message = await asyncio.wait_for(ws.recv(), timeout=5)
+                                if isinstance(message, bytes):
+                                    message = message.decode("utf-8")
+                                await self._handle_message(message)
+                            except asyncio.TimeoutError:
+                                # No message received, send a ping to keep connection alive
+                                try:
+                                    await ws.ping()
+                                except Exception:
+                                    logger.warning(
+                                        "WebSocket ping failed. Reconnecting."
+                                    )
+                                    break
+                            except ConnectionClosed:
+                                logger.warning(
+                                    "WebSocket connection closed unexpectedly."
+                                )
                                 break
-                        except ConnectionClosed:
-                            logger.warning("WebSocket connection closed unexpectedly.")
-                            break
 
-            except Exception as e:
-                # Avoid noisy logs when the process is shutting down
-                if self._running:
-                    logger.error(f"WebSocket client error: {e}.")
-                else:
-                    logger.debug(f"WebSocket client exiting during shutdown: {e}.")
+                except asyncio.CancelledError:
+                    logger.debug(
+                        "WebSocket listener cancelled; closing connection."
+                    )
+                    raise
+                except Exception as e:
+                    # Avoid noisy logs when the process is shutting down
+                    if self._running:
+                        logger.error(f"WebSocket client error: {e}.")
+                    else:
+                        logger.debug(
+                            f"WebSocket client exiting during shutdown: {e}."
+                        )
 
-            if not self._running:
-                break
+                if not self._running:
+                    break
 
-            logger.info(f"Reconnecting in {backoff_delay}s...")
-            await asyncio.sleep(backoff_delay)
-            backoff_delay = min(
-                backoff_delay * 2, max_backoff
-            )  # Exponential backoff up to max_backoff
+                logger.info(f"Reconnecting in {backoff_delay}s...")
+                await asyncio.sleep(backoff_delay)
+                backoff_delay = min(
+                    backoff_delay * 2, max_backoff
+                )  # Exponential backoff up to max_backoff
+        finally:
+            if self._websocket and not self._websocket.closed:
+                await self._websocket.close()
 
         logger.info("WebSocket run loop terminated.")
+
+    def _request_shutdown(self):
+        if self._main_task and not self._main_task.done():
+            self._main_task.cancel()
+        if self._websocket and not self._websocket.closed:
+            asyncio.create_task(self._websocket.close())
