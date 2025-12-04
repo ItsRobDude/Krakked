@@ -24,6 +24,8 @@ export type StrategiesPanelProps = {
   onToggle: (strategyId: string, enabled: boolean) => void;
   onRiskProfileChange: (strategyId: string, profile: StrategyRiskProfile) => void;
   onLearningToggle: (strategyId: string, enabled: boolean) => void;
+  mlEnabled: boolean;
+  onMlToggle: (enabled: boolean) => void;
 };
 
 export function StrategiesPanel({
@@ -37,6 +39,8 @@ export function StrategiesPanel({
   onToggle,
   onRiskProfileChange,
   onLearningToggle,
+  mlEnabled,
+  onMlToggle,
 }: StrategiesPanelProps) {
   const formatPnl = (value?: number) => {
     if (value === undefined) return '—';
@@ -63,8 +67,20 @@ export function StrategiesPanel({
   return (
     <section className="panel strategy-panel" aria-live="polite">
       <div className="panel__header">
-        <h2>Strategies</h2>
-        <p className="panel__hint">Toggle live strategies and pick a risk posture</p>
+        <div>
+          <h2>Strategies</h2>
+          <p className="panel__hint">Toggle live strategies and pick a risk posture</p>
+        </div>
+        <label className="strategy-toggle__label">
+          <input
+            type="checkbox"
+            className="strategy-toggle"
+            checked={mlEnabled}
+            disabled={readOnly}
+            onChange={(event) => onMlToggle(event.target.checked)}
+          />
+          <span className="pill pill--info">{mlEnabled ? 'ML: On' : 'ML: Off'}</span>
+        </label>
       </div>
       <p className="panel__description">
         Enable or pause each strategy and set its risk profile. Changes respect backend read-only mode.

@@ -114,6 +114,8 @@ class BackendProtocol(Protocol):
 
     def emergency_stop(self) -> None: ...
 
+    def set_mode(self, mode: str) -> Optional[str]: ...
+
 
 # ---------------------------------------------------------------------------
 # Temporary dummy backend (replace with real Krakked wiring later)
@@ -197,6 +199,9 @@ class DummyBackend:
     def emergency_stop(self) -> None:
         pass
 
+    def set_mode(self, mode: str) -> Optional[str]:
+        return None
+
 
 class HttpBackend:
     """HTTP-backed implementation that talks to the Krakked API."""
@@ -239,6 +244,17 @@ class HttpBackend:
 
     def _post(self, path: str, payload: Optional[dict] = None) -> Any:
         return self._request("POST", path, payload)
+
+    def set_mode(self, mode: str) -> Optional[str]:
+        try:
+            self._post("/api/system/mode", {"mode": mode})
+            return None
+        except requests.HTTPError as exc:
+            return self._extract_error_message(exc.response) or str(exc)
+        except RuntimeError as exc:
+            return str(exc)
+        except Exception as exc:  # pragma: no cover - defensive
+            return str(exc)
 
     def get_summary(self) -> PortfolioSummary:
         health = self._get("/api/system/health") or {}
@@ -618,6 +634,7 @@ class KrakkedDashboard(App):
         ("h", "halt_strategies", "Halt Strategies"),
         ("e", "emergency_stop", "Emergency Stop"),
         ("k", "toggle_kill_switch", "Toggle Kill Switch"),
+        ("t", "toggle_mode", "Toggle Paper/Live"),
         ("1", "view_dashboard", "Dashboard"),
         ("2", "view_risk", "Risk"),
     ]
@@ -796,6 +813,37 @@ class KrakkedDashboard(App):
             self.risk_summary_panel.set_error(None)
 
         self.refresh_risk_view()
+
+    def action_toggle_mode(self) -> None:
+        summary = self.status_panel.summary
+        if not summary:
+            logger.info("Mode toggle skipped: summary not loaded")
+            return
+
+        if summary.ui_read_only:
+            logger.warning("Mode toggle blocked: UI is read-only")
+            return
+
+        current = summary.system_mode.lower()
+        target = "live" if current != "live" else "paper"
+
+        console = getattr(self, "console", None)
+        prompt = f"Switch execution mode to {target.upper()}? (y/N): "
+        try:
+            response = (console.input(prompt) if console else input(prompt)).strip().lower()
+        except Exception:
+            response = ""
+
+        if response not in {"y", "yes"}:
+            logger.info("Mode toggle cancelled by user")
+            return
+
+        error = self.backend.set_mode(target)
+        if error:
+            logger.error("Mode toggle failed: %s", error)
+        else:
+            logger.info("Mode switched to %s", target)
+            self.refresh_all()
 
     # ------------------------------------------------------------------
     # Data refresh
