@@ -39,8 +39,10 @@ import {
   setExecutionMode,
   ExecutionMode,
   flattenAllPositions,
+  downloadRuntimeConfig,
 } from './services/api';
 import { validateCredentials } from './services/credentials';
+import { RISK_PRESET_META, formatPresetSummary } from './constants/riskPresets';
 
 const DEFAULT_REGION = (import.meta.env.VITE_REGION as string | undefined) ?? 'US_CA';
 
@@ -174,6 +176,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
   const [riskConfig, setRiskConfig] = useState<RiskConfig | null>(null);
   const [riskConfigBusy, setRiskConfigBusy] = useState(false);
   const [riskConfigError, setRiskConfigError] = useState<string | null>(null);
+  const [currentPreset, setCurrentPreset] = useState<RiskPresetName | null>(null);
   const [strategies, setStrategies] = useState<StrategyState[]>([]);
   const [strategyPerformance, setStrategyPerformance] = useState<
     Record<string, StrategyPerformance>
@@ -451,6 +454,38 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
     }
   };
 
+  const handleDownloadRuntimeConfig = async () => {
+    try {
+      const blob = await downloadRuntimeConfig();
+      if (!blob) {
+        setSystemMessage({
+          tone: 'error',
+          message: 'Failed to download config. Check server logs or network.',
+        });
+        return;
+      }
+
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      const date = new Date().toISOString().slice(0, 10);
+
+      link.href = url;
+      link.download = `krakked-config-${date}.json`;
+
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+
+      setSystemMessage({ tone: 'success', message: 'Config downloaded.' });
+    } catch (error) {
+      setSystemMessage({
+        tone: 'error',
+        message: 'Failed to download config. Check network or logs.',
+      });
+    }
+  };
+
   const setStrategyBusyState = (strategyId: string, busyState: boolean) => {
     setStrategyBusy((previous) => {
       const next = new Set(previous);
@@ -661,6 +696,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
 
       setRiskConfig(updated);
       setRiskFeedback({ tone: 'success', message: `Applied ${preset} preset.` });
+      setCurrentPreset(preset);
 
       const [strategiesData, perf, status] = await Promise.all([
         fetchStrategies(),
@@ -727,8 +763,53 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
   return (
     <Layout
       title="Trading Overview"
-      subtitle="Live data with automatic refresh."
-      sidebar={<Sidebar items={sidebarItems} footer={{ label: 'Session', value: connectionState === 'connected' ? 'Connected' : 'Degraded' }} />}
+      subtitle={
+        <div className="layout__status-row">
+          <span className="pill pill--muted">
+            Mode:{' '}
+            {health?.current_mode === 'live'
+              ? 'Live'
+              : health?.current_mode === 'paper'
+                ? 'Paper / Test'
+                : 'Unknown'}
+          </span>
+
+          <span
+            className={
+              risk?.kill_switch_active === true
+                ? 'pill pill--danger'
+                : risk?.kill_switch_active === false
+                  ? 'pill pill--success'
+                  : 'pill pill--muted'
+            }
+          >
+            {risk?.kill_switch_active === true
+              ? 'Bot stopped'
+              : risk?.kill_switch_active === false
+                ? 'Bot running'
+                : 'Bot status pending'}
+          </span>
+
+          {currentPreset && (
+            <span
+              className="pill pill--muted"
+              title={formatPresetSummary(currentPreset)}
+            >
+              Preset: {RISK_PRESET_META[currentPreset].label}
+            </span>
+          )}
+
+          <span className={mlEnabled ? 'pill pill--info' : 'pill pill--muted'}>
+            ML: {mlEnabled ? 'On' : 'Off'}
+          </span>
+        </div>
+      }
+      sidebar={
+        <Sidebar
+          items={sidebarItems}
+          footer={{ label: 'Session', value: connectionState === 'connected' ? 'Connected' : 'Degraded' }}
+        />
+      }
       actions={
         <div className="layout__action-buttons">
           <button
@@ -807,6 +888,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
         presetOptions={RISK_PRESET_OPTIONS}
         onPresetChange={handlePresetChange}
         onToggle={handleToggleKillSwitch}
+        currentPreset={currentPreset}
         feedback={riskFeedback}
       />
 
@@ -980,6 +1062,22 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
           </div>
         </section>
       ) : null}
+
+      <section className="panel">
+        <div className="panel__header">
+          <h2>Settings</h2>
+        </div>
+        <p className="panel__description">
+          Download the current runtime configuration as JSON (including UI overrides).
+        </p>
+        <button
+          type="button"
+          className="ghost-button"
+          onClick={handleDownloadRuntimeConfig}
+        >
+          Download current config
+        </button>
+      </section>
 
       <StrategiesPanel
         strategies={strategies}

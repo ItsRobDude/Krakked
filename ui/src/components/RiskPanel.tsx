@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import type { RiskConfig, RiskPresetName, RiskStatus } from '../services/api';
+import { RISK_PRESET_META, formatPresetSummary } from '../constants/riskPresets';
 
 export type RiskPanelProps = {
   status: RiskStatus | null;
@@ -10,6 +11,7 @@ export type RiskPanelProps = {
   onPresetChange: (name: RiskPresetName) => void;
   presetBusy?: boolean;
   busy?: boolean;
+  currentPreset?: RiskPresetName | null;
   feedback?: { tone: 'info' | 'error' | 'success'; message: ReactNode } | null;
 };
 
@@ -40,6 +42,7 @@ export function RiskPanel({
   onPresetChange,
   presetBusy = false,
   busy = false,
+  currentPreset,
   feedback,
 }: RiskPanelProps) {
   const killSwitchState = status ? (status.kill_switch_active ? statusCopy.on : statusCopy.off) : statusCopy.unknown;
@@ -66,6 +69,7 @@ export function RiskPanel({
         .sort(([, a], [, b]) => b - a)
         .slice(0, 5)
     : [];
+  const currentPresetMeta = currentPreset ? RISK_PRESET_META[currentPreset] : undefined;
 
   return (
     <section className={`panel risk-panel${readOnly ? ' risk-panel--readonly' : ''}`} aria-live="polite">
@@ -93,7 +97,12 @@ export function RiskPanel({
       <p className="panel__description">{killSwitchState.description}</p>
 
       <div className="field risk-panel__preset">
-        <label htmlFor="risk-preset">Portfolio preset</label>
+        <label className="field__label-row" htmlFor="risk-preset">
+          <span>Portfolio preset</span>
+          {currentPresetMeta ? (
+            <span className="pill pill--muted">{currentPresetMeta.label}</span>
+          ) : null}
+        </label>
         <select
           id="risk-preset"
           defaultValue=""
@@ -110,11 +119,15 @@ export function RiskPanel({
           </option>
           {presetOptions.map((preset) => (
             <option key={preset} value={preset}>
-              {preset.charAt(0).toUpperCase() + preset.slice(1)}
+              {RISK_PRESET_META[preset].label}
             </option>
           ))}
         </select>
-        <p className="field__hint">Apply a saved profile to risk budgets and strategy aggressiveness.</p>
+        <p className="field__hint risk-preset__preview">
+          {currentPreset
+            ? formatPresetSummary(currentPreset)
+            : 'Apply a saved profile to risk budgets and strategy aggressiveness.'}
+        </p>
       </div>
 
       <div className="risk-panel__controls">

@@ -1278,6 +1278,31 @@ input[aria-invalid='true'] {
   }
 }
 
+.risk-preset__preview {
+  margin-top: 0.25rem;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.strategy__label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 700;
+}
+
+.strategy__tag {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.layout__status-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
 @media (max-width: 960px) {
   .layout {
     grid-template-columns: 1fr;
