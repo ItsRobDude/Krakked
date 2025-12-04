@@ -46,16 +46,6 @@ CANONICAL_STRATEGIES: Dict[str, StrategyDefinition] = {
         type="machine_learning",
         label="AI Predictor",
     ),
-    "ai_predictor_alt": StrategyDefinition(
-        strategy_id="ai_predictor_alt",
-        type="machine_learning_alt",
-        label="AI Predictor (Alt)",
-    ),
-    "ai_regressor": StrategyDefinition(
-        strategy_id="ai_regressor",
-        type="machine_learning_regression",
-        label="AI Regressor",
-    ),
 }
 
 CANONICAL_STRATEGY_TYPES = {
