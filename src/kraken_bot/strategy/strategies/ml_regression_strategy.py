@@ -26,6 +26,7 @@ class AIRegressionConfig:
     long_window: int
     target_exposure_usd: Optional[float]
     continuous_learning: bool
+    max_positions: int
 
 
 class AIRegressionStrategy(Strategy):
@@ -50,6 +51,7 @@ class AIRegressionStrategy(Strategy):
             long_window=long_window,
             target_exposure_usd=params.get("target_exposure_usd"),
             continuous_learning=bool(params.get("continuous_learning", True)),
+            max_positions=max(int(params.get("max_positions", 2)), 1),
         )
 
         self.model = PassiveAggressiveRegressor(max_iter=1000, tol=1e-3)
@@ -110,6 +112,9 @@ class AIRegressionStrategy(Strategy):
         positions_by_pair = {
             pos.pair: pos for pos in positions if getattr(pos, "base_size", 0) > 0
         }
+        open_positions_count = sum(
+            1 for pos in positions_by_pair.values() if getattr(pos, "base_size", 0) > 0
+        )
 
         for pair in pairs:
             try:
@@ -158,9 +163,15 @@ class AIRegressionStrategy(Strategy):
             has_long = bool(position and getattr(position, "base_size", 0) > 0)
 
             if predicted_delta > 0:
+                if not has_long and open_positions_count >= self.params.max_positions:
+                    continue
+
                 side = "long"
                 intent_type = "increase" if has_long else "enter"
                 desired_exposure = self.params.target_exposure_usd
+
+                if not has_long:
+                    open_positions_count += 1
             else:
                 side = "flat"
                 intent_type = "reduce" if has_long else "exit"
