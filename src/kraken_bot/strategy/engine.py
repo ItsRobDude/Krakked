@@ -204,9 +204,15 @@ class StrategyEngine:
                 metadata={"error": "Market data unavailable"},
             )
 
-        regime = infer_regime(
-            self.market_data, list(self.config.universe.include_pairs)
-        )
+        # Use the dynamically discovered universe (all USD spot pairs that
+        # passed the US_CA + liquidity filters) for regime inference.
+        universe_pairs = self.market_data.get_universe()
+        if not universe_pairs:
+            # Fallback: if for some reason discovery failed, fall back to the
+            # static config list so we don't explode.
+            universe_pairs = list(self.config.universe.include_pairs)
+
+        regime = infer_regime(self.market_data, list(universe_pairs))
 
         weights = self._compute_strategy_weights(regime)
         all_intents: List[StrategyIntent] = []
@@ -408,10 +414,15 @@ class StrategyEngine:
         timeframe: str,
         regime: RegimeSnapshot,
     ) -> StrategyContext:
-        universe = self.config.universe.include_pairs
+        # Base universe is what MarketDataAPI actually discovered and is streaming.
+        dynamic_universe = self.market_data.get_universe()
+        if not dynamic_universe:
+            # Fallback to the static list if discovery failed.
+            dynamic_universe = list(self.config.universe.include_pairs)
+
         return StrategyContext(
             now=now,
-            universe=universe,
+            universe=list(dynamic_universe),
             market_data=self.market_data,
             portfolio=self.portfolio,
             timeframe=timeframe,
