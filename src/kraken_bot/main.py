@@ -33,7 +33,7 @@ from kraken_bot.portfolio.store import (
 )
 from kraken_bot.strategy.engine import StrategyEngine
 from kraken_bot.ui.api import create_api
-from kraken_bot.ui.context import AppContext
+from kraken_bot.ui.context import AppContext, SessionState
 
 logger = logging.getLogger(__name__)
 
@@ -198,6 +198,7 @@ def _run_loop_iteration(
     execution_service: ExecutionService,
     metrics: SystemMetrics,
     refresh_metrics_state: Callable[[], None],
+    session_active: bool,
 ) -> Tuple[datetime, datetime]:
     """Execute a single scheduling iteration and return updated timestamps."""
 
@@ -278,7 +279,10 @@ def _run_loop_iteration(
         metrics.record_drift(False)
 
     if (now - last_strategy_cycle).total_seconds() >= strategy_interval:
-        if not market_data_ok:
+        if not session_active:
+            logger.debug("Skipping strategy cycle: session not active")
+            updated_strategy_cycle = now
+        elif not market_data_ok:
             reason = (
                 getattr(data_status, "reason", "unknown") if data_status else "unknown"
             )
@@ -398,6 +402,14 @@ def run(allow_interactive_setup: bool = True) -> int:
 
         metrics = SystemMetrics()
 
+        session_state = SessionState(
+            active=config.session.active,
+            mode=config.session.mode,
+            loop_interval_sec=config.session.loop_interval_sec,
+            profile_name=config.session.profile_name,
+            ml_enabled=config.session.ml_enabled,
+        )
+
         context = AppContext(
             config=config,
             client=client,
@@ -406,6 +418,7 @@ def run(allow_interactive_setup: bool = True) -> int:
             strategy_engine=strategy_engine,
             execution_service=execution_service,
             metrics=metrics,
+            session=session_state,
         )
     except PortfolioSchemaError as exc:
         logger.critical(
@@ -446,8 +459,6 @@ def run(allow_interactive_setup: bool = True) -> int:
         300,
         "portfolio sync interval",
     )
-    loop_interval = min(strategy_interval, portfolio_interval, 5)
-
     def refresh_metrics_state() -> None:
         _refresh_metrics_state(portfolio, execution_service, metrics)
 
@@ -487,6 +498,14 @@ def run(allow_interactive_setup: bool = True) -> int:
                 execution_service=execution_service,
                 metrics=metrics,
                 refresh_metrics_state=refresh_metrics_state,
+                session_active=context.session.active,
+            )
+
+            session_interval = getattr(context.session, "loop_interval_sec", None)
+            loop_interval = _coerce_interval(
+                int(session_interval) if session_interval is not None else None,
+                min(strategy_interval, portfolio_interval, 5),
+                "session loop interval",
             )
 
             stop_event.wait(loop_interval)

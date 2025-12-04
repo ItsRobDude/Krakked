@@ -134,6 +134,7 @@ def test_market_data_warning_emits_structured_event(caplog: pytest.LogCaptureFix
         execution_service=MagicMock(),
         metrics=metrics_obj,
         refresh_metrics_state=refresh_metrics,
+        session_active=True,
     )
 
     records = [
