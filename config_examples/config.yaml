@@ -146,6 +146,21 @@ strategies:
         max_positions: 2
       userref: 1004
 
+    ai_predictor_alt:
+      name: "ai_predictor_alt"
+      type: "machine_learning_alt"
+      enabled: false
+      params:
+        pairs: ["BTC/USD", "ETH/USD"]
+        timeframe: "1h"
+        lookback_bars: 60
+        short_window: 5
+        long_window: 20
+        target_exposure_usd: null
+        continuous_learning: true
+        max_positions: 2
+      userref: 1101
+
     rs_rotation:
       name: "rs_rotation"
       type: "relative_strength"
