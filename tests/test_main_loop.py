@@ -195,6 +195,7 @@ def test_run_loop_iteration_executes_scheduled_work_and_updates_metrics():
         execution_service=execution_service,
         metrics=metrics,
         refresh_metrics_state=refresh_metrics,
+        session_active=True,
     )
 
     last_portfolio_sync, last_strategy_cycle = _run_loop_iteration(
@@ -209,6 +210,7 @@ def test_run_loop_iteration_executes_scheduled_work_and_updates_metrics():
         execution_service=execution_service,
         metrics=metrics,
         refresh_metrics_state=refresh_metrics,
+        session_active=True,
     )
 
     last_portfolio_sync, last_strategy_cycle = _run_loop_iteration(
@@ -223,6 +225,7 @@ def test_run_loop_iteration_executes_scheduled_work_and_updates_metrics():
         execution_service=execution_service,
         metrics=metrics,
         refresh_metrics_state=refresh_metrics,
+        session_active=True,
     )
 
     assert (
@@ -283,6 +286,7 @@ def test_run_loop_iteration_updates_market_data_metrics_when_healthy():
         execution_service=execution_service,
         metrics=metrics,
         refresh_metrics_state=refresh_metrics,
+        session_active=True,
     )
 
     assert metrics.market_data_ok is True
@@ -343,6 +347,7 @@ def test_run_loop_iteration_counts_kill_switch_rejections_as_blocked_actions():
         execution_service=execution_service,
         metrics=metrics,
         refresh_metrics_state=refresh_metrics,
+        session_active=True,
     )
 
     assert metrics.plans_generated == 1
@@ -405,6 +410,7 @@ def test_run_loop_iteration_flags_drift_and_enables_kill_switch():
         execution_service=execution_service,
         metrics=metrics,
         refresh_metrics_state=refresh_metrics,
+        session_active=True,
     )
 
     snapshot = metrics.snapshot()
@@ -446,6 +452,7 @@ def test_run_loop_iteration_skips_strategy_when_market_data_unhealthy():
         execution_service=execution_service,
         metrics=metrics,
         refresh_metrics_state=refresh_metrics,
+        session_active=True,
     )
 
     assert updated_strategy_cycle == last_strategy_cycle
@@ -519,6 +526,7 @@ def test_run_loop_iteration_handles_unavailable_market_data_with_logging_and_met
             execution_service=execution_service,
             metrics=metrics,
             refresh_metrics_state=refresh_metrics_state,
+            session_active=True,
         )
 
     assert updated_strategy_cycle == last_strategy_cycle
@@ -578,6 +586,7 @@ def test_run_loop_iteration_skips_strategy_cycle_and_refreshes_metrics_when_stal
         execution_service=execution_service,
         metrics=metrics,
         refresh_metrics_state=refresh_metrics_state,
+        session_active=True,
     )
 
     assert updated_strategy_cycle == last_strategy_cycle
@@ -690,6 +699,7 @@ def test_run_loop_iteration_triggers_kill_switch_on_drift_and_blocks_execution()
         execution_service=execution_service,
         metrics=metrics,
         refresh_metrics_state=refresh_metrics,
+        session_active=True,
     )
 
     assert strategy_engine.kill_switch_calls == [True]
@@ -734,6 +744,7 @@ def test_run_loop_iteration_records_drift_without_triggering_kill_switch_when_di
         execution_service=execution_service,
         metrics=metrics,
         refresh_metrics_state=refresh_metrics,
+        session_active=True,
     )
 
     assert strategy_engine.kill_switch_calls == []
