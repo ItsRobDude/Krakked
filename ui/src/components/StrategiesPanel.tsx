@@ -17,22 +17,26 @@ export type StrategiesPanelProps = {
   strategies: StrategyState[];
   performance: Record<string, StrategyPerformance>;
   riskSelections: Record<string, StrategyRiskProfile>;
+  learningSelections: Record<string, boolean>;
   busy: Set<string>;
   readOnly: boolean;
   feedback?: string | null;
   onToggle: (strategyId: string, enabled: boolean) => void;
   onRiskProfileChange: (strategyId: string, profile: StrategyRiskProfile) => void;
+  onLearningToggle: (strategyId: string, enabled: boolean) => void;
 };
 
 export function StrategiesPanel({
   strategies,
   performance,
   riskSelections,
+  learningSelections,
   busy,
   readOnly,
   feedback,
   onToggle,
   onRiskProfileChange,
+  onLearningToggle,
 }: StrategiesPanelProps) {
   const formatPnl = (value?: number) => {
     if (value === undefined) return '—';
@@ -78,6 +82,7 @@ export function StrategiesPanel({
           <span role="columnheader">Win rate</span>
           <span role="columnheader">Drawdown</span>
           <span role="columnheader">Risk profile</span>
+          <span role="columnheader">Learning</span>
         </div>
         <div className="table__body">
           {strategies.map((strategy) => {
@@ -143,6 +148,24 @@ export function StrategiesPanel({
                       </option>
                     ))}
                   </select>
+                </span>
+                <span role="cell">
+                  {Object.prototype.hasOwnProperty.call(strategy.params ?? {}, 'continuous_learning') ? (
+                    <label className="strategy-toggle__label">
+                      <input
+                        type="checkbox"
+                        className="strategy-toggle"
+                        checked={learningSelections[strategy.strategy_id] ?? true}
+                        disabled={readOnly || isBusy}
+                        onChange={(event) => onLearningToggle(strategy.strategy_id, event.target.checked)}
+                      />
+                      <span className="pill pill--info">
+                        {learningSelections[strategy.strategy_id] ?? true ? 'Learning' : 'Paused'}
+                      </span>
+                    </label>
+                  ) : (
+                    <span className="strategy__meta">—</span>
+                  )}
                 </span>
               </div>
             );
