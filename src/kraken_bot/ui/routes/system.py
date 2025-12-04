@@ -252,6 +252,11 @@ async def start_session(
     ctx.execution_service.adapter.config.mode = effective_mode
     ctx.execution_service.adapter.config.validate_only = execution_config.validate_only
 
+    if effective_mode == "live" and hasattr(
+        ctx.execution_service, "_emit_live_readiness_checklist"
+    ):
+        ctx.execution_service._emit_live_readiness_checklist()
+
     dump_runtime_overrides(ctx.config, session=ctx.session)
 
     logger.info(
