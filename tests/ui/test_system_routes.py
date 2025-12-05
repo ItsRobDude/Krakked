@@ -11,6 +11,8 @@ from kraken_bot.connection.exceptions import (
 )
 from kraken_bot.market_data.api import MarketDataStatus
 from kraken_bot.metrics import SystemMetrics
+from kraken_bot.config import StrategyConfig
+from kraken_bot.strategy.catalog import ML_STRATEGY_IDS
 
 
 @pytest.fixture
@@ -193,6 +195,97 @@ def test_system_metrics_reports_snapshot_payload(client, system_context):
     assert payload["market_data_stale"] is False
     assert payload["market_data_reason"] is None
     assert payload["market_data_max_staleness"] == 1.25
+
+
+def test_start_session_skips_ml_sync_when_flag_unchanged(client, system_context):
+    system_context.config.session.ml_enabled = True
+
+    system_context.config.strategies.configs = {
+        "ai_predictor": StrategyConfig(
+            name="AI Predictor", type="machine_learning", enabled=True
+        ),
+        "ai_regression": StrategyConfig(
+            name="AI Regression", type="machine_learning_regression", enabled=False
+        ),
+    }
+    system_context.config.strategies.enabled = ["ai_predictor"]
+    system_context.strategy_engine.strategy_states = {
+        "ai_predictor": SimpleNamespace(enabled=True),
+        "ai_regression": SimpleNamespace(enabled=False),
+    }
+
+    response = client.post(
+        "/api/system/session/start",
+        json={
+            "profile_name": "default",
+            "mode": "paper",
+            "loop_interval_sec": 30.0,
+            "ml_enabled": True,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["error"] is None
+
+    assert system_context.config.strategies.configs["ai_predictor"].enabled is True
+    assert system_context.config.strategies.configs["ai_regression"].enabled is False
+    assert set(system_context.config.strategies.enabled) == {"ai_predictor"}
+    assert system_context.strategy_engine.strategy_states["ai_predictor"].enabled is True
+    assert (
+        system_context.strategy_engine.strategy_states["ai_regression"].enabled is False
+    )
+
+
+def test_start_session_syncs_ml_strategies_when_flag_changes(client, system_context):
+    system_context.config.session.ml_enabled = True
+
+    system_context.config.strategies.configs = {
+        "ai_predictor": StrategyConfig(
+            name="AI Predictor", type="machine_learning", enabled=True
+        ),
+        "ai_regression": StrategyConfig(
+            name="AI Regression", type="machine_learning_regression", enabled=True
+        ),
+        "vol_breakout": StrategyConfig(
+            name="Volatility Breakout", type="vol_breakout", enabled=True
+        ),
+    }
+    system_context.config.strategies.enabled = [
+        "ai_predictor",
+        "ai_regression",
+        "vol_breakout",
+    ]
+    system_context.strategy_engine.strategy_states = {
+        "ai_predictor": SimpleNamespace(enabled=True),
+        "ai_regression": SimpleNamespace(enabled=True),
+        "vol_breakout": SimpleNamespace(enabled=True),
+    }
+
+    response = client.post(
+        "/api/system/session/start",
+        json={
+            "profile_name": "default",
+            "mode": "paper",
+            "loop_interval_sec": 20.0,
+            "ml_enabled": False,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["error"] is None
+
+    for sid in ML_STRATEGY_IDS:
+        strat_cfg = system_context.config.strategies.configs[sid]
+        assert strat_cfg.enabled is False
+
+    assert set(system_context.config.strategies.enabled) == {"vol_breakout"}
+    assert (
+        system_context.strategy_engine.strategy_states["vol_breakout"].enabled is True
+    )
+    assert all(
+        system_context.strategy_engine.strategy_states[sid].enabled is False
+        for sid in ML_STRATEGY_IDS
+    )
 
 
 def test_config_redacts_auth_token(client, system_context):
