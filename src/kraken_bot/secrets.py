@@ -12,7 +12,7 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
 from kraken_bot.config import get_config_dir
-from kraken_bot.connection.validation import validate_credentials
+import kraken_bot.connection.validation as validation_mod
 from kraken_bot.credentials import CredentialResult, CredentialStatus
 
 # --- Constants ---
@@ -149,7 +149,7 @@ def _interactive_setup() -> CredentialResult:
         )
 
     print("\nValidating credentials with Kraken...")
-    validation = validate_credentials(api_key, api_secret)
+    validation = validation_mod.validate_credentials(api_key, api_secret)
 
     if validation.status is CredentialStatus.AUTH_ERROR:
         print(f"\nCredential validation failed: {validation.validation_error}")

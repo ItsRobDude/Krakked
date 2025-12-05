@@ -222,6 +222,17 @@ class StrategyEngine:
         all_intents: List[StrategyIntent] = []
         intent_summaries: Dict[str, List[Dict[str, Any]]] = {}
         for name, strategy in self.strategies.items():
+            strategy_pairs = self._get_strategy_pairs(name)
+            if not strategy_pairs:
+                logger.info(
+                    "No eligible pairs for strategy %s; skipping this cycle",
+                    name,
+                    extra=structured_log_extra(
+                        event="strategy_no_pairs", strategy_id=name
+                    ),
+                )
+                continue
+
             configured_timeframes = strategy.config.params.get("timeframes")
             if isinstance(configured_timeframes, (list, tuple)):
                 timeframes = list(configured_timeframes)
@@ -232,7 +243,9 @@ class StrategyEngine:
                 timeframes = [single_timeframe] if single_timeframe else ["1h"]
 
             for timeframe in timeframes:
-                context = self._build_context(now, strategy.config, timeframe, regime)
+                context = self._build_context(
+                    now, strategy.config, timeframe, regime, strategy_pairs
+                )
                 try:
                     intents = strategy.generate_intents(context)
                     for intent in intents:
@@ -417,21 +430,43 @@ class StrategyEngine:
         strategy_config: StrategyConfig,
         timeframe: str,
         regime: RegimeSnapshot,
+        allowed_pairs: list[str],
     ) -> StrategyContext:
-        # Base universe is what MarketDataAPI actually discovered and is streaming.
         dynamic_universe = self.market_data.get_universe()
-        if not dynamic_universe:
-            # Fallback to the static list if discovery failed.
-            dynamic_universe = list(self.config.universe.include_pairs)
+        if dynamic_universe:
+            filtered_universe = [
+                pair for pair in allowed_pairs if pair in dynamic_universe
+            ]
+            if not filtered_universe:
+                filtered_universe = list(allowed_pairs)
+        else:
+            filtered_universe = list(allowed_pairs)
 
         return StrategyContext(
             now=now,
-            universe=list(dynamic_universe),
+            universe=filtered_universe,
             market_data=self.market_data,
             portfolio=self.portfolio,
             timeframe=timeframe,
             regime=regime,
         )
+
+    def _get_strategy_pairs(self, strategy_id: str) -> list[str]:
+        strat_cfg = self.config.strategies.configs[strategy_id]
+        global_universe = list(self.config.universe.include_pairs or [])
+        global_excludes = set(self.config.universe.exclude_pairs or [])
+
+        configured_pairs = list(strat_cfg.params.get("pairs") or [])
+
+        if configured_pairs:
+            base = configured_pairs
+        else:
+            base = global_universe
+
+        if not base:
+            return []
+
+        return [pair for pair in base if pair not in global_excludes]
 
     def _persist_actions(
         self, plan_id: str, now: datetime, actions: List[RiskAdjustedAction]
