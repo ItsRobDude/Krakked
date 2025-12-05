@@ -107,12 +107,13 @@ class AIRegressionStrategy(Strategy):
 
         timeframe = ctx.timeframe or self.params.timeframe
 
-        base_pairs = self.params.pairs or (ctx.universe or [])
-        allowed_universe = set(ctx.universe or [])
-        if allowed_universe:
-            pairs = [pair for pair in base_pairs if pair in allowed_universe]
-        else:
-            pairs = list(base_pairs)
+        universe = list(ctx.universe or [])
+        if not universe:
+            return []
+
+        base_pairs = list(self.params.pairs or universe)
+        allowed_universe = set(universe)
+        pairs = [pair for pair in base_pairs if pair in allowed_universe]
 
         if not pairs:
             return []

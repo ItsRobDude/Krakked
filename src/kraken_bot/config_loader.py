@@ -12,6 +12,7 @@ from kraken_bot.strategy.catalog import CANONICAL_STRATEGIES
 from kraken_bot.config_models import (
     AppConfig,
     ExecutionConfig,
+    MarketDataConfig,
     PortfolioConfig,
     ProfileConfig,
     RegionCapabilities,
@@ -62,6 +63,7 @@ def dump_runtime_overrides(
 ) -> None:
     config_dir = config_dir or get_config_dir()
     path = config_dir / RUNTIME_OVERRIDES_FILENAME
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
 
     session_config = session or getattr(config, "session", None)
 
@@ -90,8 +92,16 @@ def dump_runtime_overrides(
         }
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w") as f:
-        yaml.safe_dump(data, f)
+    try:
+        with open(tmp_path, "w") as f:
+            yaml.safe_dump(data, f)
+        tmp_path.replace(path)
+    finally:
+        if tmp_path.exists() and tmp_path != path:
+            try:
+                tmp_path.unlink()
+            except Exception:
+                pass
 
 
 def load_config(
@@ -595,12 +605,14 @@ def load_config(
     if execution_config.mode == "live":
         if not execution_config.allow_live_trading:
             logger.warning(
-                "Live trading mode requested but allow_live_trading is False",
+                "Live trading mode requested but allow_live_trading is False; "
+                "forcing validate_only=True to prevent real order submission",
                 extra={
                     "event": "config_live_trading_disabled",
                     "config_path": str(config_path),
                 },
             )
+            execution_config.validate_only = True
         if not execution_config.paper_tests_completed:
             logger.warning(
                 "Live trading mode requested but paper tests not marked completed",

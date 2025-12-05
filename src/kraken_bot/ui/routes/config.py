@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from copy import deepcopy
 from dataclasses import asdict
 
 from fastapi import APIRouter, Request
@@ -19,12 +20,21 @@ def _context(request: Request):
     return request.app.state.context
 
 
+def _redact_auth_token(config_dict: dict) -> dict:
+    redacted = deepcopy(config_dict)
+    ui_cfg = redacted.get("ui") or {}
+    auth_cfg = ui_cfg.get("auth") or {}
+    if "token" in auth_cfg:
+        auth_cfg["token"] = "***"
+    return redacted
+
+
 @router.get("/runtime")
 async def get_runtime_config(request: Request) -> JSONResponse:
     """Return the current runtime AppConfig as a JSON attachment."""
     ctx = _context(request)
     try:
-        config_dict = asdict(ctx.config)
+        config_dict = _redact_auth_token(asdict(ctx.config))
 
         return JSONResponse(
             content={"data": config_dict, "error": None},
