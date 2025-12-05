@@ -60,6 +60,13 @@ CANONICAL_STRATEGIES: Dict[str, StrategyDefinition] = {
     ),
 }
 
+# Anything whose type starts with "machine_learning" is considered part of the ML group.
+ML_STRATEGY_IDS = [
+    sid
+    for sid, definition in CANONICAL_STRATEGIES.items()
+    if definition.type.startswith("machine_learning")
+]
+
 CANONICAL_STRATEGY_TYPES = {
     definition.type for definition in CANONICAL_STRATEGIES.values()
 }
