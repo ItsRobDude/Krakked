@@ -4,7 +4,7 @@ import logging
 import math
 from typing import Dict, List, Optional, Tuple
 
-from .ml_models import PassiveAggressiveClassifier
+from kraken_bot.strategy.ml_models import PassiveAggressiveClassifier
 
 from kraken_bot.market_data.api import MarketDataAPI
 from kraken_bot.market_data.exceptions import DataStaleError
@@ -119,6 +119,9 @@ class AIPredictorAltStrategy(Strategy):
 
         if not pairs:
             return []
+
+        allowed = set(ctx.universe)
+        pairs = [pair for pair in pairs if pair in allowed]
 
         positions = ctx.portfolio.get_positions() or []
         positions_by_pair = {
