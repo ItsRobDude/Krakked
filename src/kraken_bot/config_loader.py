@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 import os
-import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -91,35 +90,8 @@ def dump_runtime_overrides(
         }
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path: Path | None = None
-    try:
-        # Create a unique temp file in the same directory
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            delete=False,
-            dir=path.parent,
-            prefix=path.name,
-            suffix=".tmp",
-        ) as f:
-            tmp_path = Path(f.name)
-
-            # Write the full YAML document to the temp file
-            yaml.safe_dump(data, f)
-
-            # Ensure it’s flushed to disk before we swap it in
-            f.flush()
-            os.fsync(f.fileno())
-
-        # Atomically replace the old overrides file with the new one
-        os.replace(tmp_path, path)
-    finally:
-        # If something went wrong before os.replace, clean up any stray temp file
-        if tmp_path is not None and tmp_path.exists():
-            try:
-                tmp_path.unlink()
-            except OSError:
-                # Best effort cleanup – failure here is non-fatal
-                pass
+    with open(path, "w") as f:
+        yaml.safe_dump(data, f)
 
 
 def load_config(
