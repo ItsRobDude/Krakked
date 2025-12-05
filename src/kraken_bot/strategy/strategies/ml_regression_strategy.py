@@ -5,7 +5,7 @@ import math
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
-from .ml_models import PassiveAggressiveRegressor
+from kraken_bot.strategy.ml_models import PassiveAggressiveRegressor
 
 from kraken_bot.config import StrategyConfig
 from kraken_bot.market_data.api import MarketDataAPI
@@ -116,6 +116,9 @@ class AIRegressionStrategy(Strategy):
 
         if not pairs:
             return []
+
+        allowed = set(ctx.universe)
+        pairs = [pair for pair in pairs if pair in allowed]
 
         positions = ctx.portfolio.get_positions() or []
         positions_by_pair = {

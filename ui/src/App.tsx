@@ -304,9 +304,12 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
   useEffect(() => {
     if (!session || strategies.length === 0) return;
     if (mlStrategies.length === 0) return;
+
+    if (mlEnabled === session.ml_enabled) return;
+
     handleMlToggle(session.ml_enabled);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session?.ml_enabled, strategies.length, mlStrategies.length]);
+  }, [session?.ml_enabled, strategies.length, mlEnabled, mlStrategies.length]);
 
   useEffect(() => {
     if (!health || !summary) return;
