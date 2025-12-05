@@ -9,6 +9,7 @@ from kraken_bot.strategy.ml_models import PassiveAggressiveClassifier
 from kraken_bot.market_data.api import MarketDataAPI
 from kraken_bot.market_data.exceptions import DataStaleError
 from kraken_bot.portfolio.manager import PortfolioService
+from kraken_bot.config import StrategyConfig
 from kraken_bot.strategy.base import Strategy, StrategyContext
 from kraken_bot.strategy.models import StrategyIntent
 
@@ -20,7 +21,7 @@ logger = logging.getLogger(__name__)
 class AIPredictorAltStrategy(Strategy):
     """Per-pair online-learning strategy using Passive-Aggressive models."""
 
-    def __init__(self, base_cfg):
+    def __init__(self, base_cfg: StrategyConfig) -> None:
         super().__init__(base_cfg)
         params = base_cfg.params or {}
 
