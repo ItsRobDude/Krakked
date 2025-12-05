@@ -16,7 +16,7 @@ from kraken_bot.connection.exceptions import (
     KrakenAPIError,
     ServiceUnavailableError,
 )
-from kraken_bot.connection.validation import validate_credentials
+import kraken_bot.connection.validation as validation_mod
 from kraken_bot.credentials import CredentialStatus
 from kraken_bot.market_data.api import MarketDataStatus
 from kraken_bot.strategy.catalog import ML_STRATEGY_IDS
@@ -479,7 +479,7 @@ async def validate_credentials(
         )
 
     try:
-        result = validate_credentials(
+        result = validation_mod.validate_credentials(
             payload.apiKey.strip(),
             payload.apiSecret.strip(),
         )
