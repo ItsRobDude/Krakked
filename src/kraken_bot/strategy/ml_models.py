@@ -30,7 +30,7 @@ else:  # pragma: no cover - fallback path
                 self._last_value = float(y[-1])
             return self
 
-    class PassiveAggressiveClassifier(_BasePassiveAggressive):
+    class PassiveAggressiveClassifier(_BasePassiveAggressive):  # type: ignore[no-redef]
         def predict(self, X: Iterable[Iterable[float]]):
             label = 1 if self._last_value >= 0.5 else 0
             return [label for _ in X]
@@ -39,7 +39,7 @@ else:  # pragma: no cover - fallback path
             score = self._last_value if self._last_value != 0 else -1.0
             return [score for _ in X]
 
-    class PassiveAggressiveRegressor(_BasePassiveAggressive):
+    class PassiveAggressiveRegressor(_BasePassiveAggressive):  # type: ignore[no-redef]
         def predict(self, X: Iterable[Iterable[float]]):
             return [float(self._last_value) for _ in X]
 

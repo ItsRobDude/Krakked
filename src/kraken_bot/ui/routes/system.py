@@ -500,13 +500,13 @@ async def validate_credentials(
     if result.status is CredentialStatus.LOADED and result.validated:
         return ApiEnvelope(data={"valid": True}, error=None)
 
-    exc = result.error
+    error = result.error
 
-    if isinstance(exc, AuthError):
+    if isinstance(error, AuthError):
         logger.warning(
             "Credential validation failed",
             extra=build_request_log_extra(
-                request, event="credential_validation_auth_error", error=str(exc)
+                request, event="credential_validation_auth_error", error=str(error)
             ),
         )
         return ApiEnvelope(
@@ -514,11 +514,11 @@ async def validate_credentials(
             error="Authentication failed. Please verify your API key/secret.",
         )
 
-    if isinstance(exc, ServiceUnavailableError):
+    if isinstance(error, ServiceUnavailableError):
         logger.warning(
             "Credential validation unavailable",
             extra=build_request_log_extra(
-                request, event="credential_validation_unavailable", error=str(exc)
+                request, event="credential_validation_unavailable", error=str(error)
             ),
         )
         return ApiEnvelope(
@@ -526,11 +526,11 @@ async def validate_credentials(
             error="Kraken is unavailable or could not be reached. Please retry.",
         )
 
-    if isinstance(exc, KrakenAPIError):
+    if isinstance(error, KrakenAPIError):
         logger.warning(
             "Credential validation failed with API error",
             extra=build_request_log_extra(
-                request, event="credential_validation_api_error", error=str(exc)
+                request, event="credential_validation_api_error", error=str(error)
             ),
         )
         return ApiEnvelope(
@@ -543,7 +543,7 @@ async def validate_credentials(
         extra=build_request_log_extra(
             request,
             event="credential_validation_unknown_service_error",
-            error=str(exc),
+            error=str(error),
         ),
     )
     return ApiEnvelope(

@@ -159,6 +159,7 @@ async def update_strategy_config(
         if profile:
             rp = profile_to_definition(profile)
 
+            ctx.config.risk.profile = profile
             ctx.config.risk.max_per_strategy_pct[strategy_id] = rp.max_per_strategy_pct
             ctx.strategy_engine.risk_engine.config.max_per_strategy_pct = dict(
                 ctx.config.risk.max_per_strategy_pct
