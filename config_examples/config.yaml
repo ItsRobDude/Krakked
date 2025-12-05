@@ -151,7 +151,7 @@ strategies:
         long_window: 20
         target_exposure_usd: null
         continuous_learning: true
-        max_positions: 2
+        max_positions: 2            # per-strategy cap; risk.max_open_positions still applies
       userref: 1004
 
     ai_predictor_alt:
@@ -166,7 +166,7 @@ strategies:
         long_window: 20
         target_exposure_usd: null
         continuous_learning: true
-        max_positions: 2
+        max_positions: 2            # per-strategy cap; risk.max_open_positions still applies
       userref: 1101
 
     ai_regression:
@@ -181,7 +181,7 @@ strategies:
         long_window: 20
         target_exposure_usd: null
         continuous_learning: true
-        max_positions: 2
+        max_positions: 2            # per-strategy cap; risk.max_open_positions still applies
       userref: 1102
 
     rs_rotation:
