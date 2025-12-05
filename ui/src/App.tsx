@@ -305,11 +305,10 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
     if (!session || strategies.length === 0) return;
     if (mlStrategies.length === 0) return;
 
-    if (mlEnabled === session.ml_enabled) return;
-
+    // Session-level preference changed (new session / reload) → align ML strategies once
     handleMlToggle(session.ml_enabled);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session?.ml_enabled, strategies.length, mlEnabled, mlStrategies.length]);
+  }, [session?.ml_enabled, strategies.length, mlStrategies.length]);
 
   useEffect(() => {
     if (!health || !summary) return;

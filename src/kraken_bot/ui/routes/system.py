@@ -233,6 +233,8 @@ async def start_session(
             data=None, error="Live trading not permitted by configuration"
         )
 
+    old_ml_enabled = ctx.config.session.ml_enabled
+
     session = ctx.session
     session.active = True
     session.mode = new_mode
@@ -246,25 +248,26 @@ async def start_session(
     ctx.config.session.profile_name = payload.profile_name
     ctx.config.session.ml_enabled = payload.ml_enabled
 
-    # Sync ML strategies with session-level ml_enabled flag
-    ml_enabled = bool(payload.ml_enabled)
+    # Sync ML strategies with session-level ml_enabled flag when it changes
+    if payload.ml_enabled != old_ml_enabled:
+        ml_enabled = bool(payload.ml_enabled)
 
-    for sid in ML_STRATEGY_IDS:
-        strat_cfg = ctx.config.strategies.configs.get(sid)
-        if not strat_cfg:
-            continue
+        for sid in ML_STRATEGY_IDS:
+            strat_cfg = ctx.config.strategies.configs.get(sid)
+            if not strat_cfg:
+                continue
 
-        strat_cfg.enabled = ml_enabled
+            strat_cfg.enabled = ml_enabled
 
-        if ml_enabled:
-            if sid not in ctx.config.strategies.enabled:
-                ctx.config.strategies.enabled.append(sid)
-        else:
-            if sid in ctx.config.strategies.enabled:
-                ctx.config.strategies.enabled.remove(sid)
+            if ml_enabled:
+                if sid not in ctx.config.strategies.enabled:
+                    ctx.config.strategies.enabled.append(sid)
+            else:
+                if sid in ctx.config.strategies.enabled:
+                    ctx.config.strategies.enabled.remove(sid)
 
-        if sid in ctx.strategy_engine.strategy_states:
-            ctx.strategy_engine.strategy_states[sid].enabled = ml_enabled
+            if sid in ctx.strategy_engine.strategy_states:
+                ctx.strategy_engine.strategy_states[sid].enabled = ml_enabled
 
     effective_mode = new_mode if new_mode in {"paper", "live"} else "paper"
 
