@@ -19,6 +19,7 @@ from kraken_bot.connection.exceptions import (
     ServiceUnavailableError,
 )
 from kraken_bot.market_data.api import MarketDataStatus
+from kraken_bot.strategy.catalog import ML_STRATEGY_IDS
 from kraken_bot.ui.logging import build_request_log_extra
 from kraken_bot.ui.models import ApiEnvelope, SystemHealthPayload, SystemMetricsPayload
 
@@ -244,6 +245,26 @@ async def start_session(
     ctx.config.session.loop_interval_sec = payload.loop_interval_sec
     ctx.config.session.profile_name = payload.profile_name
     ctx.config.session.ml_enabled = payload.ml_enabled
+
+    # Sync ML strategies with session-level ml_enabled flag
+    ml_enabled = bool(payload.ml_enabled)
+
+    for sid in ML_STRATEGY_IDS:
+        strat_cfg = ctx.config.strategies.configs.get(sid)
+        if not strat_cfg:
+            continue
+
+        strat_cfg.enabled = ml_enabled
+
+        if ml_enabled:
+            if sid not in ctx.config.strategies.enabled:
+                ctx.config.strategies.enabled.append(sid)
+        else:
+            if sid in ctx.config.strategies.enabled:
+                ctx.config.strategies.enabled.remove(sid)
+
+        if sid in ctx.strategy_engine.strategy_states:
+            ctx.strategy_engine.strategy_states[sid].enabled = ml_enabled
 
     effective_mode = new_mode if new_mode in {"paper", "live"} else "paper"
 
