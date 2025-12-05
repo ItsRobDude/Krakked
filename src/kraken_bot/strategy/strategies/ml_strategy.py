@@ -5,7 +5,7 @@ import math
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
-from sklearn.linear_model import PassiveAggressiveClassifier
+from kraken_bot.strategy.ml_models import PassiveAggressiveClassifier
 
 from kraken_bot.config import StrategyConfig
 from kraken_bot.market_data.api import MarketDataAPI
@@ -112,6 +112,9 @@ class AIPredictorStrategy(Strategy):
 
         timeframe = ctx.timeframe or self.params.timeframe
         pairs = self.params.pairs or ctx.universe
+
+        allowed = set(ctx.universe)
+        pairs = [pair for pair in pairs if pair in allowed]
 
         positions = ctx.portfolio.get_positions() or []
         positions_by_pair = {

@@ -124,6 +124,8 @@ Defaults if keys are missing:
 * `volatility_lookback_bars = 20`
 * `min_liquidity_24h_usd` optionally defaulted to same as `UniverseConfig.min_24h_volume_usd`.
 
+`params.max_positions` on an individual strategy is a **per-strategy** cap enforced in the strategy code (e.g., ML and mean-reversion entries). Portfolio-wide limits such as `risk.max_open_positions` still apply on top of that and are enforced by the risk engine.
+
 Risk/strategy config must be represented in `AppConfig` as new dataclasses, similar to `UniverseConfig` and `MarketDataConfig`.
 
 ---

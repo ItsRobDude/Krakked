@@ -4,7 +4,7 @@ import logging
 import math
 from typing import Dict, List, Optional, Tuple
 
-from sklearn.linear_model import PassiveAggressiveClassifier
+from kraken_bot.strategy.ml_models import PassiveAggressiveClassifier
 
 from kraken_bot.market_data.api import MarketDataAPI
 from kraken_bot.market_data.exceptions import DataStaleError
@@ -110,6 +110,9 @@ class AIPredictorAltStrategy(Strategy):
 
         timeframe = ctx.timeframe or self.params.timeframe
         pairs = self.params.pairs or ctx.universe
+
+        allowed = set(ctx.universe)
+        pairs = [pair for pair in pairs if pair in allowed]
 
         positions = ctx.portfolio.get_positions() or []
         positions_by_pair = {
