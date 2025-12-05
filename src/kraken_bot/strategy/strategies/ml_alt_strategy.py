@@ -109,7 +109,16 @@ class AIPredictorAltStrategy(Strategy):
         intents: List[StrategyIntent] = []
 
         timeframe = ctx.timeframe or self.params.timeframe
-        pairs = self.params.pairs or ctx.universe
+
+        base_pairs = self.params.pairs or (ctx.universe or [])
+        universe_set = set(ctx.universe or [])
+        if universe_set:
+            pairs = [pair for pair in base_pairs if pair in universe_set]
+        else:
+            pairs = list(base_pairs)
+
+        if not pairs:
+            return []
 
         allowed = set(ctx.universe)
         pairs = [pair for pair in pairs if pair in allowed]
