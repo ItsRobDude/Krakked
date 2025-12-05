@@ -5,7 +5,7 @@ import math
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
-from sklearn.linear_model import PassiveAggressiveRegressor
+from .ml_models import PassiveAggressiveRegressor
 
 from kraken_bot.config import StrategyConfig
 from kraken_bot.market_data.api import MarketDataAPI
@@ -106,7 +106,16 @@ class AIRegressionStrategy(Strategy):
         intents: List[StrategyIntent] = []
 
         timeframe = ctx.timeframe or self.params.timeframe
-        pairs = self.params.pairs or ctx.universe
+
+        base_pairs = self.params.pairs or (ctx.universe or [])
+        universe_set = set(ctx.universe or [])
+        if universe_set:
+            pairs = [pair for pair in base_pairs if pair in universe_set]
+        else:
+            pairs = list(base_pairs)
+
+        if not pairs:
+            return []
 
         positions = ctx.portfolio.get_positions() or []
         positions_by_pair = {

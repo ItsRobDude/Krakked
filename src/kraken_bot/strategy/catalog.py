@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict
 
+ML_STRATEGY_IDS = ["ai_predictor", "ai_predictor_alt", "ai_regression"]
+
 
 @dataclass(frozen=True)
 class StrategyDefinition:
@@ -62,4 +64,9 @@ CANONICAL_STRATEGY_TYPES = {
     definition.type for definition in CANONICAL_STRATEGIES.values()
 }
 
-__all__ = ["CANONICAL_STRATEGIES", "CANONICAL_STRATEGY_TYPES", "StrategyDefinition"]
+__all__ = [
+    "CANONICAL_STRATEGIES",
+    "CANONICAL_STRATEGY_TYPES",
+    "ML_STRATEGY_IDS",
+    "StrategyDefinition",
+]
