@@ -201,13 +201,14 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
   const [profiles, setProfiles] = useState<ProfileSummary[]>([]);
   const [loopIntervalDraft, setLoopIntervalDraft] = useState<number>(15);
 
-  const mlEnabled = useMemo(
-    () =>
-      strategies.some(
-        (strategy) =>
-          ML_STRATEGY_IDS.includes(strategy.strategy_id as MlStrategyId) && strategy.enabled,
-      ),
+  const mlStrategies = useMemo(
+    () => strategies.filter((strategy) => ML_STRATEGY_IDS.includes(strategy.strategy_id as MlStrategyId)),
     [strategies],
+  );
+
+  const mlEnabled = useMemo(
+    () => mlStrategies.length > 0 && mlStrategies.every((strategy) => strategy.enabled),
+    [mlStrategies],
   );
 
   const sidebarItems = [
@@ -299,6 +300,15 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
       clearInterval(interval);
     };
   }, [session?.active]);
+
+  useEffect(() => {
+    if (!session || strategies.length === 0) return;
+    if (mlStrategies.length === 0) return;
+
+    // Session-level preference changed (new session / reload) → align ML strategies once
+    handleMlToggle(session.ml_enabled);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session?.ml_enabled, strategies.length, mlStrategies.length]);
 
   useEffect(() => {
     if (!health || !summary) return;
