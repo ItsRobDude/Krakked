@@ -3,16 +3,15 @@ from types import SimpleNamespace
 import pytest
 from starlette.testclient import TestClient
 
-from kraken_bot.config import StrategyConfig
 from kraken_bot.connection import rest_client
 from kraken_bot.connection.exceptions import (
     AuthError,
     KrakenAPIError,
     ServiceUnavailableError,
 )
+from kraken_bot.config import StrategyConfig
 from kraken_bot.market_data.api import MarketDataStatus
 from kraken_bot.metrics import SystemMetrics
-from kraken_bot.config import StrategyConfig
 from kraken_bot.strategy.catalog import ML_STRATEGY_IDS
 
 
