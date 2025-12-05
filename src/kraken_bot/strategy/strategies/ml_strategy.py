@@ -113,17 +113,14 @@ class AIPredictorStrategy(Strategy):
         timeframe = ctx.timeframe or self.params.timeframe
 
         base_pairs = self.params.pairs or (ctx.universe or [])
-        universe_set = set(ctx.universe or [])
-        if universe_set:
-            pairs = [pair for pair in base_pairs if pair in universe_set]
+        allowed_universe = set(ctx.universe or [])
+        if allowed_universe:
+            pairs = [pair for pair in base_pairs if pair in allowed_universe]
         else:
             pairs = list(base_pairs)
 
         if not pairs:
             return []
-
-        allowed = set(ctx.universe)
-        pairs = [pair for pair in pairs if pair in allowed]
 
         positions = ctx.portfolio.get_positions() or []
         positions_by_pair = {
