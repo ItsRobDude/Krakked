@@ -9,7 +9,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
-from kraken_bot.config import AppConfig, ConnectionStatus, OHLCBar, PairMetadata
+from kraken_bot.config import AppConfig
+from kraken_bot.market_data.models import ConnectionStatus, OHLCBar, PairMetadata
 from kraken_bot.connection.rest_client import KrakenRESTClient
 from kraken_bot.execution.adapter import SimulationExecutionAdapter
 from kraken_bot.execution.oms import ExecutionService
