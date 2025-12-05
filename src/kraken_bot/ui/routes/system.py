@@ -19,7 +19,6 @@ from kraken_bot.connection.exceptions import (
 import kraken_bot.connection.validation as validation_mod
 from kraken_bot.credentials import CredentialStatus
 from kraken_bot.market_data.api import MarketDataStatus
-from kraken_bot.strategy.catalog import ML_STRATEGY_IDS
 from kraken_bot.ui.logging import build_request_log_extra
 from kraken_bot.ui.models import ApiEnvelope, SystemHealthPayload, SystemMetricsPayload
 
@@ -248,13 +247,14 @@ async def start_session(
     ctx.config.session.profile_name = payload.profile_name
     ctx.config.session.ml_enabled = payload.ml_enabled
 
-    # Sync ML strategies with session-level ml_enabled flag when it changes
+    # Sync ML strategies with session-level ml_enabled flag when it changes.
+    # Any strategy whose type starts with "machine_learning" is treated as part of the
+    # ML group, including alternate model variants.
     if payload.ml_enabled != old_ml_enabled:
         ml_enabled = bool(payload.ml_enabled)
 
-        for sid in ML_STRATEGY_IDS:
-            strat_cfg = ctx.config.strategies.configs.get(sid)
-            if not strat_cfg:
+        for sid, strat_cfg in ctx.config.strategies.configs.items():
+            if not getattr(strat_cfg, "type", "").startswith("machine_learning"):
                 continue
 
             strat_cfg.enabled = ml_enabled

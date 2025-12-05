@@ -5,8 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict
 
-ML_STRATEGY_IDS = ["ai_predictor", "ai_regression"]
-
 
 @dataclass(frozen=True)
 class StrategyDefinition:
@@ -60,11 +58,12 @@ CANONICAL_STRATEGIES: Dict[str, StrategyDefinition] = {
     ),
 }
 
-# Anything whose type starts with "machine_learning" is considered part of the ML group.
+# Anything whose type is one of the core ML families is considered part of the ML group
+# for config-level summaries and tests.
 ML_STRATEGY_IDS = [
     sid
     for sid, definition in CANONICAL_STRATEGIES.items()
-    if definition.type.startswith("machine_learning")
+    if definition.type in ("machine_learning", "machine_learning_regression")
 ]
 
 CANONICAL_STRATEGY_TYPES = {
