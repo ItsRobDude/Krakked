@@ -125,11 +125,12 @@ class AIPredictorAltStrategy(Strategy):
 
         positions = ctx.portfolio.get_positions() or []
         positions_by_pair = {
-            pos.pair: pos for pos in positions if getattr(pos, "base_size", 0) > 0
+            pos.pair: pos
+            for pos in positions
+            if getattr(pos, "base_size", 0) > 0
+            and getattr(pos, "strategy_tag", None) == self.id
         }
-        open_positions_count = sum(
-            1 for pos in positions_by_pair.values() if getattr(pos, "base_size", 0) > 0
-        )
+        open_positions_count = len(positions_by_pair)
 
         for pair in pairs:
             key = (pair, timeframe)

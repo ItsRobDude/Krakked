@@ -3,6 +3,7 @@ from types import SimpleNamespace
 import pytest
 from starlette.testclient import TestClient
 
+from kraken_bot.config import StrategyConfig
 from kraken_bot.connection import rest_client
 from kraken_bot.connection.exceptions import (
     AuthError,
@@ -217,6 +218,61 @@ def test_mode_change_updates_configs(client, system_context):
     assert payload["error"] is None
     assert payload["data"] == {"mode": "live", "validate_only": False}
     assert system_context.execution_service.adapter.config.mode == "live"
+
+
+def test_start_session_syncs_all_ml_strategies(client, system_context):
+    system_context.config.strategies.configs = {
+        "ai_predictor": StrategyConfig(
+            name="AI Predictor", type="machine_learning", enabled=True
+        ),
+        "ai_predictor_alt": StrategyConfig(
+            name="AI Predictor (Alt Model)", type="machine_learning_alt", enabled=True
+        ),
+        "ai_regression": StrategyConfig(
+            name="AI Regression", type="machine_learning_regression", enabled=True
+        ),
+        "vol_breakout": StrategyConfig(
+            name="Volatility Breakout", type="vol_breakout", enabled=True
+        ),
+    }
+    system_context.config.strategies.enabled = [
+        "ai_predictor",
+        "ai_predictor_alt",
+        "ai_regression",
+        "vol_breakout",
+    ]
+    system_context.strategy_engine.strategy_states = {
+        "ai_predictor": SimpleNamespace(enabled=True),
+        "ai_predictor_alt": SimpleNamespace(enabled=True),
+        "ai_regression": SimpleNamespace(enabled=True),
+        "vol_breakout": SimpleNamespace(enabled=True),
+    }
+
+    response = client.post(
+        "/api/system/session/start",
+        json={
+            "profile_name": "default",
+            "mode": "paper",
+            "loop_interval_sec": 15,
+            "ml_enabled": False,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["error"] is None
+
+    from kraken_bot.strategy.catalog import ML_STRATEGY_IDS
+
+    for sid in ML_STRATEGY_IDS:
+        strat_cfg = system_context.config.strategies.configs[sid]
+        assert strat_cfg.enabled is False
+
+    assert set(system_context.config.strategies.enabled) == {"vol_breakout"}
+    assert system_context.strategy_engine.strategy_states["vol_breakout"].enabled is True
+    assert all(
+        system_context.strategy_engine.strategy_states[sid].enabled is False
+        for sid in ML_STRATEGY_IDS
+    )
 
 
 @pytest.mark.parametrize("ui_read_only", [True])
