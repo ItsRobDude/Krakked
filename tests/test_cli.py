@@ -9,7 +9,7 @@ import pytest
 from kraken_bot import cli
 from kraken_bot.portfolio.exceptions import PortfolioSchemaError
 from kraken_bot.portfolio.store import CURRENT_SCHEMA_VERSION
-from kraken_bot.secrets import CredentialResult, CredentialStatus
+from kraken_bot.credentials import CredentialResult, CredentialStatus
 
 
 class _DummyClient:
