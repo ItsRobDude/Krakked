@@ -6,8 +6,9 @@ from typing import Tuple
 from kraken_bot.config import AppConfig, load_config
 from kraken_bot.connection.rate_limiter import RateLimiter
 from kraken_bot.connection.rest_client import KrakenRESTClient
+from kraken_bot.credentials import CredentialResult, CredentialStatus
 from kraken_bot.safety import check_safety, log_safety_status
-from kraken_bot.secrets import CredentialResult, CredentialStatus, load_api_keys
+from kraken_bot.secrets import load_api_keys
 
 logger = logging.getLogger(__name__)
 

@@ -1,14 +1,16 @@
+import logging
 from types import SimpleNamespace
 
 import pytest
 from starlette.testclient import TestClient
 
-from kraken_bot.connection import rest_client
+import kraken_bot.connection.validation as validation_mod
 from kraken_bot.connection.exceptions import (
     AuthError,
     KrakenAPIError,
     ServiceUnavailableError,
 )
+from kraken_bot.credentials import CredentialResult, CredentialStatus
 from kraken_bot.config import StrategyConfig
 from kraken_bot.market_data.api import MarketDataStatus
 from kraken_bot.metrics import SystemMetrics
@@ -419,17 +421,20 @@ def test_credential_validation_auth_and_missing_fields(
         "error": "apiKey, apiSecret, and region are required.",
     }
 
-    class FakeClient:
-        def __init__(self, exc):
-            self.exc = exc
-
-        def get_private(self, *_args, **_kwargs):
-            if self.exc:
-                raise self.exc
-            return {}
+    def make_result(exc):
+        return CredentialResult(
+            api_key="k",
+            api_secret="s",
+            status=CredentialStatus.LOADED if exc is None else CredentialStatus.SERVICE_ERROR,
+            source="validation",
+            validated=exc is None,
+            can_force_save=True,
+            validation_error=str(exc) if exc else None,
+            error=exc,
+        )
 
     monkeypatch.setattr(
-        rest_client, "KrakenRESTClient", lambda *_, **__: FakeClient(None)
+        validation_mod, "validate_credentials", lambda *_: make_result(None)
     )
     success = client.post(
         "/api/system/credentials/validate",
@@ -439,7 +444,9 @@ def test_credential_validation_auth_and_missing_fields(
     assert success.json() == {"data": {"valid": True}, "error": None}
 
     monkeypatch.setattr(
-        rest_client, "KrakenRESTClient", lambda *_, **__: FakeClient(AuthError("bad"))
+        validation_mod,
+        "validate_credentials",
+        lambda *_: make_result(AuthError("bad")),
     )
     auth_failure = client.post(
         "/api/system/credentials/validate",
@@ -452,9 +459,9 @@ def test_credential_validation_auth_and_missing_fields(
     }
 
     monkeypatch.setattr(
-        rest_client,
-        "KrakenRESTClient",
-        lambda *_, **__: FakeClient(ServiceUnavailableError("down")),
+        validation_mod,
+        "validate_credentials",
+        lambda *_: make_result(ServiceUnavailableError("down")),
     )
     unavailable = client.post(
         "/api/system/credentials/validate",
@@ -467,9 +474,9 @@ def test_credential_validation_auth_and_missing_fields(
     }
 
     monkeypatch.setattr(
-        rest_client,
-        "KrakenRESTClient",
-        lambda *_, **__: FakeClient(KrakenAPIError("err")),
+        validation_mod,
+        "validate_credentials",
+        lambda *_: make_result(KrakenAPIError("err")),
     )
     api_error = client.post(
         "/api/system/credentials/validate",
@@ -480,3 +487,47 @@ def test_credential_validation_auth_and_missing_fields(
         "data": {"valid": False},
         "error": "Authentication failed. Please verify your API key/secret.",
     }
+
+
+@pytest.mark.parametrize("ui_auth_enabled", [True])
+def test_ui_credential_validation_logs_do_not_include_secrets(
+    monkeypatch, client, ui_auth_token, caplog
+):
+    caplog.set_level(logging.WARNING, logger="kraken_bot.ui.routes.system")
+
+    fake_key = "FAKE_API_KEY_123"
+    fake_secret = "FAKE_API_SECRET_456"
+
+    def fake_validate(api_key, api_secret):
+        assert api_key == fake_key
+        assert api_secret == fake_secret
+        return CredentialResult(
+            api_key=api_key,
+            api_secret=api_secret,
+            status=CredentialStatus.SERVICE_ERROR,
+            source="validation",
+            validated=False,
+            can_force_save=True,
+            validation_error="down",
+            error=ServiceUnavailableError("down"),
+        )
+
+    monkeypatch.setattr(validation_mod, "validate_credentials", fake_validate)
+
+    headers = {"Authorization": f"Bearer {ui_auth_token}"}
+
+    client.post(
+        "/api/system/credentials/validate",
+        json={"apiKey": fake_key, "apiSecret": fake_secret, "region": "r"},
+        headers=headers,
+    )
+
+    assert caplog.records
+    for record in caplog.records:
+        msg = record.getMessage()
+        assert fake_key not in msg
+        assert fake_secret not in msg
+        for value in record.__dict__.values():
+            if isinstance(value, str):
+                assert fake_key not in value
+                assert fake_secret not in value

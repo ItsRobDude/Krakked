@@ -4,9 +4,7 @@ import base64
 import getpass
 import json
 import os
-from dataclasses import dataclass
 from datetime import datetime, timezone
-from enum import Enum
 
 from cryptography.fernet import Fernet, InvalidToken
 from cryptography.hazmat.backends import default_backend
@@ -14,58 +12,13 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
 from kraken_bot.config import get_config_dir
-from kraken_bot.connection.exceptions import (
-    AuthError,
-    KrakenAPIError,
-    RateLimitError,
-    ServiceUnavailableError,
-)
-from kraken_bot.connection.rest_client import KrakenRESTClient
+from kraken_bot.connection.validation import validate_credentials
+from kraken_bot.credentials import CredentialResult, CredentialStatus
 
 # --- Constants ---
 SECRETS_FILE_NAME = "secrets.enc"
 _SALT_SIZE = 16
 _KDF_ITERATIONS = 480000  # Recommended by NIST for PBKDF2
-
-
-class CredentialStatus(Enum):
-    """Explicit status for credential loading/validation flows."""
-
-    LOADED = "loaded"
-    NOT_FOUND = "not_found"
-    MISSING_PASSWORD = "missing_password"
-    LOCKED = "locked"
-    AUTH_ERROR = "auth_error"
-    SERVICE_ERROR = "service_error"
-    DECRYPTION_FAILED = "decryption_failed"
-
-
-@dataclass
-class CredentialResult:
-    """Structured result for credential operations.
-
-    The `status` field uses :class:`CredentialStatus` to summarize the outcome:
-
-    * ``LOADED`` – credentials are available and ready for use.
-    * ``NOT_FOUND`` – no credentials were discovered anywhere.
-    * ``MISSING_PASSWORD`` – an encrypted secrets file exists but no password
-      was supplied in a non-interactive context.
-    * ``LOCKED`` – secrets exist but could not be unlocked (e.g., bad password
-      or failed decryption/authentication).
-    * ``AUTH_ERROR`` – credentials were supplied but failed authentication.
-    * ``SERVICE_ERROR`` – an external or unexpected service issue occurred.
-    * ``DECRYPTION_FAILED`` – decryption failed unexpectedly (legacy value;
-      ``LOCKED`` is preferred for wrong-password scenarios).
-    """
-
-    api_key: str | None
-    api_secret: str | None
-    status: CredentialStatus
-    source: str | None = None
-    validated: bool | None = None
-    can_force_save: bool = False
-    validation_error: str | None = None
-    error: Exception | None = None
 
 
 class SecretsDecryptionError(Exception):
@@ -158,6 +111,18 @@ def _decrypt_secrets(password: str) -> dict:
         ) from e
 
 
+def _prompt_for_password(*, create: bool) -> str:
+    if create:
+        while True:
+            password = getpass.getpass("Create a master password to encrypt your keys: ")
+            password_confirm = getpass.getpass("Confirm master password: ")
+            if password == password_confirm:
+                return password
+            print("Passwords do not match. Please try again.")
+
+    return getpass.getpass("Enter master password to encrypt your keys: ")
+
+
 # --- First-Time Setup ---
 
 
@@ -168,140 +133,99 @@ def _interactive_setup() -> CredentialResult:
     """
     print("--- Kraken API Credential Setup ---")
     print("No API keys found. Please enter them below.")
-    api_key = input("Enter your Kraken API Key: ").strip()
-    api_secret = getpass.getpass("Enter your Kraken API Secret: ").strip()
+    api_key = input("Enter your Kraken API key: ").strip()
+    api_secret = getpass.getpass("Enter your Kraken API secret: ").strip()
 
-    print("\nValidating credentials with Kraken...")
-    try:
-        client = KrakenRESTClient(api_key=api_key, api_secret=api_secret)
-        client.get_private("Balance")
-        print("Credentials are valid.")
-        validation_error: str | None = None
-    except AuthError as e:
-        print(f"\nCredential validation failed: {e}")
-        print("Please check your API key and permissions. Nothing will be saved.")
+    if not api_key or not api_secret:
+        print("API key and secret are required. Nothing will be saved.")
         return CredentialResult(
-            api_key,
-            api_secret,
-            CredentialStatus.AUTH_ERROR,
+            api_key=None,
+            api_secret=None,
+            status=CredentialStatus.AUTH_ERROR,
             source="interactive",
             validated=False,
             can_force_save=False,
-            validation_error=str(e),
-            error=e,
+            validation_error="Missing API key/secret",
         )
-    except (RateLimitError, ServiceUnavailableError, KrakenAPIError) as e:
-        print(f"\nCould not validate credentials due to a service/network issue: {e}")
-        save_unvalidated = (
-            input(
-                "Validation failed due to service issues. Save credentials unvalidated anyway? (y/N): "
+
+    print("\nValidating credentials with Kraken...")
+    validation = validate_credentials(api_key, api_secret)
+
+    if validation.status is CredentialStatus.AUTH_ERROR:
+        print(f"\nCredential validation failed: {validation.validation_error}")
+        print("Please check your API key and permissions. Nothing will be saved.")
+        return CredentialResult(
+            api_key=None,
+            api_secret=None,
+            status=CredentialStatus.AUTH_ERROR,
+            source="interactive",
+            validated=False,
+            can_force_save=False,
+            validation_error=validation.validation_error,
+            error=validation.error,
+        )
+
+    if validation.status is CredentialStatus.SERVICE_ERROR:
+        print(
+            "\nCould not validate credentials due to a service/network issue: "
+            f"{validation.validation_error}"
+        )
+        choice = input(
+            "Save these credentials as UNVALIDATED anyway? [y/N]: "
+        ).strip().lower()
+        if choice not in ("y", "yes"):
+            print("Credentials were NOT saved.")
+            return CredentialResult(
+                api_key=None,
+                api_secret=None,
+                status=CredentialStatus.SERVICE_ERROR,
+                source="interactive",
+                validated=False,
+                can_force_save=True,
+                validation_error=validation.validation_error,
+                error=validation.error,
             )
-            .strip()
-            .lower()
-        )
-        if save_unvalidated.startswith("y"):
-            while True:
-                password = getpass.getpass(
-                    "Create a master password to encrypt your keys: "
-                )
-                password_confirm = getpass.getpass("Confirm master password: ")
-                if password == password_confirm:
-                    break
-                print("Passwords do not match. Please try again.")
 
-            try:
-                persist_api_keys(
-                    api_key,
-                    api_secret,
-                    password,
-                    validated=False,
-                    validation_error=str(e),
-                    force_save_unvalidated=True,
-                )
-                secrets_path = get_config_dir() / SECRETS_FILE_NAME
-                print(f"\nCredentials encrypted and saved to: {secrets_path}")
-                print("IMPORTANT: You must remember this password to run the bot.")
-                return CredentialResult(
-                    api_key,
-                    api_secret,
-                    CredentialStatus.LOADED,
-                    source="interactive",
-                    validated=False,
-                    validation_error=str(e),
-                )
-            except Exception as save_error:
-                print(f"\nAn error occurred while saving secrets: {save_error}")
-                return CredentialResult(
-                    None,
-                    None,
-                    CredentialStatus.SERVICE_ERROR,
-                    source="interactive",
-                    validated=False,
-                    validation_error=str(e),
-                    error=save_error,
-                )
-
-        print("Please retry later. Keys have not been saved.")
-        return CredentialResult(
-            api_key,
-            api_secret,
-            CredentialStatus.SERVICE_ERROR,
-            source="interactive",
-            validated=False,
-            can_force_save=True,
-            validation_error=str(e),
-            error=e,
-        )
-    except Exception as e:
-        print(f"\nAn unexpected error occurred during validation: {e}")
-        return CredentialResult(
-            api_key,
-            api_secret,
-            CredentialStatus.SERVICE_ERROR,
-            source="interactive",
-            validated=False,
-            can_force_save=True,
-            validation_error=str(e),
-            error=e,
-        )
-
-    while True:
-        password = getpass.getpass("Create a master password to encrypt your keys: ")
-        password_confirm = getpass.getpass("Confirm master password: ")
-        if password == password_confirm:
-            break
-        print("Passwords do not match. Please try again.")
-
-    try:
+        password = _prompt_for_password(create=True)
         persist_api_keys(
-            api_key,
-            api_secret,
-            password,
-            validated=True,
-            validation_error=validation_error,
+            api_key=api_key,
+            api_secret=api_secret,
+            password=password,
+            validated=False,
+            validation_error=validation.validation_error,
+            force_save_unvalidated=True,
         )
-        secrets_path = get_config_dir() / SECRETS_FILE_NAME
-        print(f"\nCredentials encrypted and saved to: {secrets_path}")
-        print("IMPORTANT: You must remember this password to run the bot.")
+        print("Credentials saved as UNVALIDATED. You can re run validation later.")
         return CredentialResult(
-            api_key,
-            api_secret,
-            CredentialStatus.LOADED,
-            source="interactive",
-            validated=True,
-            validation_error=validation_error,
+            api_key=api_key,
+            api_secret=api_secret,
+            status=CredentialStatus.LOADED,
+            source="secrets_file",
+            validated=False,
+            can_force_save=True,
+            validation_error=validation.validation_error,
+            error=validation.error,
         )
-    except Exception as e:
-        print(f"\nAn error occurred while saving secrets: {e}")
-        return CredentialResult(
-            None,
-            None,
-            CredentialStatus.SERVICE_ERROR,
-            source="interactive",
-            validated=True,
-            validation_error=validation_error,
-            error=e,
-        )
+
+    password = _prompt_for_password(create=True)
+    persist_api_keys(
+        api_key=api_key,
+        api_secret=api_secret,
+        password=password,
+        validated=True,
+        validation_error=None,
+    )
+    print("Credentials encrypted and saved to secrets.enc.")
+    return CredentialResult(
+        api_key=api_key,
+        api_secret=api_secret,
+        status=CredentialStatus.LOADED,
+        source="secrets_file",
+        validated=True,
+        can_force_save=False,
+        validation_error=None,
+        error=None,
+    )
 
 
 def persist_api_keys(

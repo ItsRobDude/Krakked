@@ -18,6 +18,7 @@ from kraken_bot.connection.exceptions import (
     ServiceUnavailableError,
 )
 from kraken_bot.connection.rest_client import KrakenRESTClient
+from kraken_bot.credentials import CredentialResult, CredentialStatus
 from kraken_bot.main import run as run_orchestrator
 from kraken_bot.portfolio.exceptions import PortfolioSchemaError
 from kraken_bot.portfolio.store import (
@@ -27,7 +28,6 @@ from kraken_bot.portfolio.store import (
     ensure_portfolio_tables,
 )
 from kraken_bot.scripts import run_strategy_once
-from kraken_bot.secrets import CredentialResult, CredentialStatus
 
 DEFAULT_DB_PATH = "portfolio.db"
 

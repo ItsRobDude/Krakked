@@ -12,7 +12,7 @@ from kraken_bot.config import (
     StrategiesConfig,
     UniverseConfig,
 )
-from kraken_bot.secrets import CredentialResult, CredentialStatus
+from kraken_bot.credentials import CredentialResult, CredentialStatus
 
 
 def _sample_config() -> AppConfig:

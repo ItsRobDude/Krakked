@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import binascii
 import logging
 from dataclasses import asdict
 from typing import Optional
@@ -12,12 +11,13 @@ from pydantic import BaseModel, Field
 
 from kraken_bot import APP_VERSION
 from kraken_bot.config import dump_runtime_overrides
-from kraken_bot.connection import rest_client
 from kraken_bot.connection.exceptions import (
     AuthError,
     KrakenAPIError,
     ServiceUnavailableError,
 )
+from kraken_bot.connection.validation import validate_credentials
+from kraken_bot.credentials import CredentialStatus
 from kraken_bot.market_data.api import MarketDataStatus
 from kraken_bot.strategy.catalog import ML_STRATEGY_IDS
 from kraken_bot.ui.logging import build_request_log_extra
@@ -478,58 +478,10 @@ async def validate_credentials(
             error="apiKey, apiSecret, and region are required.",
         )
 
-    client = rest_client.KrakenRESTClient(
-        api_key=payload.apiKey.strip(), api_secret=payload.apiSecret.strip()
-    )
-
     try:
-        # Balance is a safe, read-only private endpoint that verifies signing without
-        # mutating user state.
-        client.get_private("Balance")
-        return ApiEnvelope(data={"valid": True}, error=None)
-    except AuthError as exc:
-        logger.warning(
-            "Credential validation failed",
-            extra=build_request_log_extra(
-                request, event="credential_validation_auth_error", error=str(exc)
-            ),
-        )
-        return ApiEnvelope(
-            data={"valid": False},
-            error="Authentication failed. Please verify your API key/secret.",
-        )
-    except ServiceUnavailableError as exc:
-        logger.warning(
-            "Credential validation unavailable",
-            extra=build_request_log_extra(
-                request, event="credential_validation_unavailable", error=str(exc)
-            ),
-        )
-        return ApiEnvelope(
-            data={"valid": False},
-            error=("Kraken is unavailable or could not be reached. Please retry."),
-        )
-    except KrakenAPIError as exc:
-        logger.warning(
-            "Credential validation failed with API error",
-            extra=build_request_log_extra(
-                request, event="credential_validation_api_error", error=str(exc)
-            ),
-        )
-        return ApiEnvelope(
-            data={"valid": False},
-            error="Authentication failed. Please verify your API key/secret.",
-        )
-    except binascii.Error as exc:
-        logger.warning(
-            "Credential validation failed",
-            extra=build_request_log_extra(
-                request, event="credential_validation_auth_error", error=str(exc)
-            ),
-        )
-        return ApiEnvelope(
-            data={"valid": False},
-            error="Authentication failed. Please verify your API key/secret.",
+        result = validate_credentials(
+            payload.apiKey.strip(),
+            payload.apiSecret.strip(),
         )
     except Exception as exc:  # pragma: no cover - defensive
         logger.exception(
@@ -544,3 +496,59 @@ async def validate_credentials(
                 "Unexpected error while validating credentials. Please retry or check server logs."
             ),
         )
+
+    if result.status is CredentialStatus.LOADED and result.validated:
+        return ApiEnvelope(data={"valid": True}, error=None)
+
+    exc = result.error
+
+    if isinstance(exc, AuthError):
+        logger.warning(
+            "Credential validation failed",
+            extra=build_request_log_extra(
+                request, event="credential_validation_auth_error", error=str(exc)
+            ),
+        )
+        return ApiEnvelope(
+            data={"valid": False},
+            error="Authentication failed. Please verify your API key/secret.",
+        )
+
+    if isinstance(exc, ServiceUnavailableError):
+        logger.warning(
+            "Credential validation unavailable",
+            extra=build_request_log_extra(
+                request, event="credential_validation_unavailable", error=str(exc)
+            ),
+        )
+        return ApiEnvelope(
+            data={"valid": False},
+            error="Kraken is unavailable or could not be reached. Please retry.",
+        )
+
+    if isinstance(exc, KrakenAPIError):
+        logger.warning(
+            "Credential validation failed with API error",
+            extra=build_request_log_extra(
+                request, event="credential_validation_api_error", error=str(exc)
+            ),
+        )
+        return ApiEnvelope(
+            data={"valid": False},
+            error="Authentication failed. Please verify your API key/secret.",
+        )
+
+    logger.warning(
+        "Credential validation failed with unexpected service error",
+        extra=build_request_log_extra(
+            request,
+            event="credential_validation_unknown_service_error",
+            error=str(exc),
+        ),
+    )
+    return ApiEnvelope(
+        data={"valid": False},
+        error=(
+            "Unexpected error while validating credentials. Please retry or check server logs."
+        ),
+    )

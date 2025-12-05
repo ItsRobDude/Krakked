@@ -7,9 +7,8 @@ from unittest.mock import patch
 import pytest
 
 from kraken_bot.connection.exceptions import AuthError, ServiceUnavailableError
+from kraken_bot.credentials import CredentialResult, CredentialStatus
 from kraken_bot.secrets import (
-    CredentialResult,
-    CredentialStatus,
     SecretsDecryptionError,
     _decrypt_secrets,
     _interactive_setup,
@@ -201,11 +200,20 @@ def test_interactive_setup_service_error_prompts_and_allows_skip(mock_config_dir
     with (
         patch("builtins.input", side_effect=["key", "n"]),
         patch("getpass.getpass", side_effect=["secret"]),
-        patch("kraken_bot.secrets.KrakenRESTClient") as mock_client,
+        patch(
+            "kraken_bot.connection.validation.validate_credentials",
+            return_value=CredentialResult(
+                api_key="key",
+                api_secret="secret",
+                status=CredentialStatus.SERVICE_ERROR,
+                source="validation",
+                validated=False,
+                can_force_save=True,
+                validation_error="unavailable",
+                error=ServiceUnavailableError("unavailable"),
+            ),
+        ),
     ):
-        mock_instance = mock_client.return_value
-        mock_instance.get_private.side_effect = ServiceUnavailableError("unavailable")
-
         result = _interactive_setup()
 
     assert result.status == CredentialStatus.SERVICE_ERROR
@@ -218,11 +226,20 @@ def test_interactive_setup_auth_error_blocks_force_save(mock_config_dir):
     with (
         patch("builtins.input", return_value="key"),
         patch("getpass.getpass", side_effect=["secret"]),
-        patch("kraken_bot.secrets.KrakenRESTClient") as mock_client,
+        patch(
+            "kraken_bot.connection.validation.validate_credentials",
+            return_value=CredentialResult(
+                api_key="key",
+                api_secret="secret",
+                status=CredentialStatus.AUTH_ERROR,
+                source="validation",
+                validated=False,
+                can_force_save=False,
+                validation_error="auth bad",
+                error=AuthError("auth bad"),
+            ),
+        ),
     ):
-        mock_instance = mock_client.return_value
-        mock_instance.get_private.side_effect = AuthError("auth bad")
-
         result = _interactive_setup()
 
     assert result.status == CredentialStatus.AUTH_ERROR
@@ -235,11 +252,20 @@ def test_interactive_setup_service_error_can_force_save(mock_config_dir):
     with (
         patch("builtins.input", side_effect=["key", "y"]),
         patch("getpass.getpass", side_effect=["secret", "pw", "pw"]),
-        patch("kraken_bot.secrets.KrakenRESTClient") as mock_client,
+        patch(
+            "kraken_bot.connection.validation.validate_credentials",
+            return_value=CredentialResult(
+                api_key="key",
+                api_secret="secret",
+                status=CredentialStatus.SERVICE_ERROR,
+                source="validation",
+                validated=False,
+                can_force_save=True,
+                validation_error="unavailable",
+                error=ServiceUnavailableError("unavailable"),
+            ),
+        ),
     ):
-        mock_instance = mock_client.return_value
-        mock_instance.get_private.side_effect = ServiceUnavailableError("unavailable")
-
         result = _interactive_setup()
 
     secrets = _decrypt_secrets("pw")
