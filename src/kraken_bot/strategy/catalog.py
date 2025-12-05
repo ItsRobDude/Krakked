@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict
 
+ML_STRATEGY_IDS = ["ai_predictor", "ai_regression"]
+
 
 @dataclass(frozen=True)
 class StrategyDefinition:

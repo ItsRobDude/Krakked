@@ -143,6 +143,8 @@ def load_config(
     else:
         effective_env = initial_env
 
+    is_live_env = effective_env == "live"
+
     if not config_path.exists():
         logger.warning(
             "Configuration file not found; using defaults",
@@ -598,7 +600,10 @@ def load_config(
         snapshot_retention_days=portfolio_data.get("snapshot_retention_days", 30),
         reconciliation_tolerance=risk_tolerance,
         db_path=portfolio_data.get("db_path", "portfolio.db"),
-        auto_migrate_schema=portfolio_data.get("auto_migrate_schema", True),
+        auto_migrate_schema=portfolio_data.get(
+            "auto_migrate_schema",
+            False if is_live_env else True,
+        ),
     )
 
     # Execution/Risk validation for per-mode settings
