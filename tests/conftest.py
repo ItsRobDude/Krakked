@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+from types import SimpleNamespace
 
 import pytest
 
@@ -20,3 +21,10 @@ if missing:
         "Missing optional dependencies: " + ", ".join(sorted(missing)),
         allow_module_level=True,
     )
+
+
+@pytest.fixture
+def inactive_risk_status():
+    """Returns a callable that reports an inactive kill switch."""
+
+    return lambda: SimpleNamespace(kill_switch_active=False)
