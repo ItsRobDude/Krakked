@@ -3,7 +3,7 @@ name = "kraken-trader"
 version = "0.1.0"
 description = "A Kraken trading bot."
 authors = [{ name = "Rob" }]
-requires-python = ">=3.10,<4.0"
+requires-python = ">=3.11,<4.0"
 
 dependencies = [
   "requests>=2.31.0,<3.0.0",

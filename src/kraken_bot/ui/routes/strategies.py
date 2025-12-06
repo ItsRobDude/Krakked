@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from fastapi import APIRouter, Request
 
@@ -141,7 +142,7 @@ async def update_strategy_config(
         if not strat_cfg:
             return ApiEnvelope(data=None, error="Strategy not found")
 
-        updated_fields = {}
+        updated_fields: dict[str, Any] = {}
         for field, value in payload.items():
             if field == "params" and isinstance(value, dict):
                 strat_cfg.params.update(value)
@@ -158,8 +159,6 @@ async def update_strategy_config(
         profile = params.get("risk_profile")
         if profile:
             rp = profile_to_definition(profile)
-
-            ctx.config.risk.profile = profile
             ctx.config.risk.max_per_strategy_pct[strategy_id] = rp.max_per_strategy_pct
             ctx.strategy_engine.risk_engine.config.max_per_strategy_pct = dict(
                 ctx.config.risk.max_per_strategy_pct
