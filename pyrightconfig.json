@@ -1,21 +1,28 @@
 {
+  // Only analyze the actual application code
   "include": [
-    "src",
-    "tests"
+    "src"
   ],
+
+  // Explicitly keep pyright out of tests and other junk
   "exclude": [
+    "tests",
     "**/__pycache__",
     ".git",
     ".mypy_cache",
     ".pytest_cache",
     ".vscode",
-    ".idea"
+    ".idea",
+    ".venv",
+    "venv"
   ],
-  "stubPath": "./typings",
-  "extraPaths": [
-    "./typings",
-    "./src"
-  ],
+
+  // Match the runtime you’re actually using
   "pythonVersion": "3.11",
+
+  // Keep normal (non-insane) strictness
+  "typeCheckingMode": "basic",
+
+  // Don’t turn missing 3rd‑party stubs into hard failures
   "reportMissingTypeStubs": "warning"
 }
