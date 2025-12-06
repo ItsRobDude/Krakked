@@ -69,9 +69,11 @@ class ExecutionService:
         if mode == "live":
             self._emit_live_readiness_checklist()
 
-    def _kill_switch_active(self) -> bool:
-        # Missing provider is always a hard block — safer than executing with
-        # an unknown risk state.
+    def _kill_switch_active(self, plan_id: Optional[str] = None) -> bool:
+        """Return True when execution should be blocked by the kill switch."""
+
+        # Missing provider is always a hard block — tests rely on this and it's
+        # safer than blindly executing with an unknown risk state.
         if not self._risk_status_provider:
             mode = getattr(self._execution_config, "mode", None)
             logger.error(
@@ -79,6 +81,7 @@ class ExecutionService:
                 extra=structured_log_extra(
                     event="risk_missing",
                     execution_mode=mode,
+                    plan_id=plan_id,
                 ),
             )
             return True
@@ -88,22 +91,12 @@ class ExecutionService:
         try:
             status = self._risk_status_provider()
         except Exception:  # noqa: BLE001
-            if mode == "live":
-                logger.exception(
-                    "Risk status provider failed; forcing kill switch in live mode",
-                    extra=structured_log_extra(
-                        event="risk_provider_error_live",
-                        execution_mode=mode,
-                        plan_id=plan_id,
-                    ),
-                )
-                return True
-
             logger.exception(
                 "Risk status provider failed",
                 extra=structured_log_extra(
                     event="risk_provider_error",
                     execution_mode=mode,
+                    plan_id=plan_id,
                 ),
             )
 
@@ -113,13 +106,26 @@ class ExecutionService:
                     extra=structured_log_extra(
                         event="risk_provider_error_kill_switch",
                         execution_mode=mode,
+                        plan_id=plan_id,
                     ),
                 )
                 return True
 
             return False
 
-        return bool(getattr(status, "kill_switch_active", False))
+        kill_switch_active = bool(getattr(status, "kill_switch_active", False))
+
+        if kill_switch_active:
+            logger.warning(
+                "Kill switch active; blocking plan execution",
+                extra=structured_log_extra(
+                    event="kill_switch_active",
+                    execution_mode=mode,
+                    plan_id=plan_id,
+                ),
+            )
+
+        return kill_switch_active
 
     def execute_plan(self, plan: ExecutionPlan) -> ExecutionResult:
         """
