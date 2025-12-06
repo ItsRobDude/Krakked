@@ -6,9 +6,9 @@ import logging
 from copy import deepcopy
 from dataclasses import asdict
 
+from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
-from fastapi import APIRouter, Request
 from kraken_bot.ui.logging import build_request_log_extra
 
 logger = logging.getLogger(__name__)
