@@ -383,6 +383,28 @@ def load_config(
             continue
         normalized_limits[strategy_id] = pct_limit
 
+    missing_limits = [sid for sid in normalized_enabled if sid not in normalized_limits]
+    if missing_limits:
+        default_strategy_limit = float(risk_data.get("max_risk_per_trade_pct", 1.0))
+
+        for strategy_id in missing_limits:
+            logger.warning(
+                "Enabled strategy %s missing risk limit; applying default",
+                strategy_id,
+                extra={
+                    "event": "config_missing_strategy_limit",
+                    "config_path": str(config_path),
+                    "strategy_id": strategy_id,
+                    "applied_limit_pct": default_strategy_limit,
+                },
+            )
+            normalized_limits[strategy_id] = default_strategy_limit
+
+        if is_live_env:
+            raise ValueError(
+                "Live trading requires explicit max_per_strategy_pct entries for all enabled strategies"
+            )
+
     risk_config = RiskConfig(
         max_risk_per_trade_pct=risk_data.get("max_risk_per_trade_pct", 1.0),
         max_portfolio_risk_pct=risk_data.get("max_portfolio_risk_pct", 10.0),
@@ -520,10 +542,31 @@ def load_config(
         )
         execution_mode = "paper"
 
+    raw_slippage_bps = execution_data.get("max_slippage_bps", 50)
+    if not isinstance(raw_slippage_bps, (int, float)):
+        logger.warning(
+            "max_slippage_bps is invalid; using default",
+            extra={"event": "config_invalid_max_slippage_bps", "config_path": str(config_path)},
+        )
+        raw_slippage_bps = 50
+
+    clamped_slippage_bps = max(0, min(int(raw_slippage_bps), 5000))
+    if clamped_slippage_bps != raw_slippage_bps:
+        logger.warning(
+            "max_slippage_bps out of range; clamped to %s bps",
+            clamped_slippage_bps,
+            extra={
+                "event": "config_clamped_max_slippage_bps",
+                "config_path": str(config_path),
+                "requested": raw_slippage_bps,
+                "clamped": clamped_slippage_bps,
+            },
+        )
+
     execution_config = ExecutionConfig(
         mode=execution_mode,
         default_order_type=execution_data.get("default_order_type", "limit"),
-        max_slippage_bps=execution_data.get("max_slippage_bps", 50),
+        max_slippage_bps=clamped_slippage_bps,
         time_in_force=execution_data.get("time_in_force", "GTC"),
         post_only=execution_data.get("post_only", False),
         validate_only=execution_data.get("validate_only", True),

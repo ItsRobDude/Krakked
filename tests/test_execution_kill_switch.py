@@ -92,6 +92,24 @@ def test_execute_plan_blocked_by_kill_switch():
     assert all("kill_switch" in (order.last_error or "") for order in result.orders)
 
 
+def test_execute_plan_blocks_when_risk_provider_missing():
+    adapter = FakeAdapter()
+    service = ExecutionService(adapter=adapter)
+
+    plan = ExecutionPlan(
+        plan_id="plan_missing_risk_provider",
+        generated_at=datetime.now(UTC),
+        actions=[_build_action("XBTUSD")],
+    )
+
+    result = service.execute_plan(plan)
+
+    assert not result.success
+    assert any("kill switch" in msg.lower() for msg in result.errors)
+    assert adapter.submit_order_calls == []
+    assert all(order.status == "rejected" for order in result.orders)
+
+
 def test_cancel_operations_allowed_with_kill_switch():
     adapter = FakeAdapter()
     service = ExecutionService(

@@ -39,13 +39,18 @@ def _plan(action: RiskAdjustedAction) -> ExecutionPlan:
     )
 
 
-def test_execution_service_uses_paper_adapter_for_paper_mode():
+def test_execution_service_uses_paper_adapter_for_paper_mode(inactive_risk_status):
     config = ExecutionConfig(mode="paper", validate_only=False)
     client = MagicMock()
     market_data = MagicMock()
     market_data.get_best_bid_ask.return_value = {"bid": 30.0, "ask": 30.0}
 
-    service = ExecutionService(config=config, client=client, market_data=market_data)
+    service = ExecutionService(
+        config=config,
+        client=client,
+        market_data=market_data,
+        risk_status_provider=inactive_risk_status,
+    )
 
     assert isinstance(service.adapter, PaperExecutionAdapter)
 
@@ -58,14 +63,19 @@ def test_execution_service_uses_paper_adapter_for_paper_mode():
     client.add_order.assert_not_called()
 
 
-def test_execution_service_uses_kraken_adapter_for_live_mode():
+def test_execution_service_uses_kraken_adapter_for_live_mode(inactive_risk_status):
     config = ExecutionConfig(mode="live", validate_only=False, allow_live_trading=True)
     client = MagicMock()
     client.add_order.return_value = {"txid": ["ABC123"], "error": []}
     market_data = MagicMock()
     market_data.get_best_bid_ask.return_value = {"bid": 25.0, "ask": 25.0}
 
-    service = ExecutionService(config=config, client=client, market_data=market_data)
+    service = ExecutionService(
+        config=config,
+        client=client,
+        market_data=market_data,
+        risk_status_provider=inactive_risk_status,
+    )
 
     assert isinstance(service.adapter, KrakenExecutionAdapter)
 
