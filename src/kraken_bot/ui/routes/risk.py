@@ -8,7 +8,6 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List
 
 from fastapi import APIRouter, Request
-
 from kraken_bot.config import dump_runtime_overrides
 from kraken_bot.ui.logging import build_request_log_extra
 from kraken_bot.ui.models import (

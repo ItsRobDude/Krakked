@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from fastapi import Request
-
 from kraken_bot.logging_config import get_log_environment, structured_log_extra
 
 
