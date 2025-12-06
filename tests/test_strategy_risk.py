@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
 import pandas as pd
+
 from kraken_bot.config import PortfolioConfig, RiskConfig
 from kraken_bot.market_data.api import MarketDataAPI
 from kraken_bot.portfolio.manager import PortfolioService
