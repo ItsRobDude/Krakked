@@ -55,9 +55,11 @@ def make_plan(actions, metadata):
     )
 
 
-def test_execute_plan_skips_blocked_noop_and_zero_delta(plan_metadata):
+def test_execute_plan_skips_blocked_noop_and_zero_delta(
+    plan_metadata, inactive_risk_status
+):
     adapter = MagicMock()
-    service = ExecutionService(adapter)
+    service = ExecutionService(adapter, risk_status_provider=inactive_risk_status)
     actions = [
         make_action(target=1.0, current=0.0, blocked=True),
         make_action(target=1.0, current=1.0),
@@ -72,9 +74,9 @@ def test_execute_plan_skips_blocked_noop_and_zero_delta(plan_metadata):
     assert result.success
 
 
-def test_execute_plan_creates_buy_and_sell_orders(plan_metadata):
+def test_execute_plan_creates_buy_and_sell_orders(plan_metadata, inactive_risk_status):
     adapter = RecordingAdapter()
-    service = ExecutionService(adapter)
+    service = ExecutionService(adapter, risk_status_provider=inactive_risk_status)
     actions = [
         make_action(target=3.0, current=1.0),
         make_action(target=1.0, current=3.0),
@@ -92,9 +94,9 @@ def test_execute_plan_creates_buy_and_sell_orders(plan_metadata):
     assert result.success
 
 
-def test_execute_plan_records_errors_from_adapter(plan_metadata):
+def test_execute_plan_records_errors_from_adapter(plan_metadata, inactive_risk_status):
     adapter = RecordingAdapter(exception=ExecutionError("adapter failure"))
-    service = ExecutionService(adapter)
+    service = ExecutionService(adapter, risk_status_provider=inactive_risk_status)
     plan = make_plan([make_action(target=2.0, current=0.0)], plan_metadata)
 
     result = service.execute_plan(plan)
@@ -104,9 +106,11 @@ def test_execute_plan_records_errors_from_adapter(plan_metadata):
     assert result.orders[0].last_error == "adapter failure"
 
 
-def test_execute_plan_accepts_validated_orders_without_txid(plan_metadata):
+def test_execute_plan_accepts_validated_orders_without_txid(
+    plan_metadata, inactive_risk_status
+):
     adapter = RecordingAdapter()
-    service = ExecutionService(adapter)
+    service = ExecutionService(adapter, risk_status_provider=inactive_risk_status)
     plan = make_plan([make_action(target=1.0, current=0.0)], plan_metadata)
 
     result = service.execute_plan(plan)

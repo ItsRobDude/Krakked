@@ -10,7 +10,9 @@ from kraken_bot.connection.rest_client import KrakenRESTClient
 from kraken_bot.credentials import CredentialResult, CredentialStatus
 
 
-def validate_credentials(api_key: str, api_secret: str) -> CredentialResult:
+def validate_credentials(
+    api_key: str, api_secret: str, *, region: str | None = None
+) -> CredentialResult:
     """
     Perform a low risk private call to validate credentials and classify the failure.
 

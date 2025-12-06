@@ -56,21 +56,34 @@ class ExecutionService:
         self._risk_status_provider = risk_status_provider
 
         adapter_config = getattr(self.adapter, "config", None)
-        if getattr(adapter_config, "mode", None) == "live":
+        self._execution_config = adapter_config or config or ExecutionConfig()
+        mode = getattr(self._execution_config, "mode", None)
+
+        if mode == "live" and self._risk_status_provider is None:
+            logger.error(
+                "ExecutionService initialized in live mode without risk_status_provider; refusing to start.",
+                extra=structured_log_extra(event="risk_status_missing_live"),
+            )
+            raise ValueError("risk_status_provider is required when execution.mode='live'")
+
+        if mode == "live":
             self._emit_live_readiness_checklist()
 
     def _kill_switch_active(self) -> bool:
         if not self._risk_status_provider:
             return False
 
+        mode = getattr(self._execution_config, "mode", None)
         try:
             status = self._risk_status_provider()
         except Exception:
             logger.exception(
                 "Risk status provider failed",
-                extra=structured_log_extra(event="risk_status_error"),
+                extra=structured_log_extra(
+                    event="risk_status_error", mode=mode
+                ),
             )
-            return False
+            return mode == "live"
 
         return bool(getattr(status, "kill_switch_active", False))
 
@@ -91,9 +104,7 @@ class ExecutionService:
         """
         result = ExecutionResult(plan_id=plan.plan_id, started_at=datetime.now(UTC))
 
-        adapter_config = getattr(self.adapter, "config", None)
-        if adapter_config is None:
-            adapter_config = ExecutionConfig()
+        adapter_config = self._execution_config
 
         eligible_actions = []
         for action in plan.actions:

@@ -26,6 +26,7 @@ class SystemMetrics:
         self.open_positions_count = 0
         self.drift_detected = False
         self.drift_reason: Optional[str] = None
+        self.market_data_status_updated = False
         self.market_data_ok = False
         self.market_data_stale = False
         self.market_data_reason: Optional[str] = None
@@ -113,6 +114,7 @@ class SystemMetrics:
             self.market_data_stale = stale
             self.market_data_reason = reason
             self.market_data_max_staleness = max_staleness
+            self.market_data_status_updated = True
 
     def snapshot(self) -> Dict[str, Any]:
         """Return a read-only snapshot of current counters."""
@@ -132,6 +134,7 @@ class SystemMetrics:
                 "open_positions_count": self.open_positions_count,
                 "drift_detected": self.drift_detected,
                 "drift_reason": self.drift_reason,
+                "market_data_status_updated": self.market_data_status_updated,
                 "market_data_ok": self.market_data_ok,
                 "market_data_stale": self.market_data_stale,
                 "market_data_reason": self.market_data_reason,

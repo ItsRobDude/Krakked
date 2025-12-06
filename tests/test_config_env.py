@@ -179,3 +179,85 @@ def test_portfolio_auto_migrate_defaults_follow_env(monkeypatch, tmp_path: Path)
     monkeypatch.setenv("KRAKEN_BOT_ENV", "paper")
     paper_config = load_config()
     assert paper_config.portfolio.auto_migrate_schema is True
+
+
+def test_max_slippage_bps_clamped(monkeypatch, tmp_path: Path):
+    config_dir = tmp_path / "config"
+    data_dir = tmp_path / "data"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    config_path = config_dir / "config.yaml"
+    config_path.write_text(
+        """
+execution:
+  mode: "paper"
+  max_slippage_bps: 10000
+""".strip()
+    )
+
+    monkeypatch.setattr(appdirs, "user_config_dir", lambda appname: config_dir)
+    monkeypatch.setattr(appdirs, "user_data_dir", lambda appname: data_dir)
+    monkeypatch.setenv("KRAKEN_BOT_ENV", "paper")
+
+    app_config = load_config()
+
+    assert app_config.execution.max_slippage_bps == 5000
+
+
+def test_live_mode_requires_per_strategy_limits(monkeypatch, tmp_path: Path):
+    config_dir = tmp_path / "config"
+    data_dir = tmp_path / "data"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    config_path = config_dir / "config.yaml"
+    config_path.write_text(
+        """
+strategies:
+  enabled: ["alpha"]
+  configs:
+    alpha:
+      type: momentum
+      enabled: true
+execution:
+  mode: "live"
+  allow_live_trading: true
+""".strip()
+    )
+
+    monkeypatch.setattr(appdirs, "user_config_dir", lambda appname: config_dir)
+    monkeypatch.setattr(appdirs, "user_data_dir", lambda appname: data_dir)
+    monkeypatch.setenv("KRAKEN_BOT_ENV", "live")
+
+    with pytest.raises(ValueError):
+        load_config()
+
+
+def test_missing_strategy_limit_defaults_in_paper(monkeypatch, tmp_path: Path):
+    config_dir = tmp_path / "config"
+    data_dir = tmp_path / "data"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    config_path = config_dir / "config.yaml"
+    config_path.write_text(
+        """
+strategies:
+  enabled: ["alpha"]
+  configs:
+    alpha:
+      type: momentum
+      enabled: true
+risk:
+  max_risk_per_trade_pct: 0.5
+""".strip()
+    )
+
+    monkeypatch.setattr(appdirs, "user_config_dir", lambda appname: config_dir)
+    monkeypatch.setattr(appdirs, "user_data_dir", lambda appname: data_dir)
+    monkeypatch.setenv("KRAKEN_BOT_ENV", "paper")
+
+    app_config = load_config()
+
+    assert app_config.risk.max_per_strategy_pct["alpha"] == pytest.approx(0.5)

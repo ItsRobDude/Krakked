@@ -88,6 +88,33 @@ def test_system_health_reports_config_and_risk_flags(client, system_context):
     assert isinstance(payload["drift_detected"], bool)
 
 
+def test_system_health_prefers_metrics_snapshot_even_when_false(
+    client, system_context
+):
+    system_context.market_data.get_data_status.return_value = SimpleNamespace(
+        rest_api_reachable=True,
+        websocket_connected=True,
+        streaming_pairs=5,
+        stale_pairs=0,
+        subscription_errors=0,
+    )
+    system_context.market_data.get_health_status.return_value = None
+
+    metrics = SystemMetrics()
+    metrics.update_market_data_status(
+        ok=False, stale=False, reason=None, max_staleness=None
+    )
+    system_context.metrics = metrics
+
+    response = client.get("/api/system/health")
+
+    assert response.status_code == 200
+    payload = response.json()["data"]
+    assert payload["market_data_ok"] is False
+    assert payload["market_data_stale"] is False
+    assert payload["market_data_status"] == "unavailable"
+
+
 def test_system_metrics_endpoint(client, system_context):
     metrics = system_context.metrics
     metrics.record_plan(blocked_actions=2)
@@ -314,6 +341,8 @@ def test_mode_change_updates_configs(client, system_context):
     assert payload["error"] is None
     assert payload["data"] == {"mode": "live", "validate_only": False}
     assert system_context.execution_service.adapter.config.mode == "live"
+    assert system_context.session.mode == "live"
+    assert system_context.config.session.mode == "live"
 
 
 def test_start_session_syncs_all_ml_strategies(client, system_context):
@@ -442,7 +471,7 @@ def test_credential_validation_auth_and_missing_fields(
         )
 
     monkeypatch.setattr(
-        validation_mod, "validate_credentials", lambda *_: make_result(None)
+        validation_mod, "validate_credentials", lambda *_, **__: make_result(None)
     )
     success = client.post(
         "/api/system/credentials/validate",
@@ -454,7 +483,7 @@ def test_credential_validation_auth_and_missing_fields(
     monkeypatch.setattr(
         validation_mod,
         "validate_credentials",
-        lambda *_: make_result(AuthError("bad")),
+        lambda *_, **__: make_result(AuthError("bad")),
     )
     auth_failure = client.post(
         "/api/system/credentials/validate",
@@ -469,7 +498,7 @@ def test_credential_validation_auth_and_missing_fields(
     monkeypatch.setattr(
         validation_mod,
         "validate_credentials",
-        lambda *_: make_result(ServiceUnavailableError("down")),
+        lambda *_, **__: make_result(ServiceUnavailableError("down")),
     )
     unavailable = client.post(
         "/api/system/credentials/validate",
@@ -484,7 +513,7 @@ def test_credential_validation_auth_and_missing_fields(
     monkeypatch.setattr(
         validation_mod,
         "validate_credentials",
-        lambda *_: make_result(KrakenAPIError("err")),
+        lambda *_, **__: make_result(KrakenAPIError("err")),
     )
     api_error = client.post(
         "/api/system/credentials/validate",
@@ -506,9 +535,10 @@ def test_ui_credential_validation_logs_do_not_include_secrets(
     fake_key = "FAKE_API_KEY_123"
     fake_secret = "FAKE_API_SECRET_456"
 
-    def fake_validate(api_key, api_secret):
+    def fake_validate(api_key, api_secret, *, region=None):
         assert api_key == fake_key
         assert api_secret == fake_secret
+        assert region == "r"
         return CredentialResult(
             api_key=api_key,
             api_secret=api_secret,
