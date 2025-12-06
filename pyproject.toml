@@ -58,6 +58,13 @@ python_version = "3.11"
 mypy_path = ["src", "typings"]
 exclude = ["build", "dist"]
 
+[[tool.mypy.overrides]]
+module = [
+  "sklearn",
+  "sklearn.*",
+]
+ignore_missing_imports = true
+
 [tool.black]
 line-length = 88
 target-version = ["py311"]
