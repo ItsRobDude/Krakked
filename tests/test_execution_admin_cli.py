@@ -1,5 +1,7 @@
 from typing import Any, Optional
 
+from types import SimpleNamespace
+
 import pytest
 
 from kraken_bot.config import ExecutionConfig
@@ -73,7 +75,11 @@ def test_panic_cli_reconciles_and_persists(
 
     adapter = _FakeAdapter()
     store = _FakeStore()
-    service = admin_cli.ExecutionService(adapter=adapter, store=store)  # type: ignore[arg-type]
+    service = admin_cli.ExecutionService(  # type: ignore[arg-type]
+        adapter=adapter,
+        store=store,
+        risk_status_provider=lambda: SimpleNamespace(kill_switch_active=False),
+    )
 
     order = LocalOrder(
         local_id="local-1",
