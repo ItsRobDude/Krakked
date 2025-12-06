@@ -140,7 +140,7 @@ class ExecutionService:
 
             eligible_actions.append(action)
 
-        if self._kill_switch_active():
+        if self._kill_switch_active(plan_id=plan.plan_id):
             blocked_reason = "Execution blocked by kill switch"
             logger.warning(
                 blocked_reason,
