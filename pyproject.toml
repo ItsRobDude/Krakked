@@ -89,6 +89,7 @@ known_third_party = [
   "numpy",
   "pandas",
   "pyarrow",
+  "pydantic",
   "pyright",
   "pytest",
   "requests",
