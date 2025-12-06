@@ -6,7 +6,6 @@ import logging
 from typing import Any
 
 from fastapi import APIRouter, Request
-
 from kraken_bot.config import dump_runtime_overrides
 from kraken_bot.strategy.risk_profiles import profile_to_definition
 from kraken_bot.ui.logging import build_request_log_extra
@@ -52,8 +51,7 @@ async def get_strategy_performance(
     try:
         perf = ctx.portfolio.get_strategy_performance()
         payload = [
-            StrategyPerformancePayload(**record.__dict__)
-            for record in perf.values()
+            StrategyPerformancePayload(**record.__dict__) for record in perf.values()
         ]
         return ApiEnvelope(data=payload, error=None)
     except Exception as exc:  # pragma: no cover - defensive

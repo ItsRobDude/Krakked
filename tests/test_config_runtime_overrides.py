@@ -20,7 +20,9 @@ from kraken_bot.config_models import (
 def _minimal_config() -> AppConfig:
     return AppConfig(
         region=RegionProfile("US_CA", RegionCapabilities(False, False, False)),
-        universe=UniverseConfig(include_pairs=[], exclude_pairs=[], min_24h_volume_usd=0),
+        universe=UniverseConfig(
+            include_pairs=[], exclude_pairs=[], min_24h_volume_usd=0
+        ),
         market_data=MarketDataConfig(
             ws={}, ohlc_store={}, backfill_timeframes=[], ws_timeframes=[]
         ),
@@ -32,7 +34,9 @@ def _minimal_config() -> AppConfig:
     )
 
 
-def test_dump_runtime_overrides_atomic_write(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_dump_runtime_overrides_atomic_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
     config_dir = tmp_path
     path = config_dir / cl.RUNTIME_OVERRIDES_FILENAME
     path.parent.mkdir(parents=True, exist_ok=True)

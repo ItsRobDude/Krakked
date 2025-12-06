@@ -3,6 +3,7 @@
 This implements the small subset of functions the project relies on so tests can
 run in minimal environments without pulling the upstream package.
 """
+
 from __future__ import annotations
 
 import os

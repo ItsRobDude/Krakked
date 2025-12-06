@@ -10,12 +10,12 @@ from datetime import UTC, datetime
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from kraken_bot.config import AppConfig
-from kraken_bot.market_data.models import ConnectionStatus, OHLCBar, PairMetadata
 from kraken_bot.connection.rest_client import KrakenRESTClient
 from kraken_bot.execution.adapter import SimulationExecutionAdapter
-from kraken_bot.execution.oms import ExecutionService
 from kraken_bot.execution.models import ExecutionResult, LocalOrder
+from kraken_bot.execution.oms import ExecutionService
 from kraken_bot.market_data.api import MarketDataAPI
+from kraken_bot.market_data.models import ConnectionStatus, OHLCBar, PairMetadata
 from kraken_bot.market_data.ohlc_store import FileOHLCStore
 from kraken_bot.portfolio.manager import PortfolioService
 from kraken_bot.strategy.engine import StrategyEngine
@@ -75,10 +75,14 @@ class BacktestMarketData(MarketDataAPI):
         timestamps: set[int] = set()
         for bars in self._bar_cache.values():
             timestamps.update(int(bar.timestamp) for bar in bars)
-        self._timeline = sorted(ts for ts in timestamps if self._start_ts <= ts <= self._end_ts)
+        self._timeline = sorted(
+            ts for ts in timestamps if self._start_ts <= ts <= self._end_ts
+        )
         total_bars = sum(len(bars) for bars in self._bar_cache.values())
         logger.info(
-            "Backtest market data ready with %s bars across %s pairs", total_bars, len(self._universe)
+            "Backtest market data ready with %s bars across %s pairs",
+            total_bars,
+            len(self._universe),
         )
 
     def _pair_metadata_from_symbol(self, symbol: str) -> PairMetadata:
@@ -105,7 +109,9 @@ class BacktestMarketData(MarketDataAPI):
 
     def _filtered_bars(self, pair: str, timeframe: str) -> List[OHLCBar]:
         bars = self._bar_cache.get((pair, timeframe), [])
-        cutoff = int(self._current_time.timestamp()) if self._current_time else self._end_ts
+        cutoff = (
+            int(self._current_time.timestamp()) if self._current_time else self._end_ts
+        )
         return [bar for bar in bars if int(bar.timestamp) <= cutoff]
 
     def get_ohlc(self, pair: str, timeframe: str, lookback: int) -> List[OHLCBar]:

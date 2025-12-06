@@ -3,7 +3,6 @@
 from pathlib import Path
 
 import appdirs  # type: ignore[import-untyped]
-
 from kraken_bot.config import load_config
 
 

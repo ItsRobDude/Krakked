@@ -3910,4 +3910,3 @@ Status & TODO
 - [x] Metrics endpoint: Basic health/metrics HTTP surface for runtime checks and liveness probing.
 - [x] Schema guard: Enforce schema_version checks and migrations before the bot starts accepting work.
 - [ ] CI pipeline: Wire lint, type checks, unit tests, and offline integration tests into a reproducible pipeline.
-

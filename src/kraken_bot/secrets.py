@@ -11,8 +11,8 @@ from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
-from kraken_bot.config import get_config_dir
 import kraken_bot.connection.validation as validation_mod
+from kraken_bot.config import get_config_dir
 from kraken_bot.credentials import CredentialResult, CredentialStatus
 
 # --- Constants ---
@@ -114,7 +114,9 @@ def _decrypt_secrets(password: str) -> dict:
 def _prompt_for_password(*, create: bool) -> str:
     if create:
         while True:
-            password = getpass.getpass("Create a master password to encrypt your keys: ")
+            password = getpass.getpass(
+                "Create a master password to encrypt your keys: "
+            )
             password_confirm = getpass.getpass("Confirm master password: ")
             if password == password_confirm:
                 return password
@@ -170,9 +172,11 @@ def _interactive_setup() -> CredentialResult:
             "\nCould not validate credentials due to a service/network issue: "
             f"{validation.validation_error}"
         )
-        choice = input(
-            "Save these credentials as UNVALIDATED anyway? [y/N]: "
-        ).strip().lower()
+        choice = (
+            input("Save these credentials as UNVALIDATED anyway? [y/N]: ")
+            .strip()
+            .lower()
+        )
         if choice not in ("y", "yes"):
             print("Credentials were NOT saved.")
             return CredentialResult(

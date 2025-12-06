@@ -1,4 +1,5 @@
 """Test configuration for environments without optional heavy dependencies."""
+
 from __future__ import annotations
 
 import importlib.util

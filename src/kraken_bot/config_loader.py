@@ -5,10 +5,9 @@ import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-import appdirs  # type: ignore[import-untyped]
 import yaml  # type: ignore[import-untyped]
 
-from kraken_bot.strategy.catalog import CANONICAL_STRATEGIES
+import appdirs  # type: ignore[import-untyped]
 from kraken_bot.config_models import (
     AppConfig,
     ExecutionConfig,
@@ -26,7 +25,7 @@ from kraken_bot.config_models import (
     UIRefreshConfig,
     UniverseConfig,
 )
-
+from kraken_bot.strategy.catalog import CANONICAL_STRATEGIES
 
 RUNTIME_OVERRIDES_FILENAME = "config.runtime.yaml"
 
@@ -502,7 +501,10 @@ def load_config(
     if not isinstance(execution_data, dict):
         logger.warning(
             "Execution config is not a mapping; using defaults",
-            extra={"event": "config_invalid_execution", "config_path": str(config_path)},
+            extra={
+                "event": "config_invalid_execution",
+                "config_path": str(config_path),
+            },
         )
         execution_data = {}
 
@@ -542,7 +544,10 @@ def load_config(
     if not isinstance(portfolio_data, dict):
         logger.warning(
             "Portfolio config is not a mapping; using defaults",
-            extra={"event": "config_invalid_portfolio", "config_path": str(config_path)},
+            extra={
+                "event": "config_invalid_portfolio",
+                "config_path": str(config_path),
+            },
         )
         portfolio_data = {}
 

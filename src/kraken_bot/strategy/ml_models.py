@@ -1,4 +1,5 @@
 """Shared ML model imports with graceful fallbacks when scikit-learn is unavailable."""
+
 from __future__ import annotations
 
 import importlib.util
@@ -13,7 +14,10 @@ except ModuleNotFoundError:  # pragma: no cover - defensive
     _sklearn_spec = None
 
 if _sklearn_spec:
-    from sklearn.linear_model import PassiveAggressiveClassifier, PassiveAggressiveRegressor  # type: ignore
+    from sklearn.linear_model import (  # type: ignore
+        PassiveAggressiveClassifier,
+        PassiveAggressiveRegressor,
+    )
 else:  # pragma: no cover - fallback path
     logger.warning(
         "scikit-learn not installed; using lightweight Passive-Aggressive fallbacks"
@@ -42,5 +46,6 @@ else:  # pragma: no cover - fallback path
     class PassiveAggressiveRegressor(_BasePassiveAggressive):  # type: ignore[no-redef]
         def predict(self, X: Iterable[Iterable[float]]):
             return [float(self._last_value) for _ in X]
+
 
 __all__ = ["PassiveAggressiveClassifier", "PassiveAggressiveRegressor"]

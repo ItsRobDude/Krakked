@@ -19,7 +19,9 @@ class StrategyContext:
     universe: List[str]  # pairs this strategy is allowed to trade
     market_data: MarketDataAPI  # for pulling OHLC and prices
     portfolio: PortfolioService  # for current positions and exposures
-    timeframe: Optional[str] = None  # the timeframe for this decision cycle ("1h", etc.)
+    timeframe: Optional[str] = (
+        None  # the timeframe for this decision cycle ("1h", etc.)
+    )
     regime: Optional[RegimeSnapshot] = None
 
 

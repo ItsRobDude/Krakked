@@ -8,7 +8,6 @@ from enum import Enum
 from typing import Dict
 
 import pandas as pd
-
 from kraken_bot.market_data.api import MarketDataAPI
 
 
@@ -80,4 +79,6 @@ def infer_regime(market_data: MarketDataAPI, pairs: list[str]) -> RegimeSnapshot
         volatility = float(returns.std(ddof=0))
         regimes[pair] = _classify_pair(float(autocorr), volatility)
 
-    return RegimeSnapshot(per_pair=regimes, as_of=datetime.now(timezone.utc).isoformat())
+    return RegimeSnapshot(
+        per_pair=regimes, as_of=datetime.now(timezone.utc).isoformat()
+    )

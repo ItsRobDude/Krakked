@@ -1,11 +1,10 @@
+import json
 from datetime import UTC, datetime, timezone
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
-import json
-
 from starlette.testclient import TestClient
 
 from kraken_bot.config import (
@@ -204,7 +203,9 @@ def test_get_risk_decisions(client, risk_context):
         blocked=True,
         block_reason="max_per_strategy",
         kill_switch_active=False,
-        raw_json=json.dumps({"blocked_reasons": ["max_per_strategy_pct"], "action_type": "open"}),
+        raw_json=json.dumps(
+            {"blocked_reasons": ["max_per_strategy_pct"], "action_type": "open"}
+        ),
     )
 
     risk_context.portfolio.get_decisions.return_value = [decision]

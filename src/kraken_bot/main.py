@@ -459,6 +459,7 @@ def run(allow_interactive_setup: bool = True) -> int:
         300,
         "portfolio sync interval",
     )
+
     def refresh_metrics_state() -> None:
         _refresh_metrics_state(portfolio, execution_service, metrics)
 

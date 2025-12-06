@@ -6,9 +6,8 @@ import logging
 from dataclasses import asdict
 from typing import Optional
 
+import kraken_bot.connection.validation as validation_mod
 from fastapi import APIRouter, Request
-from pydantic import BaseModel, Field
-
 from kraken_bot import APP_VERSION
 from kraken_bot.config import dump_runtime_overrides
 from kraken_bot.connection.exceptions import (
@@ -16,11 +15,11 @@ from kraken_bot.connection.exceptions import (
     KrakenAPIError,
     ServiceUnavailableError,
 )
-import kraken_bot.connection.validation as validation_mod
 from kraken_bot.credentials import CredentialStatus
 from kraken_bot.market_data.api import MarketDataStatus
 from kraken_bot.ui.logging import build_request_log_extra
 from kraken_bot.ui.models import ApiEnvelope, SystemHealthPayload, SystemMetricsPayload
+from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
@@ -323,9 +322,7 @@ async def stop_session(request: Request) -> ApiEnvelope[SessionStatePayload]:
     return ApiEnvelope(data=_session_payload(ctx), error=None)
 
 
-@router.get(
-    "/profiles", response_model=ApiEnvelope[list[ProfileSummaryPayload]]
-)
+@router.get("/profiles", response_model=ApiEnvelope[list[ProfileSummaryPayload]])
 async def list_profiles(request: Request) -> ApiEnvelope[list[ProfileSummaryPayload]]:
     try:
         ctx = _context(request)

@@ -272,18 +272,14 @@ class KrakenWSClientV2:
                                 break
 
                 except asyncio.CancelledError:
-                    logger.debug(
-                        "WebSocket listener cancelled; closing connection."
-                    )
+                    logger.debug("WebSocket listener cancelled; closing connection.")
                     raise
                 except Exception as e:
                     # Avoid noisy logs when the process is shutting down
                     if self._running:
                         logger.error(f"WebSocket client error: {e}.")
                     else:
-                        logger.debug(
-                            f"WebSocket client exiting during shutdown: {e}."
-                        )
+                        logger.debug(f"WebSocket client exiting during shutdown: {e}.")
 
                 if not self._running:
                     break

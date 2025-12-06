@@ -109,14 +109,10 @@ def test_update_strategy_config_updates_risk_profile(client, strategy_context):
     assert response.status_code == 200
     payload = response.json()
     assert payload["error"] is None
-    assert (
-        strategy_context.config.risk.max_per_strategy_pct["alpha"]
-        == pytest.approx(20.0)
+    assert strategy_context.config.risk.max_per_strategy_pct["alpha"] == pytest.approx(
+        20.0
     )
-    assert (
-        strategy_context.strategy_engine.risk_engine.config.max_per_strategy_pct[
-            "alpha"
-        ]
-        == pytest.approx(20.0)
-    )
+    assert strategy_context.strategy_engine.risk_engine.config.max_per_strategy_pct[
+        "alpha"
+    ] == pytest.approx(20.0)
     assert payload["data"]["params"]["risk_profile"] == "aggressive"

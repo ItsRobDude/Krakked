@@ -5,13 +5,13 @@ import pytest
 from starlette.testclient import TestClient
 
 import kraken_bot.connection.validation as validation_mod
+from kraken_bot.config import StrategyConfig
 from kraken_bot.connection.exceptions import (
     AuthError,
     KrakenAPIError,
     ServiceUnavailableError,
 )
 from kraken_bot.credentials import CredentialResult, CredentialStatus
-from kraken_bot.config import StrategyConfig
 from kraken_bot.market_data.api import MarketDataStatus
 from kraken_bot.metrics import SystemMetrics
 from kraken_bot.strategy.catalog import ML_STRATEGY_IDS
@@ -232,7 +232,9 @@ def test_start_session_skips_ml_sync_when_flag_unchanged(client, system_context)
     assert system_context.config.strategies.configs["ai_predictor"].enabled is True
     assert system_context.config.strategies.configs["ai_regression"].enabled is False
     assert set(system_context.config.strategies.enabled) == {"ai_predictor"}
-    assert system_context.strategy_engine.strategy_states["ai_predictor"].enabled is True
+    assert (
+        system_context.strategy_engine.strategy_states["ai_predictor"].enabled is True
+    )
     assert (
         system_context.strategy_engine.strategy_states["ai_regression"].enabled is False
     )
@@ -362,7 +364,9 @@ def test_start_session_syncs_all_ml_strategies(client, system_context):
         assert strat_cfg.enabled is False
 
     assert set(system_context.config.strategies.enabled) == {"vol_breakout"}
-    assert system_context.strategy_engine.strategy_states["vol_breakout"].enabled is True
+    assert (
+        system_context.strategy_engine.strategy_states["vol_breakout"].enabled is True
+    )
     assert all(
         system_context.strategy_engine.strategy_states[sid].enabled is False
         for sid in ML_STRATEGY_IDS
@@ -425,7 +429,11 @@ def test_credential_validation_auth_and_missing_fields(
         return CredentialResult(
             api_key="k",
             api_secret="s",
-            status=CredentialStatus.LOADED if exc is None else CredentialStatus.SERVICE_ERROR,
+            status=(
+                CredentialStatus.LOADED
+                if exc is None
+                else CredentialStatus.SERVICE_ERROR
+            ),
             source="validation",
             validated=exc is None,
             can_force_save=True,

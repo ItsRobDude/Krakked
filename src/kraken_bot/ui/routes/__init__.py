@@ -1,7 +1,7 @@
 """API route registrations for the UI layer."""
 
-from .execution import router as execution_router
 from .config import router as config_router
+from .execution import router as execution_router
 from .portfolio import router as portfolio_router
 from .risk import router as risk_router
 from .strategies import router as strategies_router

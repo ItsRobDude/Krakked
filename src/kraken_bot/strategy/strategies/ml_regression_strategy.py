@@ -5,13 +5,12 @@ import math
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
-from kraken_bot.strategy.ml_models import PassiveAggressiveRegressor
-
 from kraken_bot.config import StrategyConfig
 from kraken_bot.market_data.api import MarketDataAPI
 from kraken_bot.market_data.exceptions import DataStaleError
 from kraken_bot.portfolio.manager import PortfolioService
 from kraken_bot.strategy.base import Strategy, StrategyContext
+from kraken_bot.strategy.ml_models import PassiveAggressiveRegressor
 from kraken_bot.strategy.models import StrategyIntent
 
 logger = logging.getLogger(__name__)

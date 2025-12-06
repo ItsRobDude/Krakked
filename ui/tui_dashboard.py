@@ -830,7 +830,9 @@ class KrakkedDashboard(App):
         console = getattr(self, "console", None)
         prompt = f"Switch execution mode to {target.upper()}? (y/N): "
         try:
-            response = (console.input(prompt) if console else input(prompt)).strip().lower()
+            response = (
+                (console.input(prompt) if console else input(prompt)).strip().lower()
+            )
         except Exception:
             response = ""
 

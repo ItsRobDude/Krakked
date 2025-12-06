@@ -2,9 +2,9 @@
 
 from pathlib import Path
 
-import appdirs  # type: ignore[import-untyped]
 import pytest
 
+import appdirs  # type: ignore[import-untyped]
 from kraken_bot.config import MarketDataConfig, OHLCBar
 from kraken_bot.market_data.ohlc_store import FileOHLCStore
 

@@ -28,10 +28,10 @@ from .models import (
 from .risk import RiskEngine
 from .strategies.dca_rebalance import DcaRebalanceStrategy
 from .strategies.demo_strategy import TrendFollowingStrategy
-from .strategies.ml_strategy import AIPredictorStrategy
+from .strategies.mean_reversion import MeanReversionStrategy
 from .strategies.ml_alt_strategy import AIPredictorAltStrategy
 from .strategies.ml_regression_strategy import AIRegressionStrategy
-from .strategies.mean_reversion import MeanReversionStrategy
+from .strategies.ml_strategy import AIPredictorStrategy
 from .strategies.relative_strength import RelativeStrengthStrategy
 from .strategies.vol_breakout import VolBreakoutStrategy
 
@@ -256,7 +256,9 @@ class StrategyEngine:
                         if weights:
                             weight_hint = weights.per_strategy_pct.get(name)
                             if weight_hint is not None:
-                                intent.metadata.setdefault("weight_hint_pct", weight_hint)
+                                intent.metadata.setdefault(
+                                    "weight_hint_pct", weight_hint
+                                )
                         if strategy.config.userref is not None:
                             intent.metadata.setdefault(
                                 "userref", str(strategy.config.userref)
@@ -313,7 +315,9 @@ class StrategyEngine:
             scored.append((intent, score))
 
         MIN_SCORE = 0.05
-        filtered_scored = [(intent, score) for intent, score in scored if score >= MIN_SCORE]
+        filtered_scored = [
+            (intent, score) for intent, score in scored if score >= MIN_SCORE
+        ]
         filtered = [intent for intent, _ in filtered_scored]
 
         MAX_INTENTS_PER_CYCLE = 500

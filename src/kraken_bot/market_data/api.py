@@ -7,11 +7,11 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from kraken_bot.config import AppConfig
-from kraken_bot.market_data.models import ConnectionStatus, OHLCBar, PairMetadata
 from kraken_bot.connection.rate_limiter import RateLimiter
 from kraken_bot.connection.rest_client import KrakenRESTClient
 from kraken_bot.market_data.exceptions import DataStaleError, PairNotFoundError
 from kraken_bot.market_data.metadata_store import PairMetadataStore
+from kraken_bot.market_data.models import ConnectionStatus, OHLCBar, PairMetadata
 from kraken_bot.market_data.ohlc_fetcher import backfill_ohlc
 from kraken_bot.market_data.ohlc_store import FileOHLCStore, OHLCStore
 from kraken_bot.market_data.universe import build_universe

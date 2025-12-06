@@ -8,14 +8,13 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List
 
 from fastapi import APIRouter, Request
-
 from kraken_bot.config import dump_runtime_overrides
 from kraken_bot.ui.logging import build_request_log_extra
 from kraken_bot.ui.models import (
     ApiEnvelope,
     KillSwitchPayload,
-    RiskDecisionPayload,
     RiskConfigPayload,
+    RiskDecisionPayload,
     RiskStatusPayload,
 )
 
@@ -223,12 +222,16 @@ async def update_risk_config(request: Request) -> ApiEnvelope[RiskConfigPayload]
 
 
 @router.post("/preset/{name}", response_model=ApiEnvelope[RiskConfigPayload])
-async def apply_risk_preset(name: str, request: Request) -> ApiEnvelope[RiskConfigPayload]:
+async def apply_risk_preset(
+    name: str, request: Request
+) -> ApiEnvelope[RiskConfigPayload]:
     ctx = _context(request)
     if ctx.config.ui.read_only:
         logger.warning(
             "Risk preset application blocked: UI read-only",
-            extra=build_request_log_extra(request, event="risk_preset_blocked", name=name),
+            extra=build_request_log_extra(
+                request, event="risk_preset_blocked", name=name
+            ),
         )
         return ApiEnvelope(data=None, error="UI is in read-only mode")
 
@@ -262,7 +265,9 @@ async def apply_risk_preset(name: str, request: Request) -> ApiEnvelope[RiskConf
             if risk_profile:
                 strat_cfg.params["risk_profile"] = risk_profile
                 if strategy_id in ctx.strategy_engine.strategy_states:
-                    ctx.strategy_engine.strategy_states[strategy_id].params["risk_profile"] = risk_profile
+                    ctx.strategy_engine.strategy_states[strategy_id].params[
+                        "risk_profile"
+                    ] = risk_profile
 
             cap_pct = settings.get("cap_pct")
             if cap_pct is not None:
@@ -278,7 +283,9 @@ async def apply_risk_preset(name: str, request: Request) -> ApiEnvelope[RiskConf
                 request, event="risk_preset_applied", preset=name, fields=updated_fields
             ),
         )
-        return ApiEnvelope(data=RiskConfigPayload(**ctx.config.risk.__dict__), error=None)
+        return ApiEnvelope(
+            data=RiskConfigPayload(**ctx.config.risk.__dict__), error=None
+        )
     except Exception as exc:  # pragma: no cover - defensive
         logger.exception(
             "Failed to apply risk preset",
