@@ -1,7 +1,9 @@
 from datetime import datetime, timezone
 from types import SimpleNamespace
+from typing import cast
 
-from kraken_bot.config import RiskConfig
+from kraken_bot.config import AppConfig, RiskConfig
+from kraken_bot.portfolio.manager import PortfolioService
 from kraken_bot.strategy.allocator import StrategyWeights
 from kraken_bot.strategy.engine import StrategyEngine
 from kraken_bot.strategy.performance import StrategyPerformance
@@ -10,8 +12,14 @@ from kraken_bot.strategy.regime import MarketRegime, RegimeSnapshot
 
 def _build_engine(risk_config: RiskConfig, portfolio: object) -> StrategyEngine:
     engine = StrategyEngine.__new__(StrategyEngine)
-    engine.config = SimpleNamespace(risk=risk_config)
-    engine.portfolio = portfolio
+
+    # Fake config object with just the bits this test needs
+    fake_config = SimpleNamespace(risk=risk_config)
+    engine.config = cast(AppConfig, fake_config)
+
+    # Portfolio only needs get_strategy_performance; cast it for the type checker
+    engine.portfolio = cast(PortfolioService, portfolio)
+
     return engine
 
 
