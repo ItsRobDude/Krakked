@@ -88,6 +88,17 @@ class ExecutionService:
         try:
             status = self._risk_status_provider()
         except Exception:  # noqa: BLE001
+            if mode == "live":
+                logger.exception(
+                    "Risk status provider failed; forcing kill switch in live mode",
+                    extra=structured_log_extra(
+                        event="risk_provider_error_live",
+                        execution_mode=mode,
+                        plan_id=plan_id,
+                    ),
+                )
+                return True
+
             logger.exception(
                 "Risk status provider failed",
                 extra=structured_log_extra(
