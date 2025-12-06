@@ -1,5 +1,21 @@
 {
+  "include": [
+    "src",
+    "tests"
+  ],
+  "exclude": [
+    "**/__pycache__",
+    ".git",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".vscode",
+    ".idea"
+  ],
   "stubPath": "./typings",
-  "extraPaths": ["./typings", "./src"],
-  "exclude": ["tests", "scripts"]
+  "extraPaths": [
+    "./typings",
+    "./src"
+  ],
+  "pythonVersion": "3.11",
+  "reportMissingTypeStubs": "warning"
 }
