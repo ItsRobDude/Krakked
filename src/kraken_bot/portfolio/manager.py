@@ -90,7 +90,7 @@ class PortfolioService:
         cash_flows.sort(key=lambda c: c.time)
         for record in cash_flows:
             # Safe internal call to rebuild balances from persisted cash flows.
-            self.portfolio._process_cash_flow(record)
+            self.portfolio.apply_cash_flow(record)
 
         self._bootstrapped = True
 

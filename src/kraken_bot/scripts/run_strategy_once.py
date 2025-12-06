@@ -109,10 +109,14 @@ def run_strategy_once() -> None:
             es_kwargs["config"] = safe_config.execution
         if "rate_limiter" in es_params:
             es_kwargs["rate_limiter"] = rate_limiter
+        if "risk_status_provider" in es_params:
+            es_kwargs["risk_status_provider"] = strategy_engine.get_risk_status
         execution_service = ExecutionService(**es_kwargs)
     except (ValueError, TypeError):
         execution_service = ExecutionService(
-            client=client, config=safe_config.execution
+            client=client,
+            config=safe_config.execution,
+            risk_status_provider=strategy_engine.get_risk_status,
         )
     result = execution_service.execute_plan(plan)
 
