@@ -9,6 +9,7 @@ from uuid import uuid4
 from fastapi import APIRouter, FastAPI, Request
 from fastapi.middleware import Middleware
 from fastapi.responses import JSONResponse
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from kraken_bot.ui.context import AppContext
 from kraken_bot.ui.logging import build_request_log_extra
@@ -20,7 +21,6 @@ from kraken_bot.ui.routes import (
     strategies_router,
     system_router,
 )
-from starlette.middleware.base import BaseHTTPMiddleware
 
 logger = logging.getLogger(__name__)
 
