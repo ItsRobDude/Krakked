@@ -200,6 +200,7 @@ def run_backtest(
             store=portfolio_service.store,
             config=config_copy.execution,
             market_data=market_data,
+            risk_status_provider=strategy_engine.get_risk_status,
         )
 
         plans: List[ExecutionPlan] = []

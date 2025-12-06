@@ -80,7 +80,7 @@ class ExecutionService:
         mode = getattr(self._execution_config, "mode", None)
         try:
             status = self._risk_status_provider()
-        except Exception:
+        except Exception:  # noqa: BLE001
             logger.exception(
                 "Risk status provider failed; forcing kill switch",
                 extra=structured_log_extra(event="risk_provider_error"),
