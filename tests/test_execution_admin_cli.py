@@ -1,4 +1,6 @@
-from typing import Any, Optional
+from typing import Any, Optional, cast
+
+from types import SimpleNamespace
 
 from types import SimpleNamespace
 
@@ -6,7 +8,10 @@ import pytest
 
 from kraken_bot.config import ExecutionConfig
 from kraken_bot.execution import admin_cli
+from kraken_bot.execution.adapter import ExecutionAdapter
 from kraken_bot.execution.models import LocalOrder
+from kraken_bot.portfolio.store import PortfolioStore
+from kraken_bot.strategy.models import RiskStatus
 
 
 def test_panic_cli_triggers_cancel_all(
@@ -57,6 +62,12 @@ def test_panic_cli_reconciles_and_persists(
 
         def cancel_all_orders(self) -> None:
             self.client.cancel_all_orders()
+
+        def submit_order(self, order: LocalOrder) -> LocalOrder:  # pragma: no cover - protocol stub
+            return order
+
+        def cancel_order(self, order: LocalOrder) -> None:  # pragma: no cover - protocol stub
+            return None
 
     class _FakeStore:
         def __init__(self) -> None:

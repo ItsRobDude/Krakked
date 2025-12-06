@@ -8,6 +8,7 @@ import pytest
 
 from kraken_bot import cli
 from kraken_bot.credentials import CredentialResult, CredentialStatus
+from kraken_bot.config import load_config
 from kraken_bot.portfolio.exceptions import PortfolioSchemaError
 from kraken_bot.portfolio.store import CURRENT_SCHEMA_VERSION
 
@@ -166,6 +167,89 @@ def test_run_once_forces_paper_and_validation(monkeypatch: pytest.MonkeyPatch) -
     assert original_config.execution.mode == "live"
     assert original_config.execution.validate_only is False
     assert original_config.execution.allow_live_trading is True
+
+
+def test_run_once_wires_risk_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    original_config = load_config()
+    captured: dict[str, Any] = {}
+
+    def fake_bootstrap(*_: Any, **__: Any) -> tuple[object, Any, object]:
+        class _DummyClient:
+            def __init__(self) -> None:
+                self.rest_client = None
+
+        return _DummyClient(), original_config, None
+
+    class _DummyMarketData:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:  # noqa: ARG002
+            pass
+
+        def refresh_universe(self) -> None:
+            return None
+
+        def get_universe(self) -> list[str]:
+            return []
+
+        def backfill_ohlc(self, pair: str, timeframe: str) -> None:  # noqa: ARG002
+            return None
+
+    class _DummyPortfolio:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:  # noqa: ARG002
+            self.store = None
+            self.portfolio = None
+            self.rate_limiter = None
+            self.rest_client = None
+
+        def initialize(self) -> None:
+            return None
+
+    class _DummyPlan:
+        plan_id = "plan-1"
+
+    class _DummyStrategyEngine:
+        def __init__(self, config: Any, market_data: Any, portfolio: Any) -> None:
+            self.config = config
+            self.market_data = market_data
+            self.portfolio = portfolio
+
+        def initialize(self) -> None:
+            return None
+
+        def run_cycle(self) -> _DummyPlan:
+            return _DummyPlan()
+
+        def get_risk_status(self) -> Any:
+            return object()
+
+    class _DummyResult:
+        success = True
+        errors: list[str] = []
+
+    class _DummyExecutionService:
+        def __init__(
+            self,
+            client: Any,
+            config: Any,
+            risk_status_provider: Any,
+            **_: Any,
+        ) -> None:
+            captured["risk_status_provider"] = risk_status_provider
+
+        def execute_plan(self, plan: Any) -> _DummyResult:  # noqa: ARG002
+            return _DummyResult()
+
+    monkeypatch.setattr(cli.run_strategy_once, "bootstrap", fake_bootstrap)
+    monkeypatch.setattr(cli.run_strategy_once, "MarketDataAPI", _DummyMarketData)
+    monkeypatch.setattr(cli.run_strategy_once, "PortfolioService", _DummyPortfolio)
+    monkeypatch.setattr(cli.run_strategy_once, "StrategyEngine", _DummyStrategyEngine)
+    monkeypatch.setattr(
+        cli.run_strategy_once, "ExecutionService", _DummyExecutionService
+    )
+
+    exit_code = cli.main(["run-once"])
+
+    assert exit_code == 0
+    assert captured["risk_status_provider"] is not None
 
 
 def test_migrate_db_subcommand_upgrades_outdated_schema(tmp_path, capsys: Any) -> None:
