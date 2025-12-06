@@ -6,7 +6,6 @@ import logging
 from typing import Any
 
 from fastapi import APIRouter, Request
-
 from kraken_bot.config import dump_runtime_overrides
 from kraken_bot.strategy.risk_profiles import profile_to_definition
 from kraken_bot.ui.logging import build_request_log_extra
