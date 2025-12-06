@@ -56,19 +56,52 @@ class ExecutionService:
         self._risk_status_provider = risk_status_provider
 
         adapter_config = getattr(self.adapter, "config", None)
-        if getattr(adapter_config, "mode", None) == "live":
+        self._execution_config = adapter_config or config or ExecutionConfig()
+        mode = getattr(self._execution_config, "mode", None)
+
+        if mode == "live" and self._risk_status_provider is None:
+            logger.error(
+                "ExecutionService initialized in live mode without risk_status_provider; refusing to start.",
+                extra=structured_log_extra(event="risk_status_missing_live"),
+            )
+            raise ValueError("risk_status_provider is required when execution.mode='live'")
+
+        if mode == "live":
             self._emit_live_readiness_checklist()
 
     def _kill_switch_active(self) -> bool:
-        if not self._risk_status_provider:
-            return False
+        mode = getattr(self._execution_config, "mode", None)
+
+        if self._risk_status_provider is None:
+            logger.error(
+                "Risk status provider missing; forcing kill switch",
+                extra=structured_log_extra(event="risk_missing", mode=mode),
+            )
+            return True
 
         try:
             status = self._risk_status_provider()
-        except Exception:
+        except Exception:  # noqa: BLE001
             logger.exception(
                 "Risk status provider failed",
-                extra=structured_log_extra(event="risk_status_error"),
+                extra=structured_log_extra(event="risk_status_error", mode=mode),
+            )
+
+            if mode == "live":
+                logger.error(
+                    "Kill switch forced due to risk provider error in live mode",
+                    extra=structured_log_extra(
+                        event="kill_switch_forced_provider_error_live",
+                        mode=mode,
+                    ),
+                )
+                return True
+
+            logger.warning(
+                "Risk provider errored in non-live mode; proceeding without kill switch",
+                extra=structured_log_extra(
+                    event="risk_provider_error_non_live", mode=mode
+                ),
             )
             return False
 
@@ -91,9 +124,7 @@ class ExecutionService:
         """
         result = ExecutionResult(plan_id=plan.plan_id, started_at=datetime.now(UTC))
 
-        adapter_config = getattr(self.adapter, "config", None)
-        if adapter_config is None:
-            adapter_config = ExecutionConfig()
+        adapter_config = self._execution_config
 
         eligible_actions = []
         for action in plan.actions:

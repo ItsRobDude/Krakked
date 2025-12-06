@@ -209,6 +209,11 @@ class Portfolio:
         balance.free += record.amount
         self.balances[record.asset] = balance
 
+    def apply_cash_flow(self, record: CashFlowRecord) -> None:
+        """Apply a persisted cash flow record to rebuild portfolio balances."""
+
+        self._process_cash_flow(record)
+
     # ------------------------------------------------------------------
     # Equity & reconciliation
     # ------------------------------------------------------------------

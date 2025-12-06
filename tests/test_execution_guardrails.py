@@ -22,7 +22,7 @@ def _build_action(pair: str, target_notional: float) -> RiskAdjustedAction:
     )
 
 
-def test_pair_notional_guardrail_blocks_submission():
+def test_pair_notional_guardrail_blocks_submission(inactive_risk_status):
     adapter = MagicMock()
     adapter.config = ExecutionConfig(max_pair_notional_usd=500.0)
     adapter.submit_order.side_effect = AssertionError(
@@ -39,7 +39,11 @@ def test_pair_notional_guardrail_blocks_submission():
     market_data = MagicMock()
     market_data.get_best_bid_ask.return_value = {"bid": 10.0, "ask": 11.0}
 
-    service = ExecutionService(adapter, market_data=market_data)
+    service = ExecutionService(
+        adapter,
+        market_data=market_data,
+        risk_status_provider=inactive_risk_status,
+    )
     result = service.execute_plan(plan)
 
     assert len(result.orders) == 1
@@ -49,7 +53,7 @@ def test_pair_notional_guardrail_blocks_submission():
     assert result.errors
 
 
-def test_total_notional_guardrail_blocks_submission():
+def test_total_notional_guardrail_blocks_submission(inactive_risk_status):
     adapter = MagicMock()
     adapter.config = ExecutionConfig(max_total_notional_usd=1000.0)
     adapter.submit_order.side_effect = AssertionError(
@@ -67,7 +71,11 @@ def test_total_notional_guardrail_blocks_submission():
     market_data = MagicMock()
     market_data.get_best_bid_ask.return_value = {"bid": 10.0, "ask": 11.0}
 
-    service = ExecutionService(adapter, market_data=market_data)
+    service = ExecutionService(
+        adapter,
+        market_data=market_data,
+        risk_status_provider=inactive_risk_status,
+    )
     result = service.execute_plan(plan)
 
     assert len(result.orders) == 2

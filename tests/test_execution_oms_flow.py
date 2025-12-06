@@ -49,10 +49,10 @@ def _market_data(mid_price: float = 25.0) -> MagicMock:
     return market_data
 
 
-def test_execute_plan_skips_blocked_and_none_actions():
+def test_execute_plan_skips_blocked_and_none_actions(inactive_risk_status):
     adapter = MagicMock()
     adapter.config = ExecutionConfig(validate_only=True)
-    service = ExecutionService(adapter=adapter)
+    service = ExecutionService(adapter=adapter, risk_status_provider=inactive_risk_status)
 
     actions = [
         _action(blocked=True),
@@ -66,11 +66,15 @@ def test_execute_plan_skips_blocked_and_none_actions():
     adapter.submit_order.assert_not_called()
 
 
-def test_execute_plan_builds_buy_and_sell_from_deltas():
+def test_execute_plan_builds_buy_and_sell_from_deltas(inactive_risk_status):
     adapter = MagicMock()
     adapter.config = ExecutionConfig(validate_only=True)
     adapter.submit_order.side_effect = lambda order: order
-    service = ExecutionService(adapter=adapter, market_data=_market_data())
+    service = ExecutionService(
+        adapter=adapter,
+        market_data=_market_data(),
+        risk_status_provider=inactive_risk_status,
+    )
 
     actions = [
         _action(target_base_size=2.0, current_base_size=1.0),  # buy 1
@@ -89,10 +93,14 @@ def test_execute_plan_builds_buy_and_sell_from_deltas():
     assert adapter.submit_order.call_count == 2
 
 
-def test_execute_plan_guardrail_blocks_order():
+def test_execute_plan_guardrail_blocks_order(inactive_risk_status):
     adapter = MagicMock()
     adapter.config = ExecutionConfig(max_pair_notional_usd=10.0)
-    service = ExecutionService(adapter=adapter, market_data=_market_data())
+    service = ExecutionService(
+        adapter=adapter,
+        market_data=_market_data(),
+        risk_status_provider=inactive_risk_status,
+    )
 
     plan = _plan([_action(target_notional_usd=100.0)])
 
@@ -104,12 +112,19 @@ def test_execute_plan_guardrail_blocks_order():
     adapter.submit_order.assert_not_called()
 
 
-def test_execute_plan_truncates_to_max_concurrent_orders_and_rejects_extra():
+def test_execute_plan_truncates_to_max_concurrent_orders_and_rejects_extra(
+    inactive_risk_status,
+):
     adapter = MagicMock()
     adapter.config = ExecutionConfig(max_concurrent_orders=2, validate_only=True)
     adapter.submit_order.side_effect = lambda order: order
     store = MagicMock()
-    service = ExecutionService(adapter=adapter, store=store, market_data=_market_data())
+    service = ExecutionService(
+        adapter=adapter,
+        store=store,
+        market_data=_market_data(),
+        risk_status_provider=inactive_risk_status,
+    )
 
     actions = [
         _action(target_base_size=1.0, current_base_size=0.0),
@@ -164,11 +179,11 @@ def test_execute_plan_blocked_by_kill_switch():
     adapter.submit_order.assert_not_called()
 
 
-def test_refresh_open_orders_updates_tracked_orders():
+def test_refresh_open_orders_updates_tracked_orders(inactive_risk_status):
     client = MagicMock()
     adapter = PaperExecutionAdapter()
     adapter.client = client
-    service = ExecutionService(adapter=adapter)
+    service = ExecutionService(adapter=adapter, risk_status_provider=inactive_risk_status)
 
     order = LocalOrder(
         local_id="1",
@@ -202,11 +217,11 @@ def test_refresh_open_orders_updates_tracked_orders():
     assert order.avg_fill_price == pytest.approx(21.0)
 
 
-def test_reconcile_orders_closes_and_updates_local_order():
+def test_reconcile_orders_closes_and_updates_local_order(inactive_risk_status):
     client = MagicMock()
     adapter = PaperExecutionAdapter()
     adapter.client = client
-    service = ExecutionService(adapter=adapter)
+    service = ExecutionService(adapter=adapter, risk_status_provider=inactive_risk_status)
 
     order = LocalOrder(
         local_id="2",
@@ -241,7 +256,7 @@ def test_reconcile_orders_closes_and_updates_local_order():
     assert order.local_id not in service.open_orders
 
 
-def test_cancel_all_requests_adapter_and_marks_orders():
+def test_cancel_all_requests_adapter_and_marks_orders(inactive_risk_status):
     class _FakeAdapter:
         def __init__(self):
             self.config = ExecutionConfig(validate_only=True)
@@ -263,7 +278,9 @@ def test_cancel_all_requests_adapter_and_marks_orders():
 
     adapter = _FakeAdapter()
     store = MagicMock()
-    service = ExecutionService(adapter=adapter, store=store)
+    service = ExecutionService(
+        adapter=adapter, store=store, risk_status_provider=inactive_risk_status
+    )
 
     order = LocalOrder(
         local_id="3",
@@ -293,11 +310,17 @@ def test_cancel_all_requests_adapter_and_marks_orders():
     )
 
 
-def test_execute_plan_applies_slippage_from_market_data_for_buy_and_sell():
+def test_execute_plan_applies_slippage_from_market_data_for_buy_and_sell(
+    inactive_risk_status,
+):
     config = ExecutionConfig(max_slippage_bps=100, validate_only=True)
     adapter = PaperExecutionAdapter(config=config)
     market_data = _market_data(mid_price=100.0)
-    service = ExecutionService(adapter=adapter, market_data=market_data)
+    service = ExecutionService(
+        adapter=adapter,
+        market_data=market_data,
+        risk_status_provider=inactive_risk_status,
+    )
 
     actions = [
         _action(target_base_size=2.0, current_base_size=1.0),  # buy 1
@@ -314,11 +337,15 @@ def test_execute_plan_applies_slippage_from_market_data_for_buy_and_sell():
     assert sell_order.raw_request["price"] == pytest.approx(99.0)
 
 
-def test_execute_plan_records_warning_when_market_data_missing():
+def test_execute_plan_records_warning_when_market_data_missing(inactive_risk_status):
     adapter = PaperExecutionAdapter(config=ExecutionConfig(validate_only=True))
     market_data = MagicMock()
     market_data.get_best_bid_ask.return_value = None
-    service = ExecutionService(adapter=adapter, market_data=market_data)
+    service = ExecutionService(
+        adapter=adapter,
+        market_data=market_data,
+        risk_status_provider=inactive_risk_status,
+    )
 
     plan = _plan([_action()])
 
