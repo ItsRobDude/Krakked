@@ -311,7 +311,9 @@ async def stop_session(request: Request) -> ApiEnvelope[SessionStatePayload]:
         return ApiEnvelope(data=None, error="UI is in read-only mode")
 
     ctx.session.active = False
-    ctx.config.session.active = False if hasattr(ctx.config, "session") else False
+
+    if hasattr(ctx.config, "session"):
+        ctx.config.session.active = False
 
     dump_runtime_overrides(ctx.config, session=ctx.session)
 
