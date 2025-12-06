@@ -71,19 +71,21 @@ class ExecutionService:
 
     def _kill_switch_active(self) -> bool:
         if not self._risk_status_provider:
-            return False
+            logger.error(
+                "Risk status provider missing; forcing kill switch",
+                extra=structured_log_extra(event="risk_missing"),
+            )
+            return True
 
         mode = getattr(self._execution_config, "mode", None)
         try:
             status = self._risk_status_provider()
         except Exception:
             logger.exception(
-                "Risk status provider failed",
-                extra=structured_log_extra(
-                    event="risk_status_error", mode=mode
-                ),
+                "Risk status provider failed; forcing kill switch",
+                extra=structured_log_extra(event="risk_provider_error"),
             )
-            return mode == "live"
+            return True
 
         return bool(getattr(status, "kill_switch_active", False))
 
