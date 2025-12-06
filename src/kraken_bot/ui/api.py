@@ -6,10 +6,10 @@ import logging
 from typing import Callable
 from uuid import uuid4
 
-from fastapi import APIRouter, FastAPI, Request
-from fastapi.middleware import Middleware
 from fastapi.responses import JSONResponse
 
+from fastapi import APIRouter, FastAPI, Request
+from fastapi.middleware import Middleware
 from kraken_bot.ui.context import AppContext
 from kraken_bot.ui.logging import build_request_log_extra
 from kraken_bot.ui.routes import (

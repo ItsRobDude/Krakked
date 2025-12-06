@@ -6,10 +6,8 @@ import logging
 from dataclasses import asdict
 from typing import Optional
 
-from fastapi import APIRouter, Request
-from pydantic import BaseModel, Field
-
 import kraken_bot.connection.validation as validation_mod
+from fastapi import APIRouter, Request
 from kraken_bot import APP_VERSION
 from kraken_bot.config import dump_runtime_overrides
 from kraken_bot.connection.exceptions import (
@@ -21,6 +19,7 @@ from kraken_bot.credentials import CredentialStatus
 from kraken_bot.market_data.api import MarketDataStatus
 from kraken_bot.ui.logging import build_request_log_extra
 from kraken_bot.ui.models import ApiEnvelope, SystemHealthPayload, SystemMetricsPayload
+from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 

@@ -9,7 +9,6 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 import pandas as pd
-
 from kraken_bot.config import RiskConfig
 from kraken_bot.logging_config import structured_log_extra
 from kraken_bot.market_data.api import MarketDataAPI
