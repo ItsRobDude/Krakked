@@ -8,7 +8,6 @@ from enum import Enum
 from typing import Dict
 
 import pandas as pd
-
 from kraken_bot.market_data.api import MarketDataAPI
 
 

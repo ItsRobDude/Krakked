@@ -4,12 +4,11 @@ from dataclasses import asdict, dataclass
 from typing import List
 
 import pandas as pd
-from pandas import Series  # type: ignore[attr-defined]
-
 from kraken_bot.config import StrategyConfig
 from kraken_bot.strategy.base import Strategy, StrategyContext
 from kraken_bot.strategy.models import StrategyIntent
 from kraken_bot.strategy.regime import MarketRegime
+from pandas import Series  # type: ignore[attr-defined]
 
 
 @dataclass

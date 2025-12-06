@@ -13,20 +13,18 @@ try:
 except ModuleNotFoundError:  # pragma: no cover - defensive
     _sklearn_spec = None
 
+
 class _PassiveAggressiveClassifierProtocol(Protocol):
     def __init__(self, *args, **kwargs) -> None:  # noqa: ANN001, ANN002
         ...
 
     def partial_fit(
         self, X: Iterable[Iterable[float]], y: List[float], classes=None
-    ) -> "_PassiveAggressiveClassifierProtocol":
-        ...
+    ) -> "_PassiveAggressiveClassifierProtocol": ...
 
-    def predict(self, X: Iterable[Iterable[float]]) -> list[float]:
-        ...
+    def predict(self, X: Iterable[Iterable[float]]) -> list[float]: ...
 
-    def decision_function(self, X: Iterable[Iterable[float]]) -> list[float]:
-        ...
+    def decision_function(self, X: Iterable[Iterable[float]]) -> list[float]: ...
 
 
 class _PassiveAggressiveRegressorProtocol(Protocol):
@@ -35,23 +33,24 @@ class _PassiveAggressiveRegressorProtocol(Protocol):
 
     def partial_fit(
         self, X: Iterable[Iterable[float]], y: List[float], classes=None
-    ) -> "_PassiveAggressiveRegressorProtocol":
-        ...
+    ) -> "_PassiveAggressiveRegressorProtocol": ...
 
-    def predict(self, X: Iterable[Iterable[float]]) -> list[float]:
-        ...
+    def predict(self, X: Iterable[Iterable[float]]) -> list[float]: ...
 
 
 _PassiveAggressiveClassifierImpl: type
 _PassiveAggressiveRegressorImpl: type
 
 if _sklearn_spec:
-    # Real sklearn models at runtime. mypy doesn't have stubs for scikit-learn,
+    # Real sklearn models at runtime. mypy doesn’t have stubs for scikit-learn,
     # so we tell it to treat these imports as untyped.
-    from sklearn.linear_model import (  # type: ignore[import-untyped]
-        PassiveAggressiveClassifier as _SklearnPassiveAggressiveClassifier,
+    from sklearn.linear_model import (
+        PassiveAggressiveClassifier as _SklearnPassiveAggressiveClassifier,  # type: ignore[import-untyped]
+    )
+    from sklearn.linear_model import (
         PassiveAggressiveRegressor as _SklearnPassiveAggressiveRegressor,
     )
+
     _PassiveAggressiveClassifierImpl = _SklearnPassiveAggressiveClassifier
     _PassiveAggressiveRegressorImpl = _SklearnPassiveAggressiveRegressor
 else:  # pragma: no cover - fallback path
@@ -90,6 +89,7 @@ else:  # pragma: no cover - fallback path
 
     _PassiveAggressiveClassifierImpl = _PassiveAggressiveClassifierFallback
     _PassiveAggressiveRegressorImpl = _PassiveAggressiveRegressorFallback
+
 
 # Single public aliases used everywhere else
 class PassiveAggressiveClassifier(_PassiveAggressiveClassifierImpl):
