@@ -96,23 +96,20 @@ def test_execute_plan_blocked_by_kill_switch():
 
 def test_execute_plan_blocks_when_risk_provider_missing():
     adapter = FakeAdapter()
-    market_data = SimpleNamespace(
-        get_best_bid_ask=lambda pair: {"bid": 100.0, "ask": 100.0}
-    )
-    service = ExecutionService(adapter=adapter, market_data=market_data)
+    service = ExecutionService(adapter=adapter)
 
     plan = ExecutionPlan(
         plan_id="plan_missing_risk_provider",
         generated_at=datetime.now(UTC),
         actions=[_build_action("XBTUSD")],
-        metadata={"order_type": "market"},
     )
 
     result = service.execute_plan(plan)
 
-    assert result.success
-    assert adapter.submit_order_calls
-    assert not result.errors
+    assert not result.success
+    assert any("kill switch" in msg.lower() for msg in result.errors)
+    assert adapter.submit_order_calls == []
+    assert all(order.status == "rejected" for order in result.orders)
 
 
 def test_cancel_operations_allowed_with_kill_switch():
