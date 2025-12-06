@@ -69,7 +69,7 @@ class ExecutionService:
         if mode == "live":
             self._emit_live_readiness_checklist()
 
-    def _kill_switch_active(self, plan_id: Optional[str] = None) -> bool:
+    def _kill_switch_active(self) -> bool:
         # Missing provider is always a hard block — safer than executing with
         # an unknown risk state.
         if not self._risk_status_provider:
@@ -79,7 +79,6 @@ class ExecutionService:
                 extra=structured_log_extra(
                     event="risk_missing",
                     execution_mode=mode,
-                    plan_id=plan_id,
                 ),
             )
             return True
@@ -101,13 +100,23 @@ class ExecutionService:
                 return True
 
             logger.exception(
-                "Risk status provider failed in non-live mode; allowing execution",
+                "Risk status provider failed",
                 extra=structured_log_extra(
-                    event="risk_provider_error_non_live",
+                    event="risk_provider_error",
                     execution_mode=mode,
-                    plan_id=plan_id,
                 ),
             )
+
+            if mode == "live":
+                logger.error(
+                    "Kill switch forced due to risk provider error in live mode",
+                    extra=structured_log_extra(
+                        event="risk_provider_error_kill_switch",
+                        execution_mode=mode,
+                    ),
+                )
+                return True
+
             return False
 
         return bool(getattr(status, "kill_switch_active", False))
