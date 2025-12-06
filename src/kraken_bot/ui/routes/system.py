@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import asdict
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import APIRouter, Request
 from pydantic import BaseModel, Field
@@ -38,14 +38,14 @@ class CredentialPayload(BaseModel):
 class ModeChangePayload(BaseModel):
     """Payload for toggling the execution mode."""
 
-    mode: str
+    mode: Literal["paper", "live"]
 
 
 class SessionConfigPayload(BaseModel):
     """Payload for starting or updating a trading session."""
 
     profile_name: str
-    mode: str = Field(..., pattern="^(paper|live|test)$")
+    mode: Literal["paper", "live"]
     loop_interval_sec: float = Field(15.0, ge=1.0, le=300.0)
     ml_enabled: bool = True
 
@@ -131,25 +131,23 @@ async def system_health(request: Request) -> ApiEnvelope[SystemHealthPayload]:
                 else ("data_stale" if market_data_stale else "connection_issue")
             )
 
-        metrics_market_data_ok = metrics_snapshot.get("market_data_ok")
-        metrics_market_data_stale = metrics_snapshot.get("market_data_stale")
-        metrics_market_data_reason = metrics_snapshot.get("market_data_reason")
-        metrics_market_data_max_staleness = metrics_snapshot.get(
-            "market_data_max_staleness"
-        )
-
         metrics_has_update = bool(
-            metrics_market_data_reason is not None
-            or metrics_market_data_max_staleness is not None
-            or metrics_market_data_ok
-            or metrics_market_data_stale
+            metrics_snapshot.get("market_data_status_updated")
         )
 
         if metrics_has_update:
-            market_data_ok = bool(metrics_market_data_ok)
-            market_data_stale = bool(metrics_market_data_stale)
-            market_data_reason = metrics_market_data_reason
-            market_data_max_staleness = metrics_market_data_max_staleness
+            market_data_ok = bool(
+                metrics_snapshot.get("market_data_ok", market_data_ok)
+            )
+            market_data_stale = bool(
+                metrics_snapshot.get("market_data_stale", market_data_stale)
+            )
+            market_data_reason = metrics_snapshot.get(
+                "market_data_reason", market_data_reason
+            )
+            market_data_max_staleness = metrics_snapshot.get(
+                "market_data_max_staleness", market_data_max_staleness
+            )
 
         market_data_status = "healthy"
         if not market_data_ok:
@@ -215,7 +213,7 @@ async def start_session(
         return ApiEnvelope(data=None, error="UI is in read-only mode")
 
     execution_config = ctx.config.execution
-    new_mode = payload.mode.lower()
+    new_mode = payload.mode
 
     if new_mode == "live" and not getattr(
         execution_config, "allow_live_trading", False
@@ -269,14 +267,12 @@ async def start_session(
             if sid in ctx.strategy_engine.strategy_states:
                 ctx.strategy_engine.strategy_states[sid].enabled = ml_enabled
 
-    effective_mode = new_mode if new_mode in {"paper", "live"} else "paper"
-
-    execution_config.mode = effective_mode
-    execution_config.validate_only = effective_mode != "live"
-    ctx.execution_service.adapter.config.mode = effective_mode
+    execution_config.mode = new_mode
+    execution_config.validate_only = new_mode != "live"
+    ctx.execution_service.adapter.config.mode = new_mode
     ctx.execution_service.adapter.config.validate_only = execution_config.validate_only
 
-    if effective_mode == "live" and hasattr(
+    if new_mode == "live" and hasattr(
         ctx.execution_service, "_emit_live_readiness_checklist"
     ):
         ctx.execution_service._emit_live_readiness_checklist()
@@ -290,7 +286,6 @@ async def start_session(
             event="session_started",
             profile=payload.profile_name,
             mode=new_mode,
-            effective_mode=effective_mode,
             loop_interval=payload.loop_interval_sec,
             ml_enabled=payload.ml_enabled,
         ),
@@ -386,10 +381,7 @@ async def set_execution_mode(
         )
         return ApiEnvelope(data=None, error="UI is in read-only mode")
 
-    new_mode = payload.mode.lower()
-    if new_mode not in {"paper", "live"}:
-        return ApiEnvelope(data=None, error="Unsupported mode; use 'paper' or 'live'")
-
+    new_mode = payload.mode
     execution_config = ctx.config.execution
     current_mode = execution_config.mode
 
@@ -419,6 +411,10 @@ async def set_execution_mode(
     execution_config.validate_only = new_mode != "live"
     ctx.execution_service.adapter.config.mode = new_mode
     ctx.execution_service.adapter.config.validate_only = execution_config.validate_only
+
+    ctx.session.mode = new_mode
+    if hasattr(ctx.config, "session"):
+        ctx.config.session.mode = new_mode
 
     if new_mode == "live" and hasattr(
         ctx.execution_service, "_emit_live_readiness_checklist"
@@ -482,6 +478,7 @@ async def validate_credentials(
         result = validation_mod.validate_credentials(
             payload.apiKey.strip(),
             payload.apiSecret.strip(),
+            region=payload.region.strip(),
         )
     except Exception as exc:  # pragma: no cover - defensive
         logger.exception(

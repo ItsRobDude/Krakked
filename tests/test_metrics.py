@@ -147,6 +147,7 @@ def test_snapshot_keys_match_payload(metrics: SystemMetrics):
         "open_positions_count",
         "drift_detected",
         "drift_reason",
+        "market_data_status_updated",
         "market_data_ok",
         "market_data_stale",
         "market_data_reason",
