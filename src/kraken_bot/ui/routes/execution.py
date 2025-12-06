@@ -6,6 +6,7 @@ import logging
 from typing import List, Optional
 
 from fastapi import APIRouter, Request
+
 from kraken_bot.execution.models import ExecutionResult, LocalOrder
 from kraken_bot.ui.logging import build_request_log_extra
 from kraken_bot.ui.models import ApiEnvelope, ExecutionResultPayload, OpenOrderPayload

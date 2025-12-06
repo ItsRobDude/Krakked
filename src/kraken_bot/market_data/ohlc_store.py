@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import List, Protocol
 
 import pandas as pd
+
 from kraken_bot.config import MarketDataConfig, OHLCBar, get_default_ohlc_store_config
 
 logger = logging.getLogger(__name__)
