@@ -2,6 +2,8 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import List
 
+import pytest
+
 from kraken_bot.config import ExecutionConfig
 from kraken_bot.execution.models import LocalOrder
 from kraken_bot.execution.oms import ExecutionService
@@ -184,3 +186,62 @@ def test_risk_provider_follows_strategy_engine_kill_switch_state():
     assert not result.success
     assert adapter.submit_order_calls == []
     assert all("kill_switch" in (order.last_error or "") for order in result.orders)
+
+
+def test_live_mode_requires_risk_provider():
+    adapter = FakeAdapter(config=ExecutionConfig(mode="live", allow_live_trading=True))
+
+    with pytest.raises(ValueError, match="risk_status_provider"):
+        ExecutionService(adapter=adapter)
+
+
+def test_live_mode_provider_error_blocks_execution():
+    adapter = FakeAdapter(config=ExecutionConfig(mode="live", allow_live_trading=True))
+
+    def _erroring_provider() -> SimpleNamespace:
+        raise RuntimeError("risk down")
+
+    service = ExecutionService(
+        adapter=adapter, risk_status_provider=_erroring_provider
+    )
+
+    plan = ExecutionPlan(
+        plan_id="plan_live_error",
+        generated_at=datetime.now(UTC),
+        actions=[_build_action("XBTUSD")],
+    )
+
+    result = service.execute_plan(plan)
+
+    assert not result.success
+    assert adapter.submit_order_calls == []
+    assert all("kill_switch" in (order.last_error or "") for order in result.orders)
+
+
+def test_non_live_provider_error_allows_execution():
+    adapter = FakeAdapter(config=ExecutionConfig(mode="paper"))
+
+    def _erroring_provider() -> SimpleNamespace:
+        raise RuntimeError("risk down")
+
+    market_data = SimpleNamespace(
+        get_best_bid_ask=lambda pair: {"bid": 100.0, "ask": 100.0}
+    )
+
+    service = ExecutionService(
+        adapter=adapter,
+        risk_status_provider=_erroring_provider,
+        market_data=market_data,
+    )
+
+    plan = ExecutionPlan(
+        plan_id="plan_non_live_error",
+        generated_at=datetime.now(UTC),
+        actions=[_build_action("XBTUSD")],
+        metadata={"order_type": "market"},
+    )
+
+    result = service.execute_plan(plan)
+
+    assert result.success
+    assert adapter.submit_order_calls
