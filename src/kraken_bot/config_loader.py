@@ -5,9 +5,9 @@ import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import appdirs  # type: ignore[import-untyped]
 import yaml  # type: ignore[import-untyped]
 
-import appdirs  # type: ignore[import-untyped]
 from kraken_bot.config_models import (
     AppConfig,
     ExecutionConfig,

@@ -75,6 +75,31 @@ profile = "black"
 line_length = 88
 src_paths = ["src", "tests"]
 
+# Your own code
+known_first_party = ["kraken_bot", "tests"]
+
+# Third-party libs you actually use
+known_third_party = [
+  "appdirs",
+  "cryptography",
+  "fastapi",
+  "flake8",
+  "httpx",
+  "mypy",
+  "numpy",
+  "pandas",
+  "pyarrow",
+  "pyright",
+  "pytest",
+  "requests",
+  "sklearn",
+  "starlette",
+  "textual",
+  "uvicorn",
+  "websockets",
+]
+default_section = "THIRDPARTY"
+
 [tool.flake8]
 max-line-length = 88
 extend-ignore = [
