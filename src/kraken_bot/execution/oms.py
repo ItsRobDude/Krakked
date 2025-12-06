@@ -69,23 +69,46 @@ class ExecutionService:
         if mode == "live":
             self._emit_live_readiness_checklist()
 
-    def _kill_switch_active(self) -> bool:
+    def _kill_switch_active(self, plan_id: Optional[str] = None) -> bool:
+        # Missing provider is always a hard block — safer than executing with
+        # an unknown risk state.
         if not self._risk_status_provider:
+            mode = getattr(self._execution_config, "mode", None)
             logger.error(
                 "Risk status provider missing; forcing kill switch",
-                extra=structured_log_extra(event="risk_missing"),
+                extra=structured_log_extra(
+                    event="risk_missing",
+                    execution_mode=mode,
+                    plan_id=plan_id,
+                ),
             )
             return True
 
         mode = getattr(self._execution_config, "mode", None)
+
         try:
             status = self._risk_status_provider()
         except Exception:  # noqa: BLE001
+            if mode == "live":
+                logger.exception(
+                    "Risk status provider failed; forcing kill switch in live mode",
+                    extra=structured_log_extra(
+                        event="risk_provider_error_live",
+                        execution_mode=mode,
+                        plan_id=plan_id,
+                    ),
+                )
+                return True
+
             logger.exception(
-                "Risk status provider failed; forcing kill switch",
-                extra=structured_log_extra(event="risk_provider_error"),
+                "Risk status provider failed in non-live mode; allowing execution",
+                extra=structured_log_extra(
+                    event="risk_provider_error_non_live",
+                    execution_mode=mode,
+                    plan_id=plan_id,
+                ),
             )
-            return True
+            return False
 
         return bool(getattr(status, "kill_switch_active", False))
 
@@ -119,7 +142,7 @@ class ExecutionService:
 
             eligible_actions.append(action)
 
-        if self._kill_switch_active():
+        if self._kill_switch_active(plan_id=plan.plan_id):
             blocked_reason = "Execution blocked by kill switch"
             logger.warning(
                 blocked_reason,
