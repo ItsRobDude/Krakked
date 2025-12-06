@@ -70,40 +70,22 @@ class ExecutionService:
             self._emit_live_readiness_checklist()
 
     def _kill_switch_active(self) -> bool:
-        mode = getattr(self._execution_config, "mode", None)
-
-        if self._risk_status_provider is None:
+        if not self._risk_status_provider:
             logger.error(
                 "Risk status provider missing; forcing kill switch",
-                extra=structured_log_extra(event="risk_missing", mode=mode),
+                extra=structured_log_extra(event="risk_missing"),
             )
             return True
 
+        mode = getattr(self._execution_config, "mode", None)
         try:
             status = self._risk_status_provider()
         except Exception:  # noqa: BLE001
             logger.exception(
-                "Risk status provider failed",
-                extra=structured_log_extra(event="risk_status_error", mode=mode),
+                "Risk status provider failed; forcing kill switch",
+                extra=structured_log_extra(event="risk_provider_error"),
             )
-
-            if mode == "live":
-                logger.error(
-                    "Kill switch forced due to risk provider error in live mode",
-                    extra=structured_log_extra(
-                        event="kill_switch_forced_provider_error_live",
-                        mode=mode,
-                    ),
-                )
-                return True
-
-            logger.warning(
-                "Risk provider errored in non-live mode; proceeding without kill switch",
-                extra=structured_log_extra(
-                    event="risk_provider_error_non_live", mode=mode
-                ),
-            )
-            return False
+            return True
 
         return bool(getattr(status, "kill_switch_active", False))
 

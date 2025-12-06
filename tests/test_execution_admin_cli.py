@@ -2,6 +2,8 @@ from typing import Any, Optional, cast
 
 from types import SimpleNamespace
 
+from types import SimpleNamespace
+
 import pytest
 
 from kraken_bot.config import ExecutionConfig
@@ -82,20 +84,12 @@ def test_panic_cli_reconciles_and_persists(
             self.events.append(f"persist:{local_id}:{status}")
             events.append(f"persist:{status}")
 
-    adapter = cast(ExecutionAdapter, _FakeAdapter())
-    store = cast(PortfolioStore, _FakeStore())
-    service = admin_cli.ExecutionService(
+    adapter = _FakeAdapter()
+    store = _FakeStore()
+    service = admin_cli.ExecutionService(  # type: ignore[arg-type]
         adapter=adapter,
         store=store,
-        risk_status_provider=lambda: RiskStatus(
-            kill_switch_active=False,
-            daily_drawdown_pct=0.0,
-            drift_flag=False,
-            total_exposure_pct=0.0,
-            manual_exposure_pct=0.0,
-            per_asset_exposure_pct={},
-            per_strategy_exposure_pct={},
-        ),
+        risk_status_provider=lambda: SimpleNamespace(kill_switch_active=False),
     )
 
     order = LocalOrder(
