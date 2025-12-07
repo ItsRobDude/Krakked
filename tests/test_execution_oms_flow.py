@@ -9,6 +9,7 @@ from kraken_bot.config import ExecutionConfig
 from kraken_bot.execution.adapter import PaperExecutionAdapter
 from kraken_bot.execution.models import LocalOrder
 from kraken_bot.execution.oms import ExecutionService
+from kraken_bot.market_data.models import PairMetadata
 from kraken_bot.strategy.models import ExecutionPlan, RiskAdjustedAction
 
 
@@ -31,6 +32,31 @@ def _action(**overrides) -> RiskAdjustedAction:
     return RiskAdjustedAction(**base)
 
 
+def _market_data_mock():
+    md = MagicMock()
+
+    def _build_metadata(pair: str) -> PairMetadata:
+        base, quote = pair[:3], pair[3:]
+        rest_symbol = f"{base}/{quote}"
+        return PairMetadata(
+            canonical=pair,
+            base=base,
+            quote=quote,
+            rest_symbol=rest_symbol,
+            ws_symbol=rest_symbol,
+            raw_name=pair,
+            price_decimals=1,
+            volume_decimals=8,
+            lot_size=0.00000001,
+            min_order_size=0.0001,
+            status="online",
+        )
+
+    md.get_pair_metadata_or_raise.side_effect = _build_metadata
+    md.get_best_bid_ask.return_value = None
+    return md
+
+
 def _plan(actions):
     return ExecutionPlan(
         plan_id="plan",
@@ -41,7 +67,7 @@ def _plan(actions):
 
 
 def _market_data(mid_price: float = 25.0) -> MagicMock:
-    market_data = MagicMock()
+    market_data = _market_data_mock()
     market_data.get_best_bid_ask.return_value = {
         "bid": mid_price - 0.5,
         "ask": mid_price + 0.5,
@@ -53,7 +79,9 @@ def test_execute_plan_skips_blocked_and_none_actions(inactive_risk_status):
     adapter = MagicMock()
     adapter.config = ExecutionConfig(validate_only=True)
     service = ExecutionService(
-        adapter=adapter, risk_status_provider=inactive_risk_status
+        adapter=adapter,
+        market_data=_market_data(),
+        risk_status_provider=inactive_risk_status,
     )
 
     actions = [
@@ -71,7 +99,7 @@ def test_execute_plan_skips_blocked_and_none_actions(inactive_risk_status):
 def test_execute_plan_builds_buy_and_sell_from_deltas(inactive_risk_status):
     adapter = MagicMock()
     adapter.config = ExecutionConfig(validate_only=True)
-    adapter.submit_order.side_effect = lambda order: order
+    adapter.submit_order.side_effect = lambda order, pair_metadata: order
     service = ExecutionService(
         adapter=adapter,
         market_data=_market_data(),
@@ -119,7 +147,7 @@ def test_execute_plan_truncates_to_max_concurrent_orders_and_rejects_extra(
 ):
     adapter = MagicMock()
     adapter.config = ExecutionConfig(max_concurrent_orders=2, validate_only=True)
-    adapter.submit_order.side_effect = lambda order: order
+    adapter.submit_order.side_effect = lambda order, pair_metadata: order
     store = MagicMock()
     service = ExecutionService(
         adapter=adapter,
@@ -181,6 +209,29 @@ def test_execute_plan_blocked_by_kill_switch():
     adapter.submit_order.assert_not_called()
 
 
+def test_execute_plan_missing_metadata_aborts(inactive_risk_status):
+    adapter = MagicMock()
+    adapter.config = ExecutionConfig(validate_only=True)
+    market_data = _market_data()
+    market_data.get_pair_metadata_or_raise.side_effect = ValueError(
+        "Missing PairMetadata for pair=FOOUSD"
+    )
+
+    service = ExecutionService(
+        adapter=adapter,
+        market_data=market_data,
+        risk_status_provider=inactive_risk_status,
+    )
+
+    plan = _plan([_action(pair="FOOUSD")])
+
+    result = service.execute_plan(plan)
+
+    assert not result.success
+    assert "Missing PairMetadata" in " ".join(result.errors)
+    adapter.submit_order.assert_not_called()
+
+
 def _ttl_action(**overrides) -> RiskAdjustedAction:
     base: Dict[str, Any] = dict(
         pair="XBTUSD",
@@ -204,9 +255,7 @@ def test_execute_plan_blocks_stale_plan_before_orders():
     adapter = MagicMock()
     adapter.config = ExecutionConfig(validate_only=True, max_plan_age_seconds=30)
 
-    market_data = SimpleNamespace(
-        get_best_bid_ask=lambda pair: {"bid": 100.0, "ask": 100.0}
-    )
+    market_data = _market_data(mid_price=100.0)
 
     risk_provider = MagicMock()
     service = ExecutionService(
@@ -235,11 +284,9 @@ def test_execute_plan_blocks_stale_plan_before_orders():
 def test_execute_plan_allows_fresh_plan_with_ttl(inactive_risk_status):
     adapter = MagicMock()
     adapter.config = ExecutionConfig(validate_only=True, max_plan_age_seconds=30)
-    adapter.submit_order.side_effect = lambda order: order
+    adapter.submit_order.side_effect = lambda order, pair_metadata: order
 
-    market_data = SimpleNamespace(
-        get_best_bid_ask=lambda pair: {"bid": 100.0, "ask": 100.0}
-    )
+    market_data = _market_data(mid_price=100.0)
 
     service = ExecutionService(
         adapter=adapter,
@@ -266,7 +313,9 @@ def test_refresh_open_orders_updates_tracked_orders(inactive_risk_status):
     adapter = PaperExecutionAdapter()
     adapter.client = client
     service = ExecutionService(
-        adapter=adapter, risk_status_provider=inactive_risk_status
+        adapter=adapter,
+        market_data=_market_data(),
+        risk_status_provider=inactive_risk_status,
     )
 
     order = LocalOrder(
@@ -306,7 +355,9 @@ def test_reconcile_orders_closes_and_updates_local_order(inactive_risk_status):
     adapter = PaperExecutionAdapter()
     adapter.client = client
     service = ExecutionService(
-        adapter=adapter, risk_status_provider=inactive_risk_status
+        adapter=adapter,
+        market_data=_market_data(),
+        risk_status_provider=inactive_risk_status,
     )
 
     order = LocalOrder(
@@ -365,7 +416,10 @@ def test_cancel_all_requests_adapter_and_marks_orders(inactive_risk_status):
     adapter = _FakeAdapter()
     store = MagicMock()
     service = ExecutionService(
-        adapter=adapter, store=store, risk_status_provider=inactive_risk_status
+        adapter=adapter,
+        store=store,
+        market_data=_market_data(),
+        risk_status_provider=inactive_risk_status,
     )
 
     order = LocalOrder(
@@ -419,8 +473,8 @@ def test_execute_plan_applies_slippage_from_market_data_for_buy_and_sell(
     assert market_data.get_best_bid_ask.call_count == len(actions)
     buy_order, sell_order = result.orders
 
-    assert buy_order.raw_request["price"] == pytest.approx(101.0)
-    assert sell_order.raw_request["price"] == pytest.approx(99.0)
+    assert float(buy_order.raw_request["price"]) == pytest.approx(101.0)
+    assert float(sell_order.raw_request["price"]) == pytest.approx(99.0)
 
 
 def test_execute_plan_records_warning_when_market_data_missing(inactive_risk_status):

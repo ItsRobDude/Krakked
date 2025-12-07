@@ -18,11 +18,14 @@ from .router import build_order_payload
 logger = logging.getLogger(__name__)
 
 
+from kraken_bot.market_data.models import PairMetadata
+
+
 class ExecutionAdapter(Protocol):
     client: Optional[KrakenRESTClient]
     config: ExecutionConfig
 
-    def submit_order(self, order: LocalOrder) -> LocalOrder: ...
+    def submit_order(self, order: LocalOrder, pair_metadata: PairMetadata) -> LocalOrder: ...
 
     def cancel_order(self, order: LocalOrder) -> None: ...
 
@@ -48,12 +51,14 @@ class KrakenExecutionAdapter:
                     extra=structured_log_extra(event="live_trading_blocked"),
                 )
 
-    def submit_order(self, order: LocalOrder) -> LocalOrder:
+    def submit_order(self, order: LocalOrder, pair_metadata: PairMetadata) -> LocalOrder:
         """
         Prepare and submit an order to Kraken. The payload construction is delegated
         to routing helpers and the actual REST call is handled here.
         """
-        payload: Dict[str, Any] = build_order_payload(order, self.config)
+        payload: Dict[str, Any] = build_order_payload(
+            order, self.config, pair_metadata
+        )
         order.raw_request = payload
 
         assert self.client is not None
@@ -300,8 +305,10 @@ class PaperExecutionAdapter:
             rate_limiter=rate_limiter
         )
 
-    def submit_order(self, order: LocalOrder) -> LocalOrder:
-        payload: Dict[str, Any] = build_order_payload(order, self.config)
+    def submit_order(self, order: LocalOrder, pair_metadata: PairMetadata) -> LocalOrder:
+        payload: Dict[str, Any] = build_order_payload(
+            order, self.config, pair_metadata
+        )
         order.raw_request = payload
 
         price_for_notional = payload.get("price") or order.requested_price
@@ -356,7 +363,7 @@ class SimulationExecutionAdapter:
         self.client: Optional[KrakenRESTClient] = None
         self._fill_callback = fill_callback
 
-    def submit_order(self, order: LocalOrder) -> LocalOrder:
+    def submit_order(self, order: LocalOrder, pair_metadata: PairMetadata) -> LocalOrder:
         price = order.requested_price
         order.kraken_order_id = order.kraken_order_id or f"sim-{order.local_id}"
         order.status = "filled"

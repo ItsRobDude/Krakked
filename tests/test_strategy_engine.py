@@ -8,7 +8,7 @@ from kraken_bot.config import AppConfig, RiskConfig, StrategiesConfig, StrategyC
 from kraken_bot.market_data.api import MarketDataAPI
 from kraken_bot.market_data.exceptions import DataStaleError
 from kraken_bot.portfolio.manager import PortfolioService
-from kraken_bot.portfolio.models import EquityView
+from kraken_bot.portfolio.models import EquityView, SpotPosition
 from kraken_bot.strategy.base import Strategy
 from kraken_bot.strategy.engine import StrategyRiskEngine
 from kraken_bot.strategy.models import (
@@ -312,3 +312,50 @@ def test_actions_inherit_userref_and_persist_in_execution_plan():
     assert persisted_plan.actions[0].userref == "4242"
     decision_record = portfolio.record_decision.call_args_list[0][0][0]
     assert decision_record.strategy_name == "fake"
+
+
+def test_build_emergency_flatten_plan():
+    engine = StrategyRiskEngine.__new__(StrategyRiskEngine)
+    positions = [
+        SpotPosition(
+            pair="XBTUSD",
+            base_asset="XBT",
+            quote_asset="USD",
+            base_size=1.5,
+            avg_entry_price=10.0,
+            realized_pnl_base=0.0,
+            fees_paid_base=0.0,
+            strategy_tag="trend",
+        ),
+        SpotPosition(
+            pair="ETHUSD",
+            base_asset="ETH",
+            quote_asset="USD",
+            base_size=-0.5,
+            avg_entry_price=20.0,
+            realized_pnl_base=0.0,
+            fees_paid_base=0.0,
+            strategy_tag=None,
+        ),
+        SpotPosition(
+            pair="DOGEUSD",
+            base_asset="DOGE",
+            quote_asset="USD",
+            base_size=0.0,
+            avg_entry_price=0.0,
+            realized_pnl_base=0.0,
+            fees_paid_base=0.0,
+            strategy_tag="ignore",
+        ),
+    ]
+
+    plan = engine.build_emergency_flatten_plan(positions)
+
+    assert plan.plan_id.startswith("flatten_")
+    assert len(plan.actions) == 2
+    assert all(action.action_type == "close" for action in plan.actions)
+    assert all(action.target_base_size == 0.0 for action in plan.actions)
+    assert all(action.target_notional_usd == 0.0 for action in plan.actions)
+    assert {a.pair for a in plan.actions} == {"XBTUSD", "ETHUSD"}
+    assert any(a.strategy_id == "trend" for a in plan.actions)
+    assert any(a.strategy_id == "manual" for a in plan.actions)

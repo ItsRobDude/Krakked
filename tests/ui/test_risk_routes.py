@@ -23,6 +23,7 @@ from kraken_bot.config import (
 )
 from kraken_bot.execution.models import LocalOrder
 from kraken_bot.execution.oms import ExecutionService
+from kraken_bot.market_data.models import PairMetadata
 from kraken_bot.metrics import SystemMetrics
 from kraken_bot.strategy.models import DecisionRecord, ExecutionPlan, RiskAdjustedAction
 from kraken_bot.ui.api import create_api
@@ -45,7 +46,7 @@ class RecordingAdapter:
             get_closed_orders=lambda: {},
         )
 
-    def submit_order(self, order: LocalOrder) -> LocalOrder:
+    def submit_order(self, order: LocalOrder, pair_metadata: PairMetadata) -> LocalOrder:
         self.submit_order_calls.append(order)
         return order
 
@@ -137,20 +138,40 @@ def _build_app_config_for_risk() -> AppConfig:
     )
 
 
+def _pair_metadata() -> PairMetadata:
+    return PairMetadata(
+        canonical="XBTUSD",
+        base="XBT",
+        quote="USD",
+        rest_symbol="XBT/USD",
+        ws_symbol="XBT/USD",
+        raw_name="XBTUSD",
+        price_decimals=1,
+        volume_decimals=8,
+        lot_size=0.00000001,
+        min_order_size=0.0001,
+        status="online",
+    )
+
+
 def _build_live_risk_context():
     config = _build_app_config_for_risk()
     adapter = RecordingAdapter(config.execution)
     strategy_engine = StubStrategyEngine(config.risk)
+    market_data = MagicMock(name="market_data")
+    market_data.get_pair_metadata_or_raise.return_value = _pair_metadata()
+    market_data.get_best_bid_ask.return_value = None
     execution_service = ExecutionService(
         adapter=adapter,
         config=config.execution,
+        market_data=market_data,
         risk_status_provider=strategy_engine.get_risk_status,
     )
 
     context = AppContext(
         config=config,
         client=MagicMock(name="rest_client"),
-        market_data=MagicMock(name="market_data"),
+        market_data=market_data,
         portfolio=MagicMock(name="portfolio_service"),
         strategy_engine=strategy_engine,
         execution_service=execution_service,

@@ -146,6 +146,19 @@ class MarketDataAPI:
             raise PairNotFoundError(pair)
         return self._universe_map[pair]
 
+    def get_pair_metadata_or_raise(self, pair: str) -> PairMetadata:
+        """Return metadata for ``pair`` or raise a :class:`ValueError` if missing."""
+
+        try:
+            metadata = self.get_pair_metadata(pair)
+        except PairNotFoundError as exc:
+            raise ValueError(f"Missing PairMetadata for pair={pair}") from exc
+
+        if metadata is None:
+            raise ValueError(f"Missing PairMetadata for pair={pair}")
+
+        return metadata
+
     def get_ohlc(self, pair: str, timeframe: str, lookback: int) -> List[OHLCBar]:
         if pair not in self._universe_map:
             raise PairNotFoundError(pair)

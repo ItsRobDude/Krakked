@@ -14,6 +14,8 @@ The Deployment, Monitoring & Ops layer is responsible for:
 	•	Backups & data retention,
 	•	Runtime safety (kill switches, dead‑man, failure modes).
 
+Kill switches currently block all execution paths, including emergency `flatten_all` requests, to keep behavior conservative until a reduce‑only bypass is defined.
+
 It does not:
 	•	Change core trading logic (Phases 2–5).
 	•	Implement new strategies (Phase 4).

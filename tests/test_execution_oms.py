@@ -6,6 +6,7 @@ import pytest
 from kraken_bot.execution.exceptions import ExecutionError
 from kraken_bot.execution.models import LocalOrder
 from kraken_bot.execution.oms import ExecutionService
+from kraken_bot.market_data.models import PairMetadata
 from kraken_bot.strategy.models import ExecutionPlan, RiskAdjustedAction
 
 
@@ -17,7 +18,7 @@ class RecordingAdapter:
         self.submitted = []
         self.exception = exception
 
-    def submit_order(self, order: LocalOrder) -> LocalOrder:
+    def submit_order(self, order: LocalOrder, pair_metadata: PairMetadata) -> LocalOrder:
         if self.exception:
             raise self.exception
         self.submitted.append(order)
@@ -55,11 +56,38 @@ def make_plan(actions, metadata):
     )
 
 
+def _pair_metadata() -> PairMetadata:
+    return PairMetadata(
+        canonical="XBTUSD",
+        base="XBT",
+        quote="USD",
+        rest_symbol="XBT/USD",
+        ws_symbol="XBT/USD",
+        raw_name="XBTUSD",
+        price_decimals=1,
+        volume_decimals=8,
+        lot_size=0.00000001,
+        min_order_size=0.0001,
+        status="online",
+    )
+
+
+def _market_data_mock():
+    md = MagicMock()
+    md.get_pair_metadata_or_raise.return_value = _pair_metadata()
+    md.get_best_bid_ask.return_value = None
+    return md
+
+
 def test_execute_plan_skips_blocked_noop_and_zero_delta(
     plan_metadata, inactive_risk_status
 ):
     adapter = MagicMock()
-    service = ExecutionService(adapter, risk_status_provider=inactive_risk_status)
+    service = ExecutionService(
+        adapter,
+        market_data=_market_data_mock(),
+        risk_status_provider=inactive_risk_status,
+    )
     actions = [
         make_action(target=1.0, current=0.0, blocked=True),
         make_action(target=1.0, current=1.0),
@@ -76,7 +104,9 @@ def test_execute_plan_skips_blocked_noop_and_zero_delta(
 
 def test_execute_plan_creates_buy_and_sell_orders(plan_metadata, inactive_risk_status):
     adapter = RecordingAdapter()
-    service = ExecutionService(adapter, risk_status_provider=inactive_risk_status)
+    service = ExecutionService(
+        adapter, market_data=_market_data_mock(), risk_status_provider=inactive_risk_status
+    )
     actions = [
         make_action(target=3.0, current=1.0),
         make_action(target=1.0, current=3.0),
@@ -96,7 +126,11 @@ def test_execute_plan_creates_buy_and_sell_orders(plan_metadata, inactive_risk_s
 
 def test_execute_plan_records_errors_from_adapter(plan_metadata, inactive_risk_status):
     adapter = RecordingAdapter(exception=ExecutionError("adapter failure"))
-    service = ExecutionService(adapter, risk_status_provider=inactive_risk_status)
+    service = ExecutionService(
+        adapter,
+        market_data=_market_data_mock(),
+        risk_status_provider=inactive_risk_status,
+    )
     plan = make_plan([make_action(target=2.0, current=0.0)], plan_metadata)
 
     result = service.execute_plan(plan)
@@ -110,7 +144,11 @@ def test_execute_plan_accepts_validated_orders_without_txid(
     plan_metadata, inactive_risk_status
 ):
     adapter = RecordingAdapter()
-    service = ExecutionService(adapter, risk_status_provider=inactive_risk_status)
+    service = ExecutionService(
+        adapter,
+        market_data=_market_data_mock(),
+        risk_status_provider=inactive_risk_status,
+    )
     plan = make_plan([make_action(target=1.0, current=0.0)], plan_metadata)
 
     result = service.execute_plan(plan)

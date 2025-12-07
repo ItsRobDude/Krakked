@@ -9,6 +9,7 @@ from kraken_bot.execution.adapter import KrakenExecutionAdapter, PaperExecutionA
 from kraken_bot.execution.exceptions import ExecutionError, OrderRejectedError
 from kraken_bot.execution.models import LocalOrder
 from kraken_bot.execution.oms import ExecutionService
+from kraken_bot.market_data.models import PairMetadata
 from kraken_bot.strategy.models import ExecutionPlan, RiskAdjustedAction
 
 
@@ -39,11 +40,32 @@ def _plan(action: RiskAdjustedAction) -> ExecutionPlan:
     )
 
 
+def _pair_metadata(pair: str = "XBTUSD") -> PairMetadata:
+    base, quote = pair[:3], pair[3:]
+    rest_symbol = f"{base}/{quote}"
+    return PairMetadata(
+        canonical=pair,
+        base=base,
+        quote=quote,
+        rest_symbol=rest_symbol,
+        ws_symbol=rest_symbol,
+        raw_name=pair,
+        price_decimals=1,
+        volume_decimals=8,
+        lot_size=0.00000001,
+        min_order_size=0.0001,
+        status="online",
+    )
+
+
 def test_execution_service_uses_paper_adapter_for_paper_mode(inactive_risk_status):
     config = ExecutionConfig(mode="paper", validate_only=False)
     client = MagicMock()
     market_data = MagicMock()
     market_data.get_best_bid_ask.return_value = {"bid": 30.0, "ask": 30.0}
+    market_data.get_pair_metadata_or_raise.side_effect = (
+        lambda pair: _pair_metadata(pair)
+    )
 
     service = ExecutionService(
         config=config,
@@ -69,6 +91,9 @@ def test_execution_service_uses_kraken_adapter_for_live_mode(inactive_risk_statu
     client.add_order.return_value = {"txid": ["ABC123"], "error": []}
     market_data = MagicMock()
     market_data.get_best_bid_ask.return_value = {"bid": 25.0, "ask": 25.0}
+    market_data.get_pair_metadata_or_raise.side_effect = (
+        lambda pair: _pair_metadata(pair)
+    )
 
     service = ExecutionService(
         config=config,
@@ -108,7 +133,7 @@ def test_kraken_execution_adapter_validate_only_success():
     config = ExecutionConfig(mode="live", validate_only=True)
     adapter = KrakenExecutionAdapter(client=client, config=config)
 
-    local_order = adapter.submit_order(_local_order())
+    local_order = adapter.submit_order(_local_order(), _pair_metadata())
 
     assert local_order.status == "validated"
     client.add_order.assert_called_once()
@@ -120,7 +145,7 @@ def test_kraken_execution_adapter_live_success_sets_txid():
     config = ExecutionConfig(mode="live", validate_only=False, allow_live_trading=True)
     adapter = KrakenExecutionAdapter(client=client, config=config)
 
-    local_order = adapter.submit_order(_local_order(price=30.0, volume=1.0))
+    local_order = adapter.submit_order(_local_order(price=30.0, volume=1.0), _pair_metadata())
 
     assert local_order.status == "open"
     assert local_order.kraken_order_id == "ABC123"
@@ -133,7 +158,7 @@ def test_kraken_execution_adapter_handles_kraken_errors():
     adapter = KrakenExecutionAdapter(client=client, config=config)
 
     with pytest.raises(OrderRejectedError):
-        adapter.submit_order(_local_order(price=30.0, volume=1.0))
+        adapter.submit_order(_local_order(price=30.0, volume=1.0), _pair_metadata())
 
 
 def test_kraken_execution_adapter_client_exception():
@@ -143,7 +168,7 @@ def test_kraken_execution_adapter_client_exception():
     adapter = KrakenExecutionAdapter(client=client, config=config)
 
     with pytest.raises(ExecutionError):
-        adapter.submit_order(_local_order(price=30.0, volume=1.0))
+        adapter.submit_order(_local_order(price=30.0, volume=1.0), _pair_metadata())
 
 
 def test_kraken_execution_adapter_retries_on_transient_error_then_succeeds(monkeypatch):
@@ -164,7 +189,7 @@ def test_kraken_execution_adapter_retries_on_transient_error_then_succeeds(monke
 
     monkeypatch.setattr("time.sleep", lambda _: None)
 
-    order = adapter.submit_order(_local_order(price=30.0, volume=1.0))
+    order = adapter.submit_order(_local_order(price=30.0, volume=1.0), _pair_metadata())
 
     assert order.status == "open"
     assert order.kraken_order_id == "ABC123"
@@ -189,7 +214,7 @@ def test_kraken_execution_adapter_retries_exhausted_sets_error(monkeypatch):
     order = _local_order(price=30.0, volume=1.0)
 
     with pytest.raises(ExecutionError):
-        adapter.submit_order(order)
+        adapter.submit_order(order, _pair_metadata())
 
     assert client.add_order.call_count == 2
     assert order.status == "error"

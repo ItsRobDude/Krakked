@@ -4,6 +4,7 @@ import pytest
 from starlette.testclient import TestClient
 
 from kraken_bot.execution.models import ExecutionResult, LocalOrder
+from kraken_bot.strategy.models import ExecutionPlan
 from kraken_bot.portfolio.models import SpotPosition
 
 
@@ -111,6 +112,11 @@ def test_cancel_order_blocked(client, exec_context):
 
 @pytest.mark.parametrize("ui_read_only", [False])
 def test_flatten_all_executes_plan(client, exec_context):
+    plan = ExecutionPlan(
+        plan_id="flatten_1",
+        generated_at=datetime.now(UTC),
+        actions=[],
+    )
     exec_context.portfolio.get_positions.return_value = [
         SpotPosition(
             pair="BTC/USD",
@@ -123,6 +129,7 @@ def test_flatten_all_executes_plan(client, exec_context):
             strategy_tag="alpha",
         )
     ]
+    exec_context.strategy_engine.build_emergency_flatten_plan.return_value = plan
     exec_context.execution_service.execute_plan.return_value = ExecutionResult(
         plan_id="flatten_1", started_at=datetime.now(UTC), success=True
     )
@@ -131,7 +138,10 @@ def test_flatten_all_executes_plan(client, exec_context):
 
     assert response.status_code == 200
     payload = response.json()
-    exec_context.execution_service.execute_plan.assert_called_once()
+    exec_context.strategy_engine.build_emergency_flatten_plan.assert_called_once_with(
+        exec_context.portfolio.get_positions.return_value
+    )
+    exec_context.execution_service.execute_plan.assert_called_once_with(plan)
     assert payload["error"] is None
     assert payload["data"]["plan_id"].startswith("flatten_")
 

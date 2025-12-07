@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 from typing import Any, Optional, cast
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -7,6 +8,7 @@ from kraken_bot.config import ExecutionConfig
 from kraken_bot.execution import admin_cli
 from kraken_bot.execution.adapter import ExecutionAdapter
 from kraken_bot.execution.models import LocalOrder
+from kraken_bot.market_data.models import PairMetadata
 from kraken_bot.portfolio.store import PortfolioStore
 from kraken_bot.strategy.models import RiskStatus
 
@@ -95,13 +97,29 @@ def test_panic_cli_reconciles_and_persists(
             manual_exposure_pct=0.0,
             per_asset_exposure_pct={},
             per_strategy_exposure_pct={},
-        )
+    )
 
     adapter = _FakeAdapter()
     store = _FakeStore()
+    market_data = MagicMock()
+    market_data.get_pair_metadata_or_raise.return_value = PairMetadata(
+        canonical="ETHUSD",
+        base="ETH",
+        quote="USD",
+        rest_symbol="ETH/USD",
+        ws_symbol="ETH/USD",
+        raw_name="ETHUSD",
+        price_decimals=1,
+        volume_decimals=8,
+        lot_size=0.00000001,
+        min_order_size=0.0001,
+        status="online",
+    )
+    market_data.get_best_bid_ask.return_value = None
     service = admin_cli.ExecutionService(
         adapter=cast(ExecutionAdapter, adapter),
         store=cast(PortfolioStore, store),
+        market_data=market_data,
         risk_status_provider=fake_risk_status,
     )
     assert service is not None

@@ -1,10 +1,12 @@
 # src/kraken_bot/execution/router.py
 
 import logging
-from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
+import math
+from typing import TYPE_CHECKING, Any, Optional, Tuple
 from uuid import uuid4
 
 from kraken_bot.config import ExecutionConfig
+from kraken_bot.market_data.models import PairMetadata
 
 from .models import LocalOrder
 
@@ -15,40 +17,18 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def round_order_size(pair_metadata: Dict[str, Any], size: float) -> float:
-    """Round order volume using pair metadata decimals when available."""
-    decimals = None
-    if pair_metadata:
-        decimals = (
-            pair_metadata.get("volume_decimals")
-            if isinstance(pair_metadata, dict)
-            else getattr(pair_metadata, "volume_decimals", None)
-        )
+def round_order_size(metadata: PairMetadata, size: float) -> float:
+    """Round order volume using PairMetadata volume precision."""
 
-    try:
-        precision = int(decimals) if decimals is not None else None
-    except (TypeError, ValueError):
-        precision = None
-
-    return round(size, precision) if precision is not None else size
+    factor = 10**metadata.volume_decimals
+    rounded = math.floor(size * factor) / factor
+    return rounded
 
 
-def round_order_price(pair_metadata: Dict[str, Any], price: float) -> float:
-    """Round order price using pair metadata decimals when available."""
-    decimals = None
-    if pair_metadata:
-        decimals = (
-            pair_metadata.get("price_decimals")
-            if isinstance(pair_metadata, dict)
-            else getattr(pair_metadata, "price_decimals", None)
-        )
+def round_order_price(metadata: PairMetadata, price: float) -> float:
+    """Round order price using PairMetadata price precision."""
 
-    try:
-        precision = int(decimals) if decimals is not None else None
-    except (TypeError, ValueError):
-        precision = None
-
-    return round(price, precision) if precision is not None else price
+    return round(price, metadata.price_decimals)
 
 
 def determine_order_type(order: LocalOrder, config: ExecutionConfig) -> str:
@@ -94,25 +74,25 @@ def apply_slippage(order: LocalOrder, config: ExecutionConfig) -> Optional[float
 def build_order_payload(
     order: LocalOrder,
     config: ExecutionConfig,
-    pair_metadata: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
+    pair_metadata: PairMetadata,
+) -> dict[str, Any]:
     """
     Construct the Kraken AddOrder payload for a given LocalOrder.
     Rounding uses pair metadata when provided, and validation/userref flags
     mirror the execution configuration and order context.
     """
     order_type = determine_order_type(order, config)
-    payload: Dict[str, Any] = {
-        "pair": order.pair,
+    payload: dict[str, Any] = {
+        "pair": pair_metadata.rest_symbol,
         "type": order.side,
         "ordertype": order_type,
-        "volume": round_order_size(pair_metadata or {}, order.requested_base_size),
+        "volume": str(round_order_size(pair_metadata, order.requested_base_size)),
     }
 
     slippage_price = apply_slippage(order, config)
 
     if order_type == "limit" and slippage_price is not None:
-        payload["price"] = round_order_price(pair_metadata or {}, slippage_price)
+        payload["price"] = str(round_order_price(pair_metadata, slippage_price))
 
     payload["timeinforce"] = config.time_in_force
 
@@ -135,8 +115,9 @@ def build_order_payload(
 def build_order_from_plan_action(
     action: "RiskAdjustedAction",
     plan: "ExecutionPlan",
-    market_data: Optional["MarketDataAPI"],
+    pair_metadata: PairMetadata,
     config: ExecutionConfig,
+    market_data: Optional["MarketDataAPI"] = None,
 ) -> Tuple[Optional[LocalOrder], Optional[str]]:
     """
     Build a :class:`LocalOrder` from a plan action using live market data.
@@ -181,6 +162,17 @@ def build_order_from_plan_action(
         warning = f"Missing market data for limit order on {action.pair}"
         return None, warning
 
+    rounded_size = round_order_size(pair_metadata, volume)
+    if rounded_size <= 0 or rounded_size < pair_metadata.min_order_size:
+        raise ValueError(
+            f"Requested size {volume} too small for pair "
+            f"{pair_metadata.canonical} (min={pair_metadata.min_order_size})"
+        )
+
+    rounded_price: Optional[float] = None
+    if requested_price is not None:
+        rounded_price = round_order_price(pair_metadata, requested_price)
+
     order = LocalOrder(
         local_id=str(uuid4()),
         plan_id=plan.plan_id,
@@ -189,8 +181,8 @@ def build_order_from_plan_action(
         side=side,
         order_type=order_type,
         userref=int(action.userref) if action.userref is not None else None,
-        requested_base_size=volume,
-        requested_price=requested_price,
+        requested_base_size=rounded_size,
+        requested_price=rounded_price,
     )
 
     return order, None

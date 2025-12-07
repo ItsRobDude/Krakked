@@ -107,6 +107,8 @@ def run_strategy_once() -> None:
             es_kwargs["client"] = client
         if "config" in es_params:
             es_kwargs["config"] = safe_config.execution
+        if "market_data" in es_params:
+            es_kwargs["market_data"] = market_data
         if "rate_limiter" in es_params:
             es_kwargs["rate_limiter"] = rate_limiter
         if "risk_status_provider" in es_params:
@@ -116,6 +118,7 @@ def run_strategy_once() -> None:
         execution_service = ExecutionService(
             client=client,
             config=safe_config.execution,
+            market_data=market_data,
             risk_status_provider=strategy_engine.get_risk_status,
         )
     result = execution_service.execute_plan(plan)
