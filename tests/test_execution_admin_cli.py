@@ -1,6 +1,4 @@
-from typing import Any, Optional, cast
-
-from types import SimpleNamespace
+from typing import Any, Optional
 
 from types import SimpleNamespace
 
@@ -122,3 +120,40 @@ def test_panic_cli_reconciles_and_persists(
         "get_closed_orders",
         "persist:canceled",
     ]
+
+
+def test_admin_cli_builds_service_with_risk_provider(tmp_path, monkeypatch):
+    db_path = tmp_path / "portfolio.db"
+
+    config = SimpleNamespace(
+        execution=ExecutionConfig(mode="live", validate_only=True),
+        portfolio=SimpleNamespace(auto_migrate_schema=False),
+    )
+
+    monkeypatch.setattr(admin_cli, "load_config", lambda: config)
+    monkeypatch.setattr(
+        admin_cli, "bootstrap", lambda allow_interactive_setup: (None, config, None)
+    )
+
+    captured_provider: list[Any] = []
+
+    class _RecordingService:
+        def __init__(
+            self,
+            *,
+            risk_status_provider: Any,
+            **_: Any,
+        ) -> None:
+            captured_provider.append(risk_status_provider)
+
+        def load_open_orders_from_store(self) -> None:
+            return None
+
+    monkeypatch.setattr(admin_cli, "ExecutionService", _RecordingService)
+
+    service = admin_cli._build_service(str(db_path), allow_interactive_setup=False)
+
+    assert captured_provider and captured_provider[0] is admin_cli._admin_cli_risk_status
+    assert captured_provider[0]() == SimpleNamespace(
+        kill_switch_active=False, source="admin_cli"
+    )
