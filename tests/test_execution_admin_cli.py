@@ -1,4 +1,4 @@
-from typing import Any, Optional
+from typing import Any, Optional, cast
 
 from types import SimpleNamespace
 
@@ -82,13 +82,26 @@ def test_panic_cli_reconciles_and_persists(
             self.events.append(f"persist:{local_id}:{status}")
             events.append(f"persist:{status}")
 
+    def fake_risk_status() -> RiskStatus:
+        return RiskStatus(
+            kill_switch_active=False,
+            daily_drawdown_pct=0.0,
+            drift_flag=False,
+            drift_info=None,
+            total_exposure_pct=0.0,
+            manual_exposure_pct=0.0,
+            per_asset_exposure_pct={},
+            per_strategy_exposure_pct={},
+        )
+
     adapter = _FakeAdapter()
     store = _FakeStore()
-    service = admin_cli.ExecutionService(  # type: ignore[arg-type]
-        adapter=adapter,
-        store=store,
-        risk_status_provider=lambda: SimpleNamespace(kill_switch_active=False),
+    service = admin_cli.ExecutionService(
+        adapter=cast(ExecutionAdapter, adapter),
+        store=cast(PortfolioStore, store),
+        risk_status_provider=fake_risk_status,
     )
+    assert service is not None
 
     order = LocalOrder(
         local_id="local-1",
@@ -152,6 +165,7 @@ def test_admin_cli_builds_service_with_risk_provider(tmp_path, monkeypatch):
     monkeypatch.setattr(admin_cli, "ExecutionService", _RecordingService)
 
     service = admin_cli._build_service(str(db_path), allow_interactive_setup=False)
+    assert service is not None
 
     assert captured_provider and captured_provider[0] is admin_cli._admin_cli_risk_status
     status = captured_provider[0]()

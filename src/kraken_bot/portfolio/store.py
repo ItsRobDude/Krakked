@@ -7,7 +7,7 @@ import pickle
 import sqlite3
 import threading
 from dataclasses import asdict, dataclass
-from datetime import UTC, datetime, timezone
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Tuple
 
 from kraken_bot.logging_config import structured_log_extra
@@ -1599,4 +1599,3 @@ class SQLitePortfolioStore(PortfolioStore):
             # If the pickled model is corrupt or incompatible, we fail soft:
             # callers go on to bootstrap from raw examples instead.
             return None
-
