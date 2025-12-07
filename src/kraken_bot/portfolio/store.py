@@ -562,21 +562,14 @@ class SQLitePortfolioStore(PortfolioStore):
     def _init_db(self):
         """Initialize the portfolio database with strict schema handling."""
 
-        if self.auto_migrate_schema:
-            with sqlite3.connect(self.db_path) as conn:
-                ensure_portfolio_schema(
-                    conn, CURRENT_SCHEMA_VERSION, migrate=self.auto_migrate_schema
-                )
-                ensure_portfolio_tables(conn)
-                conn.commit()
-        else:
-            # In non-migrating modes, refuse to operate on an outdated schema. This
-            # still initializes a brand new DB by writing the current schema
-            # version when none exists.
-            assert_portfolio_schema(self.db_path)
-            with sqlite3.connect(self.db_path) as conn:
-                ensure_portfolio_tables(conn)
-                conn.commit()
+        try:
+            ensure_portfolio_schema(
+                conn, CURRENT_SCHEMA_VERSION, migrate=self.auto_migrate_schema
+            )
+            ensure_portfolio_tables(conn)
+            conn.commit()
+        finally:
+            conn.close()
 
     def _get_conn(self):
         return sqlite3.connect(self.db_path)
