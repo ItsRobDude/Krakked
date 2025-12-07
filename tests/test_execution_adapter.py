@@ -156,3 +156,44 @@ def test_submit_order_client_exception_maps_to_execution_error(sample_order, pai
 
     assert sample_order.status == "error"
     assert sample_order.last_error == "network down"
+
+
+def test_submit_order_rejects_below_min_volume(pair_metadata):
+    client = MagicMock()
+    client.add_order.return_value = {"error": []}
+    adapter = KrakenExecutionAdapter(client, ExecutionConfig())
+
+    small_order = LocalOrder(
+        local_id="local-2",
+        plan_id="plan-1",
+        strategy_id="strategy-1",
+        pair=pair_metadata.canonical,
+        side="buy",
+        order_type="market",
+        requested_base_size=pair_metadata.min_order_size / 2,
+        requested_price=None,
+    )
+
+    order = adapter.submit_order(small_order, pair_metadata)
+
+    assert order.status == "rejected"
+    assert "below minimum" in (order.last_error or "")
+    client.add_order.assert_not_called()
+
+
+def test_submit_order_uses_latest_price_for_notional_check(sample_order, pair_metadata):
+    client = MagicMock()
+    client.add_order.return_value = {"error": []}
+    adapter = KrakenExecutionAdapter(
+        client, ExecutionConfig(min_order_notional_usd=100)
+    )
+
+    sample_order.order_type = "market"
+    sample_order.requested_price = None
+    sample_order.requested_base_size = 1
+
+    order = adapter.submit_order(sample_order, pair_metadata, latest_price=50)
+
+    assert order.status == "rejected"
+    assert "below minimum" in (order.last_error or "")
+    client.add_order.assert_not_called()
