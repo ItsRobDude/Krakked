@@ -1503,7 +1503,7 @@ class SQLitePortfolioStore(PortfolioStore):
         version: int = 1,
     ) -> None:
         blob = pickle.dumps(model)
-        updated_at = _utc_now_iso()
+        updated_at = datetime.now(timezone.utc).isoformat()
 
         with self._lock:
             conn = self._get_conn()
