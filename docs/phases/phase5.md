@@ -512,6 +512,15 @@ Phase 5 is done when:
 
 ⸻
 
+Plan staleness guardrail
+
+	•	ExecutionConfig.max_plan_age_seconds limits how old an ExecutionPlan can be when handed to the OMS.
+	•	If now - plan.generated_at exceeds that threshold, ExecutionService rejects the plan before any order build or risk calls.
+	•	The resulting ExecutionResult records success=False, no orders, and an error message noting max_plan_age_seconds and the plan age; it is persisted alongside other execution results.
+	•	This prevents accidentally executing plans generated under stale market data or outdated portfolio states.
+
+⸻
+
 12. Quickstart (dry run)
 
         •       Run a single plan cycle safely via the CLI:
