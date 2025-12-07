@@ -165,9 +165,8 @@ def _migrate_db_command(args: argparse.Namespace) -> int:
         stored_version = _get_schema_version(args.db_path)
     except PortfolioSchemaError as exc:
         return _print_error(
-            "Migration failed: "
-            "stored schema version value {exc.found} is incompatible with "
-            f"expected {exc.expected}."
+            f"Migration failed: stored schema version value {exc.found} "
+            f"is incompatible with expected {exc.expected}."
         )
     except Exception as exc:  # noqa: BLE001
         return _print_error(f"Migration failed: {exc}")
@@ -182,9 +181,8 @@ def _migrate_db_command(args: argparse.Namespace) -> int:
         status = run_migrate_db(args.db_path)
     except PortfolioSchemaError as exc:
         return _print_error(
-            "Migration failed: "
-            "stored schema version {exc.found} is incompatible with "
-            f"expected {exc.expected}."
+            f"Migration failed: stored schema version {exc.found} "
+            f"is incompatible with expected {exc.expected}."
         )
     except Exception as exc:  # noqa: BLE001
         return _print_error(f"Migration failed: {exc}")
@@ -207,9 +205,8 @@ def _portfolio_migrate_command(args: argparse.Namespace) -> int:
             conn.commit()
     except PortfolioSchemaError as exc:
         return _print_error(
-            "Migration failed: "
-            "stored schema version {exc.found} is incompatible with expected "
-            f"{exc.expected}."
+            f"Migration failed: stored schema version {exc.found} "
+            f"is incompatible with expected {exc.expected}."
         )
     except Exception as exc:  # noqa: BLE001
         return _print_error(f"Migration failed: {exc}")
@@ -227,9 +224,8 @@ def _schema_version_command(args: argparse.Namespace) -> int:
         status = print_schema_version(resolved_path.as_posix())
     except PortfolioSchemaError as exc:
         return _print_error(
-            "Failed to read schema version: "
-            "stored value {exc.found} is incompatible with expected "
-            f"{exc.expected}."
+            f"Failed to read schema version: stored value {exc.found} "
+            f"is incompatible with expected {exc.expected}."
         )
     except Exception as exc:  # noqa: BLE001
         return _print_error(f"Failed to read schema version: {exc}")
@@ -309,9 +305,8 @@ def _db_info_command(args: argparse.Namespace) -> int:
         schema_version = _get_schema_version(resolved_path.as_posix())
     except PortfolioSchemaError as exc:
         return _print_error(
-            "Failed to read schema version: "
-            "stored value {exc.found} is incompatible with expected "
-            f"{exc.expected}."
+            f"Failed to read schema version: stored value {exc.found} "
+            f"is incompatible with expected {exc.expected}."
         )
     except sqlite3.OperationalError as exc:
         return _print_error(f"Failed to read schema version: {exc}")

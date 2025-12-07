@@ -586,8 +586,6 @@ class SQLitePortfolioStore(PortfolioStore):
         try:
             ensure_portfolio_tables(conn)
             conn.commit()
-        finally:
-            conn.close()
 
     def _get_conn(self):
         return sqlite3.connect(self.db_path)
