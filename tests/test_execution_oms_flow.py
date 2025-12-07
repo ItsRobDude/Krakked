@@ -52,7 +52,9 @@ def _market_data(mid_price: float = 25.0) -> MagicMock:
 def test_execute_plan_skips_blocked_and_none_actions(inactive_risk_status):
     adapter = MagicMock()
     adapter.config = ExecutionConfig(validate_only=True)
-    service = ExecutionService(adapter=adapter, risk_status_provider=inactive_risk_status)
+    service = ExecutionService(
+        adapter=adapter, risk_status_provider=inactive_risk_status
+    )
 
     actions = [
         _action(blocked=True),
@@ -183,7 +185,9 @@ def test_refresh_open_orders_updates_tracked_orders(inactive_risk_status):
     client = MagicMock()
     adapter = PaperExecutionAdapter()
     adapter.client = client
-    service = ExecutionService(adapter=adapter, risk_status_provider=inactive_risk_status)
+    service = ExecutionService(
+        adapter=adapter, risk_status_provider=inactive_risk_status
+    )
 
     order = LocalOrder(
         local_id="1",
@@ -221,7 +225,9 @@ def test_reconcile_orders_closes_and_updates_local_order(inactive_risk_status):
     client = MagicMock()
     adapter = PaperExecutionAdapter()
     adapter.client = client
-    service = ExecutionService(adapter=adapter, risk_status_provider=inactive_risk_status)
+    service = ExecutionService(
+        adapter=adapter, risk_status_provider=inactive_risk_status
+    )
 
     order = LocalOrder(
         local_id="2",

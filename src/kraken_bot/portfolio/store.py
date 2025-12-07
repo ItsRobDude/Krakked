@@ -1398,7 +1398,9 @@ class SQLitePortfolioStore(PortfolioStore):
 
         # Normalize timestamp and features to stable types
         created_at_iso = (
-            created_at.astimezone(UTC) if created_at.tzinfo else created_at.replace(tzinfo=UTC)
+            created_at.astimezone(UTC)
+            if created_at.tzinfo
+            else created_at.replace(tzinfo=UTC)
         ).isoformat()
 
         features_json = json.dumps(

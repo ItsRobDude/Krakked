@@ -546,7 +546,10 @@ def load_config(
     if not isinstance(raw_slippage_bps, (int, float)):
         logger.warning(
             "max_slippage_bps is invalid; using default",
-            extra={"event": "config_invalid_max_slippage_bps", "config_path": str(config_path)},
+            extra={
+                "event": "config_invalid_max_slippage_bps",
+                "config_path": str(config_path),
+            },
         )
         raw_slippage_bps = 50
 

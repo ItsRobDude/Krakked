@@ -128,7 +128,11 @@ class InMemoryStore(PortfolioStore):
         self.ml_models = models
 
     def load_ml_model(self, strategy_id: str, model_key: str):
-        return getattr(self, "ml_models", {}).get((strategy_id, model_key), {}).get("model")
+        return (
+            getattr(self, "ml_models", {})
+            .get((strategy_id, model_key), {})
+            .get("model")
+        )
 
 
 @pytest.fixture

@@ -64,7 +64,9 @@ class ExecutionService:
                 "ExecutionService initialized in live mode without risk_status_provider; refusing to start.",
                 extra=structured_log_extra(event="risk_status_missing_live"),
             )
-            raise ValueError("risk_status_provider is required when execution.mode='live'")
+            raise ValueError(
+                "risk_status_provider is required when execution.mode='live'"
+            )
 
         if mode == "live":
             self._emit_live_readiness_checklist()

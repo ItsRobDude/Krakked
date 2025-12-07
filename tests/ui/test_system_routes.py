@@ -88,9 +88,7 @@ def test_system_health_reports_config_and_risk_flags(client, system_context):
     assert isinstance(payload["drift_detected"], bool)
 
 
-def test_system_health_prefers_metrics_snapshot_even_when_false(
-    client, system_context
-):
+def test_system_health_prefers_metrics_snapshot_even_when_false(client, system_context):
     system_context.market_data.get_data_status.return_value = SimpleNamespace(
         rest_api_reachable=True,
         websocket_connected=True,

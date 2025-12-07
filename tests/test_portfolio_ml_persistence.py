@@ -1,10 +1,7 @@
 from datetime import datetime, timezone
 from pathlib import Path
 
-from kraken_bot.portfolio.store import (
-    MAX_ML_TRAINING_EXAMPLES,
-    SQLitePortfolioStore,
-)
+from kraken_bot.portfolio.store import MAX_ML_TRAINING_EXAMPLES, SQLitePortfolioStore
 
 
 class DummyModel:

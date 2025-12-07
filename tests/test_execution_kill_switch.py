@@ -201,9 +201,7 @@ def test_live_mode_provider_error_blocks_execution():
     def _erroring_provider() -> SimpleNamespace:
         raise RuntimeError("risk down")
 
-    service = ExecutionService(
-        adapter=adapter, risk_status_provider=_erroring_provider
-    )
+    service = ExecutionService(adapter=adapter, risk_status_provider=_erroring_provider)
 
     plan = ExecutionPlan(
         plan_id="plan_live_error",

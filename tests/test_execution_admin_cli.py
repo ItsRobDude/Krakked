@@ -1,6 +1,5 @@
-from typing import Any, Optional, cast
-
 from types import SimpleNamespace
+from typing import Any, Optional, cast
 
 import pytest
 
@@ -61,10 +60,14 @@ def test_panic_cli_reconciles_and_persists(
         def cancel_all_orders(self) -> None:
             self.client.cancel_all_orders()
 
-        def submit_order(self, order: LocalOrder) -> LocalOrder:  # pragma: no cover - protocol stub
+        def submit_order(
+            self, order: LocalOrder
+        ) -> LocalOrder:  # pragma: no cover - protocol stub
             return order
 
-        def cancel_order(self, order: LocalOrder) -> None:  # pragma: no cover - protocol stub
+        def cancel_order(
+            self, order: LocalOrder
+        ) -> None:  # pragma: no cover - protocol stub
             return None
 
     class _FakeStore:
@@ -167,7 +170,9 @@ def test_admin_cli_builds_service_with_risk_provider(tmp_path, monkeypatch):
     service = admin_cli._build_service(str(db_path), allow_interactive_setup=False)
     assert service is not None
 
-    assert captured_provider and captured_provider[0] is admin_cli._admin_cli_risk_status
+    assert (
+        captured_provider and captured_provider[0] is admin_cli._admin_cli_risk_status
+    )
     status = captured_provider[0]()
     assert status == RiskStatus(
         kill_switch_active=False,

@@ -131,9 +131,7 @@ async def system_health(request: Request) -> ApiEnvelope[SystemHealthPayload]:
                 else ("data_stale" if market_data_stale else "connection_issue")
             )
 
-        metrics_has_update = bool(
-            metrics_snapshot.get("market_data_status_updated")
-        )
+        metrics_has_update = bool(metrics_snapshot.get("market_data_status_updated"))
 
         if metrics_has_update:
             market_data_ok = bool(

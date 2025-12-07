@@ -74,7 +74,9 @@ class AIRegressionStrategy(Strategy):
     def _model_key(self, timeframe: str) -> str:
         return f"global|{timeframe}"
 
-    def _maybe_bootstrap_from_history(self, ctx: StrategyContext, timeframe: str) -> None:
+    def _maybe_bootstrap_from_history(
+        self, ctx: StrategyContext, timeframe: str
+    ) -> None:
         if self.model_initialized:
             return
 

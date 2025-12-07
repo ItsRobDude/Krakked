@@ -17,7 +17,12 @@ def test_run_backtest_wires_risk_provider(monkeypatch: pytest.MonkeyPatch) -> No
 
     class _DummyMarketData:
         def __init__(
-            self, config: AppConfig, pairs: list[str], frames: list[str], start: datetime, end: datetime
+            self,
+            config: AppConfig,
+            pairs: list[str],
+            frames: list[str],
+            start: datetime,
+            end: datetime,
         ) -> None:  # noqa: ARG002
             self._timeline = [int(start.timestamp())]
 
@@ -30,7 +35,9 @@ def test_run_backtest_wires_risk_provider(monkeypatch: pytest.MonkeyPatch) -> No
     class _DummyPortfolioService:
         def __init__(self, *args: Any, **kwargs: Any) -> None:  # noqa: ARG002
             self.store = SimpleNamespace()
-            self.portfolio = SimpleNamespace(ingest_trades=lambda trades, persist=True: None)
+            self.portfolio = SimpleNamespace(
+                ingest_trades=lambda trades, persist=True: None
+            )
 
         def initialize(self) -> None:
             return None
@@ -47,7 +54,9 @@ def test_run_backtest_wires_risk_provider(monkeypatch: pytest.MonkeyPatch) -> No
         def get_risk_status(self) -> Any:
             return SimpleNamespace(kill_switch_active=False)
 
-        def run_cycle(self, now: datetime | None = None) -> ExecutionPlan:  # noqa: ARG002
+        def run_cycle(
+            self, now: datetime | None = None
+        ) -> ExecutionPlan:  # noqa: ARG002
             return ExecutionPlan(
                 plan_id="plan-1",
                 generated_at=datetime.now(UTC),
@@ -59,7 +68,9 @@ def test_run_backtest_wires_risk_provider(monkeypatch: pytest.MonkeyPatch) -> No
             captured["risk_status_provider"] = kwargs.get("risk_status_provider")
 
         def execute_plan(self, plan: ExecutionPlan) -> ExecutionResult:  # noqa: ARG002
-            return ExecutionResult(plan_id=plan.plan_id, started_at=datetime.now(UTC), success=True)
+            return ExecutionResult(
+                plan_id=plan.plan_id, started_at=datetime.now(UTC), success=True
+            )
 
     monkeypatch.setattr(runner, "BacktestMarketData", _DummyMarketData)
     monkeypatch.setattr(runner, "BacktestPortfolioService", _DummyPortfolioService)
