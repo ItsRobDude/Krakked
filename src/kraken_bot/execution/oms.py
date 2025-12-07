@@ -9,6 +9,7 @@ from kraken_bot.config import ExecutionConfig
 from kraken_bot.connection.rate_limiter import RateLimiter
 from kraken_bot.connection.rest_client import KrakenRESTClient
 from kraken_bot.logging_config import structured_log_extra
+from kraken_bot.market_data.exceptions import DataStaleError
 from kraken_bot.market_data.api import MarketDataAPI
 from kraken_bot.strategy.models import ExecutionPlan
 
@@ -370,6 +371,36 @@ class ExecutionService:
                 result.orders.append(order)
                 continue
 
+            latest_price: Optional[float] = None
+            if (
+                order.requested_price is None
+                and getattr(adapter_config, "min_order_notional_usd", 0) > 0
+            ):
+                try:
+                    latest_price = self.market_data.get_latest_price(order.pair)
+                except DataStaleError as exc:
+                    logger.warning(
+                        "Latest price unavailable for notional guardrail; proceeding without it",
+                        extra=structured_log_extra(
+                            event="latest_price_unavailable",
+                            plan_id=plan.plan_id,
+                            strategy_id=action.strategy_id,
+                            pair=action.pair,
+                            error=str(exc),
+                        ),
+                    )
+                except Exception as exc:  # pragma: no cover - defensive logging
+                    logger.exception(
+                        "Unexpected error fetching latest price for notional guardrail",
+                        extra=structured_log_extra(
+                            event="latest_price_error",
+                            plan_id=plan.plan_id,
+                            strategy_id=action.strategy_id,
+                            pair=action.pair,
+                            error=str(exc),
+                        ),
+                    )
+
             try:
                 logger.info(
                     "Submitting order",
@@ -383,7 +414,9 @@ class ExecutionService:
                         local_order_id=order.local_id,
                     ),
                 )
-                order = self.adapter.submit_order(order, pair_metadata)
+                order = self.adapter.submit_order(
+                    order, pair_metadata, latest_price=latest_price
+                )
                 self.register_order(order)
                 if self.store:
                     self.store.save_order(order)

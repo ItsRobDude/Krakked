@@ -25,7 +25,12 @@ class ExecutionAdapter(Protocol):
     client: Optional[KrakenRESTClient]
     config: ExecutionConfig
 
-    def submit_order(self, order: LocalOrder, pair_metadata: PairMetadata) -> LocalOrder: ...
+    def submit_order(
+        self,
+        order: LocalOrder,
+        pair_metadata: PairMetadata,
+        latest_price: Optional[float] = None,
+    ) -> LocalOrder: ...
 
     def cancel_order(self, order: LocalOrder) -> None: ...
 
@@ -51,7 +56,12 @@ class KrakenExecutionAdapter:
                     extra=structured_log_extra(event="live_trading_blocked"),
                 )
 
-    def submit_order(self, order: LocalOrder, pair_metadata: PairMetadata) -> LocalOrder:
+    def submit_order(
+        self,
+        order: LocalOrder,
+        pair_metadata: PairMetadata,
+        latest_price: Optional[float] = None,
+    ) -> LocalOrder:
         """
         Prepare and submit an order to Kraken. The payload construction is delegated
         to routing helpers and the actual REST call is handled here.
@@ -63,7 +73,27 @@ class KrakenExecutionAdapter:
 
         assert self.client is not None
 
-        price_for_notional = payload.get("price") or order.requested_price
+        rounded_volume = float(payload["volume"])
+        if rounded_volume < pair_metadata.min_order_size:
+            order.status = "rejected"
+            order.last_error = (
+                f"Order volume {rounded_volume} below minimum "
+                f"{pair_metadata.min_order_size} for {pair_metadata.canonical}"
+            )
+            logger.error(
+                order.last_error,
+                extra=structured_log_extra(
+                    event="order_rejected_min_volume",
+                    plan_id=order.plan_id,
+                    strategy_id=order.strategy_id,
+                    pair=order.pair,
+                    local_order_id=order.local_id,
+                    volume=rounded_volume,
+                ),
+            )
+            return order
+
+        price_for_notional = payload.get("price") or latest_price or order.requested_price
         if price_for_notional is not None:
             notional = float(payload["volume"]) * float(price_for_notional)
             if notional < self.config.min_order_notional_usd:
@@ -305,13 +335,38 @@ class PaperExecutionAdapter:
             rate_limiter=rate_limiter
         )
 
-    def submit_order(self, order: LocalOrder, pair_metadata: PairMetadata) -> LocalOrder:
+    def submit_order(
+        self,
+        order: LocalOrder,
+        pair_metadata: PairMetadata,
+        latest_price: Optional[float] = None,
+    ) -> LocalOrder:
         payload: Dict[str, Any] = build_order_payload(
             order, self.config, pair_metadata
         )
         order.raw_request = payload
 
-        price_for_notional = payload.get("price") or order.requested_price
+        rounded_volume = float(payload["volume"])
+        if rounded_volume < pair_metadata.min_order_size:
+            order.status = "rejected"
+            order.last_error = (
+                f"Order volume {rounded_volume} below minimum "
+                f"{pair_metadata.min_order_size} for {pair_metadata.canonical}"
+            )
+            logger.error(
+                order.last_error,
+                extra=structured_log_extra(
+                    event="order_rejected_min_volume",
+                    plan_id=order.plan_id,
+                    strategy_id=order.strategy_id,
+                    pair=order.pair,
+                    local_order_id=order.local_id,
+                    volume=rounded_volume,
+                ),
+            )
+            return order
+
+        price_for_notional = payload.get("price") or latest_price or order.requested_price
         if price_for_notional is not None:
             notional = float(payload["volume"]) * float(price_for_notional)
             if notional < self.config.min_order_notional_usd:
@@ -363,7 +418,12 @@ class SimulationExecutionAdapter:
         self.client: Optional[KrakenRESTClient] = None
         self._fill_callback = fill_callback
 
-    def submit_order(self, order: LocalOrder, pair_metadata: PairMetadata) -> LocalOrder:
+    def submit_order(
+        self,
+        order: LocalOrder,
+        pair_metadata: PairMetadata,
+        latest_price: Optional[float] = None,
+    ) -> LocalOrder:
         price = order.requested_price
         order.kraken_order_id = order.kraken_order_id or f"sim-{order.local_id}"
         order.status = "filled"
