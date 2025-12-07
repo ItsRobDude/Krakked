@@ -214,6 +214,12 @@ class Portfolio:
 
         self._process_cash_flow(record)
 
+    def apply_cash_flows(self, records: Sequence[CashFlowRecord]) -> None:
+        """Apply multiple cash flow records to rebuild balances."""
+
+        for record in records:
+            self.apply_cash_flow(record)
+
     # ------------------------------------------------------------------
     # Equity & reconciliation
     # ------------------------------------------------------------------
