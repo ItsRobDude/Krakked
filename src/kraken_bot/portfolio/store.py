@@ -1384,9 +1384,9 @@ class SQLitePortfolioStore(PortfolioStore):
 
     def record_ml_example(
         self,
-        *,
         strategy_id: str,
         model_key: str,
+        *,
         created_at: datetime,
         source_mode: str,
         label_type: str,
@@ -1394,111 +1394,73 @@ class SQLitePortfolioStore(PortfolioStore):
         label: float,
         sample_weight: float = 1.0,
     ) -> None:
-        """Append a training example and keep only the newest MAX_ML_TRAINING_EXAMPLES
-        for this (strategy_id, model_key) pair.
-        """
-        created_at_str = (
-            created_at.astimezone(timezone.utc)
-            if created_at.tzinfo is not None
-            else created_at.replace(tzinfo=timezone.utc)
-        ).isoformat()
+        """Persist a single ML training example and keep a rolling window per model key."""
+        payload = json.dumps([float(x) for x in features])
 
-        features_json = json.dumps(list(features), separators=(",", ":"))
+        with self._lock:
+            conn = self._get_conn()
+            try:
+                cursor = conn.cursor()
 
-        with self._get_conn() as conn:
-            cur = conn.cursor()
-            cur.execute(
-                """
-                INSERT INTO ml_training_examples (
-                    strategy_id,
-                    model_key,
-                    created_at,
-                    source_mode,
-                    label_type,
-                    features,
-                    label,
-                    sample_weight
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    strategy_id,
-                    model_key,
-                    created_at_str,
-                    source_mode,
-                    label_type,
-                    features_json,
-                    float(label),
-                    float(sample_weight),
-                ),
-            )
-
-            # Enforce rolling window per (strategy_id, model_key)
-            cur.execute(
-                """
-                SELECT COUNT(*)
-                FROM ml_training_examples
-                WHERE strategy_id = ? AND model_key = ?
-                """,
-                (strategy_id, model_key),
-            )
-            count = int(cur.fetchone()[0] or 0)
-
-            if count > MAX_ML_TRAINING_EXAMPLES:
-                to_delete = count - MAX_ML_TRAINING_EXAMPLES
-                cur.execute(
+                # Insert the new example
+                cursor.execute(
                     """
-                    DELETE FROM ml_training_examples
-                    WHERE id IN (
-                        SELECT id
-                        FROM ml_training_examples
-                        WHERE strategy_id = ? AND model_key = ?
-                        ORDER BY created_at ASC, id ASC
-                        LIMIT ?
+                    INSERT INTO ml_training_examples (
+                        strategy_id,
+                        model_key,
+                        created_at,
+                        source_mode,
+                        label_type,
+                        features,
+                        label,
+                        sample_weight
                     )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (strategy_id, model_key, to_delete),
+                    (
+                        strategy_id,
+                        model_key,
+                        created_at.isoformat(),
+                        source_mode,
+                        label_type,
+                        payload,
+                        float(label),
+                        float(sample_weight),
+                    ),
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    strategy_id,
-                    model_key,
-                    created_at_iso,
-                    source_mode,
-                    label_type,
-                    features_json,
-                    float(label),
-                    float(sample_weight),
-                ),
-            )
 
-            # Enforce rolling window per (strategy_id, model_key):
-            # keep the newest MAX_ML_TRAINING_EXAMPLES by id, drop older ones.
-            cursor.execute(
-                """
-                DELETE FROM ml_training_examples
-                WHERE strategy_id = ?
-                  AND model_key = ?
-                  AND id NOT IN (
-                      SELECT id
-                      FROM ml_training_examples
-                      WHERE strategy_id = ?
-                        AND model_key = ?
-                      ORDER BY id DESC
-                      LIMIT ?
-                  )
-                """,
-                (
-                    strategy_id,
-                    model_key,
-                    strategy_id,
-                    model_key,
-                    MAX_ML_TRAINING_EXAMPLES,
-                ),
-            )
+                # Enforce rolling window per (strategy_id, model_key)
+                cursor.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM ml_training_examples
+                    WHERE strategy_id = ? AND model_key = ?
+                    """,
+                    (strategy_id, model_key),
+                )
+                count_row = cursor.fetchone()
+                total = int(count_row[0]) if count_row and count_row[0] is not None else 0
 
-            conn.commit()
+                if total > MAX_ML_TRAINING_EXAMPLES:
+                    to_delete = total - MAX_ML_TRAINING_EXAMPLES
+                    # Delete the oldest rows first
+                    cursor.execute(
+                        """
+                        DELETE FROM ml_training_examples
+                        WHERE id IN (
+                            SELECT id
+                            FROM ml_training_examples
+                            WHERE strategy_id = ? AND model_key = ?
+                            ORDER BY created_at ASC, id ASC
+                            LIMIT ?
+                        )
+                        """,
+                        (strategy_id, model_key, to_delete),
+                    )
+
+                conn.commit()
+            finally:
+                conn.close()
 
     def load_ml_training_window(
         self,
@@ -1507,94 +1469,102 @@ class SQLitePortfolioStore(PortfolioStore):
         *,
         max_examples: int = MAX_ML_TRAINING_EXAMPLES,
     ) -> Tuple[List[List[float]], List[float]]:
-        """Load up to max_examples most recent training examples for a model.
+        """Return up to ``max_examples`` most recent examples for this model key.
 
-        Returns (X, y) where X is a list of feature vectors and y a list of labels.
-        Oldest examples are first, newest last.
+        The result is ordered oldest → newest to be friendly to online learners.
         """
-        with self._get_conn() as conn:
-            cur = conn.cursor()
-            cur.execute(
+        conn = self._get_conn()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
                 """
                 SELECT features, label
                 FROM ml_training_examples
                 WHERE strategy_id = ? AND model_key = ?
-                ORDER BY created_at ASC, id ASC
+                ORDER BY created_at DESC, id DESC
                 LIMIT ?
                 """,
                 (strategy_id, model_key, int(max_examples)),
             )
-            rows = cur.fetchall()
+            rows = cursor.fetchall()
+        finally:
+            conn.close()
+
+        # rows are newest → oldest; reverse so caller sees oldest → newest
+        rows.reverse()
 
         X: List[List[float]] = []
         y: List[float] = []
 
-        for features_json, label in rows:
+        for features_json, label_value in rows:
             try:
                 features = json.loads(features_json)
             except Exception:
-                # Defensive: skip corrupt rows rather than breaking the whole load.
-                continue
-
-            if not isinstance(features, list):
+                # Skip malformed rows defensively
                 continue
 
             X.append([float(v) for v in features])
-            y.append(float(label))
+            y.append(float(label_value))
 
         return X, y
 
     def save_ml_model(
         self,
-        *,
         strategy_id: str,
         model_key: str,
+        *,
         label_type: str,
         framework: str,
         model: object,
+        version: int = 1,
     ) -> None:
-        """Persist a pickled model for a given (strategy_id, model_key)."""
-        blob = pickle.dumps(model, protocol=pickle.HIGHEST_PROTOCOL)
+        """Serialize and upsert the latest model snapshot for this key."""
+        blob = pickle.dumps(model)
         updated_at = _utc_now_iso()
 
-        with self._get_conn() as conn:
-            cur = conn.cursor()
-            cur.execute(
-                """
-                INSERT INTO ml_models (
-                    strategy_id,
-                    model_key,
-                    label_type,
-                    framework,
-                    version,
-                    updated_at,
-                    model_blob
+        with self._lock:
+            conn = self._get_conn()
+            try:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    INSERT INTO ml_models (
+                        strategy_id,
+                        model_key,
+                        label_type,
+                        framework,
+                        version,
+                        updated_at,
+                        model_blob
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(strategy_id, model_key) DO UPDATE SET
+                        label_type = excluded.label_type,
+                        framework  = excluded.framework,
+                        version    = excluded.version,
+                        updated_at = excluded.updated_at,
+                        model_blob = excluded.model_blob
+                    """,
+                    (
+                        strategy_id,
+                        model_key,
+                        label_type,
+                        framework,
+                        int(version),
+                        updated_at,
+                        blob,
+                    ),
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(strategy_id, model_key) DO UPDATE SET
-                    label_type = excluded.label_type,
-                    framework = excluded.framework,
-                    version = excluded.version,
-                    updated_at = excluded.updated_at,
-                    model_blob = excluded.model_blob
-                """,
-                (
-                    strategy_id,
-                    model_key,
-                    label_type,
-                    framework,
-                    1,  # simple versioning for now
-                    updated_at,
-                    blob,
-                ),
-            )
-            conn.commit()
+                conn.commit()
+            finally:
+                conn.close()
 
-    def load_ml_model(self, strategy_id: str, model_key: str) -> object | None:
-        """Load a previously saved model, or None if absent."""
-        with self._get_conn() as conn:
-            cur = conn.cursor()
-            cur.execute(
+    def load_ml_model(self, strategy_id: str, model_key: str) -> Optional[object]:
+        """Load the latest stored model for this key, if any."""
+        conn = self._get_conn()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
                 """
                 SELECT model_blob
                 FROM ml_models
@@ -1602,14 +1572,18 @@ class SQLitePortfolioStore(PortfolioStore):
                 """,
                 (strategy_id, model_key),
             )
-            row = cur.fetchone()
+            row = cursor.fetchone()
+        finally:
+            conn.close()
 
-        if row is None:
+        if not row:
             return None
 
         blob = row[0]
         try:
             return pickle.loads(blob)
         except Exception:
-            # Defensive: if unpickling fails, act as if no model exists.
+            logger.warning(
+                "Failed to deserialize ML model for %s:%s", strategy_id, model_key
+            )
             return None
