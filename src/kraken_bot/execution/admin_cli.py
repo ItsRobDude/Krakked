@@ -4,18 +4,18 @@ from __future__ import annotations
 
 import argparse
 import logging
-from types import SimpleNamespace
 from typing import List, Optional
 
 from kraken_bot.bootstrap import bootstrap
 from kraken_bot.config import load_config
 from kraken_bot.execution.oms import ExecutionService
 from kraken_bot.portfolio.store import SQLitePortfolioStore
+from kraken_bot.strategy.models import RiskStatus
 
 logger = logging.getLogger(__name__)
 
 
-def _admin_cli_risk_status() -> SimpleNamespace:
+def _admin_cli_risk_status() -> RiskStatus:
     """Risk provider stub for the admin CLI.
 
     The admin helpers do not execute new plans; they reconcile, list, and cancel
@@ -23,7 +23,16 @@ def _admin_cli_risk_status() -> SimpleNamespace:
     requirement without depending on the full strategy/risk stack.
     """
 
-    return SimpleNamespace(kill_switch_active=False, source="admin_cli")
+    return RiskStatus(
+        kill_switch_active=False,
+        daily_drawdown_pct=0.0,
+        drift_flag=False,
+        total_exposure_pct=0.0,
+        manual_exposure_pct=0.0,
+        per_asset_exposure_pct={},
+        per_strategy_exposure_pct={},
+        drift_info={"source": "admin_cli"},
+    )
 
 
 def _build_service(db_path: str, allow_interactive_setup: bool) -> ExecutionService:

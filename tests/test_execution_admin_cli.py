@@ -154,6 +154,14 @@ def test_admin_cli_builds_service_with_risk_provider(tmp_path, monkeypatch):
     service = admin_cli._build_service(str(db_path), allow_interactive_setup=False)
 
     assert captured_provider and captured_provider[0] is admin_cli._admin_cli_risk_status
-    assert captured_provider[0]() == SimpleNamespace(
-        kill_switch_active=False, source="admin_cli"
+    status = captured_provider[0]()
+    assert status == RiskStatus(
+        kill_switch_active=False,
+        daily_drawdown_pct=0.0,
+        drift_flag=False,
+        total_exposure_pct=0.0,
+        manual_exposure_pct=0.0,
+        per_asset_exposure_pct={},
+        per_strategy_exposure_pct={},
+        drift_info={"source": "admin_cli"},
     )
