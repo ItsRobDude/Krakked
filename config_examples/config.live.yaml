@@ -6,7 +6,7 @@ execution:
   paper_tests_completed: true
 
 portfolio:
-  auto_migrate_schema: false
+  auto_migrate_schema: false  # run `krakked portfolio-migrate` before live/paper startup
 
 ui:
   read_only: true
