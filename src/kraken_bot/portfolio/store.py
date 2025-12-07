@@ -1384,9 +1384,9 @@ class SQLitePortfolioStore(PortfolioStore):
 
     def record_ml_example(
         self,
+        *,
         strategy_id: str,
         model_key: str,
-        *,
         created_at: datetime,
         source_mode: str,
         label_type: str,
@@ -1394,27 +1394,20 @@ class SQLitePortfolioStore(PortfolioStore):
         label: float,
         sample_weight: float = 1.0,
     ) -> None:
+        """Append a training example and keep only the newest MAX_ML_TRAINING_EXAMPLES
+        for this (strategy_id, model_key) pair.
         """
-        Persist a single ML training example and enforce a per-model rolling window.
+        created_at_str = (
+            created_at.astimezone(timezone.utc)
+            if created_at.tzinfo is not None
+            else created_at.replace(tzinfo=timezone.utc)
+        ).isoformat()
 
-        We keep at most MAX_ML_TRAINING_EXAMPLES rows per (strategy_id, model_key),
-        dropping the oldest rows first.
-        """
-        # Normalize timestamp to UTC ISO string
-        if created_at.tzinfo is None:
-            created_at = created_at.replace(tzinfo=UTC)
-        else:
-            created_at = created_at.astimezone(UTC)
-        created_at_iso = created_at.isoformat()
+        features_json = json.dumps(list(features), separators=(",", ":"))
 
-        features_json = json.dumps([float(x) for x in features], separators=(",", ":"))
-
-        conn = self._get_conn()
-        try:
-            cursor = conn.cursor()
-
-            # Insert the new example
-            cursor.execute(
+        with self._get_conn() as conn:
+            cur = conn.cursor()
+            cur.execute(
                 """
                 INSERT INTO ml_training_examples (
                     strategy_id,
@@ -1425,6 +1418,46 @@ class SQLitePortfolioStore(PortfolioStore):
                     features,
                     label,
                     sample_weight
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    strategy_id,
+                    model_key,
+                    created_at_str,
+                    source_mode,
+                    label_type,
+                    features_json,
+                    float(label),
+                    float(sample_weight),
+                ),
+            )
+
+            # Enforce rolling window per (strategy_id, model_key)
+            cur.execute(
+                """
+                SELECT COUNT(*)
+                FROM ml_training_examples
+                WHERE strategy_id = ? AND model_key = ?
+                """,
+                (strategy_id, model_key),
+            )
+            count = int(cur.fetchone()[0] or 0)
+
+            if count > MAX_ML_TRAINING_EXAMPLES:
+                to_delete = count - MAX_ML_TRAINING_EXAMPLES
+                cur.execute(
+                    """
+                    DELETE FROM ml_training_examples
+                    WHERE id IN (
+                        SELECT id
+                        FROM ml_training_examples
+                        WHERE strategy_id = ? AND model_key = ?
+                        ORDER BY created_at ASC, id ASC
+                        LIMIT ?
+                    )
+                    """,
+                    (strategy_id, model_key, to_delete),
                 )
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
@@ -1466,11 +1499,6 @@ class SQLitePortfolioStore(PortfolioStore):
             )
 
             conn.commit()
-        finally:
-            try:
-                conn.close()
-            except Exception:  # pragma: no cover - best-effort cleanup
-                pass
 
     def load_ml_training_window(
         self,
@@ -1479,81 +1507,61 @@ class SQLitePortfolioStore(PortfolioStore):
         *,
         max_examples: int = MAX_ML_TRAINING_EXAMPLES,
     ) -> Tuple[List[List[float]], List[float]]:
+        """Load up to max_examples most recent training examples for a model.
+
+        Returns (X, y) where X is a list of feature vectors and y a list of labels.
+        Oldest examples are first, newest last.
         """
-        Load up to max_examples training points for (strategy_id, model_key),
-        ordered from oldest to newest within the retained rolling window.
-        """
-        conn = self._get_conn()
-        try:
-            cursor = conn.cursor()
-            cursor.execute(
+        with self._get_conn() as conn:
+            cur = conn.cursor()
+            cur.execute(
                 """
                 SELECT features, label
                 FROM ml_training_examples
-                WHERE strategy_id = ?
-                  AND model_key = ?
-                ORDER BY id DESC
+                WHERE strategy_id = ? AND model_key = ?
+                ORDER BY created_at ASC, id ASC
                 LIMIT ?
                 """,
                 (strategy_id, model_key, int(max_examples)),
             )
-            rows = cursor.fetchall()
-        finally:
-            try:
-                conn.close()
-            except Exception:  # pragma: no cover - best-effort cleanup
-                pass
-
-        # rows are newest → oldest, reverse to get chronological order
-        rows = list(reversed(rows))
+            rows = cur.fetchall()
 
         X: List[List[float]] = []
         y: List[float] = []
 
         for features_json, label in rows:
             try:
-                parsed = json.loads(features_json)
+                features = json.loads(features_json)
             except Exception:
-                # If a single row is corrupt, skip it rather than nuking all
+                # Defensive: skip corrupt rows rather than breaking the whole load.
                 continue
 
-            if not isinstance(parsed, list):
+            if not isinstance(features, list):
                 continue
 
-            try:
-                feat_vec = [float(v) for v in parsed]
-                y_val = float(label)
-            except (TypeError, ValueError):
-                continue
-
-            X.append(feat_vec)
-            y.append(y_val)
+            X.append([float(v) for v in features])
+            y.append(float(label))
 
         return X, y
 
     def save_ml_model(
         self,
+        *,
         strategy_id: str,
         model_key: str,
-        *,
         label_type: str,
         framework: str,
         model: object,
-        version: int = 1,
     ) -> None:
-        """
-        Persist a serialized ML model for (strategy_id, model_key).
-        Subsequent saves overwrite the previous row for that key.
-        """
-        blob = pickle.dumps(model)
+        """Persist a pickled model for a given (strategy_id, model_key)."""
+        blob = pickle.dumps(model, protocol=pickle.HIGHEST_PROTOCOL)
         updated_at = _utc_now_iso()
 
-        conn = self._get_conn()
-        try:
-            cursor = conn.cursor()
-            cursor.execute(
+        with self._get_conn() as conn:
+            cur = conn.cursor()
+            cur.execute(
                 """
-                INSERT OR REPLACE INTO ml_models (
+                INSERT INTO ml_models (
                     strategy_id,
                     model_key,
                     label_type,
@@ -1563,49 +1571,38 @@ class SQLitePortfolioStore(PortfolioStore):
                     model_blob
                 )
                 VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(strategy_id, model_key) DO UPDATE SET
+                    label_type = excluded.label_type,
+                    framework = excluded.framework,
+                    version = excluded.version,
+                    updated_at = excluded.updated_at,
+                    model_blob = excluded.model_blob
                 """,
                 (
                     strategy_id,
                     model_key,
                     label_type,
                     framework,
-                    int(version),
+                    1,  # simple versioning for now
                     updated_at,
                     blob,
                 ),
             )
             conn.commit()
-        finally:
-            try:
-                conn.close()
-            except Exception:  # pragma: no cover - best-effort cleanup
-                pass
 
-    def load_ml_model(self, strategy_id: str, model_key: str) -> Optional[object]:
-        """
-        Load a serialized ML model for (strategy_id, model_key) if present.
-
-        On any unpickling error, we log and return None so callers can fall back
-        to cold-start training.
-        """
-        conn = self._get_conn()
-        try:
-            cursor = conn.cursor()
-            cursor.execute(
+    def load_ml_model(self, strategy_id: str, model_key: str) -> object | None:
+        """Load a previously saved model, or None if absent."""
+        with self._get_conn() as conn:
+            cur = conn.cursor()
+            cur.execute(
                 """
                 SELECT model_blob
                 FROM ml_models
-                WHERE strategy_id = ?
-                  AND model_key = ?
+                WHERE strategy_id = ? AND model_key = ?
                 """,
                 (strategy_id, model_key),
             )
-            row = cursor.fetchone()
-        finally:
-            try:
-                conn.close()
-            except Exception:  # pragma: no cover
-                pass
+            row = cur.fetchone()
 
         if row is None:
             return None
@@ -1613,16 +1610,6 @@ class SQLitePortfolioStore(PortfolioStore):
         blob = row[0]
         try:
             return pickle.loads(blob)
-        except Exception as exc:  # pragma: no cover - defensive
-            logger.warning(
-                "Failed to load ML model for %s/%s: %s",
-                strategy_id,
-                model_key,
-                exc,
-                extra=structured_log_extra(
-                    event="ml_model_load_failed",
-                    strategy_id=strategy_id,
-                    model_key=model_key,
-                ),
-            )
+        except Exception:
+            # Defensive: if unpickling fails, act as if no model exists.
             return None
