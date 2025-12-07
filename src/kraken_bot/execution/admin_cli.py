@@ -15,6 +15,17 @@ from kraken_bot.portfolio.store import SQLitePortfolioStore
 logger = logging.getLogger(__name__)
 
 
+def _admin_cli_risk_status() -> SimpleNamespace:
+    """Risk provider stub for the admin CLI.
+
+    The admin helpers do not execute new plans; they reconcile, list, and cancel
+    orders. We still supply a provider to satisfy ``ExecutionService``'s live-mode
+    requirement without depending on the full strategy/risk stack.
+    """
+
+    return SimpleNamespace(kill_switch_active=False, source="admin_cli")
+
+
 def _build_service(db_path: str, allow_interactive_setup: bool) -> ExecutionService:
     config = load_config()
     client = None
@@ -25,11 +36,6 @@ def _build_service(db_path: str, allow_interactive_setup: bool) -> ExecutionServ
             allow_interactive_setup=allow_interactive_setup
         )
 
-    def _cli_risk_status():
-        return SimpleNamespace(kill_switch_active=False)
-
-    risk_provider = _cli_risk_status if config.execution.mode == "live" else None
-
     store = SQLitePortfolioStore(
         db_path=db_path, auto_migrate_schema=config.portfolio.auto_migrate_schema
     )
@@ -38,7 +44,7 @@ def _build_service(db_path: str, allow_interactive_setup: bool) -> ExecutionServ
         config=config.execution,
         store=store,
         rate_limiter=rate_limiter,
-        risk_status_provider=risk_provider,
+        risk_status_provider=_admin_cli_risk_status,
     )
     service.load_open_orders_from_store()
     return service
