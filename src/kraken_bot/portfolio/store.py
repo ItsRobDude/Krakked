@@ -1380,6 +1380,8 @@ class SQLitePortfolioStore(PortfolioStore):
 
         return results
 
+    # --- ML persistence -------------------------------------------------
+
     def record_ml_example(
         self,
         strategy_id: str,
@@ -1392,63 +1394,83 @@ class SQLitePortfolioStore(PortfolioStore):
         label: float,
         sample_weight: float = 1.0,
     ) -> None:
-        created_iso = (
-            created_at.astimezone(timezone.utc)
-            if created_at.tzinfo
-            else created_at.replace(tzinfo=timezone.utc)
-        ).isoformat()
+        """
+        Persist a single ML training example and enforce a per-model rolling window.
 
-        features_payload = json.dumps([float(x) for x in features])
+        We keep at most MAX_ML_TRAINING_EXAMPLES rows per (strategy_id, model_key),
+        dropping the oldest rows first.
+        """
+        # Normalize timestamp to UTC ISO string
+        if created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=UTC)
+        else:
+            created_at = created_at.astimezone(UTC)
+        created_at_iso = created_at.isoformat()
 
-        with self._lock:
-            conn = self._get_conn()
+        features_json = json.dumps([float(x) for x in features])
+
+        conn = self._get_conn()
+        try:
+            cursor = conn.cursor()
+
+            # Insert the new example
+            cursor.execute(
+                """
+                INSERT INTO ml_training_examples (
+                    strategy_id,
+                    model_key,
+                    created_at,
+                    source_mode,
+                    label_type,
+                    features,
+                    label,
+                    sample_weight
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    strategy_id,
+                    model_key,
+                    created_at_iso,
+                    source_mode,
+                    label_type,
+                    features_json,
+                    float(label),
+                    float(sample_weight),
+                ),
+            )
+
+            # Enforce rolling window per (strategy_id, model_key):
+            # keep the newest MAX_ML_TRAINING_EXAMPLES by id, drop older ones.
+            cursor.execute(
+                """
+                DELETE FROM ml_training_examples
+                WHERE strategy_id = ?
+                  AND model_key = ?
+                  AND id NOT IN (
+                      SELECT id
+                      FROM ml_training_examples
+                      WHERE strategy_id = ?
+                        AND model_key = ?
+                      ORDER BY id DESC
+                      LIMIT ?
+                  )
+                """,
+                (
+                    strategy_id,
+                    model_key,
+                    strategy_id,
+                    model_key,
+                    MAX_ML_TRAINING_EXAMPLES,
+                ),
+            )
+
+            conn.commit()
+        finally:
             try:
-                cursor = conn.cursor()
-
-                cursor.execute(
-                    """
-                    INSERT INTO ml_training_examples (
-                        strategy_id,
-                        model_key,
-                        created_at,
-                        source_mode,
-                        label_type,
-                        features,
-                        label,
-                        sample_weight
-                    )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        strategy_id,
-                        model_key,
-                        created_iso,
-                        source_mode,
-                        label_type,
-                        features_payload,
-                        float(label),
-                        float(sample_weight),
-                    ),
-                )
-
-                cursor.execute(
-                    """
-                    DELETE FROM ml_training_examples
-                    WHERE id IN (
-                        SELECT id
-                        FROM ml_training_examples
-                        WHERE strategy_id = ?
-                          AND model_key = ?
-                        ORDER BY created_at DESC, id DESC
-                        LIMIT -1 OFFSET ?
-                    )
-                    """,
-                    (strategy_id, model_key, MAX_ML_TRAINING_EXAMPLES),
-                )
-
-                conn.commit()
-            finally:
                 conn.close()
+            except Exception:  # pragma: no cover - best-effort cleanup
+                pass
 
     def load_ml_training_window(
         self,
@@ -1457,40 +1479,57 @@ class SQLitePortfolioStore(PortfolioStore):
         *,
         max_examples: int = MAX_ML_TRAINING_EXAMPLES,
     ) -> Tuple[List[List[float]], List[float]]:
-        with self._lock:
-            conn = self._get_conn()
+        """
+        Load up to max_examples training points for (strategy_id, model_key),
+        ordered from oldest to newest within the retained rolling window.
+        """
+        conn = self._get_conn()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT features, label
+                FROM ml_training_examples
+                WHERE strategy_id = ?
+                  AND model_key = ?
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (strategy_id, model_key, max_examples),
+            )
+            rows = cursor.fetchall()
+        finally:
             try:
-                cursor = conn.cursor()
-                cursor.execute(
-                    """
-                    SELECT features, label
-                    FROM ml_training_examples
-                    WHERE strategy_id = ?
-                      AND model_key = ?
-                    ORDER BY created_at DESC, id DESC
-                    LIMIT ?
-                    """,
-                    (strategy_id, model_key, int(max_examples)),
-                )
-                rows = cursor.fetchall()
-            finally:
                 conn.close()
+            except Exception:  # pragma: no cover - best-effort cleanup
+                pass
 
-        if not rows:
-            return [], []
+        # rows are newest → oldest, reverse to get chronological order
+        rows = list(reversed(rows))
 
-        features_list: List[List[float]] = []
-        labels: List[float] = []
+        X: List[List[float]] = []
+        y: List[float] = []
 
-        for features_json, value in reversed(rows):
+        for features_json, label in rows:
             try:
                 parsed = json.loads(features_json)
-                features_list.append([float(v) for v in parsed])
-                labels.append(float(value))
             except Exception:
+                # If a single row is corrupt, skip it rather than nuking all
                 continue
 
-        return features_list, labels
+            if not isinstance(parsed, list):
+                continue
+
+            try:
+                feat_vec = [float(v) for v in parsed]
+                y_val = float(label)
+            except (TypeError, ValueError):
+                continue
+
+            X.append(feat_vec)
+            y.append(y_val)
+
+        return X, y
 
     def save_ml_model(
         self,
@@ -1502,70 +1541,88 @@ class SQLitePortfolioStore(PortfolioStore):
         model: object,
         version: int = 1,
     ) -> None:
+        """
+        Persist a serialized ML model for (strategy_id, model_key).
+        Subsequent saves overwrite the previous row for that key.
+        """
         blob = pickle.dumps(model)
-        updated_at = datetime.now(timezone.utc).isoformat()
+        updated_at = _utc_now_iso()
 
-        with self._lock:
-            conn = self._get_conn()
-            try:
-                cursor = conn.cursor()
-                cursor.execute(
-                    """
-                    INSERT INTO ml_models (
-                        strategy_id,
-                        model_key,
-                        label_type,
-                        framework,
-                        version,
-                        updated_at,
-                        model_blob
-                    )
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(strategy_id, model_key)
-                    DO UPDATE SET
-                        label_type = excluded.label_type,
-                        framework   = excluded.framework,
-                        version     = excluded.version,
-                        updated_at  = excluded.updated_at,
-                        model_blob  = excluded.model_blob
-                    """,
-                    (
-                        strategy_id,
-                        model_key,
-                        label_type,
-                        framework,
-                        int(version),
-                        updated_at,
-                        blob,
-                    ),
+        conn = self._get_conn()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT OR REPLACE INTO ml_models (
+                    strategy_id,
+                    model_key,
+                    label_type,
+                    framework,
+                    version,
+                    updated_at,
+                    model_blob
                 )
-                conn.commit()
-            finally:
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    strategy_id,
+                    model_key,
+                    label_type,
+                    framework,
+                    int(version),
+                    updated_at,
+                    blob,
+                ),
+            )
+            conn.commit()
+        finally:
+            try:
                 conn.close()
+            except Exception:  # pragma: no cover - best-effort cleanup
+                pass
 
     def load_ml_model(self, strategy_id: str, model_key: str) -> Optional[object]:
-        with self._lock:
-            conn = self._get_conn()
-            try:
-                cursor = conn.cursor()
-                cursor.execute(
-                    """
-                    SELECT model_blob
-                    FROM ml_models
-                    WHERE strategy_id = ?
-                      AND model_key = ?
-                    """,
-                    (strategy_id, model_key),
-                )
-                row = cursor.fetchone()
-            finally:
-                conn.close()
+        """
+        Load a serialized ML model for (strategy_id, model_key) if present.
 
-        if not row:
+        On any unpickling error, we log and return None so callers can fall back
+        to cold-start training.
+        """
+        conn = self._get_conn()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT model_blob
+                FROM ml_models
+                WHERE strategy_id = ?
+                  AND model_key = ?
+                """,
+                (strategy_id, model_key),
+            )
+            row = cursor.fetchone()
+        finally:
+            try:
+                conn.close()
+            except Exception:  # pragma: no cover
+                pass
+
+        if row is None:
             return None
 
         blob = row[0]
         try:
             return pickle.loads(blob)
-        except Exception:
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning(
+                "Failed to load ML model for %s/%s: %s",
+                strategy_id,
+                model_key,
+                exc,
+                extra=structured_log_extra(
+                    event="ml_model_load_failed",
+                    strategy_id=strategy_id,
+                    model_key=model_key,
+                ),
+            )
             return None
