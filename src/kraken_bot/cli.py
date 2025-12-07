@@ -48,6 +48,16 @@ def _db_path_exists(db_path: str) -> bool:
     return Path(db_path).expanduser().resolve().exists()
 
 
+def _format_schema_version_mismatch(
+    prefix: str, exc: PortfolioSchemaError, *, include_value_word: bool = False
+) -> str:
+    value_word = " value" if include_value_word else ""
+    return (
+        f"{prefix}: stored schema version{value_word} {exc.found} "
+        f"is incompatible with expected {exc.expected}."
+    )
+
+
 def _print_error(message: str) -> int:
     """Print an error message and return a non-zero exit code."""
 
