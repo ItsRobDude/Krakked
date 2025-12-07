@@ -11,9 +11,17 @@ from kraken_bot.market_data.exceptions import DataStaleError
 from kraken_bot.portfolio.manager import PortfolioService
 from kraken_bot.strategy.base import Strategy, StrategyContext
 from kraken_bot.strategy.ml_models import PassiveAggressiveClassifier
+from kraken_bot.strategy.ml_persistence import (
+    load_model,
+    load_training_window,
+    record_example,
+    save_model,
+)
 from kraken_bot.strategy.models import StrategyIntent
 
 logger = logging.getLogger(__name__)
+
+TRAINING_WINDOW_EXAMPLES = 5000
 
 
 @dataclass
@@ -64,6 +72,35 @@ class AIPredictorStrategy(Strategy):
     def _learning_enabled(self) -> bool:
         return bool(self.config.params.get("continuous_learning", True))
 
+    def _model_key(self, timeframe: str) -> str:
+        return f"global|{timeframe}"
+
+    def _maybe_bootstrap_from_history(self, ctx: StrategyContext, timeframe: str) -> None:
+        if self.model_initialized:
+            return
+
+        model_key = self._model_key(timeframe)
+        restored_model = load_model(ctx, self.id, model_key)
+        if restored_model is not None:
+            self.model = restored_model
+            self.model_initialized = True
+            return
+
+        X, y = load_training_window(
+            ctx,
+            strategy_id=self.id,
+            model_key=model_key,
+            max_examples=TRAINING_WINDOW_EXAMPLES,
+        )
+        if not X or not y:
+            return
+
+        try:
+            self.model.partial_fit(X, [int(v) for v in y], classes=self.classes)
+            self.model_initialized = True
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("ML bootstrap failed for %s: %s", self.id, exc)
+
     def _extract_features(
         self, ctx: StrategyContext, pair: str, timeframe: str
     ) -> Optional[List[float]]:
@@ -110,6 +147,8 @@ class AIPredictorStrategy(Strategy):
         intents: List[StrategyIntent] = []
 
         timeframe = ctx.timeframe or self.params.timeframe
+        model_key = self._model_key(timeframe)
+        self._maybe_bootstrap_from_history(ctx, timeframe)
 
         universe = list(ctx.universe or [])
         if not universe:
@@ -148,6 +187,14 @@ class AIPredictorStrategy(Strategy):
             if last_obs:
                 last_features, last_price = last_obs
                 label = 1 if current_price > last_price else 0
+                record_example(
+                    ctx,
+                    strategy_id=self.id,
+                    model_key=model_key,
+                    label_type="classification",
+                    features=last_features,
+                    label=float(label),
+                )
                 try:
                     if not self.model_initialized:
                         self.model.partial_fit(
@@ -214,6 +261,16 @@ class AIPredictorStrategy(Strategy):
                         },
                     },
                 )
+            )
+
+        if self.model_initialized:
+            save_model(
+                ctx,
+                strategy_id=self.id,
+                model_key=model_key,
+                label_type="classification",
+                framework="sklearn_passive_aggressive_classifier",
+                model=self.model,
             )
 
         return intents

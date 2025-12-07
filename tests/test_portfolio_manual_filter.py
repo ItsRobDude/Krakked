@@ -77,6 +77,65 @@ class InMemoryStore(PortfolioStore):
     def get_execution_results(self, limit: int = 10):
         return getattr(self, "execution_results", [])[:limit]
 
+    def record_ml_example(
+        self,
+        strategy_id: str,
+        model_key: str,
+        *,
+        created_at,
+        source_mode: str,
+        label_type: str,
+        features,
+        label,
+        sample_weight: float = 1.0,
+    ) -> None:
+        examples = getattr(self, "ml_examples", [])
+        examples.append(
+            {
+                "strategy_id": strategy_id,
+                "model_key": model_key,
+                "created_at": created_at,
+                "source_mode": source_mode,
+                "label_type": label_type,
+                "features": list(features),
+                "label": label,
+                "sample_weight": sample_weight,
+            }
+        )
+        self.ml_examples = examples
+
+    def load_ml_training_window(self, strategy_id: str, model_key: str, *, max_examples: int):
+        examples = [
+            ex
+            for ex in getattr(self, "ml_examples", [])
+            if ex["strategy_id"] == strategy_id and ex["model_key"] == model_key
+        ]
+        features = [ex["features"] for ex in examples][:max_examples]
+        labels = [float(ex["label"]) for ex in examples][:max_examples]
+        return features, labels
+
+    def save_ml_model(
+        self,
+        strategy_id: str,
+        model_key: str,
+        *,
+        label_type: str,
+        framework: str,
+        model: object,
+        version: int = 1,
+    ) -> None:
+        models = getattr(self, "ml_models", {})
+        models[(strategy_id, model_key)] = {
+            "label_type": label_type,
+            "framework": framework,
+            "model": model,
+            "version": version,
+        }
+        self.ml_models = models
+
+    def load_ml_model(self, strategy_id: str, model_key: str):
+        return getattr(self, "ml_models", {}).get((strategy_id, model_key), {}).get("model")
+
 
 @pytest.fixture
 def market_data_mock():

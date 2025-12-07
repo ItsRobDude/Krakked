@@ -221,6 +221,48 @@ def migrate_4_to_5(conn: sqlite3.Connection) -> None:
     )
 
 
+def migrate_5_to_6(conn: sqlite3.Connection) -> None:
+    """Add ML training data and persisted model tables."""
+    cursor = conn.cursor()
+
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS ml_training_examples (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            strategy_id TEXT NOT NULL,
+            model_key   TEXT NOT NULL,
+            created_at  TEXT NOT NULL,
+            source_mode TEXT NOT NULL,
+            label_type  TEXT NOT NULL,
+            features    TEXT NOT NULL,
+            label       REAL NOT NULL,
+            sample_weight REAL NOT NULL DEFAULT 1.0
+        )
+        """
+    )
+    cursor.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_ml_training_key
+            ON ml_training_examples(strategy_id, model_key, created_at)
+        """
+    )
+
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS ml_models (
+            strategy_id TEXT NOT NULL,
+            model_key   TEXT NOT NULL,
+            label_type  TEXT NOT NULL,
+            framework   TEXT NOT NULL,
+            version     INTEGER NOT NULL,
+            updated_at  TEXT NOT NULL,
+            model_blob  BLOB NOT NULL,
+            PRIMARY KEY (strategy_id, model_key)
+        )
+        """
+    )
+
+
 def run_migrations(
     conn: sqlite3.Connection, from_version: int, to_version: int
 ) -> None:
@@ -239,6 +281,7 @@ def run_migrations(
         2: migrate_2_to_3,
         3: migrate_3_to_4,
         4: migrate_4_to_5,
+        5: migrate_5_to_6,
     }
 
     for version in range(from_version, to_version):
