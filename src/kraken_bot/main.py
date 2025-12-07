@@ -205,6 +205,25 @@ def _run_loop_iteration(
     updated_portfolio_sync = last_portfolio_sync
     updated_strategy_cycle = last_strategy_cycle
 
+    if (now - last_portfolio_sync).total_seconds() >= portfolio_interval:
+        try:
+            portfolio.sync()
+            if portfolio.last_sync_ok:
+                updated_portfolio_sync = now
+                refresh_metrics_state()
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logger.error("Portfolio sync failed: %s", exc)
+            metrics.record_error(f"Portfolio sync failed: {exc}")
+
+    if not portfolio.last_sync_ok:
+        logger.error(
+            "Skipping loop iteration: portfolio sync failed",
+            extra=structured_log_extra(event="portfolio_sync_failed"),
+        )
+        metrics.record_error("Portfolio sync failed")
+        refresh_metrics_state()
+        return updated_portfolio_sync, updated_strategy_cycle
+
     try:
         data_status = market_data.get_health_status()
     except Exception as exc:  # pragma: no cover - defensive logging
@@ -228,15 +247,6 @@ def _run_loop_iteration(
         ),
         max_staleness=getattr(data_status, "max_staleness", None),
     )
-
-    if (now - last_portfolio_sync).total_seconds() >= portfolio_interval:
-        try:
-            portfolio.sync()
-            updated_portfolio_sync = now
-            refresh_metrics_state()
-        except Exception as exc:  # pragma: no cover - defensive logging
-            logger.error("Portfolio sync failed: %s", exc)
-            metrics.record_error(f"Portfolio sync failed: {exc}")
 
     drift_status = _get_portfolio_drift(portfolio)
     if drift_status:
@@ -354,12 +364,20 @@ def run(allow_interactive_setup: bool = True) -> int:
         )
 
         db_path = getattr(getattr(config, "portfolio", None), "db_path", "portfolio.db")
+        auto_migrate = config.portfolio.auto_migrate_schema
+        execution_mode = getattr(config.execution, "mode", "unknown")
 
-        if config.portfolio.auto_migrate_schema:
+        if auto_migrate and execution_mode in {"paper", "live"}:
+            raise RuntimeError(
+                "auto_migrate_schema must be False in paper/live mode. "
+                "Run `krakked portfolio-migrate` to upgrade the DB schema first."
+            )
+
+        if auto_migrate:
+            schema_status = ensure_portfolio_schema(
+                db_path, CURRENT_SCHEMA_VERSION, migrate=True
+            )
             with sqlite3.connect(db_path) as conn:
-                schema_status = ensure_portfolio_schema(
-                    conn, CURRENT_SCHEMA_VERSION, migrate=True
-                )
                 ensure_portfolio_tables(conn)
                 conn.commit()
         else:
@@ -414,6 +432,7 @@ def run(allow_interactive_setup: bool = True) -> int:
             config=config,
             client=client,
             market_data=market_data,
+            portfolio_service=portfolio,
             portfolio=portfolio,
             strategy_engine=strategy_engine,
             execution_service=execution_service,
@@ -431,6 +450,11 @@ def run(allow_interactive_setup: bool = True) -> int:
                 found_schema=exc.found,
                 db_path=db_path,
             ),
+        )
+        return 1
+    except RuntimeError as exc:
+        logger.critical(
+            "%s", exc, extra=structured_log_extra(event="schema_guard_failed")
         )
         return 1
 

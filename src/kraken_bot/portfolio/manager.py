@@ -61,6 +61,13 @@ class PortfolioService:
             userref_to_strategy=userref_to_strategy,
         )
         self._bootstrapped = False
+        self._last_sync_ok: bool = True  # pessimistic until first failure
+
+    @property
+    def last_sync_ok(self) -> bool:
+        """True if the last sync completed successfully."""
+
+        return self._last_sync_ok
 
     def initialize(self):
         """
@@ -98,12 +105,14 @@ class PortfolioService:
         """
         Fetches new trades/ledgers, updates state, reconciles.
         """
+
         logger.info(
             "Syncing portfolio...",
             extra=structured_log_extra(event="portfolio_sync_start"),
         )
 
         self._bootstrap_from_store()
+        self._last_sync_ok = False
 
         # 1. Fetch and Save Trades
         latest_trades = self.store.get_trades(limit=1)  # ordered by time desc
@@ -163,7 +172,19 @@ class PortfolioService:
                 break
 
         if new_trades:
-            self.portfolio.ingest_trades(new_trades, persist=True)
+            try:
+                self.portfolio.ingest_trades(new_trades, persist=False)
+            except Exception:  # noqa: BLE001
+                logger.exception(
+                    "portfolio.sync.ingest_trades_failed",
+                    extra={"since": since_ts, "count": len(new_trades)},
+                )
+                return {"new_trades": 0, "new_cash_flows": 0}
+
+            normalized_trades = [
+                self.portfolio._normalize_trade_payload(t) for t in new_trades
+            ]
+            self.store.save_trades(normalized_trades)
 
         # 2. Fetch Ledgers for Cash Flows
         latest_cashflows = self.store.get_cash_flows(limit=1)
@@ -176,12 +197,25 @@ class PortfolioService:
         ledger_resp = self.rest_client.get_ledgers(params=ledger_params)
         ledger_entries = ledger_resp.get("ledger", {})
 
-        cash_flow_records = self.portfolio.ingest_cashflows(
-            ledger_entries, persist=True
-        )
+        cash_flow_records = []
+        if ledger_entries:
+            try:
+                cash_flow_records = self.portfolio.ingest_cashflows(
+                    ledger_entries, persist=False
+                )
+            except Exception:  # noqa: BLE001
+                logger.exception(
+                    "portfolio.sync.ingest_cash_flows_failed",
+                    extra={"since": since_ledger, "count": len(ledger_entries)},
+                )
+                return {"new_trades": len(new_trades), "new_cash_flows": 0}
+
+            if cash_flow_records:
+                self.store.save_cash_flows(cash_flow_records)
 
         # 3. Reconcile
         self._reconcile()
+        self._last_sync_ok = True
 
         return {
             "new_trades": len(new_trades),
