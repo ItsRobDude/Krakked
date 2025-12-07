@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import List, Optional
+from typing import List
 
 from fastapi import APIRouter, Request
 
@@ -171,58 +171,9 @@ async def flatten_all_positions(
         )
         return ApiEnvelope(data=None, error="UI is in read-only mode")
 
-    plan: Optional[ExecutionPlan] = None
     try:
-        actions = []
         positions = ctx.portfolio.get_positions()
-        for position in positions:
-            if position.base_size == 0:
-                continue
-            actions.append(
-                {
-                    "pair": position.pair,
-                    "strategy_id": position.strategy_tag or "manual",
-                    "target_base_size": 0.0,
-                    "current_base_size": position.base_size,
-                }
-            )
-
-        plan = (
-            ctx.strategy_engine._build_flatten_plan(actions)
-            if hasattr(ctx.strategy_engine, "_build_flatten_plan")
-            else None
-        )
-        if plan is None:
-            from datetime import datetime, timezone
-
-            from kraken_bot.strategy.models import ExecutionPlan, RiskAdjustedAction
-
-            now = datetime.now(timezone.utc)
-            risk_actions = [
-                RiskAdjustedAction(
-                    pair=item["pair"],
-                    strategy_id=item["strategy_id"],
-                    action_type="close",
-                    target_base_size=item["target_base_size"],
-                    target_notional_usd=0.0,
-                    current_base_size=item["current_base_size"],
-                    reason="Manual flatten all",
-                    blocked=False,
-                    blocked_reasons=[],
-                    strategy_tag=item["strategy_id"],
-                    userref=None,
-                    risk_limits_snapshot={},
-                )
-                for item in actions
-            ]
-            plan = ExecutionPlan(
-                plan_id=f"flatten_{int(now.timestamp())}",
-                generated_at=now,
-                actions=risk_actions,
-            )
-
-        if plan is None:
-            raise ValueError("No execution plan generated")
+        plan = ctx.strategy_engine.build_emergency_flatten_plan(positions)
 
         result = ctx.execution_service.execute_plan(plan)
         logger.info(
@@ -241,7 +192,7 @@ async def flatten_all_positions(
             extra=build_request_log_extra(
                 request,
                 event="flatten_all_failed",
-                plan_id=plan.plan_id if plan else None,
+                plan_id=plan.plan_id if "plan" in locals() and plan else None,
             ),
         )
         return ApiEnvelope(data=None, error=str(exc))

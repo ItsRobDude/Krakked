@@ -1,12 +1,14 @@
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import List
+from unittest.mock import MagicMock
 
 import pytest
 
 from kraken_bot.config import ExecutionConfig
 from kraken_bot.execution.models import LocalOrder
 from kraken_bot.execution.oms import ExecutionService
+from kraken_bot.market_data.models import PairMetadata
 from kraken_bot.strategy.models import ExecutionPlan, RiskAdjustedAction
 
 
@@ -43,7 +45,7 @@ class FakeAdapter:
             get_closed_orders=lambda: {},
         )
 
-    def submit_order(self, order: LocalOrder) -> LocalOrder:
+    def submit_order(self, order: LocalOrder, pair_metadata: PairMetadata) -> LocalOrder:
         self.submit_order_calls.append(order)
         return order
 
@@ -69,10 +71,39 @@ class ToggleableRiskEngine:
         return SimpleNamespace(kill_switch_active=self.manual_kill_switch_active)
 
 
+def _pair_metadata(pair: str = "XBTUSD") -> PairMetadata:
+    base, quote = pair[:3], pair[3:]
+    rest_symbol = f"{base}/{quote}"
+    return PairMetadata(
+        canonical=pair,
+        base=base,
+        quote=quote,
+        rest_symbol=rest_symbol,
+        ws_symbol=rest_symbol,
+        raw_name=pair,
+        price_decimals=1,
+        volume_decimals=8,
+        lot_size=0.00000001,
+        min_order_size=0.0001,
+        status="online",
+    )
+
+
+def _market_data_mock():
+    md = MagicMock()
+    md.get_pair_metadata_or_raise.side_effect = (
+        lambda pair: _pair_metadata(pair)
+    )
+    md.get_best_bid_ask.return_value = None
+    return md
+
+
 def test_execute_plan_blocked_by_kill_switch():
     adapter = FakeAdapter()
     service = ExecutionService(
-        adapter=adapter, risk_status_provider=_kill_switch_provider
+        adapter=adapter,
+        market_data=_market_data_mock(),
+        risk_status_provider=_kill_switch_provider,
     )
 
     plan = ExecutionPlan(
@@ -96,7 +127,7 @@ def test_execute_plan_blocked_by_kill_switch():
 
 def test_execute_plan_blocks_when_risk_provider_missing():
     adapter = FakeAdapter()
-    service = ExecutionService(adapter=adapter)
+    service = ExecutionService(adapter=adapter, market_data=_market_data_mock())
 
     plan = ExecutionPlan(
         plan_id="plan_missing_risk_provider",
@@ -115,7 +146,9 @@ def test_execute_plan_blocks_when_risk_provider_missing():
 def test_cancel_operations_allowed_with_kill_switch():
     adapter = FakeAdapter()
     service = ExecutionService(
-        adapter=adapter, risk_status_provider=_kill_switch_provider
+        adapter=adapter,
+        market_data=_market_data_mock(),
+        risk_status_provider=_kill_switch_provider,
     )
 
     order = LocalOrder(
@@ -137,7 +170,9 @@ def test_cancel_operations_allowed_with_kill_switch():
 def test_kill_switch_blocks_all_eligible_actions_with_truncation_config():
     adapter = FakeAdapter(config=ExecutionConfig(max_concurrent_orders=1))
     service = ExecutionService(
-        adapter=adapter, risk_status_provider=_kill_switch_provider
+        adapter=adapter,
+        market_data=_market_data_mock(),
+        risk_status_provider=_kill_switch_provider,
     )
 
     actions = [
@@ -171,7 +206,9 @@ def test_risk_provider_follows_strategy_engine_kill_switch_state():
     adapter = FakeAdapter()
     risk_engine = ToggleableRiskEngine()
     service = ExecutionService(
-        adapter=adapter, risk_status_provider=risk_engine.get_status
+        adapter=adapter,
+        market_data=_market_data_mock(),
+        risk_status_provider=risk_engine.get_status,
     )
 
     plan = ExecutionPlan(
@@ -192,7 +229,7 @@ def test_live_mode_requires_risk_provider():
     adapter = FakeAdapter(config=ExecutionConfig(mode="live", allow_live_trading=True))
 
     with pytest.raises(ValueError, match="risk_status_provider"):
-        ExecutionService(adapter=adapter)
+        ExecutionService(adapter=adapter, market_data=_market_data_mock())
 
 
 def test_live_mode_provider_error_blocks_execution():
@@ -201,7 +238,11 @@ def test_live_mode_provider_error_blocks_execution():
     def _erroring_provider() -> SimpleNamespace:
         raise RuntimeError("risk down")
 
-    service = ExecutionService(adapter=adapter, risk_status_provider=_erroring_provider)
+    service = ExecutionService(
+        adapter=adapter,
+        market_data=_market_data_mock(),
+        risk_status_provider=_erroring_provider,
+    )
 
     plan = ExecutionPlan(
         plan_id="plan_live_error",
@@ -223,7 +264,8 @@ def test_non_live_provider_error_allows_execution():
         raise RuntimeError("risk down")
 
     market_data = SimpleNamespace(
-        get_best_bid_ask=lambda pair: {"bid": 100.0, "ask": 100.0}
+        get_best_bid_ask=lambda pair: {"bid": 100.0, "ask": 100.0},
+        get_pair_metadata_or_raise=lambda pair: _pair_metadata(pair),
     )
 
     service = ExecutionService(

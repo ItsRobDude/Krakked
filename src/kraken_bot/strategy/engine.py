@@ -6,13 +6,14 @@ import json
 import logging
 from dataclasses import asdict
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Type
+from typing import Any, Dict, List, Optional, Sequence, Type
 
 from kraken_bot.config import AppConfig, StrategyConfig
 from kraken_bot.logging_config import structured_log_extra
 from kraken_bot.market_data.api import MarketDataAPI
 from kraken_bot.market_data.exceptions import DataStaleError
 from kraken_bot.portfolio.manager import PortfolioService
+from kraken_bot.portfolio.models import SpotPosition
 from kraken_bot.strategy.regime import RegimeSnapshot, infer_regime
 
 from .allocator import StrategyWeights, compute_weights
@@ -510,6 +511,45 @@ class StrategyEngine:
 
     def get_risk_status(self) -> RiskStatus:
         return self.risk_engine.get_status()
+
+    def build_emergency_flatten_plan(
+        self, positions: Sequence[SpotPosition], reason: str = "Manual flatten all"
+    ) -> ExecutionPlan:
+        """Construct a flatten-all execution plan for the provided positions."""
+
+        now = datetime.now(timezone.utc)
+        actions: list[RiskAdjustedAction] = []
+
+        for position in positions:
+            if position.base_size == 0:
+                continue
+
+            strategy_tag = position.strategy_tag or "manual"
+            actions.append(
+                RiskAdjustedAction(
+                    pair=position.pair,
+                    strategy_id=strategy_tag,
+                    action_type="close",
+                    target_base_size=0.0,
+                    target_notional_usd=0.0,
+                    current_base_size=position.base_size,
+                    reason=reason,
+                    blocked=False,
+                    blocked_reasons=[],
+                    strategy_tag=strategy_tag,
+                    userref=None,
+                    risk_limits_snapshot={},
+                )
+            )
+
+        plan = ExecutionPlan(
+            plan_id=f"flatten_{int(now.timestamp())}",
+            generated_at=now,
+            actions=actions,
+            metadata={},
+        )
+
+        return plan
 
     def get_strategy_state(self) -> List[StrategyState]:
         return list(self.strategy_states.values())

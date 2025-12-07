@@ -14,6 +14,7 @@ from kraken_bot.connection.rest_client import KrakenRESTClient
 from kraken_bot.execution.adapter import ExecutionAdapter
 from kraken_bot.execution.models import LocalOrder
 from kraken_bot.execution.oms import ExecutionService
+from kraken_bot.market_data.models import PairMetadata
 from kraken_bot.main import _run_loop_iteration, _shutdown, run
 from kraken_bot.market_data.api import MarketDataAPI
 from kraken_bot.metrics import SystemMetrics
@@ -32,7 +33,7 @@ class _FakeAdapter(ExecutionAdapter):
         self.config = ExecutionConfig()
         self.submit_order_calls: list[LocalOrder] = []
 
-    def submit_order(self, order: LocalOrder) -> LocalOrder:
+    def submit_order(self, order: LocalOrder, pair_metadata: PairMetadata) -> LocalOrder:
         self.submit_order_calls.append(order)
         return order
 
@@ -61,6 +62,25 @@ def _build_action(pair: str) -> RiskAdjustedAction:
     )
 
 
+def _market_data_mock():
+    market_data = MagicMock()
+    market_data.get_pair_metadata_or_raise.return_value = PairMetadata(
+        canonical="XBTUSD",
+        base="XBT",
+        quote="USD",
+        rest_symbol="XBT/USD",
+        ws_symbol="XBT/USD",
+        raw_name="XBTUSD",
+        price_decimals=1,
+        volume_decimals=8,
+        lot_size=0.00000001,
+        min_order_size=0.0001,
+        status="online",
+    )
+    market_data.get_best_bid_ask.return_value = None
+    return market_data
+
+
 def test_kill_switch_block_logs_warning_with_event(caplog: pytest.LogCaptureFixture):
     caplog.set_level(logging.WARNING, logger="kraken_bot.execution.oms")
 
@@ -69,6 +89,7 @@ def test_kill_switch_block_logs_warning_with_event(caplog: pytest.LogCaptureFixt
 
     service = ExecutionService(
         adapter=_FakeAdapter(),
+        market_data=_market_data_mock(),
         risk_status_provider=_kill_switch_status,
     )
 

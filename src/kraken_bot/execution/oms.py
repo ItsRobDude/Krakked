@@ -41,7 +41,7 @@ class ExecutionService:
         store: Optional["PortfolioStore"] = None,
         client: Optional[KrakenRESTClient] = None,
         config: Optional[ExecutionConfig] = None,
-        market_data: Optional[MarketDataAPI] = None,
+        market_data: MarketDataAPI | None = None,
         rate_limiter: Optional[RateLimiter] = None,
         risk_status_provider: Optional[Callable[[], "RiskStatus"]] = None,
     ):
@@ -49,6 +49,8 @@ class ExecutionService:
             client=client, config=config or ExecutionConfig(), rate_limiter=rate_limiter
         )
         self.store = store
+        if market_data is None:
+            raise ValueError("market_data is required for ExecutionService")
         self.market_data = market_data
         self.open_orders: Dict[str, LocalOrder] = {}
         self.recent_executions: List[ExecutionResult] = []
@@ -269,12 +271,48 @@ class ExecutionService:
         total_target_notional = sum(pair_target_notional.values())
 
         for action in actions_to_process:
-            order, routing_warning = build_order_from_plan_action(
-                action=action,
-                plan=plan,
-                market_data=self.market_data,
-                config=adapter_config,
-            )
+            try:
+                pair_metadata = self.market_data.get_pair_metadata_or_raise(
+                    action.pair
+                )
+            except ValueError as exc:
+                logger.error(
+                    "Execution aborted: missing metadata for pair",
+                    extra=structured_log_extra(
+                        event="execution_missing_metadata",
+                        plan_id=plan.plan_id,
+                        pair=action.pair,
+                    ),
+                )
+                result.errors.append(str(exc))
+                result.completed_at = datetime.now(UTC)
+                result.success = False
+                self.record_execution_result(result)
+                if self.store:
+                    self.store.save_execution_result(result)
+                return result
+
+            try:
+                order, routing_warning = build_order_from_plan_action(
+                    action=action,
+                    plan=plan,
+                    pair_metadata=pair_metadata,
+                    config=adapter_config,
+                    market_data=self.market_data,
+                )
+            except ValueError as exc:
+                result.errors.append(str(exc))
+                logger.warning(
+                    "Order build rejected due to invalid size",
+                    extra=structured_log_extra(
+                        event="order_build_invalid_size",
+                        plan_id=plan.plan_id,
+                        strategy_id=action.strategy_id,
+                        pair=action.pair,
+                        error=str(exc),
+                    ),
+                )
+                continue
 
             if routing_warning:
                 result.warnings.append(routing_warning)
@@ -345,7 +383,7 @@ class ExecutionService:
                         local_order_id=order.local_id,
                     ),
                 )
-                order = self.adapter.submit_order(order)
+                order = self.adapter.submit_order(order, pair_metadata)
                 self.register_order(order)
                 if self.store:
                     self.store.save_order(order)

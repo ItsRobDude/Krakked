@@ -9,6 +9,7 @@ from typing import List, Optional
 from kraken_bot.bootstrap import bootstrap
 from kraken_bot.config import load_config
 from kraken_bot.execution.oms import ExecutionService
+from kraken_bot.market_data.api import MarketDataAPI
 from kraken_bot.portfolio.store import SQLitePortfolioStore
 from kraken_bot.strategy.models import RiskStatus
 
@@ -48,10 +49,14 @@ def _build_service(db_path: str, allow_interactive_setup: bool) -> ExecutionServ
     store = SQLitePortfolioStore(
         db_path=db_path, auto_migrate_schema=config.portfolio.auto_migrate_schema
     )
+    market_data = MarketDataAPI(
+        config, rest_client=client, rate_limiter=rate_limiter
+    )
     service = ExecutionService(
         client=client,
         config=config.execution,
         store=store,
+        market_data=market_data,
         rate_limiter=rate_limiter,
         risk_status_provider=_admin_cli_risk_status,
     )

@@ -3,6 +3,7 @@ from unittest.mock import MagicMock
 
 from kraken_bot.config import ExecutionConfig
 from kraken_bot.execution.oms import ExecutionService
+from kraken_bot.market_data.models import PairMetadata
 from kraken_bot.strategy.models import ExecutionPlan, RiskAdjustedAction
 
 
@@ -22,6 +23,24 @@ def _build_action(pair: str, target_notional: float) -> RiskAdjustedAction:
     )
 
 
+def _pair_metadata(pair: str = "XBTUSD") -> PairMetadata:
+    base, quote = pair[:3], pair[3:]
+    rest_symbol = f"{base}/{quote}"
+    return PairMetadata(
+        canonical=pair,
+        base=base,
+        quote=quote,
+        rest_symbol=rest_symbol,
+        ws_symbol=rest_symbol,
+        raw_name=pair,
+        price_decimals=1,
+        volume_decimals=8,
+        lot_size=0.00000001,
+        min_order_size=0.0001,
+        status="online",
+    )
+
+
 def test_pair_notional_guardrail_blocks_submission(inactive_risk_status):
     adapter = MagicMock()
     adapter.config = ExecutionConfig(max_pair_notional_usd=500.0)
@@ -38,6 +57,9 @@ def test_pair_notional_guardrail_blocks_submission(inactive_risk_status):
 
     market_data = MagicMock()
     market_data.get_best_bid_ask.return_value = {"bid": 10.0, "ask": 11.0}
+    market_data.get_pair_metadata_or_raise.side_effect = (
+        lambda pair: _pair_metadata(pair)
+    )
 
     service = ExecutionService(
         adapter,
@@ -70,6 +92,9 @@ def test_total_notional_guardrail_blocks_submission(inactive_risk_status):
 
     market_data = MagicMock()
     market_data.get_best_bid_ask.return_value = {"bid": 10.0, "ask": 11.0}
+    market_data.get_pair_metadata_or_raise.side_effect = (
+        lambda pair: _pair_metadata(pair)
+    )
 
     service = ExecutionService(
         adapter,
