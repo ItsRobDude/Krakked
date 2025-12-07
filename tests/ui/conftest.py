@@ -155,6 +155,7 @@ def build_test_context(
         config=config,
         client=rest_client,
         market_data=market_data,
+        portfolio_service=portfolio,
         portfolio=portfolio,
         strategy_engine=strategy_engine,
         execution_service=execution_service,

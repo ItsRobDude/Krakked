@@ -172,6 +172,7 @@ def _build_live_risk_context():
         config=config,
         client=MagicMock(name="rest_client"),
         market_data=market_data,
+        portfolio_service=MagicMock(name="portfolio_service"),
         portfolio=MagicMock(name="portfolio_service"),
         strategy_engine=strategy_engine,
         execution_service=execution_service,

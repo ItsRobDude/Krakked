@@ -39,11 +39,13 @@ class StubPortfolioService:
             tolerance_base=0.0,
             mismatched_assets=[],
         )
+        self.last_sync_ok = True
 
     def initialize(self) -> None: ...
 
     def sync(self) -> None:
         self.sync_calls += 1
+        self.last_sync_ok = True
 
     def get_equity(self) -> StubEquity:
         return self.equity
@@ -356,6 +358,44 @@ def test_run_loop_iteration_counts_kill_switch_rejections_as_blocked_actions():
     assert metrics.execution_errors == 1
 
 
+def test_run_loop_iteration_skips_when_portfolio_sync_failed():
+    now = datetime(2024, 2, 1, tzinfo=timezone.utc)
+    strategy_interval = 1
+    portfolio_interval = 1
+
+    portfolio = StubPortfolioService()
+    portfolio.last_sync_ok = False
+    portfolio.sync = MagicMock()
+
+    strategy_engine = MagicMock()
+    execution_service = MagicMock()
+    market_data = StubMarketData()
+    metrics = FakeMetrics()
+
+    refresh_metrics = MagicMock()
+
+    updated_portfolio_sync, updated_strategy_cycle = _run_loop_iteration(
+        now=now,
+        strategy_interval=strategy_interval,
+        portfolio_interval=portfolio_interval,
+        last_strategy_cycle=now - timedelta(seconds=strategy_interval),
+        last_portfolio_sync=now - timedelta(seconds=portfolio_interval),
+        portfolio=portfolio,
+        market_data=market_data,
+        strategy_engine=strategy_engine,
+        execution_service=execution_service,
+        metrics=metrics,
+        refresh_metrics_state=refresh_metrics,
+        session_active=True,
+    )
+
+    assert updated_strategy_cycle == now - timedelta(seconds=strategy_interval)
+    assert updated_portfolio_sync == now - timedelta(seconds=portfolio_interval)
+    strategy_engine.run_cycle.assert_not_called()
+    execution_service.execute_plan.assert_not_called()
+    refresh_metrics.assert_called_once()
+
+
 def test_run_loop_iteration_flags_drift_and_enables_kill_switch():
     now = datetime(2024, 2, 2, tzinfo=timezone.utc)
     strategy_interval = 60
@@ -480,6 +520,7 @@ def test_run_loop_iteration_handles_unavailable_market_data_with_logging_and_met
 
     portfolio = MagicMock()
     portfolio.sync.return_value = None
+    portfolio.last_sync_ok = True
     portfolio.get_drift_status.return_value = DriftStatus(
         drift_flag=False,
         expected_position_value_base=0.0,
@@ -609,6 +650,7 @@ class DriftAwarePortfolio:
             unrealized_pnl_base_total=3.0,
         )
         self.positions = ["SOL/USD"]
+        self.last_sync_ok = True
 
     def sync(self) -> None: ...
 
