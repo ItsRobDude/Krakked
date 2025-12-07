@@ -138,15 +138,50 @@ class ExecutionService:
         * Applies notional guardrails before any submission attempt.
         * Submits eligible orders through the adapter; any :class:`ExecutionError`
           is captured and persisted on the associated :class:`LocalOrder`.
-        * Persists orders and the aggregate :class:`ExecutionResult` when a store
-          is configured.
-        * Records an in-memory execution result and registers each order for
-          later reconciliation via :meth:`refresh_open_orders` or
-          :meth:`reconcile_orders`.
-        """
-        result = ExecutionResult(plan_id=plan.plan_id, started_at=datetime.now(UTC))
+    * Persists orders and the aggregate :class:`ExecutionResult` when a store
+      is configured.
+    * Records an in-memory execution result and registers each order for
+      later reconciliation via :meth:`refresh_open_orders` or
+      :meth:`reconcile_orders`.
+    """
+        started_at = datetime.now(UTC)
+        result = ExecutionResult(plan_id=plan.plan_id, started_at=started_at)
 
         adapter_config = self._execution_config
+
+        max_age = getattr(adapter_config, "max_plan_age_seconds", None)
+        if isinstance(max_age, int) and max_age > 0:
+            generated_at = getattr(plan, "generated_at", None)
+
+            if isinstance(generated_at, datetime):
+                if generated_at.tzinfo is None:
+                    generated_at = generated_at.replace(tzinfo=UTC)
+                plan_age_seconds = (started_at - generated_at).total_seconds()
+            else:
+                plan_age_seconds = float("inf")
+
+            if plan_age_seconds > max_age:
+                reason = (
+                    "Execution plan age "
+                    f"{plan_age_seconds:.1f}s exceeds max_plan_age_seconds={max_age}s; "
+                    "rejecting without order submission"
+                )
+                logger.warning(
+                    "Execution plan stale; blocking execution",
+                    extra=structured_log_extra(
+                        event="plan_stale",
+                        plan_id=plan.plan_id,
+                        plan_age_seconds=plan_age_seconds,
+                        max_plan_age_seconds=max_age,
+                    ),
+                )
+                result.errors.append(reason)
+                result.completed_at = datetime.now(UTC)
+                result.success = False
+                self.record_execution_result(result)
+                if self.store:
+                    self.store.save_execution_result(result)
+                return result
 
         eligible_actions = []
         for action in plan.actions:

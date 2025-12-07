@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any, Dict
 from unittest.mock import MagicMock
@@ -179,6 +179,86 @@ def test_execute_plan_blocked_by_kill_switch():
     )
     assert result.completed_at is not None
     adapter.submit_order.assert_not_called()
+
+
+def _ttl_action(**overrides) -> RiskAdjustedAction:
+    base: Dict[str, Any] = dict(
+        pair="XBTUSD",
+        strategy_id="ttl_test",
+        action_type="open",
+        target_base_size=1.0,
+        target_notional_usd=100.0,
+        current_base_size=0.0,
+        reason="",
+        blocked=False,
+        blocked_reasons=[],
+        strategy_tag="ttl",
+        userref=42,
+        risk_limits_snapshot={},
+    )
+    base.update(overrides)
+    return RiskAdjustedAction(**base)
+
+
+def test_execute_plan_blocks_stale_plan_before_orders():
+    adapter = MagicMock()
+    adapter.config = ExecutionConfig(validate_only=True, max_plan_age_seconds=30)
+
+    market_data = SimpleNamespace(
+        get_best_bid_ask=lambda pair: {"bid": 100.0, "ask": 100.0}
+    )
+
+    risk_provider = MagicMock()
+    service = ExecutionService(
+        adapter=adapter,
+        market_data=market_data,
+        risk_status_provider=risk_provider,
+    )
+
+    stale_generated_at = datetime.now(UTC) - timedelta(seconds=120)
+    plan = ExecutionPlan(
+        plan_id="plan_stale",
+        generated_at=stale_generated_at,
+        actions=[_ttl_action()],
+        metadata={"order_type": "limit"},
+    )
+
+    result = service.execute_plan(plan)
+
+    adapter.submit_order.assert_not_called()
+    risk_provider.assert_not_called()
+    assert result.success is False
+    assert result.orders == []
+    assert any("max_plan_age_seconds" in msg for msg in result.errors)
+
+
+def test_execute_plan_allows_fresh_plan_with_ttl(inactive_risk_status):
+    adapter = MagicMock()
+    adapter.config = ExecutionConfig(validate_only=True, max_plan_age_seconds=30)
+    adapter.submit_order.side_effect = lambda order: order
+
+    market_data = SimpleNamespace(
+        get_best_bid_ask=lambda pair: {"bid": 100.0, "ask": 100.0}
+    )
+
+    service = ExecutionService(
+        adapter=adapter,
+        market_data=market_data,
+        risk_status_provider=inactive_risk_status,
+    )
+
+    plan = ExecutionPlan(
+        plan_id="plan_fresh",
+        generated_at=datetime.now(UTC),
+        actions=[_ttl_action()],
+        metadata={"order_type": "limit"},
+    )
+
+    result = service.execute_plan(plan)
+
+    adapter.submit_order.assert_called()
+    assert result.orders
+    assert result.success is True
 
 
 def test_refresh_open_orders_updates_tracked_orders(inactive_risk_status):

@@ -52,6 +52,9 @@ class ExecutionConfig:
     min_order_notional_usd: float = 20.0
     max_pair_notional_usd: Optional[float] = None
     max_total_notional_usd: Optional[float] = None
+    # Maximum allowed age for a plan at execution time. Plans older than this
+    # are rejected before any orders are built or submitted.
+    max_plan_age_seconds: int = 60
 
 
 @dataclass
