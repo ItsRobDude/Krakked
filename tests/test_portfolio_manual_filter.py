@@ -5,7 +5,7 @@ import pytest
 
 from kraken_bot.config import PortfolioConfig
 from kraken_bot.portfolio.portfolio import Portfolio
-from kraken_bot.portfolio.store import PortfolioStore
+from kraken_bot.portfolio.store import MAX_ML_TRAINING_EXAMPLES, PortfolioStore
 
 
 class InMemoryStore(PortfolioStore):
@@ -89,30 +89,24 @@ class InMemoryStore(PortfolioStore):
         label,
         sample_weight: float = 1.0,
     ) -> None:
-        examples = getattr(self, "ml_examples", [])
-        examples.append(
-            {
-                "strategy_id": strategy_id,
-                "model_key": model_key,
-                "created_at": created_at,
-                "source_mode": source_mode,
-                "label_type": label_type,
-                "features": list(features),
-                "label": label,
-                "sample_weight": sample_weight,
-            }
-        )
+        examples = getattr(self, "ml_examples", {})
+        window = examples.setdefault((strategy_id, model_key), [])
+        window.append((list(features), float(label)))
         self.ml_examples = examples
 
-    def load_ml_training_window(self, strategy_id: str, model_key: str, *, max_examples: int):
-        examples = [
-            ex
-            for ex in getattr(self, "ml_examples", [])
-            if ex["strategy_id"] == strategy_id and ex["model_key"] == model_key
-        ]
-        features = [ex["features"] for ex in examples][:max_examples]
-        labels = [float(ex["label"]) for ex in examples][:max_examples]
-        return features, labels
+    def load_ml_training_window(
+        self,
+        strategy_id: str,
+        model_key: str,
+        *,
+        max_examples: int = MAX_ML_TRAINING_EXAMPLES,
+    ) -> tuple[list[list[float]], list[float]]:
+        examples = self.ml_examples.get((strategy_id, model_key), [])
+        # keep only the newest max_examples
+        window = examples[-max_examples:]
+        X = [features for features, _ in window]
+        y = [label for _, label in window]
+        return X, y
 
     def save_ml_model(
         self,
