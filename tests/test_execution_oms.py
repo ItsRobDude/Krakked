@@ -1,8 +1,9 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock
 
 import pytest
 
+from kraken_bot.config import ExecutionConfig
 from kraken_bot.execution.exceptions import ExecutionError
 from kraken_bot.execution.models import LocalOrder
 from kraken_bot.execution.oms import ExecutionService
@@ -18,7 +19,12 @@ class RecordingAdapter:
         self.submitted = []
         self.exception = exception
 
-    def submit_order(self, order: LocalOrder, pair_metadata: PairMetadata) -> LocalOrder:
+    def submit_order(
+        self,
+        order: LocalOrder,
+        pair_metadata: PairMetadata,
+        latest_price: float | None = None,
+    ) -> LocalOrder:
         if self.exception:
             raise self.exception
         self.submitted.append(order)
@@ -47,10 +53,10 @@ def make_action(
     )
 
 
-def make_plan(actions, metadata):
+def make_plan(actions, metadata, generated_at: datetime | None = None):
     return ExecutionPlan(
         plan_id="plan-123",
-        generated_at=datetime.now(UTC),
+        generated_at=generated_at or datetime.now(UTC),
         actions=actions,
         metadata=metadata,
     )
@@ -157,3 +163,45 @@ def test_execute_plan_accepts_validated_orders_without_txid(
     assert order.status == "validated"
     assert order.kraken_order_id is None
     assert result.success
+
+
+def test_execute_plan_rejects_stale_plan(plan_metadata, inactive_risk_status):
+    adapter = MagicMock()
+    market_data = _market_data_mock()
+    config = ExecutionConfig(max_plan_age_seconds=1)
+    adapter.config = config
+
+    service = ExecutionService(
+        adapter, config=config, market_data=market_data, risk_status_provider=inactive_risk_status
+    )
+
+    stale_time = datetime.now(UTC) - timedelta(seconds=5)
+    plan = make_plan([make_action(target=1.0, current=0.0)], plan_metadata, generated_at=stale_time)
+
+    result = service.execute_plan(plan)
+
+    adapter.submit_order.assert_not_called()
+    market_data.get_pair_metadata_or_raise.assert_not_called()
+    assert not result.success
+    assert any("max_plan_age_seconds" in reason for reason in result.errors)
+
+
+def test_execute_plan_treats_routing_failure_as_error(inactive_risk_status):
+    adapter = MagicMock()
+    market_data = _market_data_mock()
+    plan_metadata = {"order_type": "limit"}
+
+    service = ExecutionService(
+        adapter, market_data=market_data, risk_status_provider=inactive_risk_status
+    )
+
+    plan = make_plan([make_action(target=1.0, current=0.0)], plan_metadata)
+
+    result = service.execute_plan(plan)
+
+    adapter.submit_order.assert_not_called()
+    assert not result.orders
+    assert not result.success
+    assert result.warnings
+    assert result.errors
+    assert "Missing market data for limit order" in result.errors[0]

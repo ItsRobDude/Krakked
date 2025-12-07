@@ -161,6 +161,7 @@ class ExecutionService:
                     generated_at = generated_at.replace(tzinfo=UTC)
                 plan_age_seconds = (started_at - generated_at).total_seconds()
             else:
+                # Missing or invalid generated_at is treated as infinitely stale.
                 plan_age_seconds = float("inf")
 
             if plan_age_seconds > max_age:
@@ -317,6 +318,7 @@ class ExecutionService:
 
             if routing_warning:
                 result.warnings.append(routing_warning)
+                result.errors.append(routing_warning)
                 logger.warning(
                     "Order routing failed",
                     extra=structured_log_extra(
