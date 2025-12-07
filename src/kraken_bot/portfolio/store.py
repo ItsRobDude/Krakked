@@ -559,20 +559,31 @@ class SQLitePortfolioStore(PortfolioStore):
         self._lock = threading.RLock()
         self._init_db()
 
-    def _init_db(self):
-        """Initialize the portfolio database with strict schema handling."""
+    def _init_db(self) -> None:
+        """
+        Initialize the portfolio database with strict schema handling.
 
+        Rules:
+        - If auto_migrate_schema=True:
+            * Run migrations up to CURRENT_SCHEMA_VERSION.
+            * Create all required tables.
+        - If auto_migrate_schema=False:
+            * Do NOT migrate.
+            * Require on-disk schema to already be exactly CURRENT_SCHEMA_VERSION.
+            * Raise PortfolioSchemaError if the DB is behind or ahead.
+        """
+
+        # 1. Guard / migrate schema version via the shared helpers.
         if self.auto_migrate_schema:
-            ensure_portfolio_schema(
-                self.db_path, CURRENT_SCHEMA_VERSION, migrate=True
-            )
+            # May create meta table and run migrations.
+            ensure_portfolio_schema(self.db_path, CURRENT_SCHEMA_VERSION, migrate=True)
         else:
-            # In non-migrating modes, refuse to operate on an outdated schema. This
-            # still initializes a brand new DB by writing the current schema
-            # version when none exists.
+            # Strict: only accept an exact match; behind/ahead → PortfolioSchemaError.
             assert_portfolio_schema(self.db_path)
 
-        with sqlite3.connect(self.db_path) as conn:
+        # 2. Ensure all logical portfolio tables exist.
+        conn = sqlite3.connect(self.db_path)
+        try:
             ensure_portfolio_tables(conn)
             conn.commit()
         finally:
