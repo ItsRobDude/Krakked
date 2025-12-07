@@ -1459,6 +1459,44 @@ class SQLitePortfolioStore(PortfolioStore):
                     """,
                     (strategy_id, model_key, to_delete),
                 )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    strategy_id,
+                    model_key,
+                    created_at_iso,
+                    source_mode,
+                    label_type,
+                    features_json,
+                    float(label),
+                    float(sample_weight),
+                ),
+            )
+
+            # Enforce rolling window per (strategy_id, model_key):
+            # keep the newest MAX_ML_TRAINING_EXAMPLES by id, drop older ones.
+            cursor.execute(
+                """
+                DELETE FROM ml_training_examples
+                WHERE strategy_id = ?
+                  AND model_key = ?
+                  AND id NOT IN (
+                      SELECT id
+                      FROM ml_training_examples
+                      WHERE strategy_id = ?
+                        AND model_key = ?
+                      ORDER BY id DESC
+                      LIMIT ?
+                  )
+                """,
+                (
+                    strategy_id,
+                    model_key,
+                    strategy_id,
+                    model_key,
+                    MAX_ML_TRAINING_EXAMPLES,
+                ),
+            )
 
             conn.commit()
 
@@ -1566,7 +1604,7 @@ class SQLitePortfolioStore(PortfolioStore):
             )
             row = cur.fetchone()
 
-        if not row:
+        if row is None:
             return None
 
         blob = row[0]
