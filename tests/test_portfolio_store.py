@@ -81,6 +81,27 @@ def test_schema_version_mismatch_triggers_migration(tmp_path, monkeypatch):
     assert called.get("args") == (outdated_version, CURRENT_SCHEMA_VERSION)
 
 
+def test_schema_version_mismatch_without_migration_raises(tmp_path):
+    db_path = tmp_path / "schema_no_migrate.db"
+    seed_schema_version(db_path, CURRENT_SCHEMA_VERSION - 1)
+
+    with pytest.raises(PortfolioSchemaError):
+        SQLitePortfolioStore(str(db_path), auto_migrate_schema=False)
+
+
+def test_schema_version_initialized_without_migration(tmp_path):
+    db_path = tmp_path / "schema_init_no_migrate.db"
+    SQLitePortfolioStore(str(db_path), auto_migrate_schema=False)
+
+    with sqlite3.connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT value FROM meta WHERE key = 'schema_version'"
+        ).fetchone()
+
+    assert row is not None
+    assert int(row[0]) == CURRENT_SCHEMA_VERSION
+
+
 def test_schema_version_ahead_raises(tmp_path):
     db_path = tmp_path / "schema_ahead.db"
     seed_schema_version(db_path, CURRENT_SCHEMA_VERSION + 1)

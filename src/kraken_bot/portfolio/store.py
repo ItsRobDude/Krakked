@@ -560,7 +560,7 @@ class SQLitePortfolioStore(PortfolioStore):
         self._init_db()
 
     def _init_db(self):
-        conn = sqlite3.connect(self.db_path)
+        """Initialize the portfolio database with strict schema handling."""
 
         try:
             ensure_portfolio_schema(
