@@ -582,7 +582,8 @@ class SQLitePortfolioStore(PortfolioStore):
             assert_portfolio_schema(self.db_path)
 
         # 2. Ensure all logical portfolio tables exist.
-        with sqlite3.connect(self.db_path) as conn:
+        conn = sqlite3.connect(self.db_path)
+        try:
             ensure_portfolio_tables(conn)
             conn.commit()
 
