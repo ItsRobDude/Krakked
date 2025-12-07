@@ -31,6 +31,7 @@ class AppContext:
     config: AppConfig
     client: KrakenRESTClient
     market_data: MarketDataAPI
+    portfolio_service: PortfolioService
     portfolio: PortfolioService
     strategy_engine: StrategyEngine
     execution_service: ExecutionService
@@ -52,6 +53,15 @@ def build_app_context(allow_interactive_setup: bool = True) -> AppContext:
     client, config, rate_limiter = bootstrap(
         allow_interactive_setup=allow_interactive_setup
     )
+
+    auto_migrate = config.portfolio.auto_migrate_schema
+    execution_mode = getattr(config.execution, "mode", "unknown")
+
+    if auto_migrate and execution_mode in {"paper", "live"}:
+        raise RuntimeError(
+            "auto_migrate_schema must be False in paper/live mode. "
+            "Run `krakked portfolio-migrate` to upgrade the DB schema first."
+        )
 
     market_data = MarketDataAPI(config, rate_limiter=rate_limiter)
     market_data.refresh_universe()
@@ -87,6 +97,7 @@ def build_app_context(allow_interactive_setup: bool = True) -> AppContext:
         config=config,
         client=client,
         market_data=market_data,
+        portfolio_service=portfolio,
         portfolio=portfolio,
         strategy_engine=strategy_engine,
         execution_service=execution_service,

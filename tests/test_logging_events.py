@@ -202,6 +202,7 @@ def test_shutdown_logs_include_event(caplog):
         config=MagicMock(),
         client=MagicMock(),
         market_data=MagicMock(),
+        portfolio_service=MagicMock(),
         portfolio=MagicMock(),
         strategy_engine=MagicMock(),
         execution_service=MagicMock(),

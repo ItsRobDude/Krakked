@@ -193,6 +193,31 @@ def _migrate_db_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _portfolio_migrate_command(args: argparse.Namespace) -> int:
+    """Migrate the portfolio DB schema to the current code version."""
+
+    db_path = Path(args.db).expanduser().resolve()
+
+    try:
+        status = ensure_portfolio_schema(
+            db_path.as_posix(), CURRENT_SCHEMA_VERSION, migrate=True
+        )
+        with sqlite3.connect(db_path.as_posix()) as conn:
+            ensure_portfolio_tables(conn)
+            conn.commit()
+    except PortfolioSchemaError as exc:
+        return _print_error(
+            "Migration failed: "
+            "stored schema version {exc.found} is incompatible with expected "
+            f"{exc.expected}."
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _print_error(f"Migration failed: {exc}")
+
+    print(f"Portfolio schema migrated at {db_path} (version {status.version}).")
+    return 0
+
+
 def _schema_version_command(args: argparse.Namespace) -> int:
     """Display the current portfolio schema version stored at --db-path."""
 
@@ -396,6 +421,15 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     _add_db_path_argument(migrate_parser)
     migrate_parser.set_defaults(func=_migrate_db_command)
+
+    portfolio_migrate_parser = subparsers.add_parser(
+        "portfolio-migrate",
+        help="Migrate the portfolio DB schema to the current code version",
+    )
+    portfolio_migrate_parser.add_argument(
+        "--db", required=True, type=str, help="Path to portfolio SQLite DB"
+    )
+    portfolio_migrate_parser.set_defaults(func=_portfolio_migrate_command)
 
     version_parser = subparsers.add_parser(
         "db-schema-version",

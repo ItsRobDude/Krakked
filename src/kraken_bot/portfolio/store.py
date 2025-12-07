@@ -44,7 +44,7 @@ def _utc_now_iso() -> str:
 
 
 def ensure_portfolio_schema(
-    conn: sqlite3.Connection,
+    conn: sqlite3.Connection | str,
     target_version: int = CURRENT_SCHEMA_VERSION,
     migrate: bool = True,
 ) -> SchemaStatus:
@@ -56,56 +56,78 @@ def ensure_portfolio_schema(
     :class:`PortfolioSchemaError`.
     """
 
-    _ensure_meta_table(conn)
-    cursor = conn.cursor()
-    row = cursor.execute(
-        "SELECT value FROM meta WHERE key = 'schema_version'"
-    ).fetchone()
+    connection_provided = isinstance(conn, sqlite3.Connection)
+    owned_conn = None
+
+    if connection_provided:
+        _conn = conn
+    else:
+        owned_conn = sqlite3.connect(str(conn))
+        _conn = owned_conn
 
     initialized = False
-    if row is None:
-        _set_schema_version(conn, target_version)
-        initialized = True
-        return SchemaStatus(
-            version=target_version, migrated=False, initialized=initialized
-        )
+    migrated = False
+    stored_version = target_version
 
     try:
-        stored_version = int(row[0])
-    except (TypeError, ValueError) as exc:
-        logger.exception(
-            "Invalid schema version stored in portfolio DB",
-            extra=structured_log_extra(event="portfolio_schema_invalid"),
+        _ensure_meta_table(_conn)
+        cursor = _conn.cursor()
+        row = cursor.execute(
+            "SELECT value FROM meta WHERE key = 'schema_version'"
+        ).fetchone()
+
+        if row is None:
+            _set_schema_version(_conn, target_version)
+            initialized = True
+        else:
+            try:
+                stored_version = int(row[0])
+            except (TypeError, ValueError) as exc:
+                logger.exception(
+                    "Invalid schema version stored in portfolio DB",
+                    extra=structured_log_extra(event="portfolio_schema_invalid"),
+                )
+                raise PortfolioSchemaError(
+                    found=row[0], expected=target_version
+                ) from exc
+
+            if stored_version > target_version:
+                raise PortfolioSchemaError(
+                    found=stored_version, expected=target_version
+                )
+
+            if migrate and stored_version < target_version:
+                try:
+                    run_migrations(_conn, stored_version, target_version)
+                except Exception as exc:  # noqa: BLE001
+                    logger.exception(
+                        "Failed to run portfolio migrations from v%s to v%s",
+                        stored_version,
+                        target_version,
+                        extra=structured_log_extra(
+                            event="portfolio_migration_failed",
+                            from_version=stored_version,
+                            to_version=target_version,
+                        ),
+                    )
+                    raise PortfolioSchemaError(
+                        found=stored_version, expected=target_version
+                    ) from exc
+                migrated = True
+                stored_version = target_version
+
+        status = SchemaStatus(
+            version=stored_version, migrated=migrated, initialized=initialized
         )
-        raise PortfolioSchemaError(found=row[0], expected=target_version) from exc
-
-    if stored_version > target_version:
-        raise PortfolioSchemaError(found=stored_version, expected=target_version)
-
-    migrated = False
-    if migrate and stored_version < target_version:
-        try:
-            run_migrations(conn, stored_version, target_version)
-        except Exception as exc:  # noqa: BLE001
-            logger.exception(
-                "Failed to run portfolio migrations from v%s to v%s",
-                stored_version,
-                target_version,
-                extra=structured_log_extra(
-                    event="portfolio_migration_failed",
-                    from_version=stored_version,
-                    to_version=target_version,
-                ),
-            )
-            raise PortfolioSchemaError(
-                found=stored_version, expected=target_version
-            ) from exc
-        migrated = True
-        stored_version = target_version
-
-    return SchemaStatus(
-        version=stored_version, migrated=migrated, initialized=initialized
-    )
+        return status
+    finally:
+        if owned_conn is not None:
+            try:
+                owned_conn.commit()
+            except Exception:  # pragma: no cover - best effort
+                owned_conn.rollback()
+            finally:
+                owned_conn.close()
 
 
 def assert_portfolio_schema(db_path: str) -> SchemaStatus:
@@ -116,9 +138,7 @@ def assert_portfolio_schema(db_path: str) -> SchemaStatus:
     version raises :class:`PortfolioSchemaError`.
     """
 
-    with sqlite3.connect(db_path) as conn:
-        status = ensure_portfolio_schema(conn, CURRENT_SCHEMA_VERSION, migrate=False)
-        conn.commit()
+    status = ensure_portfolio_schema(db_path, CURRENT_SCHEMA_VERSION, migrate=False)
 
     if status.version < CURRENT_SCHEMA_VERSION:
         raise PortfolioSchemaError(
@@ -547,6 +567,7 @@ class SQLitePortfolioStore(PortfolioStore):
                 conn, CURRENT_SCHEMA_VERSION, migrate=self.auto_migrate_schema
             )
             ensure_portfolio_tables(conn)
+            conn.commit()
         finally:
             conn.close()
 
