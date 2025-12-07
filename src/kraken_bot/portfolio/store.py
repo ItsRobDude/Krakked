@@ -7,7 +7,7 @@ import pickle
 import sqlite3
 import threading
 from dataclasses import asdict, dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Tuple
 
 from kraken_bot.logging_config import structured_log_extra
@@ -1392,16 +1392,19 @@ class SQLitePortfolioStore(PortfolioStore):
         label: float,
         sample_weight: float = 1.0,
     ) -> None:
-        payload = json.dumps(list(features))
-        timestamp_dt = (
-            created_at if created_at.tzinfo else created_at.replace(tzinfo=UTC)
-        )
-        timestamp = timestamp_dt.astimezone(UTC).isoformat()
+        created_iso = (
+            created_at.astimezone(timezone.utc)
+            if created_at.tzinfo
+            else created_at.replace(tzinfo=timezone.utc)
+        ).isoformat()
+
+        features_payload = json.dumps([float(x) for x in features])
 
         with self._lock:
             conn = self._get_conn()
             try:
                 cursor = conn.cursor()
+
                 cursor.execute(
                     """
                     INSERT INTO ml_training_examples (
@@ -1419,10 +1422,10 @@ class SQLitePortfolioStore(PortfolioStore):
                     (
                         strategy_id,
                         model_key,
-                        timestamp,
+                        created_iso,
                         source_mode,
                         label_type,
-                        payload,
+                        features_payload,
                         float(label),
                         float(sample_weight),
                     ),
@@ -1430,27 +1433,18 @@ class SQLitePortfolioStore(PortfolioStore):
 
                 cursor.execute(
                     """
-                    SELECT COUNT(*) FROM ml_training_examples
-                    WHERE strategy_id = ? AND model_key = ?
-                    """,
-                    (strategy_id, model_key),
-                )
-                row = cursor.fetchone()
-                count = int(row[0]) if row else 0
-                if count > MAX_ML_TRAINING_EXAMPLES:
-                    excess = count - MAX_ML_TRAINING_EXAMPLES
-                    cursor.execute(
-                        """
-                        DELETE FROM ml_training_examples
-                        WHERE id IN (
-                            SELECT id FROM ml_training_examples
-                            WHERE strategy_id = ? AND model_key = ?
-                            ORDER BY created_at ASC
-                            LIMIT ?
-                        )
-                        """,
-                        (strategy_id, model_key, excess),
+                    DELETE FROM ml_training_examples
+                    WHERE id IN (
+                        SELECT id
+                        FROM ml_training_examples
+                        WHERE strategy_id = ?
+                          AND model_key = ?
+                        ORDER BY created_at DESC, id DESC
+                        LIMIT -1 OFFSET ?
                     )
+                    """,
+                    (strategy_id, model_key, MAX_ML_TRAINING_EXAMPLES),
+                )
 
                 conn.commit()
             finally:
@@ -1471,24 +1465,28 @@ class SQLitePortfolioStore(PortfolioStore):
                     """
                     SELECT features, label
                     FROM ml_training_examples
-                    WHERE strategy_id = ? AND model_key = ?
-                    ORDER BY created_at ASC
+                    WHERE strategy_id = ?
+                      AND model_key = ?
+                    ORDER BY created_at DESC, id DESC
                     LIMIT ?
                     """,
-                    (strategy_id, model_key, max_examples),
+                    (strategy_id, model_key, int(max_examples)),
                 )
                 rows = cursor.fetchall()
             finally:
                 conn.close()
 
+        if not rows:
+            return [], []
+
         features_list: List[List[float]] = []
         labels: List[float] = []
-        for features_json, value in rows:
+
+        for features_json, value in reversed(rows):
             try:
                 parsed = json.loads(features_json)
-                if isinstance(parsed, list):
-                    features_list.append([float(v) for v in parsed])
-                    labels.append(float(value))
+                features_list.append([float(v) for v in parsed])
+                labels.append(float(value))
             except Exception:
                 continue
 
@@ -1504,8 +1502,8 @@ class SQLitePortfolioStore(PortfolioStore):
         model: object,
         version: int = 1,
     ) -> None:
-        serialized = pickle.dumps(model)
-        now_iso = _utc_now_iso()
+        blob = pickle.dumps(model)
+        updated_at = datetime.now(timezone.utc).isoformat()
 
         with self._lock:
             conn = self._get_conn()
@@ -1526,19 +1524,19 @@ class SQLitePortfolioStore(PortfolioStore):
                     ON CONFLICT(strategy_id, model_key)
                     DO UPDATE SET
                         label_type = excluded.label_type,
-                        framework = excluded.framework,
-                        version = excluded.version,
-                        updated_at = excluded.updated_at,
-                        model_blob = excluded.model_blob
+                        framework   = excluded.framework,
+                        version     = excluded.version,
+                        updated_at  = excluded.updated_at,
+                        model_blob  = excluded.model_blob
                     """,
                     (
                         strategy_id,
                         model_key,
                         label_type,
                         framework,
-                        version,
-                        now_iso,
-                        serialized,
+                        int(version),
+                        updated_at,
+                        blob,
                     ),
                 )
                 conn.commit()
@@ -1554,7 +1552,8 @@ class SQLitePortfolioStore(PortfolioStore):
                     """
                     SELECT model_blob
                     FROM ml_models
-                    WHERE strategy_id = ? AND model_key = ?
+                    WHERE strategy_id = ?
+                      AND model_key = ?
                     """,
                     (strategy_id, model_key),
                 )
@@ -1565,7 +1564,8 @@ class SQLitePortfolioStore(PortfolioStore):
         if not row:
             return None
 
+        blob = row[0]
         try:
-            return pickle.loads(row[0])
+            return pickle.loads(blob)
         except Exception:
             return None
