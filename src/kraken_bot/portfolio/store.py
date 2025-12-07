@@ -3,10 +3,12 @@
 import abc
 import json
 import logging
+import pickle
 import sqlite3
+import threading
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Tuple
 
 from kraken_bot.logging_config import structured_log_extra
 
@@ -20,7 +22,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-CURRENT_SCHEMA_VERSION = 5
+CURRENT_SCHEMA_VERSION = 6
+
+MAX_ML_TRAINING_EXAMPLES = 5000
+MIN_ML_BOOTSTRAP_EXAMPLES = 50
 
 
 @dataclass
@@ -32,6 +37,10 @@ class SchemaStatus:
     @property
     def changed(self) -> bool:
         return self.migrated or self.initialized
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(UTC).isoformat()
 
 
 def ensure_portfolio_schema(
@@ -297,6 +306,43 @@ def ensure_portfolio_tables(conn: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_execution_results_started_at ON execution_results(started_at)"
     )
 
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS ml_training_examples (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            strategy_id TEXT NOT NULL,
+            model_key   TEXT NOT NULL,
+            created_at  TEXT NOT NULL,
+            source_mode TEXT NOT NULL,
+            label_type  TEXT NOT NULL,
+            features    TEXT NOT NULL,
+            label       REAL NOT NULL,
+            sample_weight REAL NOT NULL DEFAULT 1.0
+        )
+        """
+    )
+    cursor.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_ml_training_key
+            ON ml_training_examples(strategy_id, model_key, created_at)
+        """
+    )
+
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS ml_models (
+            strategy_id TEXT NOT NULL,
+            model_key   TEXT NOT NULL,
+            label_type  TEXT NOT NULL,
+            framework   TEXT NOT NULL,
+            version     INTEGER NOT NULL,
+            updated_at  TEXT NOT NULL,
+            model_blob  BLOB NOT NULL,
+            PRIMARY KEY (strategy_id, model_key)
+        )
+        """
+    )
+
     conn.commit()
 
 
@@ -434,6 +480,52 @@ class PortfolioStore(abc.ABC):
         """Return recent execution results."""
         pass
 
+    @abc.abstractmethod
+    def record_ml_example(
+        self,
+        strategy_id: str,
+        model_key: str,
+        *,
+        created_at: datetime,
+        source_mode: str,
+        label_type: str,
+        features: Sequence[float],
+        label: float,
+        sample_weight: float = 1.0,
+    ) -> None:
+        """Record a single ML training example."""
+        pass
+
+    @abc.abstractmethod
+    def load_ml_training_window(
+        self,
+        strategy_id: str,
+        model_key: str,
+        *,
+        max_examples: int = MAX_ML_TRAINING_EXAMPLES,
+    ) -> Tuple[List[List[float]], List[float]]:
+        """Load a rolling window of ML training examples for a model key."""
+        pass
+
+    @abc.abstractmethod
+    def save_ml_model(
+        self,
+        strategy_id: str,
+        model_key: str,
+        *,
+        label_type: str,
+        framework: str,
+        model: object,
+        version: int = 1,
+    ) -> None:
+        """Persist a serialized ML model."""
+        pass
+
+    @abc.abstractmethod
+    def load_ml_model(self, strategy_id: str, model_key: str) -> Optional[object]:
+        """Load a serialized ML model if present."""
+        pass
+
     def get_schema_version(self) -> Optional[int]:
         """Return the stored schema version if available."""
 
@@ -444,6 +536,7 @@ class SQLitePortfolioStore(PortfolioStore):
     def __init__(self, db_path: str = "portfolio.db", auto_migrate_schema: bool = True):
         self.db_path = db_path
         self.auto_migrate_schema = auto_migrate_schema
+        self._lock = threading.RLock()
         self._init_db()
 
     def _init_db(self):
@@ -1286,3 +1379,193 @@ class SQLitePortfolioStore(PortfolioStore):
             )
 
         return results
+
+    def record_ml_example(
+        self,
+        strategy_id: str,
+        model_key: str,
+        *,
+        created_at: datetime,
+        source_mode: str,
+        label_type: str,
+        features: Sequence[float],
+        label: float,
+        sample_weight: float = 1.0,
+    ) -> None:
+        payload = json.dumps(list(features))
+        timestamp_dt = (
+            created_at if created_at.tzinfo else created_at.replace(tzinfo=UTC)
+        )
+        timestamp = timestamp_dt.astimezone(UTC).isoformat()
+
+        with self._lock:
+            conn = self._get_conn()
+            try:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    INSERT INTO ml_training_examples (
+                        strategy_id,
+                        model_key,
+                        created_at,
+                        source_mode,
+                        label_type,
+                        features,
+                        label,
+                        sample_weight
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        strategy_id,
+                        model_key,
+                        timestamp,
+                        source_mode,
+                        label_type,
+                        payload,
+                        float(label),
+                        float(sample_weight),
+                    ),
+                )
+
+                cursor.execute(
+                    """
+                    SELECT COUNT(*) FROM ml_training_examples
+                    WHERE strategy_id = ? AND model_key = ?
+                    """,
+                    (strategy_id, model_key),
+                )
+                row = cursor.fetchone()
+                count = int(row[0]) if row else 0
+                if count > MAX_ML_TRAINING_EXAMPLES:
+                    excess = count - MAX_ML_TRAINING_EXAMPLES
+                    cursor.execute(
+                        """
+                        DELETE FROM ml_training_examples
+                        WHERE id IN (
+                            SELECT id FROM ml_training_examples
+                            WHERE strategy_id = ? AND model_key = ?
+                            ORDER BY created_at ASC
+                            LIMIT ?
+                        )
+                        """,
+                        (strategy_id, model_key, excess),
+                    )
+
+                conn.commit()
+            finally:
+                conn.close()
+
+    def load_ml_training_window(
+        self,
+        strategy_id: str,
+        model_key: str,
+        *,
+        max_examples: int = MAX_ML_TRAINING_EXAMPLES,
+    ) -> Tuple[List[List[float]], List[float]]:
+        with self._lock:
+            conn = self._get_conn()
+            try:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    SELECT features, label
+                    FROM ml_training_examples
+                    WHERE strategy_id = ? AND model_key = ?
+                    ORDER BY created_at ASC
+                    LIMIT ?
+                    """,
+                    (strategy_id, model_key, max_examples),
+                )
+                rows = cursor.fetchall()
+            finally:
+                conn.close()
+
+        features_list: List[List[float]] = []
+        labels: List[float] = []
+        for features_json, value in rows:
+            try:
+                parsed = json.loads(features_json)
+                if isinstance(parsed, list):
+                    features_list.append([float(v) for v in parsed])
+                    labels.append(float(value))
+            except Exception:
+                continue
+
+        return features_list, labels
+
+    def save_ml_model(
+        self,
+        strategy_id: str,
+        model_key: str,
+        *,
+        label_type: str,
+        framework: str,
+        model: object,
+        version: int = 1,
+    ) -> None:
+        serialized = pickle.dumps(model)
+        now_iso = _utc_now_iso()
+
+        with self._lock:
+            conn = self._get_conn()
+            try:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    INSERT INTO ml_models (
+                        strategy_id,
+                        model_key,
+                        label_type,
+                        framework,
+                        version,
+                        updated_at,
+                        model_blob
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(strategy_id, model_key)
+                    DO UPDATE SET
+                        label_type = excluded.label_type,
+                        framework = excluded.framework,
+                        version = excluded.version,
+                        updated_at = excluded.updated_at,
+                        model_blob = excluded.model_blob
+                    """,
+                    (
+                        strategy_id,
+                        model_key,
+                        label_type,
+                        framework,
+                        version,
+                        now_iso,
+                        serialized,
+                    ),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
+    def load_ml_model(self, strategy_id: str, model_key: str) -> Optional[object]:
+        with self._lock:
+            conn = self._get_conn()
+            try:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    SELECT model_blob
+                    FROM ml_models
+                    WHERE strategy_id = ? AND model_key = ?
+                    """,
+                    (strategy_id, model_key),
+                )
+                row = cursor.fetchone()
+            finally:
+                conn.close()
+
+        if not row:
+            return None
+
+        try:
+            return pickle.loads(row[0])
+        except Exception:
+            return None
