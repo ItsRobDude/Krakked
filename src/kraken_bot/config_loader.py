@@ -25,7 +25,7 @@ from kraken_bot.config_models import (
     UIRefreshConfig,
     UniverseConfig,
 )
-from kraken_bot.logging_config import get_log_environment, structured_log_extra
+from kraken_bot.logging_config import structured_log_extra
 from kraken_bot.strategy.catalog import CANONICAL_STRATEGIES
 
 RUNTIME_OVERRIDES_FILENAME = "config.runtime.yaml"
@@ -707,19 +707,15 @@ def load_config(
         )
         refresh_data = {}
 
-    raw_auth_enabled = auth_data.get("enabled", default_ui.auth.enabled)
-    raw_auth_token = auth_data.get("token", default_ui.auth.token)
-
-    auth_token = (raw_auth_token or "").strip()
-    auth_enabled = bool(raw_auth_enabled)
+    auth_enabled = bool(auth_data.get("enabled", default_ui.auth.enabled))
+    auth_token = (auth_data.get("token", default_ui.auth.token) or "").strip()
 
     if auth_enabled and not auth_token:
         logger.warning(
-            "UI auth enabled but no token configured; disabling auth",
+            "UI auth misconfigured: enabled but token is empty; forcing auth.enabled = False",
             extra=structured_log_extra(
                 env=get_log_environment(),
-                event="config_ui_auth_empty_token",
-                config_path=str(config_path),
+                event="ui_auth_empty_token",
             ),
         )
         auth_enabled = False
@@ -786,18 +782,6 @@ def load_config(
                 extra=structured_log_extra(
                     env="live",
                     event="live_ui_disabled_no_auth",
-                    ui_host=ui_config.host,
-                    ui_port=ui_config.port,
-                ),
-            )
-            ui_config.enabled = False
-
-        if ui_config.auth.enabled and not ui_config.auth.token:
-            logger.warning(
-                "Disabling UI in live environment: ui.auth.enabled is True but token is empty",
-                extra=structured_log_extra(
-                    env="live",
-                    event="live_ui_disabled_empty_auth_token",
                     ui_host=ui_config.host,
                     ui_port=ui_config.port,
                 ),
