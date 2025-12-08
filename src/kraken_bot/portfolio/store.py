@@ -1449,13 +1449,8 @@ class SQLitePortfolioStore(PortfolioStore):
                 cursor = conn.cursor()
 
                 query = """
-                    SELECT
-                        plan_id,
-                        generated_at,
-                        action_count,
-                        blocked_actions,
-                        metadata_json,
-                        plan_json
+                    SELECT plan_id, generated_at, action_count, blocked_actions,
+                           metadata_json, plan_json
                     FROM execution_plans
                     WHERE 1=1
                 """
@@ -1469,6 +1464,7 @@ class SQLitePortfolioStore(PortfolioStore):
                     query += " AND generated_at >= ?"
                     params.append(since)
 
+                # Most recent plans first
                 query += " ORDER BY generated_at DESC"
 
                 if limit is not None:
@@ -1489,13 +1485,8 @@ class SQLitePortfolioStore(PortfolioStore):
                 cursor = conn.cursor()
                 cursor.execute(
                     """
-                    SELECT
-                        plan_id,
-                        generated_at,
-                        action_count,
-                        blocked_actions,
-                        metadata_json,
-                        plan_json
+                    SELECT plan_id, generated_at, action_count, blocked_actions,
+                           metadata_json, plan_json
                     FROM execution_plans
                     WHERE plan_id = ?
                     """,
@@ -1515,11 +1506,61 @@ class SQLitePortfolioStore(PortfolioStore):
         plan_id: Optional[str] = None,
         strategy_id: Optional[str] = None,
     ) -> List["LocalOrder"]:
+        from kraken_bot.execution.models import LocalOrder
+
+        # Statuses that should be treated as "still working / open"
+        open_statuses = ("pending", "submitted", "open", "partially_filled", "validated")
+
         with self._lock:
             conn = self._get_conn()
             try:
-                conn.row_factory = None
                 cursor = conn.cursor()
+
+                query = """
+                    SELECT
+                        local_id,
+                        plan_id,
+                        strategy_id,
+                        pair,
+                        side,
+                        order_type,
+                        kraken_order_id,
+                        userref,
+                        requested_base_size,
+                        requested_price,
+                        status,
+                        created_at,
+                        updated_at,
+                        cumulative_base_filled,
+                        avg_fill_price,
+                        last_error,
+                        raw_request_json,
+                        raw_response_json
+                    FROM execution_orders
+                    WHERE status IN ({statuses})
+                """.format(
+                    statuses=", ".join("?" for _ in open_statuses)
+                )
+
+                params: List[Any] = list(open_statuses)
+
+                if plan_id is not None:
+                    query += " AND plan_id = ?"
+                    params.append(plan_id)
+
+                if strategy_id is not None:
+                    query += " AND strategy_id = ?"
+                    params.append(strategy_id)
+
+                # Oldest first is usually what you want operationally
+                query += " ORDER BY created_at ASC"
+
+                cursor.execute(query, params)
+                rows = cursor.fetchall()
+            finally:
+                conn.close()
+
+        orders: List[LocalOrder] = []
 
                 query = """
                     SELECT
@@ -1576,8 +1617,39 @@ class SQLitePortfolioStore(PortfolioStore):
         return [self._deserialize_order_row(row) for row in rows]
 
     def get_execution_results(self, limit: int = 10) -> List["ExecutionResult"]:
-        if limit <= 0:
-            return []
+        from kraken_bot.execution.models import ExecutionResult
+
+        with self._lock:
+            conn = self._get_conn()
+            try:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    SELECT
+                        plan_id,
+                        started_at,
+                        completed_at,
+                        success,
+                        errors_json
+                    FROM execution_results
+                    ORDER BY started_at DESC
+                    LIMIT ?
+                    """,
+                    (limit,),
+                )
+                rows = cursor.fetchall()
+            finally:
+                conn.close()
+
+        results: List[ExecutionResult] = []
+
+        for plan_id, started_at_ts, completed_at_ts, success_int, errors_json in rows:
+            started_at = datetime.fromtimestamp(started_at_ts)
+            completed_at = (
+                datetime.fromtimestamp(completed_at_ts)
+                if completed_at_ts is not None
+                else None
+            )
 
         with self._lock:
             conn = self._get_conn()
