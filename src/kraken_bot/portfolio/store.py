@@ -1275,17 +1275,12 @@ class SQLitePortfolioStore(PortfolioStore):
         Row layout (from SELECT):
           0: plan_id
           1: generated_at (REAL)
-          2: action_count (INTEGER)
-          3: blocked_actions (INTEGER)
-          4: metadata_json (TEXT)
-          5: plan_json (TEXT)
+          2: plan_json (TEXT)
+          3: metadata_json (TEXT)
         """
         from kraken_bot.strategy.models import ExecutionPlan, RiskAdjustedAction
 
-        plan_id = row[0]
-        generated_ts = row[1]
-        metadata_json = row[4]
-        plan_json = row[5]
+        plan_id, generated_ts, plan_json, metadata_json = row
 
         payload: Dict[str, Any] = {}
         if plan_json:
@@ -1294,37 +1289,25 @@ class SQLitePortfolioStore(PortfolioStore):
             except json.JSONDecodeError:
                 payload = {}
 
-        generated_at_value = payload.get("generated_at", generated_ts)
-        generated_at: datetime
-
-        if isinstance(generated_at_value, str):
-            try:
-                parsed = datetime.fromisoformat(generated_at_value)
-                generated_at = parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
-            except ValueError:
-                generated_at = datetime.fromtimestamp(generated_ts, tz=UTC)
-        elif isinstance(generated_at_value, (int, float)):
-            generated_at = datetime.fromtimestamp(float(generated_at_value), tz=UTC)
-        else:
-            generated_at = datetime.fromtimestamp(generated_ts, tz=UTC)
+        plan_id_value = payload.get("plan_id") or plan_id
+        generated_at = datetime.fromtimestamp(
+            generated_ts if generated_ts is not None else 0, tz=UTC
+        )
 
         actions_data = payload.get("actions") or []
         actions: List[RiskAdjustedAction] = [
             RiskAdjustedAction(**action_dict) for action_dict in actions_data
         ]
 
-        if "metadata" in payload and payload["metadata"] is not None:
-            metadata = payload["metadata"]
-        elif metadata_json:
+        metadata: Dict[str, Any] = {}
+        if metadata_json:
             try:
                 metadata = json.loads(metadata_json)
             except json.JSONDecodeError:
                 metadata = {}
-        else:
-            metadata = {}
 
         return ExecutionPlan(
-            plan_id=plan_id,
+            plan_id=plan_id_value,
             generated_at=generated_at,
             actions=actions,
             metadata=metadata,
@@ -1356,12 +1339,14 @@ class SQLitePortfolioStore(PortfolioStore):
         ) = row
 
         created_at = (
-            datetime.fromtimestamp(created_ts)
+            datetime.fromtimestamp(created_ts, tz=UTC)
             if created_ts is not None
-            else datetime.now()
+            else datetime.now(UTC)
         )
         updated_at = (
-            datetime.fromtimestamp(updated_ts) if updated_ts is not None else created_at
+            datetime.fromtimestamp(updated_ts, tz=UTC)
+            if updated_ts is not None
+            else created_at
         )
 
         try:
@@ -1432,12 +1417,14 @@ class SQLitePortfolioStore(PortfolioStore):
         plan_id, started_ts, completed_ts, success_int, errors_json = row
 
         started_at = (
-            datetime.fromtimestamp(started_ts)
+            datetime.fromtimestamp(started_ts, tz=UTC)
             if started_ts is not None
-            else datetime.fromtimestamp(0)
+            else datetime.fromtimestamp(0, tz=UTC)
         )
         completed_at = (
-            datetime.fromtimestamp(completed_ts) if completed_ts is not None else None
+            datetime.fromtimestamp(completed_ts, tz=UTC)
+            if completed_ts is not None
+            else None
         )
 
         errors: List[str] = []
@@ -1471,8 +1458,7 @@ class SQLitePortfolioStore(PortfolioStore):
                 cursor = conn.cursor()
 
                 query = """
-                    SELECT plan_id, generated_at, action_count, blocked_actions,
-                           metadata_json, plan_json
+                    SELECT plan_id, generated_at, plan_json, metadata_json
                     FROM execution_plans
                     WHERE 1=1
                 """
@@ -1507,8 +1493,7 @@ class SQLitePortfolioStore(PortfolioStore):
                 cursor = conn.cursor()
                 cursor.execute(
                     """
-                    SELECT plan_id, generated_at, action_count, blocked_actions,
-                           metadata_json, plan_json
+                    SELECT plan_id, generated_at, plan_json, metadata_json
                     FROM execution_plans
                     WHERE plan_id = ?
                     """,
@@ -1562,11 +1547,11 @@ class SQLitePortfolioStore(PortfolioStore):
                         raw_request_json,
                         raw_response_json
                     FROM execution_orders
-                    WHERE status IS NULL OR status IN ({statuses})
-                """.format(
-                    statuses=", ".join("?" for _ in open_statuses)
-                )
+                    WHERE 1=1
+                """
 
+                status_placeholders = ", ".join("?" for _ in open_statuses)
+                query += f" AND (status IS NULL OR status IN ({status_placeholders}))"
                 params: List[Any] = list(open_statuses)
 
                 if plan_id is not None:
@@ -1577,7 +1562,7 @@ class SQLitePortfolioStore(PortfolioStore):
                     query += " AND strategy_id = ?"
                     params.append(strategy_id)
 
-                query += " ORDER BY created_at ASC"
+                query += " ORDER BY created_at DESC"
 
                 cursor.execute(query, params)
                 rows = cursor.fetchall()
