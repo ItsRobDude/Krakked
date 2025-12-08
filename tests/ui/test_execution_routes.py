@@ -4,8 +4,8 @@ import pytest
 from starlette.testclient import TestClient
 
 from kraken_bot.execution.models import ExecutionResult, LocalOrder
-from kraken_bot.strategy.models import ExecutionPlan
 from kraken_bot.portfolio.models import SpotPosition
+from kraken_bot.strategy.models import ExecutionPlan
 
 
 @pytest.fixture

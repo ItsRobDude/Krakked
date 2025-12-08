@@ -53,7 +53,9 @@ def test_build_order_payload_validate_and_userref(sample_order, pair_metadata):
     assert payload["volume"] == "1.5"
 
 
-def test_build_order_payload_live_market_excludes_validate_and_price(sample_order, pair_metadata):
+def test_build_order_payload_live_market_excludes_validate_and_price(
+    sample_order, pair_metadata
+):
     config = ExecutionConfig(mode="live", validate_only=False)
     sample_order.order_type = "market"
 
@@ -112,7 +114,9 @@ def test_submit_order_sets_dead_man_switch(sample_order, pair_metadata):
     client.cancel_all_orders_after.assert_called_once_with(15)
 
 
-def test_submit_order_with_zero_dead_man_switch_leaves_payload(sample_order, pair_metadata):
+def test_submit_order_with_zero_dead_man_switch_leaves_payload(
+    sample_order, pair_metadata
+):
     client = MagicMock()
     client.add_order.return_value = {"error": [], "txid": ["ABC123"]}
     adapter = KrakenExecutionAdapter(
@@ -146,7 +150,9 @@ def test_submit_order_rejected_raises(sample_order, pair_metadata):
     assert sample_order.last_error == "EGeneral:failure"
 
 
-def test_submit_order_client_exception_maps_to_execution_error(sample_order, pair_metadata):
+def test_submit_order_client_exception_maps_to_execution_error(
+    sample_order, pair_metadata
+):
     client = MagicMock()
     client.add_order.side_effect = RuntimeError("network down")
     adapter = KrakenExecutionAdapter(client, ExecutionConfig())

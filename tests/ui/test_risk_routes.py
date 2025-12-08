@@ -46,7 +46,9 @@ class RecordingAdapter:
             get_closed_orders=lambda: {},
         )
 
-    def submit_order(self, order: LocalOrder, pair_metadata: PairMetadata) -> LocalOrder:
+    def submit_order(
+        self, order: LocalOrder, pair_metadata: PairMetadata
+    ) -> LocalOrder:
         self.submit_order_calls.append(order)
         return order
 
