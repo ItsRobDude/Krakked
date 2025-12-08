@@ -1169,9 +1169,6 @@ class SQLitePortfolioStore(PortfolioStore):
         kraken_order_id: Optional[str] = None,
         userref: Optional[int] = None,
     ) -> Optional["LocalOrder"]:
-        if not kraken_order_id and userref is None:
-            raise ValueError("kraken_order_id or userref must be provided")
-
         with self._lock:
             conn = self._get_conn()
             try:
@@ -1186,6 +1183,9 @@ class SQLitePortfolioStore(PortfolioStore):
                 if userref is not None:
                     conditions.append("userref = ?")
                     params.append(userref)
+
+                if not conditions:
+                    return None
 
                 where_clause = " OR ".join(conditions)
                 cursor.execute(
@@ -1217,6 +1217,7 @@ class SQLitePortfolioStore(PortfolioStore):
         since: Optional[int] = None,
         limit: Optional[int] = None,
         strategy_name: Optional[str] = None,
+        pair: Optional[str] = None,
     ) -> List["DecisionRecord"]:
         from kraken_bot.strategy.models import DecisionRecord
 
@@ -1240,6 +1241,10 @@ class SQLitePortfolioStore(PortfolioStore):
                 if strategy_name:
                     query += " AND strategy_name = ?"
                     params.append(strategy_name)
+
+                if pair:
+                    query += " AND pair = ?"
+                    params.append(pair)
 
                 if since is not None:
                     query += " AND time >= ?"
@@ -1288,15 +1293,24 @@ class SQLitePortfolioStore(PortfolioStore):
             except json.JSONDecodeError:
                 payload = {}
 
-        generated_at = datetime.fromtimestamp(float(generated_ts), tz=UTC)
+        generated_at_raw = payload.get("generated_at")
+        if isinstance(generated_at_raw, (int, float)):
+            generated_at = datetime.fromtimestamp(float(generated_at_raw), tz=UTC)
+        elif isinstance(generated_at_raw, str):
+            try:
+                generated_at = datetime.fromisoformat(generated_at_raw)
+            except ValueError:
+                generated_at = datetime.fromtimestamp(float(generated_ts), tz=UTC)
+        else:
+            generated_at = datetime.fromtimestamp(float(generated_ts), tz=UTC)
 
         actions_data = payload.get("actions") or []
         actions: List[RiskAdjustedAction] = [
             RiskAdjustedAction(**action_dict) for action_dict in actions_data
         ]
 
-        metadata = {}
-        if metadata_json:
+        metadata = payload.get("metadata") or {}
+        if not metadata and metadata_json:
             try:
                 metadata = json.loads(metadata_json)
             except json.JSONDecodeError:
@@ -1398,19 +1412,15 @@ class SQLitePortfolioStore(PortfolioStore):
     def _deserialize_execution_result_row(
         self, row: Tuple[Any, ...]
     ) -> "ExecutionResult":
-        """
-        Convert a row from execution_results into an ExecutionResult.
-
-        Row layout:
-          0: plan_id
-          1: started_at (REAL)
-          2: completed_at (REAL)
-          3: success (INTEGER 0/1)
-          4: errors_json (TEXT)
-        """
+        """Convert a row from execution_results into an ExecutionResult."""
         from kraken_bot.execution.models import ExecutionResult
 
-        plan_id, started_ts, completed_ts, success_int, errors_json = row
+        plan_id = row[0]
+        started_ts = row[1]
+        completed_ts = row[2]
+        success_int = row[3]
+        errors_json = row[4] if len(row) > 4 else None
+        warnings_json = row[5] if len(row) > 5 else None
 
         started_at = (
             datetime.fromtimestamp(started_ts, tz=UTC)
@@ -1423,14 +1433,19 @@ class SQLitePortfolioStore(PortfolioStore):
             else None
         )
 
-        errors: List[str] = []
-        if errors_json:
+        def _loads_list(blob: Any) -> List[str]:
+            if not blob:
+                return []
             try:
-                parsed = json.loads(errors_json)
+                parsed = json.loads(blob)
                 if isinstance(parsed, list):
-                    errors = [str(e) for e in parsed]
+                    return [str(item) for item in parsed]
             except json.JSONDecodeError:
-                errors = []
+                return []
+            return []
+
+        errors = _loads_list(errors_json)
+        warnings = _loads_list(warnings_json)
 
         return ExecutionResult(
             plan_id=plan_id,
@@ -1439,13 +1454,13 @@ class SQLitePortfolioStore(PortfolioStore):
             success=bool(success_int),
             orders=[],
             errors=errors,
-            warnings=[],
+            warnings=warnings,
         )
 
     def get_execution_plans(
         self,
         plan_id: Optional[str] = None,
-        since: Optional[int] = None,
+        since: Optional[datetime] = None,
         limit: Optional[int] = None,
     ) -> List["ExecutionPlan"]:
         with self._lock:
@@ -1465,8 +1480,11 @@ class SQLitePortfolioStore(PortfolioStore):
                     params.append(plan_id)
 
                 if since is not None:
+                    cutoff = (
+                        since.timestamp() if isinstance(since, datetime) else float(since)
+                    )
                     query += " AND generated_at >= ?"
-                    params.append(since)
+                    params.append(cutoff)
 
                 query += " ORDER BY generated_at DESC"
 
@@ -1514,6 +1532,9 @@ class SQLitePortfolioStore(PortfolioStore):
             "open",
             "partially_filled",
             "validated",
+            "pending_cancel",
+            "pending_cancellation",
+            "canceling",
         }
 
         with self._lock:
@@ -1580,7 +1601,7 @@ class SQLitePortfolioStore(PortfolioStore):
                         success,
                         errors_json
                     FROM execution_results
-                    ORDER BY started_at DESC
+                    ORDER BY COALESCE(completed_at, started_at) DESC, started_at DESC
                     LIMIT ?
                     """,
                     (limit,),
@@ -1713,12 +1734,14 @@ class SQLitePortfolioStore(PortfolioStore):
         y: List[float] = []
         weights: List[float] = []
 
-        for features_json, label in rows:
+        for features_json, label, sample_weight in rows:
             X.append(json.loads(features_json))
             y.append(float(label))
+            weights.append(float(sample_weight))
 
         X.reverse()
         y.reverse()
+        weights.reverse()
 
         if return_weights:
             return X, y, weights
