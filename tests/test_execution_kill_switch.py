@@ -45,7 +45,12 @@ class FakeAdapter:
             get_closed_orders=lambda: {},
         )
 
-    def submit_order(self, order: LocalOrder, pair_metadata: PairMetadata) -> LocalOrder:
+    def submit_order(
+        self,
+        order: LocalOrder,
+        pair_metadata: PairMetadata,
+        latest_price: float | None = None,
+    ) -> LocalOrder:
         self.submit_order_calls.append(order)
         return order
 
@@ -91,9 +96,7 @@ def _pair_metadata(pair: str = "XBTUSD") -> PairMetadata:
 
 def _market_data_mock():
     md = MagicMock()
-    md.get_pair_metadata_or_raise.side_effect = (
-        lambda pair: _pair_metadata(pair)
-    )
+    md.get_pair_metadata_or_raise.side_effect = lambda pair: _pair_metadata(pair)
     md.get_best_bid_ask.return_value = None
     return md
 
