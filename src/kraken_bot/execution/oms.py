@@ -9,8 +9,8 @@ from kraken_bot.config import ExecutionConfig
 from kraken_bot.connection.rate_limiter import RateLimiter
 from kraken_bot.connection.rest_client import KrakenRESTClient
 from kraken_bot.logging_config import structured_log_extra
-from kraken_bot.market_data.exceptions import DataStaleError
 from kraken_bot.market_data.api import MarketDataAPI
+from kraken_bot.market_data.exceptions import DataStaleError
 from kraken_bot.strategy.models import ExecutionPlan
 
 from .adapter import ExecutionAdapter, get_execution_adapter
@@ -134,19 +134,19 @@ class ExecutionService:
 
     def execute_plan(self, plan: ExecutionPlan) -> ExecutionResult:
         """
-        Execute a plan by building orders, enforcing guardrails, and routing submissions.
+            Execute a plan by building orders, enforcing guardrails, and routing submissions.
 
-        * Skips blocked/"none" actions and no-op deltas.
-        * Enforces max_concurrent_orders, marking extra actions as rejected.
-        * Applies notional guardrails before any submission attempt.
-        * Submits eligible orders through the adapter; any :class:`ExecutionError`
-          is captured and persisted on the associated :class:`LocalOrder`.
-    * Persists orders and the aggregate :class:`ExecutionResult` when a store
-      is configured.
-    * Records an in-memory execution result and registers each order for
-      later reconciliation via :meth:`refresh_open_orders` or
-      :meth:`reconcile_orders`.
-    """
+            * Skips blocked/"none" actions and no-op deltas.
+            * Enforces max_concurrent_orders, marking extra actions as rejected.
+            * Applies notional guardrails before any submission attempt.
+            * Submits eligible orders through the adapter; any :class:`ExecutionError`
+              is captured and persisted on the associated :class:`LocalOrder`.
+        * Persists orders and the aggregate :class:`ExecutionResult` when a store
+          is configured.
+        * Records an in-memory execution result and registers each order for
+          later reconciliation via :meth:`refresh_open_orders` or
+          :meth:`reconcile_orders`.
+        """
         started_at = datetime.now(UTC)
         result = ExecutionResult(plan_id=plan.plan_id, started_at=started_at)
 
@@ -274,9 +274,7 @@ class ExecutionService:
 
         for action in actions_to_process:
             try:
-                pair_metadata = self.market_data.get_pair_metadata_or_raise(
-                    action.pair
-                )
+                pair_metadata = self.market_data.get_pair_metadata_or_raise(action.pair)
             except ValueError as exc:
                 logger.error(
                     "Execution aborted: missing metadata for pair",

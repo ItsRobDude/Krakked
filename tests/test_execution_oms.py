@@ -111,7 +111,9 @@ def test_execute_plan_skips_blocked_noop_and_zero_delta(
 def test_execute_plan_creates_buy_and_sell_orders(plan_metadata, inactive_risk_status):
     adapter = RecordingAdapter()
     service = ExecutionService(
-        adapter, market_data=_market_data_mock(), risk_status_provider=inactive_risk_status
+        adapter,
+        market_data=_market_data_mock(),
+        risk_status_provider=inactive_risk_status,
     )
     actions = [
         make_action(target=3.0, current=1.0),
@@ -172,11 +174,16 @@ def test_execute_plan_rejects_stale_plan(plan_metadata, inactive_risk_status):
     adapter.config = config
 
     service = ExecutionService(
-        adapter, config=config, market_data=market_data, risk_status_provider=inactive_risk_status
+        adapter,
+        config=config,
+        market_data=market_data,
+        risk_status_provider=inactive_risk_status,
     )
 
     stale_time = datetime.now(UTC) - timedelta(seconds=5)
-    plan = make_plan([make_action(target=1.0, current=0.0)], plan_metadata, generated_at=stale_time)
+    plan = make_plan(
+        [make_action(target=1.0, current=0.0)], plan_metadata, generated_at=stale_time
+    )
 
     result = service.execute_plan(plan)
 

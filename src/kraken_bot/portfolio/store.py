@@ -625,60 +625,75 @@ class SQLitePortfolioStore(PortfolioStore):
         if not trades:
             return
 
-        conn = self._get_conn()
-        cursor = conn.cursor()
+        with self._lock:
+            conn = self._get_conn()
+            try:
+                cursor = conn.cursor()
 
-        for trade in trades:
-            # We assume 'trade' is the raw dictionary from Kraken API or internal representation
-            # The 'id' in our table maps to the trade ID (key in the dictionary usually)
-            # However, Kraken 'TradesHistory' returns a dict where keys are trade IDs.
-            # We need to handle that before calling this, or assume 'trades' here is a list of flattened dicts with 'id' field.
-            # Let's assume flattened dict with 'id'.
+                for trade in trades:
+                    # We assume 'trade' is the raw dictionary from Kraken API or internal representation
+                    # The 'id' in our table maps to the trade ID (key in the dictionary usually)
+                    # However, Kraken 'TradesHistory' returns a dict where keys are trade IDs.
+                    # We need to handle that before calling this, or assume 'trades' here is a list of flattened dicts with 'id' field.
+                    # Let's assume flattened dict with 'id'.
 
-            raw_json = json.dumps(trade)
+                    raw_json = json.dumps(trade)
 
-            # Handle 'trades' field which can be a list of strings
-            trades_val = trade.get("trades")
-            trades_csv = None
-            if isinstance(trades_val, list):
-                trades_csv = ",".join(str(t) for t in trades_val)
-            elif trades_val is not None:
-                trades_csv = str(trades_val)
+                    # Handle 'trades' field which can be a list of strings
+                    trades_val = trade.get("trades")
+                    trades_csv = None
+                    if isinstance(trades_val, list):
+                        trades_csv = ",".join(str(t) for t in trades_val)
+                    elif trades_val is not None:
+                        trades_csv = str(trades_val)
 
-            cursor.execute(
-                """
-                INSERT OR IGNORE INTO trades (
-                    id, ordertxid, pair, time, type, ordertype, price, cost, fee, vol,
-                    margin, misc, posstatus, cprice, ccost, cfee, cvol, cmargin, net,
-                    trades_csv, raw_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-                (
-                    trade.get("id"),
-                    trade.get("ordertxid"),
-                    trade.get("pair"),
-                    trade.get("time"),
-                    trade.get("type"),
-                    trade.get("ordertype"),
-                    float(trade.get("price", 0)),
-                    float(trade.get("cost", 0)),
-                    float(trade.get("fee", 0)),
-                    float(trade.get("vol", 0)),
-                    float(trade.get("margin", 0)),
-                    trade.get("misc"),
-                    trade.get("posstatus"),
-                    float(trade.get("cprice", 0)) if trade.get("cprice") else None,
-                    float(trade.get("ccost", 0)) if trade.get("ccost") else None,
-                    float(trade.get("cfee", 0)) if trade.get("cfee") else None,
-                    float(trade.get("cvol", 0)) if trade.get("cvol") else None,
-                    float(trade.get("cmargin", 0)) if trade.get("cmargin") else None,
-                    float(trade.get("net", 0)) if trade.get("net") else None,
-                    trades_csv,  # trades list CSV
-                    raw_json,
-                ),
-            )
-        conn.commit()
-        conn.close()
+                    cursor.execute(
+                        """
+                        INSERT OR IGNORE INTO trades (
+                            id, ordertxid, pair, time, type, ordertype, price, cost, fee, vol,
+                            margin, misc, posstatus, cprice, ccost, cfee, cvol, cmargin, net,
+                            trades_csv, raw_json
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                        (
+                            trade.get("id"),
+                            trade.get("ordertxid"),
+                            trade.get("pair"),
+                            trade.get("time"),
+                            trade.get("type"),
+                            trade.get("ordertype"),
+                            float(trade.get("price", 0)),
+                            float(trade.get("cost", 0)),
+                            float(trade.get("fee", 0)),
+                            float(trade.get("vol", 0)),
+                            float(trade.get("margin", 0)),
+                            trade.get("misc"),
+                            trade.get("posstatus"),
+                            (
+                                float(trade.get("cprice", 0))
+                                if trade.get("cprice")
+                                else None
+                            ),
+                            (
+                                float(trade.get("ccost", 0))
+                                if trade.get("ccost")
+                                else None
+                            ),
+                            float(trade.get("cfee", 0)) if trade.get("cfee") else None,
+                            float(trade.get("cvol", 0)) if trade.get("cvol") else None,
+                            (
+                                float(trade.get("cmargin", 0))
+                                if trade.get("cmargin")
+                                else None
+                            ),
+                            float(trade.get("net", 0)) if trade.get("net") else None,
+                            trades_csv,  # trades list CSV
+                            raw_json,
+                        ),
+                    )
+                conn.commit()
+            finally:
+                conn.close()
 
     def get_trades(
         self,
@@ -723,27 +738,30 @@ class SQLitePortfolioStore(PortfolioStore):
         if not records:
             return
 
-        conn = self._get_conn()
-        cursor = conn.cursor()
+        with self._lock:
+            conn = self._get_conn()
+            try:
+                cursor = conn.cursor()
 
-        for record in records:
-            cursor.execute(
-                """
-                INSERT OR IGNORE INTO cash_flows (
-                    id, time, asset, amount, type, note
-                ) VALUES (?, ?, ?, ?, ?, ?)
-            """,
-                (
-                    record.id,
-                    record.time,
-                    record.asset,
-                    record.amount,
-                    record.type,
-                    record.note,
-                ),
-            )
-        conn.commit()
-        conn.close()
+                for record in records:
+                    cursor.execute(
+                        """
+                        INSERT OR IGNORE INTO cash_flows (
+                            id, time, asset, amount, type, note
+                        ) VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                        (
+                            record.id,
+                            record.time,
+                            record.asset,
+                            record.amount,
+                            record.type,
+                            record.note,
+                        ),
+                    )
+                conn.commit()
+            finally:
+                conn.close()
 
     def get_cash_flows(
         self,
@@ -795,42 +813,45 @@ class SQLitePortfolioStore(PortfolioStore):
         ]
 
     def save_snapshot(self, snapshot: PortfolioSnapshot):
-        conn = self._get_conn()
-        cursor = conn.cursor()
+        with self._lock:
+            conn = self._get_conn()
+            try:
+                cursor = conn.cursor()
 
-        # We store the heavy lifting in JSON
-        data = {
-            "asset_valuations": [
-                {
-                    "asset": av.asset,
-                    "amount": av.amount,
-                    "value_base": av.value_base,
-                    "source_pair": av.source_pair,
-                    "valuation_status": av.valuation_status,
+                # We store the heavy lifting in JSON
+                data = {
+                    "asset_valuations": [
+                        {
+                            "asset": av.asset,
+                            "amount": av.amount,
+                            "value_base": av.value_base,
+                            "source_pair": av.source_pair,
+                            "valuation_status": av.valuation_status,
+                        }
+                        for av in snapshot.asset_valuations
+                    ],
+                    "realized_pnl_base_total": snapshot.realized_pnl_base_total,
+                    "unrealized_pnl_base_total": snapshot.unrealized_pnl_base_total,
+                    "realized_pnl_base_by_pair": snapshot.realized_pnl_base_by_pair,
+                    "unrealized_pnl_base_by_pair": snapshot.unrealized_pnl_base_by_pair,
                 }
-                for av in snapshot.asset_valuations
-            ],
-            "realized_pnl_base_total": snapshot.realized_pnl_base_total,
-            "unrealized_pnl_base_total": snapshot.unrealized_pnl_base_total,
-            "realized_pnl_base_by_pair": snapshot.realized_pnl_base_by_pair,
-            "unrealized_pnl_base_by_pair": snapshot.unrealized_pnl_base_by_pair,
-        }
 
-        cursor.execute(
-            """
-            INSERT OR REPLACE INTO snapshots (
-                timestamp, equity_base, cash_base, data_json
-            ) VALUES (?, ?, ?, ?)
-        """,
-            (
-                snapshot.timestamp,
-                snapshot.equity_base,
-                snapshot.cash_base,
-                json.dumps(data),
-            ),
-        )
-        conn.commit()
-        conn.close()
+                cursor.execute(
+                    """
+                    INSERT OR REPLACE INTO snapshots (
+                        timestamp, equity_base, cash_base, data_json
+                    ) VALUES (?, ?, ?, ?)
+                """,
+                    (
+                        snapshot.timestamp,
+                        snapshot.equity_base,
+                        snapshot.cash_base,
+                        json.dumps(data),
+                    ),
+                )
+                conn.commit()
+            finally:
+                conn.close()
 
     def get_snapshots(
         self, since: Optional[int] = None, limit: Optional[int] = None
@@ -882,148 +903,162 @@ class SQLitePortfolioStore(PortfolioStore):
         return snapshots
 
     def prune_snapshots(self, older_than_ts: int):
-        conn = self._get_conn()
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM snapshots WHERE timestamp < ?", (older_than_ts,))
-        conn.commit()
-        conn.close()
+        with self._lock:
+            conn = self._get_conn()
+            try:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "DELETE FROM snapshots WHERE timestamp < ?", (older_than_ts,)
+                )
+                conn.commit()
+            finally:
+                conn.close()
 
     def add_decision(self, record: "DecisionRecord"):
-        conn = self._get_conn()
-        cursor = conn.cursor()
+        with self._lock:
+            conn = self._get_conn()
+            try:
+                cursor = conn.cursor()
 
-        cursor.execute(
-            """
-            INSERT INTO decisions (
-                time, plan_id, strategy_name, pair, action_type,
-                target_position_usd, blocked, block_reason, kill_switch_active, raw_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-            (
-                record.time,
-                record.plan_id,
-                record.strategy_name,
-                record.pair,
-                record.action_type,
-                record.target_position_usd,
-                1 if record.blocked else 0,
-                record.block_reason,
-                1 if record.kill_switch_active else 0,
-                record.raw_json,
-            ),
-        )
+                cursor.execute(
+                    """
+                    INSERT INTO decisions (
+                        time, plan_id, strategy_name, pair, action_type,
+                        target_position_usd, blocked, block_reason, kill_switch_active, raw_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                    (
+                        record.time,
+                        record.plan_id,
+                        record.strategy_name,
+                        record.pair,
+                        record.action_type,
+                        record.target_position_usd,
+                        1 if record.blocked else 0,
+                        record.block_reason,
+                        1 if record.kill_switch_active else 0,
+                        record.raw_json,
+                    ),
+                )
 
-        conn.commit()
-        conn.close()
+                conn.commit()
+            finally:
+                conn.close()
 
     def save_execution_plan(self, plan: "ExecutionPlan"):
-        conn = self._get_conn()
-        cursor = conn.cursor()
+        with self._lock:
+            conn = self._get_conn()
+            try:
+                cursor = conn.cursor()
 
-        plan_json = json.dumps(
-            {
-                "plan_id": plan.plan_id,
-                "generated_at": plan.generated_at,
-                "actions": [asdict(a) for a in plan.actions],
-                "metadata": plan.metadata,
-            },
-            default=str,
-        )
+                plan_json = json.dumps(
+                    {
+                        "plan_id": plan.plan_id,
+                        "generated_at": plan.generated_at,
+                        "actions": [asdict(a) for a in plan.actions],
+                        "metadata": plan.metadata,
+                    },
+                    default=str,
+                )
 
-        cursor.execute(
-            """
-            INSERT OR REPLACE INTO execution_plans (
-                plan_id, generated_at, action_count, blocked_actions, metadata_json, plan_json
-            ) VALUES (?, ?, ?, ?, ?, ?)
-            """,
-            (
-                plan.plan_id,
-                plan.generated_at.timestamp(),
-                len(plan.actions),
-                len([a for a in plan.actions if a.blocked]),
-                json.dumps(plan.metadata, default=str),
-                plan_json,
-            ),
-        )
+                cursor.execute(
+                    """
+                    INSERT OR REPLACE INTO execution_plans (
+                        plan_id, generated_at, action_count, blocked_actions, metadata_json, plan_json
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        plan.plan_id,
+                        plan.generated_at.timestamp(),
+                        len(plan.actions),
+                        len([a for a in plan.actions if a.blocked]),
+                        json.dumps(plan.metadata, default=str),
+                        plan_json,
+                    ),
+                )
 
-        conn.commit()
-        conn.close()
+                conn.commit()
+            finally:
+                conn.close()
 
     def save_order(self, order: "LocalOrder"):
-        conn = self._get_conn()
-        cursor = conn.cursor()
+        with self._lock:
+            conn = self._get_conn()
+            try:
+                cursor = conn.cursor()
 
-        created_ts = (
-            order.created_at.timestamp()
-            if isinstance(order.created_at, datetime)
-            else None
-        )
-        updated_ts = (
-            order.updated_at.timestamp()
-            if isinstance(order.updated_at, datetime)
-            else None
-        )
-
-        cursor.execute(
-            """
-            INSERT OR REPLACE INTO execution_orders (
-                local_id, plan_id, strategy_id, pair, side, order_type, kraken_order_id, userref,
-                requested_base_size, requested_price, status, created_at, updated_at,
-                cumulative_base_filled, avg_fill_price, last_error, raw_request_json, raw_response_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                order.local_id,
-                order.plan_id,
-                order.strategy_id,
-                order.pair,
-                order.side,
-                order.order_type,
-                order.kraken_order_id,
-                order.userref,
-                order.requested_base_size,
-                order.requested_price,
-                order.status,
-                created_ts,
-                updated_ts,
-                order.cumulative_base_filled,
-                order.avg_fill_price,
-                order.last_error,
-                (
-                    json.dumps(order.raw_request, default=str)
-                    if order.raw_request
+                created_ts = (
+                    order.created_at.timestamp()
+                    if isinstance(order.created_at, datetime)
                     else None
-                ),
-                (
-                    json.dumps(order.raw_response, default=str)
-                    if order.raw_response
+                )
+                updated_ts = (
+                    order.updated_at.timestamp()
+                    if isinstance(order.updated_at, datetime)
                     else None
-                ),
-            ),
-        )
+                )
 
-        cursor.execute(
-            """
-            INSERT INTO execution_order_events (
-                local_order_id, plan_id, event_time, status, message, raw_json
-            ) VALUES (?, ?, ?, ?, ?, ?)
-            """,
-            (
-                order.local_id,
-                order.plan_id,
-                updated_ts or created_ts or datetime.now(UTC).timestamp(),
-                order.status,
-                order.last_error,
-                (
-                    json.dumps(order.raw_response, default=str)
-                    if order.raw_response
-                    else None
-                ),
-            ),
-        )
+                cursor.execute(
+                    """
+                    INSERT OR REPLACE INTO execution_orders (
+                        local_id, plan_id, strategy_id, pair, side, order_type, kraken_order_id, userref,
+                        requested_base_size, requested_price, status, created_at, updated_at,
+                        cumulative_base_filled, avg_fill_price, last_error, raw_request_json, raw_response_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        order.local_id,
+                        order.plan_id,
+                        order.strategy_id,
+                        order.pair,
+                        order.side,
+                        order.order_type,
+                        order.kraken_order_id,
+                        order.userref,
+                        order.requested_base_size,
+                        order.requested_price,
+                        order.status,
+                        created_ts,
+                        updated_ts,
+                        order.cumulative_base_filled,
+                        order.avg_fill_price,
+                        order.last_error,
+                        (
+                            json.dumps(order.raw_request, default=str)
+                            if order.raw_request
+                            else None
+                        ),
+                        (
+                            json.dumps(order.raw_response, default=str)
+                            if order.raw_response
+                            else None
+                        ),
+                    ),
+                )
 
-        conn.commit()
-        conn.close()
+                cursor.execute(
+                    """
+                    INSERT INTO execution_order_events (
+                        local_order_id, plan_id, event_time, status, message, raw_json
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        order.local_id,
+                        order.plan_id,
+                        updated_ts or created_ts or datetime.now(UTC).timestamp(),
+                        order.status,
+                        order.last_error,
+                        (
+                            json.dumps(order.raw_response, default=str)
+                            if order.raw_response
+                            else None
+                        ),
+                    ),
+                )
+
+                conn.commit()
+            finally:
+                conn.close()
 
     def update_order_status(
         self,
@@ -1036,85 +1071,97 @@ class SQLitePortfolioStore(PortfolioStore):
         raw_response: Optional[Dict[str, Any]] = None,
         event_message: Optional[str] = None,
     ):
-        conn = self._get_conn()
-        cursor = conn.cursor()
+        with self._lock:
+            conn = self._get_conn()
+            try:
+                cursor = conn.cursor()
 
-        cursor.execute(
-            "SELECT plan_id FROM execution_orders WHERE local_id = ?", (local_id,)
-        )
-        order_row = cursor.fetchone()
+                cursor.execute(
+                    "SELECT plan_id FROM execution_orders WHERE local_id = ?",
+                    (local_id,),
+                )
+                order_row = cursor.fetchone()
 
-        now_ts = datetime.now(UTC).timestamp()
-        updates: Dict[str, Any] = {
-            "status": status,
-            "updated_at": now_ts,
-        }
+                now_ts = datetime.now(UTC).timestamp()
+                updates: Dict[str, Any] = {
+                    "status": status,
+                    "updated_at": now_ts,
+                }
 
-        if kraken_order_id is not None:
-            updates["kraken_order_id"] = kraken_order_id
-        if cumulative_base_filled is not None:
-            updates["cumulative_base_filled"] = cumulative_base_filled
-        if avg_fill_price is not None:
-            updates["avg_fill_price"] = avg_fill_price
-        if last_error is not None:
-            updates["last_error"] = last_error
-        if raw_response is not None:
-            updates["raw_response_json"] = json.dumps(raw_response, default=str)
+                if kraken_order_id is not None:
+                    updates["kraken_order_id"] = kraken_order_id
+                if cumulative_base_filled is not None:
+                    updates["cumulative_base_filled"] = cumulative_base_filled
+                if avg_fill_price is not None:
+                    updates["avg_fill_price"] = avg_fill_price
+                if last_error is not None:
+                    updates["last_error"] = last_error
+                if raw_response is not None:
+                    updates["raw_response_json"] = json.dumps(raw_response, default=str)
 
-        set_clause = ", ".join(f"{k} = ?" for k in updates)
-        params = list(updates.values()) + [local_id]
-        cursor.execute(
-            f"UPDATE execution_orders SET {set_clause} WHERE local_id = ?", params
-        )
+                set_clause = ", ".join(f"{k} = ?" for k in updates)
+                params = list(updates.values()) + [local_id]
+                cursor.execute(
+                    f"UPDATE execution_orders SET {set_clause} WHERE local_id = ?",
+                    params,
+                )
 
-        cursor.execute(
-            """
-            INSERT INTO execution_order_events (
-                local_order_id, plan_id, event_time, status, message, raw_json
-            ) VALUES (?, ?, ?, ?, ?, ?)
-            """,
-            (
-                local_id,
-                order_row[0] if order_row else None,
-                now_ts,
-                status,
-                event_message or last_error,
-                (
-                    json.dumps(raw_response, default=str)
-                    if raw_response is not None
-                    else None
-                ),
-            ),
-        )
+                cursor.execute(
+                    """
+                    INSERT INTO execution_order_events (
+                        local_order_id, plan_id, event_time, status, message, raw_json
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        local_id,
+                        order_row[0] if order_row else None,
+                        now_ts,
+                        status,
+                        event_message or last_error,
+                        (
+                            json.dumps(raw_response, default=str)
+                            if raw_response is not None
+                            else None
+                        ),
+                    ),
+                )
 
-        conn.commit()
-        conn.close()
+                conn.commit()
+            finally:
+                conn.close()
 
     def save_execution_result(self, result: "ExecutionResult"):
-        conn = self._get_conn()
-        cursor = conn.cursor()
+        with self._lock:
+            conn = self._get_conn()
+            try:
+                cursor = conn.cursor()
 
-        cursor.execute(
-            """
-            INSERT OR REPLACE INTO execution_results (
-                plan_id, started_at, completed_at, success, errors_json
-            ) VALUES (?, ?, ?, ?, ?)
-            """,
-            (
-                result.plan_id,
-                result.started_at.timestamp() if result.started_at else None,
-                result.completed_at.timestamp() if result.completed_at else None,
-                1 if result.success else 0,
-                (
-                    json.dumps(result.errors, default=str)
-                    if result.errors
-                    else json.dumps([])
-                ),
-            ),
-        )
+                cursor.execute(
+                    """
+                    INSERT OR REPLACE INTO execution_results (
+                        plan_id, started_at, completed_at, success, errors_json
+                    ) VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        result.plan_id,
+                        result.started_at.timestamp() if result.started_at else None,
+                        (
+                            result.completed_at.timestamp()
+                            if result.completed_at
+                            else None
+                        ),
+                        1 if result.success else 0,
+                        (
+                            json.dumps(result.errors, default=str)
+                            if result.errors
+                            else json.dumps([])
+                        ),
+                    ),
+                )
 
-        conn.commit()
-        conn.close()
+                conn.commit()
+            finally:
+                conn.close()
 
     def get_order_by_reference(
         self,
@@ -1173,37 +1220,39 @@ class SQLitePortfolioStore(PortfolioStore):
         from kraken_bot.strategy.models import DecisionRecord
 
         conn = self._get_conn()
-        cursor = conn.cursor()
+        try:
+            cursor = conn.cursor()
 
-        query = """
-            SELECT time, plan_id, strategy_name, pair, action_type, target_position_usd,
-                   blocked, block_reason, kill_switch_active, raw_json
-            FROM decisions
-            WHERE 1=1
-        """
-        params: List[Any] = []
+            query = """
+                SELECT time, plan_id, strategy_name, pair, action_type, target_position_usd,
+                       blocked, block_reason, kill_switch_active, raw_json
+                FROM decisions
+                WHERE 1=1
+            """
+            params: List[Any] = []
 
-        if plan_id:
-            query += " AND plan_id = ?"
-            params.append(plan_id)
+            if plan_id:
+                query += " AND plan_id = ?"
+                params.append(plan_id)
 
-        if strategy_name:
-            query += " AND strategy_name = ?"
-            params.append(strategy_name)
+            if strategy_name:
+                query += " AND strategy_name = ?"
+                params.append(strategy_name)
 
-        if since is not None:
-            query += " AND time >= ?"
-            params.append(since)
+            if since is not None:
+                query += " AND time >= ?"
+                params.append(since)
 
-        query += " ORDER BY time DESC"
+            query += " ORDER BY time DESC"
 
-        if limit:
-            query += " LIMIT ?"
-            params.append(limit)
+            if limit:
+                query += " LIMIT ?"
+                params.append(limit)
 
-        cursor.execute(query, params)
-        rows = cursor.fetchall()
-        conn.close()
+            cursor.execute(query, params)
+            rows = cursor.fetchall()
+        finally:
+            conn.close()
 
         return [
             DecisionRecord(
@@ -1347,12 +1396,16 @@ class SQLitePortfolioStore(PortfolioStore):
             kraken_order_id=kraken_order_id,
             userref=normalized_userref,
             requested_base_size=float(requested_base_size or 0.0),
-            requested_price=float(requested_price) if requested_price is not None else None,
+            requested_price=(
+                float(requested_price) if requested_price is not None else None
+            ),
             status=status or "pending",
             created_at=created_at,
             updated_at=updated_at,
             cumulative_base_filled=float(cumulative_base_filled or 0.0),
-            avg_fill_price=float(avg_fill_price) if avg_fill_price is not None else None,
+            avg_fill_price=(
+                float(avg_fill_price) if avg_fill_price is not None else None
+            ),
             last_error=last_error,
             raw_request=raw_request,
             raw_response=raw_response,
@@ -1363,7 +1416,9 @@ class SQLitePortfolioStore(PortfolioStore):
 
         return self._row_to_local_order(row)
 
-    def _deserialize_execution_result_row(self, row: Tuple[Any, ...]) -> "ExecutionResult":
+    def _deserialize_execution_result_row(
+        self, row: Tuple[Any, ...]
+    ) -> "ExecutionResult":
         """
         Convert a row from execution_results into an ExecutionResult.
 
@@ -1510,7 +1565,9 @@ class SQLitePortfolioStore(PortfolioStore):
                         raw_response_json
                     FROM execution_orders
                     WHERE status IS NULL OR status IN ({statuses})
-                """.format(statuses=", ".join("?" for _ in open_statuses))
+                """.format(
+                    statuses=", ".join("?" for _ in open_statuses)
+                )
 
                 params: List[Any] = list(open_statuses)
 

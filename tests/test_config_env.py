@@ -211,7 +211,9 @@ ui:
     )
 
 
-def test_ui_auth_empty_token_disables_auth_and_logs(monkeypatch, tmp_path: Path, caplog):
+def test_ui_auth_empty_token_disables_auth_and_logs(
+    monkeypatch, tmp_path: Path, caplog
+):
     config_dir = tmp_path / "config"
     data_dir = tmp_path / "data"
     config_dir.mkdir(parents=True, exist_ok=True)

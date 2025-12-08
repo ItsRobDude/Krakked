@@ -25,9 +25,10 @@ def test_live_mode_disallows_auto_migrate_schema(monkeypatch):
 def test_portfolio_migrate_cli_calls_ensure_schema(tmp_path):
     db = tmp_path / "portfolio.db"
 
-    with patch("kraken_bot.cli.ensure_portfolio_schema") as ensure_mock, patch(
-        "kraken_bot.cli.ensure_portfolio_tables"
-    ) as ensure_tables_mock:
+    with (
+        patch("kraken_bot.cli.ensure_portfolio_schema") as ensure_mock,
+        patch("kraken_bot.cli.ensure_portfolio_tables") as ensure_tables_mock,
+    ):
         ensure_mock.return_value = SimpleNamespace(
             version=CURRENT_SCHEMA_VERSION, migrated=True, initialized=False
         )

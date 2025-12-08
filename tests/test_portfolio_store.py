@@ -23,6 +23,19 @@ def store(tmp_path):
     return SQLitePortfolioStore(str(db_path))
 
 
+def test_sqlite_store_is_concrete(tmp_path):
+    db_path = tmp_path / "concrete.db"
+
+    # If any @abstractmethod is missing, this will raise TypeError
+    store = SQLitePortfolioStore(str(db_path))
+
+    # Sanity: it’s an instance of the ABC
+    from kraken_bot.portfolio.store import PortfolioStore
+
+    assert isinstance(store, PortfolioStore)
+    assert SQLitePortfolioStore.__abstractmethods__ == set()
+
+
 def seed_schema_version(db_path, version: int) -> None:
     with sqlite3.connect(db_path) as conn:
         conn.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)")
