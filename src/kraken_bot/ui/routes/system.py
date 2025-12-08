@@ -442,20 +442,6 @@ async def validate_credentials(
 ) -> ApiEnvelope[dict]:
     """Validate API credentials by pinging a lightweight private Kraken endpoint."""
 
-    ctx = _context(request)
-    auth_config = ctx.config.ui.auth
-    expected_auth = f"Bearer {auth_config.token}" if auth_config.token else ""
-    auth_header = request.headers.get("Authorization", "")
-
-    if auth_config.enabled and auth_header != expected_auth:
-        logger.warning(
-            "Unauthorized credential validation attempt",
-            extra=build_request_log_extra(
-                request, event="credential_validation_unauthorized"
-            ),
-        )
-        return ApiEnvelope(data={"valid": False}, error="Unauthorized")
-
     missing = [
         field_name
         for field_name, value in (

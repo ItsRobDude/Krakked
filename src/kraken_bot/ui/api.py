@@ -28,15 +28,30 @@ logger = logging.getLogger(__name__)
 class AuthMiddleware(BaseHTTPMiddleware):
     """Simple bearer-token middleware for UI API endpoints."""
 
-    def __init__(self, app, token: str):
+    def __init__(self, app, token: str, base_path: str = ""):
         super().__init__(app)
         self._token = token
+        normalized_base = base_path.rstrip("/") or ""
+        self._protected_prefix = f"{normalized_base}/api" or "/api"
+        self._health_paths = {
+            f"{self._protected_prefix}/health",
+            f"{self._protected_prefix}/system/health",
+        }
 
     async def dispatch(self, request: Request, call_next: Callable):  # type: ignore[override]
-        if request.url.path.startswith("/api"):
-            auth_header = request.headers.get("Authorization")
+        path = request.url.path
+
+        if path.startswith(self._protected_prefix) and path not in self._health_paths:
+            auth_header = request.headers.get("Authorization") or ""
             expected = f"Bearer {self._token}" if self._token else ""
             if auth_header != expected:
+                logger.warning(
+                    "Unauthorized UI API request",
+                    extra=build_request_log_extra(
+                        request,
+                        event="ui_auth_unauthorized",
+                    ),
+                )
                 return JSONResponse(
                     {"data": None, "error": "Unauthorized"}, status_code=401
                 )
@@ -46,15 +61,17 @@ class AuthMiddleware(BaseHTTPMiddleware):
 def create_api(context: AppContext) -> FastAPI:
     """Build a FastAPI app wired with routers and optional auth."""
 
+    base_path = context.config.ui.base_path.rstrip("/") or ""
+
     middleware = []
     auth_config = context.config.ui.auth
     if auth_config.enabled:
-        middleware.append(Middleware(AuthMiddleware, token=auth_config.token))
+        middleware.append(
+            Middleware(AuthMiddleware, token=auth_config.token, base_path=base_path)
+        )
 
     app = FastAPI(middleware=middleware)
     app.state.context = context
-
-    base_path = context.config.ui.base_path.rstrip("/") or ""
 
     app.include_router(portfolio_router, prefix=f"{base_path}/api/portfolio")
     app.include_router(risk_router, prefix=f"{base_path}/api/risk")

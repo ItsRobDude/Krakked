@@ -10,15 +10,13 @@ from kraken_bot.connection.exceptions import RateLimitError, ServiceUnavailableE
 from kraken_bot.connection.rate_limiter import RateLimiter
 from kraken_bot.connection.rest_client import KrakenRESTClient
 from kraken_bot.logging_config import structured_log_extra
+from kraken_bot.market_data.models import PairMetadata
 
 from .exceptions import ExecutionError, OrderCancelError, OrderRejectedError
 from .models import LocalOrder
 from .router import build_order_payload
 
 logger = logging.getLogger(__name__)
-
-
-from kraken_bot.market_data.models import PairMetadata
 
 
 class ExecutionAdapter(Protocol):
@@ -66,9 +64,7 @@ class KrakenExecutionAdapter:
         Prepare and submit an order to Kraken. The payload construction is delegated
         to routing helpers and the actual REST call is handled here.
         """
-        payload: Dict[str, Any] = build_order_payload(
-            order, self.config, pair_metadata
-        )
+        payload: Dict[str, Any] = build_order_payload(order, self.config, pair_metadata)
         order.raw_request = payload
 
         assert self.client is not None
@@ -93,7 +89,9 @@ class KrakenExecutionAdapter:
             )
             return order
 
-        price_for_notional = payload.get("price") or latest_price or order.requested_price
+        price_for_notional = (
+            payload.get("price") or latest_price or order.requested_price
+        )
         if price_for_notional is not None:
             notional = float(payload["volume"]) * float(price_for_notional)
             if notional < self.config.min_order_notional_usd:
@@ -341,9 +339,7 @@ class PaperExecutionAdapter:
         pair_metadata: PairMetadata,
         latest_price: Optional[float] = None,
     ) -> LocalOrder:
-        payload: Dict[str, Any] = build_order_payload(
-            order, self.config, pair_metadata
-        )
+        payload: Dict[str, Any] = build_order_payload(order, self.config, pair_metadata)
         order.raw_request = payload
 
         rounded_volume = float(payload["volume"])
@@ -366,7 +362,9 @@ class PaperExecutionAdapter:
             )
             return order
 
-        price_for_notional = payload.get("price") or latest_price or order.requested_price
+        price_for_notional = (
+            payload.get("price") or latest_price or order.requested_price
+        )
         if price_for_notional is not None:
             notional = float(payload["volume"]) * float(price_for_notional)
             if notional < self.config.min_order_notional_usd:
