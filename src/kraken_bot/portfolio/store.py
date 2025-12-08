@@ -1252,20 +1252,47 @@ class SQLitePortfolioStore(PortfolioStore):
             for row in rows
         ]
 
-    def _row_to_execution_plan(self, row) -> "ExecutionPlan":
+    def _row_to_execution_plan(self, row: Tuple[Any, ...]) -> "ExecutionPlan":
+        """
+        Internal helper to hydrate an ExecutionPlan from an execution_plans row.
+
+        Row layout (see ensure_portfolio_tables):
+            0: plan_id TEXT PRIMARY KEY
+            1: generated_at REAL (epoch seconds)
+            2: action_count INTEGER
+            3: blocked_actions INTEGER
+            4: metadata_json TEXT
+            5: plan_json TEXT
+        """
         from kraken_bot.strategy.models import ExecutionPlan, RiskAdjustedAction
 
-        plan_id, generated_at_ts, metadata_json, plan_json = row
-        plan_data = json.loads(plan_json) if plan_json else {}
-        actions_data = plan_data.get("actions", [])
-        actions = [RiskAdjustedAction(**action) for action in actions_data]
-        metadata = plan_data.get("metadata") or (
+        plan_id = row[0]
+        generated_at_ts = row[1]
+        metadata_json = row[4]
+        plan_json = row[5]
+
+        generated_at = datetime.fromtimestamp(generated_at_ts, tz=UTC)
+
+        metadata_from_col: Dict[str, Any] = (
             json.loads(metadata_json) if metadata_json else {}
         )
 
+        if plan_json:
+            decoded = json.loads(plan_json)
+        else:
+            decoded = {}
+
+        actions_payload = decoded.get("actions", [])
+        metadata_from_payload = decoded.get("metadata") or {}
+
+        # Prefer metadata embedded in the plan payload, fallback to column
+        metadata: Dict[str, Any] = metadata_from_payload or metadata_from_col or {}
+
+        actions = [RiskAdjustedAction(**a) for a in actions_payload]
+
         return ExecutionPlan(
             plan_id=plan_id,
-            generated_at=datetime.fromtimestamp(generated_at_ts, tz=UTC),
+            generated_at=generated_at,
             actions=actions,
             metadata=metadata,
         )
@@ -1361,13 +1388,15 @@ class SQLitePortfolioStore(PortfolioStore):
         try:
             cursor = conn.cursor()
 
-            query = (
-                "SELECT plan_id, generated_at, metadata_json, plan_json "
-                "FROM execution_plans WHERE 1=1"
-            )
+            query = """
+                SELECT plan_id, generated_at, action_count, blocked_actions,
+                       metadata_json, plan_json
+                FROM execution_plans
+                WHERE 1=1
+            """
             params: List[Any] = []
 
-            if plan_id:
+            if plan_id is not None:
                 query += " AND plan_id = ?"
                 params.append(plan_id)
 
@@ -1375,75 +1404,177 @@ class SQLitePortfolioStore(PortfolioStore):
                 query += " AND generated_at >= ?"
                 params.append(since)
 
+            # Most recent plans first
             query += " ORDER BY generated_at DESC"
 
-            if limit:
+            if limit is not None:
                 query += " LIMIT ?"
                 params.append(limit)
 
             cursor.execute(query, params)
             rows = cursor.fetchall()
-            return [self._row_to_execution_plan(row) for row in rows]
         finally:
             conn.close()
+
+        return [self._row_to_execution_plan(row) for row in rows]
 
     def get_execution_plan(self, plan_id: str) -> Optional["ExecutionPlan"]:
         conn = self._get_conn()
         try:
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT plan_id, generated_at, metadata_json, plan_json "
-                "FROM execution_plans WHERE plan_id = ?",
+                """
+                SELECT plan_id, generated_at, action_count, blocked_actions,
+                       metadata_json, plan_json
+                FROM execution_plans
+                WHERE plan_id = ?
+                """,
                 (plan_id,),
             )
             row = cursor.fetchone()
-            if not row:
-                return None
-            return self._row_to_execution_plan(row)
         finally:
             conn.close()
 
+        if row is None:
+            return None
+
+        return self._row_to_execution_plan(row)
+
     def get_open_orders(
-        self, plan_id: Optional[str] = None, strategy_id: Optional[str] = None
+        self,
+        plan_id: Optional[str] = None,
+        strategy_id: Optional[str] = None,
     ) -> List["LocalOrder"]:
+        from kraken_bot.execution.models import LocalOrder
+
+        # Statuses that should be treated as "still working / open"
+        open_statuses = ("pending", "submitted", "open", "partially_filled", "validated")
+
         conn = self._get_conn()
         try:
             cursor = conn.cursor()
 
             query = """
-                SELECT local_id, plan_id, strategy_id, pair, side, order_type,
-                       kraken_order_id, userref, requested_base_size, requested_price,
-                       status, created_at, updated_at, cumulative_base_filled,
-                       avg_fill_price, last_error, raw_request_json, raw_response_json
+                SELECT
+                    local_id,
+                    plan_id,
+                    strategy_id,
+                    pair,
+                    side,
+                    order_type,
+                    kraken_order_id,
+                    userref,
+                    requested_base_size,
+                    requested_price,
+                    status,
+                    created_at,
+                    updated_at,
+                    cumulative_base_filled,
+                    avg_fill_price,
+                    last_error,
+                    raw_request_json,
+                    raw_response_json
                 FROM execution_orders
-                WHERE status NOT IN ('closed', 'canceled', 'rejected', 'expired')
-            """
-            params: List[Any] = []
+                WHERE status IN ({statuses})
+            """.format(
+                statuses=", ".join("?" for _ in open_statuses)
+            )
 
-            if plan_id:
+            params: List[Any] = list(open_statuses)
+
+            if plan_id is not None:
                 query += " AND plan_id = ?"
                 params.append(plan_id)
 
-            if strategy_id:
+            if strategy_id is not None:
                 query += " AND strategy_id = ?"
                 params.append(strategy_id)
 
-            query += " ORDER BY created_at DESC"
+            # Oldest first is usually what you want operationally
+            query += " ORDER BY created_at ASC"
 
             cursor.execute(query, params)
             rows = cursor.fetchall()
-            return [self._row_to_local_order(row) for row in rows]
         finally:
             conn.close()
 
+        orders: List[LocalOrder] = []
+
+        for (
+            local_id,
+            row_plan_id,
+            row_strategy_id,
+            pair,
+            side,
+            order_type,
+            kraken_order_id,
+            userref,
+            requested_base_size,
+            requested_price,
+            status,
+            created_at_ts,
+            updated_at_ts,
+            cumulative_base_filled,
+            avg_fill_price,
+            last_error,
+            raw_request_json,
+            raw_response_json,
+        ) in rows:
+            created_at = (
+                datetime.fromtimestamp(created_at_ts, tz=UTC)
+                if created_at_ts is not None
+                else datetime.now(UTC)
+            )
+            updated_at = (
+                datetime.fromtimestamp(updated_at_ts, tz=UTC)
+                if updated_at_ts is not None
+                else created_at
+            )
+
+            raw_request = json.loads(raw_request_json) if raw_request_json else {}
+            raw_response = (
+                json.loads(raw_response_json) if raw_response_json else None
+            )
+
+            orders.append(
+                LocalOrder(
+                    local_id=local_id,
+                    plan_id=row_plan_id,
+                    strategy_id=row_strategy_id,
+                    pair=pair,
+                    side=side,
+                    order_type=order_type or "limit",
+                    kraken_order_id=kraken_order_id,
+                    userref=userref,
+                    requested_base_size=requested_base_size or 0.0,
+                    requested_price=requested_price,
+                    status=status or "pending",
+                    created_at=created_at,
+                    updated_at=updated_at,
+                    cumulative_base_filled=cumulative_base_filled or 0.0,
+                    avg_fill_price=avg_fill_price,
+                    last_error=last_error,
+                    raw_request=raw_request,
+                    raw_response=raw_response,
+                )
+            )
+
+        return orders
+
     def get_execution_results(self, limit: int = 10) -> List["ExecutionResult"]:
+        from kraken_bot.execution.models import ExecutionResult
+
         conn = self._get_conn()
         try:
             cursor = conn.cursor()
-
             cursor.execute(
                 """
-                SELECT plan_id, started_at, completed_at, success, errors_json
+                SELECT
+                    plan_id,
+                    started_at,
+                    completed_at,
+                    success,
+                    errors_json
                 FROM execution_results
                 ORDER BY started_at DESC
                 LIMIT ?
@@ -1451,9 +1582,35 @@ class SQLitePortfolioStore(PortfolioStore):
                 (limit,),
             )
             rows = cursor.fetchall()
-            return [self._row_to_execution_result(row) for row in rows]
         finally:
             conn.close()
+
+        results: List[ExecutionResult] = []
+
+        for plan_id, started_at_ts, completed_at_ts, success_int, errors_json in rows:
+            started_at = datetime.fromtimestamp(started_at_ts)
+            completed_at = (
+                datetime.fromtimestamp(completed_at_ts)
+                if completed_at_ts is not None
+                else None
+            )
+
+            try:
+                errors = json.loads(errors_json) if errors_json else []
+            except json.JSONDecodeError:
+                errors = []
+
+            results.append(
+                ExecutionResult(
+                    plan_id=plan_id,
+                    started_at=started_at,
+                    completed_at=completed_at,
+                    success=bool(success_int),
+                    errors=errors,
+                )
+            )
+
+        return results
 
     # --- ML persistence -------------------------------------------------
 
