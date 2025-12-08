@@ -57,8 +57,8 @@ def test_pair_notional_guardrail_blocks_submission(inactive_risk_status):
 
     market_data = MagicMock()
     market_data.get_best_bid_ask.return_value = {"bid": 10.0, "ask": 11.0}
-    market_data.get_pair_metadata_or_raise.side_effect = (
-        lambda pair: _pair_metadata(pair)
+    market_data.get_pair_metadata_or_raise.side_effect = lambda pair: _pair_metadata(
+        pair
     )
 
     service = ExecutionService(
@@ -92,8 +92,8 @@ def test_total_notional_guardrail_blocks_submission(inactive_risk_status):
 
     market_data = MagicMock()
     market_data.get_best_bid_ask.return_value = {"bid": 10.0, "ask": 11.0}
-    market_data.get_pair_metadata_or_raise.side_effect = (
-        lambda pair: _pair_metadata(pair)
+    market_data.get_pair_metadata_or_raise.side_effect = lambda pair: _pair_metadata(
+        pair
     )
 
     service = ExecutionService(
