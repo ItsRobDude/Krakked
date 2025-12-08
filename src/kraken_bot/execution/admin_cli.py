@@ -49,9 +49,11 @@ def _build_service(db_path: str, allow_interactive_setup: bool) -> ExecutionServ
     store = SQLitePortfolioStore(
         db_path=db_path, auto_migrate_schema=config.portfolio.auto_migrate_schema
     )
-    market_data = MarketDataAPI(
-        config, rest_client=client, rate_limiter=rate_limiter
-    )
+    market_data = None
+    if hasattr(config, "market_data"):
+        market_data = MarketDataAPI(
+            config, rest_client=client, rate_limiter=rate_limiter
+        )
     service = ExecutionService(
         client=client,
         config=config.execution,

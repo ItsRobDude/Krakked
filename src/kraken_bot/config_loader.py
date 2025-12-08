@@ -25,6 +25,7 @@ from kraken_bot.config_models import (
     UIRefreshConfig,
     UniverseConfig,
 )
+from kraken_bot.logging_config import get_log_environment, structured_log_extra
 from kraken_bot.strategy.catalog import CANONICAL_STRATEGIES
 
 RUNTIME_OVERRIDES_FILENAME = "config.runtime.yaml"
@@ -706,10 +707,24 @@ def load_config(
         )
         refresh_data = {}
 
-    auth_config = UIAuthConfig(
-        enabled=bool(auth_data.get("enabled", default_ui.auth.enabled)),
-        token=auth_data.get("token", default_ui.auth.token),
-    )
+    raw_auth_enabled = auth_data.get("enabled", default_ui.auth.enabled)
+    raw_auth_token = auth_data.get("token", default_ui.auth.token)
+
+    auth_token = (raw_auth_token or "").strip()
+    auth_enabled = bool(raw_auth_enabled)
+
+    if auth_enabled and not auth_token:
+        logger.warning(
+            "UI auth enabled but no token configured; disabling auth",
+            extra=structured_log_extra(
+                env=get_log_environment(),
+                event="config_ui_auth_empty_token",
+                config_path=str(config_path),
+            ),
+        )
+        auth_enabled = False
+
+    auth_config = UIAuthConfig(enabled=auth_enabled, token=auth_token)
 
     refresh_config = UIRefreshConfig(
         dashboard_ms=_validated_int(
@@ -763,6 +778,42 @@ def load_config(
         read_only=ui_data.get("read_only", default_ui.read_only),
         refresh_intervals=refresh_config,
     )
+
+    if is_live_env and ui_config.enabled:
+        if not ui_config.auth.enabled:
+            logger.warning(
+                "Disabling UI in live environment: ui.auth.enabled is False",
+                extra=structured_log_extra(
+                    env="live",
+                    event="live_ui_disabled_no_auth",
+                    ui_host=ui_config.host,
+                    ui_port=ui_config.port,
+                ),
+            )
+            ui_config.enabled = False
+
+        if ui_config.auth.enabled and not ui_config.auth.token:
+            logger.warning(
+                "Disabling UI in live environment: ui.auth.enabled is True but token is empty",
+                extra=structured_log_extra(
+                    env="live",
+                    event="live_ui_disabled_empty_auth_token",
+                    ui_host=ui_config.host,
+                    ui_port=ui_config.port,
+                ),
+            )
+            ui_config.enabled = False
+
+        if ui_config.host == "0.0.0.0":
+            logger.warning(
+                "UI is configured to listen on 0.0.0.0 in live environment",
+                extra=structured_log_extra(
+                    env="live",
+                    event="live_ui_public_host_warning",
+                    ui_host=ui_config.host,
+                    ui_port=ui_config.port,
+                ),
+            )
 
     return AppConfig(
         region=RegionProfile(
