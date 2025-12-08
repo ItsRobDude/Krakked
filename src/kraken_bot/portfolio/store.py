@@ -1384,56 +1384,58 @@ class SQLitePortfolioStore(PortfolioStore):
         since: Optional[int] = None,
         limit: Optional[int] = None,
     ) -> List["ExecutionPlan"]:
-        conn = self._get_conn()
-        try:
-            cursor = conn.cursor()
+        with self._lock:
+            conn = self._get_conn()
+            try:
+                cursor = conn.cursor()
 
-            query = """
-                SELECT plan_id, generated_at, action_count, blocked_actions,
-                       metadata_json, plan_json
-                FROM execution_plans
-                WHERE 1=1
-            """
-            params: List[Any] = []
+                query = """
+                    SELECT plan_id, generated_at, action_count, blocked_actions,
+                           metadata_json, plan_json
+                    FROM execution_plans
+                    WHERE 1=1
+                """
+                params: List[Any] = []
 
-            if plan_id is not None:
-                query += " AND plan_id = ?"
-                params.append(plan_id)
+                if plan_id is not None:
+                    query += " AND plan_id = ?"
+                    params.append(plan_id)
 
-            if since is not None:
-                query += " AND generated_at >= ?"
-                params.append(since)
+                if since is not None:
+                    query += " AND generated_at >= ?"
+                    params.append(since)
 
-            # Most recent plans first
-            query += " ORDER BY generated_at DESC"
+                # Most recent plans first
+                query += " ORDER BY generated_at DESC"
 
-            if limit is not None:
-                query += " LIMIT ?"
-                params.append(limit)
+                if limit is not None:
+                    query += " LIMIT ?"
+                    params.append(limit)
 
-            cursor.execute(query, params)
-            rows = cursor.fetchall()
-        finally:
-            conn.close()
+                cursor.execute(query, params)
+                rows = cursor.fetchall()
+            finally:
+                conn.close()
 
         return [self._row_to_execution_plan(row) for row in rows]
 
     def get_execution_plan(self, plan_id: str) -> Optional["ExecutionPlan"]:
-        conn = self._get_conn()
-        try:
-            cursor = conn.cursor()
-            cursor.execute(
-                """
-                SELECT plan_id, generated_at, action_count, blocked_actions,
-                       metadata_json, plan_json
-                FROM execution_plans
-                WHERE plan_id = ?
-                """,
-                (plan_id,),
-            )
-            row = cursor.fetchone()
-        finally:
-            conn.close()
+        with self._lock:
+            conn = self._get_conn()
+            try:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    SELECT plan_id, generated_at, action_count, blocked_actions,
+                           metadata_json, plan_json
+                    FROM execution_plans
+                    WHERE plan_id = ?
+                    """,
+                    (plan_id,),
+                )
+                row = cursor.fetchone()
+            finally:
+                conn.close()
 
         if row is None:
             return None
@@ -1450,53 +1452,54 @@ class SQLitePortfolioStore(PortfolioStore):
         # Statuses that should be treated as "still working / open"
         open_statuses = ("pending", "submitted", "open", "partially_filled", "validated")
 
-        conn = self._get_conn()
-        try:
-            cursor = conn.cursor()
+        with self._lock:
+            conn = self._get_conn()
+            try:
+                cursor = conn.cursor()
 
-            query = """
-                SELECT
-                    local_id,
-                    plan_id,
-                    strategy_id,
-                    pair,
-                    side,
-                    order_type,
-                    kraken_order_id,
-                    userref,
-                    requested_base_size,
-                    requested_price,
-                    status,
-                    created_at,
-                    updated_at,
-                    cumulative_base_filled,
-                    avg_fill_price,
-                    last_error,
-                    raw_request_json,
-                    raw_response_json
-                FROM execution_orders
-                WHERE status IN ({statuses})
-            """.format(
-                statuses=", ".join("?" for _ in open_statuses)
-            )
+                query = """
+                    SELECT
+                        local_id,
+                        plan_id,
+                        strategy_id,
+                        pair,
+                        side,
+                        order_type,
+                        kraken_order_id,
+                        userref,
+                        requested_base_size,
+                        requested_price,
+                        status,
+                        created_at,
+                        updated_at,
+                        cumulative_base_filled,
+                        avg_fill_price,
+                        last_error,
+                        raw_request_json,
+                        raw_response_json
+                    FROM execution_orders
+                    WHERE status IN ({statuses})
+                """.format(
+                    statuses=", ".join("?" for _ in open_statuses)
+                )
 
-            params: List[Any] = list(open_statuses)
+                params: List[Any] = list(open_statuses)
 
-            if plan_id is not None:
-                query += " AND plan_id = ?"
-                params.append(plan_id)
+                if plan_id is not None:
+                    query += " AND plan_id = ?"
+                    params.append(plan_id)
 
-            if strategy_id is not None:
-                query += " AND strategy_id = ?"
-                params.append(strategy_id)
+                if strategy_id is not None:
+                    query += " AND strategy_id = ?"
+                    params.append(strategy_id)
 
-            # Oldest first is usually what you want operationally
-            query += " ORDER BY created_at ASC"
+                # Oldest first is usually what you want operationally
+                query += " ORDER BY created_at ASC"
 
-            cursor.execute(query, params)
-            rows = cursor.fetchall()
-        finally:
-            conn.close()
+                cursor.execute(query, params)
+                rows = cursor.fetchall()
+            finally:
+                conn.close()
 
         orders: List[LocalOrder] = []
 
@@ -1564,26 +1567,27 @@ class SQLitePortfolioStore(PortfolioStore):
     def get_execution_results(self, limit: int = 10) -> List["ExecutionResult"]:
         from kraken_bot.execution.models import ExecutionResult
 
-        conn = self._get_conn()
-        try:
-            cursor = conn.cursor()
-            cursor.execute(
-                """
-                SELECT
-                    plan_id,
-                    started_at,
-                    completed_at,
-                    success,
-                    errors_json
-                FROM execution_results
-                ORDER BY started_at DESC
-                LIMIT ?
-                """,
-                (limit,),
-            )
-            rows = cursor.fetchall()
-        finally:
-            conn.close()
+        with self._lock:
+            conn = self._get_conn()
+            try:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    SELECT
+                        plan_id,
+                        started_at,
+                        completed_at,
+                        success,
+                        errors_json
+                    FROM execution_results
+                    ORDER BY started_at DESC
+                    LIMIT ?
+                    """,
+                    (limit,),
+                )
+                rows = cursor.fetchall()
+            finally:
+                conn.close()
 
         results: List[ExecutionResult] = []
 
