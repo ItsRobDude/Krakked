@@ -707,10 +707,20 @@ def load_config(
         )
         refresh_data = {}
 
-    auth_config = UIAuthConfig(
-        enabled=bool(auth_data.get("enabled", default_ui.auth.enabled)),
-        token=auth_data.get("token", default_ui.auth.token),
-    )
+    auth_enabled = bool(auth_data.get("enabled", default_ui.auth.enabled))
+    auth_token = (auth_data.get("token", default_ui.auth.token) or "").strip()
+
+    if auth_enabled and not auth_token:
+        logger.warning(
+            "UI auth misconfigured: enabled but token is empty; forcing auth.enabled = False",
+            extra=structured_log_extra(
+                env=get_log_environment(),
+                event="ui_auth_empty_token",
+            ),
+        )
+        auth_enabled = False
+
+    auth_config = UIAuthConfig(enabled=auth_enabled, token=auth_token)
 
     refresh_config = UIRefreshConfig(
         dashboard_ms=_validated_int(
