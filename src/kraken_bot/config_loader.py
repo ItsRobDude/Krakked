@@ -25,6 +25,7 @@ from kraken_bot.config_models import (
     UIRefreshConfig,
     UniverseConfig,
 )
+from kraken_bot.logging_config import structured_log_extra
 from kraken_bot.strategy.catalog import CANONICAL_STRATEGIES
 
 RUNTIME_OVERRIDES_FILENAME = "config.runtime.yaml"
@@ -763,6 +764,42 @@ def load_config(
         read_only=ui_data.get("read_only", default_ui.read_only),
         refresh_intervals=refresh_config,
     )
+
+    if is_live_env and ui_config.enabled:
+        if not ui_config.auth.enabled:
+            logger.warning(
+                "Disabling UI in live environment: ui.auth.enabled is False",
+                extra=structured_log_extra(
+                    env="live",
+                    event="live_ui_disabled_no_auth",
+                    ui_host=ui_config.host,
+                    ui_port=ui_config.port,
+                ),
+            )
+            ui_config.enabled = False
+
+        if ui_config.auth.enabled and not ui_config.auth.token:
+            logger.warning(
+                "Disabling UI in live environment: ui.auth.enabled is True but token is empty",
+                extra=structured_log_extra(
+                    env="live",
+                    event="live_ui_disabled_empty_auth_token",
+                    ui_host=ui_config.host,
+                    ui_port=ui_config.port,
+                ),
+            )
+            ui_config.enabled = False
+
+        if ui_config.host == "0.0.0.0":
+            logger.warning(
+                "UI is configured to listen on 0.0.0.0 in live environment",
+                extra=structured_log_extra(
+                    env="live",
+                    event="live_ui_public_host_warning",
+                    ui_host=ui_config.host,
+                    ui_port=ui_config.port,
+                ),
+            )
 
     return AppConfig(
         region=RegionProfile(

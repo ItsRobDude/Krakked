@@ -99,7 +99,9 @@ def test_execute_plan_skips_blocked_and_none_actions(inactive_risk_status):
 def test_execute_plan_builds_buy_and_sell_from_deltas(inactive_risk_status):
     adapter = MagicMock()
     adapter.config = ExecutionConfig(validate_only=True)
-    adapter.submit_order.side_effect = lambda order, pair_metadata: order
+    adapter.submit_order.side_effect = (
+        lambda order, pair_metadata, latest_price=None: order
+    )
     service = ExecutionService(
         adapter=adapter,
         market_data=_market_data(),
@@ -147,7 +149,9 @@ def test_execute_plan_truncates_to_max_concurrent_orders_and_rejects_extra(
 ):
     adapter = MagicMock()
     adapter.config = ExecutionConfig(max_concurrent_orders=2, validate_only=True)
-    adapter.submit_order.side_effect = lambda order, pair_metadata: order
+    adapter.submit_order.side_effect = (
+        lambda order, pair_metadata, latest_price=None: order
+    )
     store = MagicMock()
     service = ExecutionService(
         adapter=adapter,
@@ -284,7 +288,9 @@ def test_execute_plan_blocks_stale_plan_before_orders():
 def test_execute_plan_allows_fresh_plan_with_ttl(inactive_risk_status):
     adapter = MagicMock()
     adapter.config = ExecutionConfig(validate_only=True, max_plan_age_seconds=30)
-    adapter.submit_order.side_effect = lambda order, pair_metadata: order
+    adapter.submit_order.side_effect = (
+        lambda order, pair_metadata, latest_price=None: order
+    )
 
     market_data = _market_data(mid_price=100.0)
 
