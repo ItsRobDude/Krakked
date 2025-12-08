@@ -422,8 +422,8 @@ def test_save_and_load_local_order(store):
 
 
 def test_save_and_load_execution_result(store):
-    started_at = datetime(2024, 1, 2, 15, 30, 0)
-    completed_at = datetime(2024, 1, 2, 15, 45, 0)
+    started_at = datetime(2024, 1, 2, 15, 30, 0, tzinfo=timezone.utc)
+    completed_at = datetime(2024, 1, 2, 15, 45, 0, tzinfo=timezone.utc)
     result = ExecutionResult(
         plan_id="PLAN-RESULT",
         started_at=started_at,
