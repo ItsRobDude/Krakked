@@ -100,12 +100,16 @@ class InMemoryStore(PortfolioStore):
         model_key: str,
         *,
         max_examples: int = MAX_ML_TRAINING_EXAMPLES,
-    ) -> tuple[list[list[float]], list[float]]:
+        return_weights: bool = False,
+    ) -> tuple[list[list[float]], list[float]] | tuple[list[list[float]], list[float], list[float]]:
         examples = self.ml_examples.get((strategy_id, model_key), [])
         # keep only the newest max_examples
         window = examples[-max_examples:]
         X = [features for features, _ in window]
         y = [label for _, label in window]
+        if return_weights:
+            weights = [1.0 for _ in window]
+            return X, y, weights
         return X, y
 
     def save_ml_model(
