@@ -1605,17 +1605,12 @@ class SQLitePortfolioStore(PortfolioStore):
     ) -> None:
         """Record a single ML training example in the SQLite backend."""
 
-        # Normalize timestamp and features to stable types
-        created_at_iso = (
-            created_at.astimezone(UTC)
-            if created_at.tzinfo
-            else created_at.replace(tzinfo=UTC)
-        ).isoformat()
+        if created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=UTC)
 
-        features_json = json.dumps(
-            [float(x) for x in features],
-            separators=(",", ":"),  # compact storage
-        )
+        created_at_iso = created_at.astimezone(UTC).isoformat()
+
+        features_json = json.dumps(list(features))
 
         with self._lock:
             conn = self._get_conn()
@@ -1646,21 +1641,33 @@ class SQLitePortfolioStore(PortfolioStore):
                     ),
                 )
 
-                # Enforce per-model rolling window on-disk as well
                 cursor.execute(
                     """
-                    DELETE FROM ml_training_examples
-                    WHERE id IN (
-                        SELECT id
-                        FROM ml_training_examples
-                        WHERE strategy_id = ?
-                          AND model_key   = ?
-                        ORDER BY created_at DESC, id DESC
-                        LIMIT -1 OFFSET ?
-                    )
+                    SELECT COUNT(*)
+                    FROM ml_training_examples
+                    WHERE strategy_id = ? AND model_key = ?
                     """,
-                    (strategy_id, model_key, MAX_ML_TRAINING_EXAMPLES),
+                    (strategy_id, model_key),
                 )
+                (count,) = cursor.fetchone()
+
+                excess = max((count or 0) - MAX_ML_TRAINING_EXAMPLES, 0)
+
+                if excess > 0:
+                    cursor.execute(
+                        """
+                        DELETE FROM ml_training_examples
+                        WHERE id IN (
+                            SELECT id
+                            FROM ml_training_examples
+                            WHERE strategy_id = ?
+                              AND model_key   = ?
+                            ORDER BY created_at ASC, id ASC
+                            LIMIT ?
+                        )
+                        """,
+                        (strategy_id, model_key, excess),
+                    )
 
                 conn.commit()
             finally:
@@ -1691,7 +1698,7 @@ class SQLitePortfolioStore(PortfolioStore):
                     FROM ml_training_examples
                     WHERE strategy_id = ?
                       AND model_key   = ?
-                    ORDER BY created_at DESC, id DESC
+                    ORDER BY created_at DESC
                     LIMIT ?
                     """,
                     (strategy_id, model_key, max_examples),
@@ -1700,33 +1707,15 @@ class SQLitePortfolioStore(PortfolioStore):
             finally:
                 conn.close()
 
-        if not rows:
-            return [], []
-
-        # We selected newest-first; reverse to get oldest-first
-        rows = list(reversed(rows))
-
         X: List[List[float]] = []
         y: List[float] = []
 
         for features_json, label in rows:
-            try:
-                feats = json.loads(features_json)
-            except Exception:
-                # Corrupt row – skip it; better to train on clean data
-                continue
+            X.append(json.loads(features_json))
+            y.append(float(label))
 
-            if not isinstance(feats, list):
-                continue
-
-            try:
-                feats_f = [float(v) for v in feats]
-                label_f = float(label)
-            except (TypeError, ValueError):
-                continue
-
-            X.append(feats_f)
-            y.append(label_f)
+        X.reverse()
+        y.reverse()
 
         return X, y
 

@@ -1,3 +1,4 @@
+import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -37,6 +38,23 @@ def test_ml_examples_rolling_window(tmp_path):
 
     assert len(X) == MAX_ML_TRAINING_EXAMPLES
     assert len(y) == MAX_ML_TRAINING_EXAMPLES
+
+    conn = sqlite3.connect(store.db_path)
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT COUNT(*)
+            FROM ml_training_examples
+            WHERE strategy_id = ? AND model_key = ?
+            """,
+            ("ml_strategy", "global|1h"),
+        )
+        (count,) = cursor.fetchone()
+    finally:
+        conn.close()
+
+    assert count == MAX_ML_TRAINING_EXAMPLES
 
 
 def test_ml_model_roundtrip(tmp_path):
