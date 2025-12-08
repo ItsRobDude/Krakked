@@ -63,8 +63,8 @@ def test_execution_service_uses_paper_adapter_for_paper_mode(inactive_risk_statu
     client = MagicMock()
     market_data = MagicMock()
     market_data.get_best_bid_ask.return_value = {"bid": 30.0, "ask": 30.0}
-    market_data.get_pair_metadata_or_raise.side_effect = (
-        lambda pair: _pair_metadata(pair)
+    market_data.get_pair_metadata_or_raise.side_effect = lambda pair: _pair_metadata(
+        pair
     )
 
     service = ExecutionService(
@@ -91,8 +91,8 @@ def test_execution_service_uses_kraken_adapter_for_live_mode(inactive_risk_statu
     client.add_order.return_value = {"txid": ["ABC123"], "error": []}
     market_data = MagicMock()
     market_data.get_best_bid_ask.return_value = {"bid": 25.0, "ask": 25.0}
-    market_data.get_pair_metadata_or_raise.side_effect = (
-        lambda pair: _pair_metadata(pair)
+    market_data.get_pair_metadata_or_raise.side_effect = lambda pair: _pair_metadata(
+        pair
     )
 
     service = ExecutionService(
@@ -145,7 +145,9 @@ def test_kraken_execution_adapter_live_success_sets_txid():
     config = ExecutionConfig(mode="live", validate_only=False, allow_live_trading=True)
     adapter = KrakenExecutionAdapter(client=client, config=config)
 
-    local_order = adapter.submit_order(_local_order(price=30.0, volume=1.0), _pair_metadata())
+    local_order = adapter.submit_order(
+        _local_order(price=30.0, volume=1.0), _pair_metadata()
+    )
 
     assert local_order.status == "open"
     assert local_order.kraken_order_id == "ABC123"

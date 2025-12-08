@@ -23,6 +23,19 @@ def store(tmp_path):
     return SQLitePortfolioStore(str(db_path))
 
 
+def test_sqlite_store_is_concrete(tmp_path):
+    db_path = tmp_path / "concrete.db"
+
+    # If any @abstractmethod is missing, this will raise TypeError
+    store = SQLitePortfolioStore(str(db_path))
+
+    # Sanity: it’s an instance of the ABC
+    from kraken_bot.portfolio.store import PortfolioStore
+
+    assert isinstance(store, PortfolioStore)
+    assert SQLitePortfolioStore.__abstractmethods__ == set()
+
+
 def seed_schema_version(db_path, version: int) -> None:
     with sqlite3.connect(db_path) as conn:
         conn.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)")
@@ -31,6 +44,23 @@ def seed_schema_version(db_path, version: int) -> None:
             (str(version),),
         )
         conn.commit()
+
+
+def test_sqlite_store_read_interfaces_exist(store: SQLitePortfolioStore):
+    """Ensure all read-side APIs are concrete and return sensible empties."""
+
+    assert store.get_decisions() == []
+    assert store.get_execution_plan("missing") is None
+    assert store.get_execution_plans() == []
+    assert store.get_order_by_reference(kraken_order_id="missing") is None
+    assert store.get_open_orders() == []
+    assert store.get_execution_results() == []
+
+    # ML persistence read paths
+    features, labels = store.load_ml_training_window("strategy", "model")
+    assert features == []
+    assert labels == []
+    assert store.load_ml_model("strategy", "model") is None
 
 
 def test_schema_version_initialized(tmp_path):
