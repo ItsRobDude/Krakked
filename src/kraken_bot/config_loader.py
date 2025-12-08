@@ -778,18 +778,6 @@ def load_config(
             )
             ui_config.enabled = False
 
-        if ui_config.auth.enabled and not ui_config.auth.token:
-            logger.warning(
-                "Disabling UI in live environment: ui.auth.enabled is True but token is empty",
-                extra=structured_log_extra(
-                    env="live",
-                    event="live_ui_disabled_empty_auth_token",
-                    ui_host=ui_config.host,
-                    ui_port=ui_config.port,
-                ),
-            )
-            ui_config.enabled = False
-
         if ui_config.host == "0.0.0.0":
             logger.warning(
                 "UI is configured to listen on 0.0.0.0 in live environment",

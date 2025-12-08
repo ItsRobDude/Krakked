@@ -32,10 +32,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
         super().__init__(app)
         self._token = token
         normalized_base = base_path.rstrip("/") or ""
-        if normalized_base:
-            self._protected_prefix = f"{normalized_base}/api"
-        else:
-            self._protected_prefix = "/api"
+        self._protected_prefix = f"{normalized_base}/api" or "/api"
         self._health_paths = {
             f"{self._protected_prefix}/health",
             f"{self._protected_prefix}/system/health",

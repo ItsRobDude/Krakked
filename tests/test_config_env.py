@@ -211,39 +211,6 @@ ui:
     )
 
 
-def test_live_env_disables_ui_with_empty_auth_token(
-    monkeypatch, tmp_path: Path, caplog
-):
-    config_dir = tmp_path / "config"
-    data_dir = tmp_path / "data"
-    config_dir.mkdir(parents=True, exist_ok=True)
-    data_dir.mkdir(parents=True, exist_ok=True)
-
-    config_path = config_dir / "config.yaml"
-    config_path.write_text(
-        """
-ui:
-  enabled: true
-  auth:
-    enabled: true
-    token: ""
-""".strip()
-    )
-
-    monkeypatch.setattr(appdirs, "user_config_dir", lambda appname: config_dir)
-    monkeypatch.setattr(appdirs, "user_data_dir", lambda appname: data_dir)
-    monkeypatch.setenv("KRAKEN_BOT_ENV", "live")
-
-    with caplog.at_level("WARNING"):
-        app_config = load_config()
-
-    assert app_config.ui.enabled is False
-    assert any(
-        rec.__dict__.get("event") == "live_ui_disabled_empty_auth_token"
-        for rec in caplog.records
-    )
-
-
 def test_max_slippage_bps_clamped(monkeypatch, tmp_path: Path):
     config_dir = tmp_path / "config"
     data_dir = tmp_path / "data"
