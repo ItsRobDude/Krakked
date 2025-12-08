@@ -25,7 +25,7 @@ from kraken_bot.config_models import (
     UIRefreshConfig,
     UniverseConfig,
 )
-from kraken_bot.logging_config import get_log_environment, structured_log_extra
+from kraken_bot.logging_config import structured_log_extra
 from kraken_bot.strategy.catalog import CANONICAL_STRATEGIES
 
 RUNTIME_OVERRIDES_FILENAME = "config.runtime.yaml"
@@ -782,18 +782,6 @@ def load_config(
                 extra=structured_log_extra(
                     env="live",
                     event="live_ui_disabled_no_auth",
-                    ui_host=ui_config.host,
-                    ui_port=ui_config.port,
-                ),
-            )
-            ui_config.enabled = False
-
-        if ui_config.auth.enabled and not ui_config.auth.token:
-            logger.warning(
-                "Disabling UI in live environment: ui.auth.enabled is True but token is empty",
-                extra=structured_log_extra(
-                    env="live",
-                    event="live_ui_disabled_empty_auth_token",
                     ui_host=ui_config.host,
                     ui_port=ui_config.port,
                 ),
