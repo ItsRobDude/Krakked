@@ -97,7 +97,7 @@ def test_panic_cli_reconciles_and_persists(
             manual_exposure_pct=0.0,
             per_asset_exposure_pct={},
             per_strategy_exposure_pct={},
-    )
+        )
 
     adapter = _FakeAdapter()
     store = _FakeStore()

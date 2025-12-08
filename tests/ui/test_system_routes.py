@@ -15,11 +15,53 @@ from kraken_bot.credentials import CredentialResult, CredentialStatus
 from kraken_bot.market_data.api import MarketDataStatus
 from kraken_bot.metrics import SystemMetrics
 from kraken_bot.strategy.catalog import ML_STRATEGY_IDS
+from kraken_bot.ui.api import create_api
+from tests.ui.conftest import build_test_context
 
 
 @pytest.fixture
 def system_context(client: TestClient):
     return client.context  # type: ignore[attr-defined]
+
+
+def test_auth_middleware_respects_base_path():
+    context = build_test_context(
+        auth_enabled=True, auth_token="secret", read_only=False
+    )
+    context.config.ui.base_path = "/krakked"
+
+    app = create_api(context)
+    client = TestClient(app)
+
+    health = client.get("/krakked/api/system/health")
+    assert health.status_code == 200
+
+    unauthorized = client.get("/krakked/api/portfolio/summary")
+    assert unauthorized.status_code == 401
+    assert unauthorized.json() == {"data": None, "error": "Unauthorized"}
+
+    authorized = client.get(
+        "/krakked/api/portfolio/summary",
+        headers={"Authorization": "Bearer secret"},
+    )
+    assert authorized.status_code == 200
+    assert authorized.json()["error"] is None
+
+
+def test_health_endpoints_are_public_when_auth_enabled():
+    context = build_test_context(
+        auth_enabled=True, auth_token="secret", read_only=False
+    )
+    app = create_api(context)
+    client = TestClient(app)
+
+    simple_health = client.get("/api/health")
+    assert simple_health.status_code == 200
+    assert simple_health.json()["data"]["status"] == "ok"
+
+    system_health = client.get("/api/system/health")
+    assert system_health.status_code == 200
+    assert system_health.json()["error"] is None
 
 
 def test_system_health_enveloped(client, system_context):

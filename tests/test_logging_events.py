@@ -14,9 +14,9 @@ from kraken_bot.connection.rest_client import KrakenRESTClient
 from kraken_bot.execution.adapter import ExecutionAdapter
 from kraken_bot.execution.models import LocalOrder
 from kraken_bot.execution.oms import ExecutionService
-from kraken_bot.market_data.models import PairMetadata
 from kraken_bot.main import _run_loop_iteration, _shutdown, run
 from kraken_bot.market_data.api import MarketDataAPI
+from kraken_bot.market_data.models import PairMetadata
 from kraken_bot.metrics import SystemMetrics
 from kraken_bot.portfolio.exceptions import PortfolioSchemaError
 from kraken_bot.portfolio.manager import PortfolioService
@@ -33,7 +33,12 @@ class _FakeAdapter(ExecutionAdapter):
         self.config = ExecutionConfig()
         self.submit_order_calls: list[LocalOrder] = []
 
-    def submit_order(self, order: LocalOrder, pair_metadata: PairMetadata) -> LocalOrder:
+    def submit_order(
+        self,
+        order: LocalOrder,
+        pair_metadata: PairMetadata,
+        latest_price: float | None = None,
+    ) -> LocalOrder:
         self.submit_order_calls.append(order)
         return order
 
@@ -130,6 +135,8 @@ def test_market_data_warning_emits_structured_event(caplog: pytest.LogCaptureFix
         def record_drift(self, *_args, **_kwargs): ...
 
     class _Portfolio:
+        last_sync_ok = True
+
         def sync(self) -> None:  # pragma: no cover - not expected to run
             ...
 
