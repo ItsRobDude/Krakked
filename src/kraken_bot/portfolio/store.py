@@ -8,7 +8,7 @@ import sqlite3
 import threading
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Tuple, cast
 
 from kraken_bot.logging_config import structured_log_extra
 
@@ -60,7 +60,7 @@ def ensure_portfolio_schema(
     owned_conn = None
 
     if connection_provided:
-        _conn = conn
+        _conn = cast(sqlite3.Connection, conn)
     else:
         owned_conn = sqlite3.connect(str(conn))
         _conn = owned_conn
@@ -586,6 +586,8 @@ class SQLitePortfolioStore(PortfolioStore):
         try:
             ensure_portfolio_tables(conn)
             conn.commit()
+        finally:
+            conn.close()
 
     def _get_conn(self):
         return sqlite3.connect(self.db_path)
