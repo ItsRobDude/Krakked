@@ -65,7 +65,6 @@ def create_api(context: AppContext) -> FastAPI:
 
     middleware = []
     auth_config = context.config.ui.auth
-    # Defense in depth: only attach auth when a non-empty token is configured
     if auth_config.enabled and auth_config.token:
         middleware.append(
             Middleware(AuthMiddleware, token=auth_config.token, base_path=base_path)
