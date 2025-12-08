@@ -523,7 +523,8 @@ class PortfolioStore(abc.ABC):
         model_key: str,
         *,
         max_examples: int = MAX_ML_TRAINING_EXAMPLES,
-    ) -> Tuple[List[List[float]], List[float]]:
+        return_weights: bool = False,
+    ) -> Tuple[List[List[float]], List[float]] | Tuple[List[List[float]], List[float], List[float]]:
         """Load a rolling window of ML training examples for a model key."""
         pass
 
@@ -1679,7 +1680,8 @@ class SQLitePortfolioStore(PortfolioStore):
         model_key: str,
         *,
         max_examples: int = MAX_ML_TRAINING_EXAMPLES,
-    ) -> Tuple[List[List[float]], List[float]]:
+        return_weights: bool = False,
+    ) -> Tuple[List[List[float]], List[float]] | Tuple[List[List[float]], List[float], List[float]]:
         """Load a rolling window of ML training examples for a model key.
 
         Returns features and labels in chronological order (oldest → newest).
@@ -1694,7 +1696,7 @@ class SQLitePortfolioStore(PortfolioStore):
                 cursor = conn.cursor()
                 cursor.execute(
                     """
-                    SELECT features, label
+                    SELECT features, label, sample_weight
                     FROM ml_training_examples
                     WHERE strategy_id = ?
                       AND model_key   = ?
@@ -1709,6 +1711,7 @@ class SQLitePortfolioStore(PortfolioStore):
 
         X: List[List[float]] = []
         y: List[float] = []
+        weights: List[float] = []
 
         for features_json, label in rows:
             X.append(json.loads(features_json))
@@ -1717,6 +1720,8 @@ class SQLitePortfolioStore(PortfolioStore):
         X.reverse()
         y.reverse()
 
+        if return_weights:
+            return X, y, weights
         return X, y
 
     def save_ml_model(
