@@ -1713,14 +1713,12 @@ class SQLitePortfolioStore(PortfolioStore):
         y: List[float] = []
         weights: List[float] = []
 
-        for features_json, label, sample_weight in rows:
+        for features_json, label in rows:
             X.append(json.loads(features_json))
             y.append(float(label))
-            weights.append(float(sample_weight))
 
         X.reverse()
         y.reverse()
-        weights.reverse()
 
         if return_weights:
             return X, y, weights
