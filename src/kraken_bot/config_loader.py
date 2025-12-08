@@ -25,7 +25,7 @@ from kraken_bot.config_models import (
     UIRefreshConfig,
     UniverseConfig,
 )
-from kraken_bot.logging_config import structured_log_extra
+from kraken_bot.logging_config import get_log_environment, structured_log_extra
 from kraken_bot.strategy.catalog import CANONICAL_STRATEGIES
 
 RUNTIME_OVERRIDES_FILENAME = "config.runtime.yaml"
