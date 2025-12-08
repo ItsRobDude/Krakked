@@ -32,10 +32,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
         super().__init__(app)
         self._token = token
         normalized_base = base_path.rstrip("/") or ""
-        if normalized_base:
-            self._protected_prefix = f"{normalized_base}/api"
-        else:
-            self._protected_prefix = "/api"
+        self._protected_prefix = f"{normalized_base}/api" or "/api"
         self._health_paths = {
             f"{self._protected_prefix}/health",
             f"{self._protected_prefix}/system/health",
@@ -68,7 +65,7 @@ def create_api(context: AppContext) -> FastAPI:
 
     middleware = []
     auth_config = context.config.ui.auth
-    if auth_config.enabled and auth_config.token:
+    if auth_config.enabled:
         middleware.append(
             Middleware(AuthMiddleware, token=auth_config.token, base_path=base_path)
         )
