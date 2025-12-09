@@ -595,6 +595,14 @@ class SQLitePortfolioStore(PortfolioStore):
     def _get_conn(self):
         return sqlite3.connect(self.db_path)
 
+    def _to_timestamp(self, val: Union[int, float, datetime]) -> float:
+        """Normalize various time inputs to a float timestamp."""
+        if isinstance(val, (int, float)):
+            return float(val)
+        if isinstance(val, datetime):
+            return val.timestamp()
+        raise TypeError(f"Cannot convert {type(val)} to timestamp")
+
     def get_schema_version(self) -> Optional[int]:
         conn = None
         try:
@@ -718,11 +726,11 @@ class SQLitePortfolioStore(PortfolioStore):
 
         if since is not None:
             query += " AND time >= ?"
-            params.append(since)
+            params.append(self._to_timestamp(since))
 
         if until is not None:
             query += " AND time <= ?"
-            params.append(until)
+            params.append(self._to_timestamp(until))
 
         order = "ASC" if ascending else "DESC"
         query += f" ORDER BY time {order}"
@@ -786,11 +794,11 @@ class SQLitePortfolioStore(PortfolioStore):
 
         if since is not None:
             query += " AND time >= ?"
-            params.append(since)
+            params.append(self._to_timestamp(since))
 
         if until is not None:
             query += " AND time <= ?"
-            params.append(until)
+            params.append(self._to_timestamp(until))
 
         order = "ASC" if ascending else "DESC"
         query += f" ORDER BY time {order}"
@@ -865,9 +873,9 @@ class SQLitePortfolioStore(PortfolioStore):
         query = "SELECT timestamp, equity_base, cash_base, data_json FROM snapshots WHERE 1=1"
         params = []
 
-        if since:
+        if since is not None:
             query += " AND timestamp >= ?"
-            params.append(since)
+            params.append(self._to_timestamp(since))
 
         query += " ORDER BY timestamp DESC"
 
@@ -1255,7 +1263,7 @@ class SQLitePortfolioStore(PortfolioStore):
 
                 if since is not None:
                     query += " AND time >= ?"
-                    params.append(since)
+                    params.append(self._to_timestamp(since))
 
                 query += " ORDER BY time DESC"
 
@@ -1487,11 +1495,8 @@ class SQLitePortfolioStore(PortfolioStore):
                     params.append(plan_id)
 
                 if since is not None:
-                    cutoff = (
-                        since.timestamp() if isinstance(since, datetime) else float(since)
-                    )
                     query += " AND generated_at >= ?"
-                    params.append(cutoff)
+                    params.append(self._to_timestamp(since))
 
                 query += " ORDER BY generated_at DESC"
 
