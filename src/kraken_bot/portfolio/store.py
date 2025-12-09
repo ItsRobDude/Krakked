@@ -22,7 +22,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-CURRENT_SCHEMA_VERSION = 6
+CURRENT_SCHEMA_VERSION = 7
 
 MAX_ML_TRAINING_EXAMPLES = 5000
 MIN_ML_BOOTSTRAP_EXAMPLES = 50
@@ -318,7 +318,8 @@ def ensure_portfolio_tables(conn: sqlite3.Connection) -> None:
             started_at REAL,
             completed_at REAL,
             success INTEGER,
-            errors_json TEXT
+            errors_json TEXT,
+            warnings_json TEXT
         )
         """
     )
@@ -594,6 +595,14 @@ class SQLitePortfolioStore(PortfolioStore):
     def _get_conn(self):
         return sqlite3.connect(self.db_path)
 
+    def _to_timestamp(self, val: Union[int, float, datetime]) -> float:
+        """Normalize various time inputs to a float timestamp."""
+        if isinstance(val, (int, float)):
+            return float(val)
+        if isinstance(val, datetime):
+            return val.timestamp()
+        raise TypeError(f"Cannot convert {type(val)} to timestamp")
+
     def get_schema_version(self) -> Optional[int]:
         conn = None
         try:
@@ -717,11 +726,11 @@ class SQLitePortfolioStore(PortfolioStore):
 
         if since is not None:
             query += " AND time >= ?"
-            params.append(since)
+            params.append(self._to_timestamp(since))
 
         if until is not None:
             query += " AND time <= ?"
-            params.append(until)
+            params.append(self._to_timestamp(until))
 
         order = "ASC" if ascending else "DESC"
         query += f" ORDER BY time {order}"
@@ -785,11 +794,11 @@ class SQLitePortfolioStore(PortfolioStore):
 
         if since is not None:
             query += " AND time >= ?"
-            params.append(since)
+            params.append(self._to_timestamp(since))
 
         if until is not None:
             query += " AND time <= ?"
-            params.append(until)
+            params.append(self._to_timestamp(until))
 
         order = "ASC" if ascending else "DESC"
         query += f" ORDER BY time {order}"
@@ -864,9 +873,9 @@ class SQLitePortfolioStore(PortfolioStore):
         query = "SELECT timestamp, equity_base, cash_base, data_json FROM snapshots WHERE 1=1"
         params = []
 
-        if since:
+        if since is not None:
             query += " AND timestamp >= ?"
-            params.append(since)
+            params.append(self._to_timestamp(since))
 
         query += " ORDER BY timestamp DESC"
 
@@ -1141,8 +1150,8 @@ class SQLitePortfolioStore(PortfolioStore):
                 cursor.execute(
                     """
                     INSERT OR REPLACE INTO execution_results (
-                        plan_id, started_at, completed_at, success, errors_json
-                    ) VALUES (?, ?, ?, ?, ?)
+                        plan_id, started_at, completed_at, success, errors_json, warnings_json
+                    ) VALUES (?, ?, ?, ?, ?, ?)
                     """,
                     (
                         result.plan_id,
@@ -1156,6 +1165,11 @@ class SQLitePortfolioStore(PortfolioStore):
                         (
                             json.dumps(result.errors, default=str)
                             if result.errors
+                            else json.dumps([])
+                        ),
+                        (
+                            json.dumps(result.warnings, default=str)
+                            if result.warnings
                             else json.dumps([])
                         ),
                     ),
@@ -1186,7 +1200,7 @@ class SQLitePortfolioStore(PortfolioStore):
                     params.append(userref)
 
                 if not conditions:
-                    return None
+                    raise ValueError("Must provide either kraken_order_id or userref")
 
                 where_clause = " OR ".join(conditions)
                 cursor.execute(
@@ -1249,7 +1263,7 @@ class SQLitePortfolioStore(PortfolioStore):
 
                 if since is not None:
                     query += " AND time >= ?"
-                    params.append(since)
+                    params.append(self._to_timestamp(since))
 
                 query += " ORDER BY time DESC"
 
@@ -1481,11 +1495,8 @@ class SQLitePortfolioStore(PortfolioStore):
                     params.append(plan_id)
 
                 if since is not None:
-                    cutoff = (
-                        since.timestamp() if isinstance(since, datetime) else float(since)
-                    )
                     query += " AND generated_at >= ?"
-                    params.append(cutoff)
+                    params.append(self._to_timestamp(since))
 
                 query += " ORDER BY generated_at DESC"
 
@@ -1600,7 +1611,8 @@ class SQLitePortfolioStore(PortfolioStore):
                         started_at,
                         completed_at,
                         success,
-                        errors_json
+                        errors_json,
+                        warnings_json
                     FROM execution_results
                     ORDER BY COALESCE(completed_at, started_at) DESC, started_at DESC
                     LIMIT ?
