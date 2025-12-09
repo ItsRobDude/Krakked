@@ -263,6 +263,18 @@ def migrate_5_to_6(conn: sqlite3.Connection) -> None:
     )
 
 
+def migrate_6_to_7(conn: sqlite3.Connection) -> None:
+    """Add warnings_json column to execution_results table."""
+    cursor = conn.cursor()
+    # Check if column exists first to be safe, though not strictly required if versioning is correct.
+    # SQLite doesn't support IF NOT EXISTS for ADD COLUMN easily, so we rely on versioning.
+    try:
+        cursor.execute("ALTER TABLE execution_results ADD COLUMN warnings_json TEXT")
+    except sqlite3.OperationalError:
+        # If column already exists, ignore
+        pass
+
+
 def run_migrations(
     conn: sqlite3.Connection, from_version: int, to_version: int
 ) -> None:
@@ -282,6 +294,7 @@ def run_migrations(
         3: migrate_3_to_4,
         4: migrate_4_to_5,
         5: migrate_5_to_6,
+        6: migrate_6_to_7,
     }
 
     for version in range(from_version, to_version):

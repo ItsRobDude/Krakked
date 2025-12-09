@@ -22,7 +22,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-CURRENT_SCHEMA_VERSION = 6
+CURRENT_SCHEMA_VERSION = 7
 
 MAX_ML_TRAINING_EXAMPLES = 5000
 MIN_ML_BOOTSTRAP_EXAMPLES = 50
@@ -318,7 +318,8 @@ def ensure_portfolio_tables(conn: sqlite3.Connection) -> None:
             started_at REAL,
             completed_at REAL,
             success INTEGER,
-            errors_json TEXT
+            errors_json TEXT,
+            warnings_json TEXT
         )
         """
     )
@@ -1141,8 +1142,8 @@ class SQLitePortfolioStore(PortfolioStore):
                 cursor.execute(
                     """
                     INSERT OR REPLACE INTO execution_results (
-                        plan_id, started_at, completed_at, success, errors_json
-                    ) VALUES (?, ?, ?, ?, ?)
+                        plan_id, started_at, completed_at, success, errors_json, warnings_json
+                    ) VALUES (?, ?, ?, ?, ?, ?)
                     """,
                     (
                         result.plan_id,
@@ -1156,6 +1157,11 @@ class SQLitePortfolioStore(PortfolioStore):
                         (
                             json.dumps(result.errors, default=str)
                             if result.errors
+                            else json.dumps([])
+                        ),
+                        (
+                            json.dumps(result.warnings, default=str)
+                            if result.warnings
                             else json.dumps([])
                         ),
                     ),
@@ -1186,7 +1192,7 @@ class SQLitePortfolioStore(PortfolioStore):
                     params.append(userref)
 
                 if not conditions:
-                    return None
+                    raise ValueError("Must provide either kraken_order_id or userref")
 
                 where_clause = " OR ".join(conditions)
                 cursor.execute(
@@ -1600,7 +1606,8 @@ class SQLitePortfolioStore(PortfolioStore):
                         started_at,
                         completed_at,
                         success,
-                        errors_json
+                        errors_json,
+                        warnings_json
                     FROM execution_results
                     ORDER BY COALESCE(completed_at, started_at) DESC, started_at DESC
                     LIMIT ?
