@@ -188,6 +188,29 @@ class Portfolio:
                 else 0.0
             )
             position.base_size = new_total_qty
+
+            # Fees on BUY are realized immediately as a loss.
+            # We must subtract this fee from realized PnL to maintain Equity = PnL + Cash + AssetValue.
+            position.realized_pnl_base -= fee_in_base
+            self.realized_pnl_base_by_pair[pair] -= fee_in_base
+
+            self.realized_pnl_history.append(
+                RealizedPnLRecord(
+                    trade_id=trade.get("id", ""),
+                    order_id=trade.get("ordertxid"),
+                    pair=pair,
+                    time=int(trade.get("time", 0)),
+                    side=side,
+                    base_delta=vol,
+                    quote_delta=-cost,
+                    fee_asset=quote_asset,
+                    fee_amount=fee,
+                    pnl_quote=-fee_in_base,
+                    strategy_tag=strategy_tag,
+                    raw_userref=raw_userref,
+                    comment=comment,
+                )
+            )
         else:
             gross_pnl_quote = (price - position.avg_entry_price) * vol
             pnl_conversion = self._convert_to_base_currency(

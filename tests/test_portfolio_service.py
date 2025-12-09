@@ -125,9 +125,10 @@ def test_process_trade_sell_pnl(service):
     # Realized PnL: (60k - 50k) * 0.5 = 5000. Less fees (10) = 4990
     assert pos.realized_pnl_base == 4990.0
 
-    # Check history
-    assert len(service.realized_pnl_history) == 1
-    rec = service.realized_pnl_history[0]
+    # Check history (1 buy record + 1 sell record)
+    assert len(service.realized_pnl_history) == 2
+    # The second record is the sell
+    rec = service.realized_pnl_history[1]
     assert rec.pnl_quote == 4990.0
 
 
@@ -175,7 +176,11 @@ def test_equity_uses_fallback_price(service):
 
     service.market_data.get_latest_price.side_effect = None
     service.market_data.get_latest_price.return_value = None
-    service.market_data._get_cached_price_from_store = MagicMock(return_value=120.0)
+
+    # Mock get_ohlc which is the new public fallback
+    mock_bar = MagicMock()
+    mock_bar.close = 120.0
+    service.market_data.get_ohlc = MagicMock(return_value=[mock_bar])
 
     equity = service.get_equity()
 
@@ -192,8 +197,7 @@ def test_equity_sets_drift_when_no_price(service):
 
     service.market_data.get_latest_price.side_effect = None
     service.market_data.get_latest_price.return_value = None
-    service.market_data._get_cached_price_from_store = MagicMock(return_value=None)
-    service.market_data._get_rest_ticker_price = MagicMock(return_value=None)
+    # We no longer access private methods. Just ensure get_ohlc returns empty
     service.market_data.get_ohlc = MagicMock(return_value=[])
 
     equity = service.get_equity()
