@@ -99,7 +99,11 @@ class FileOHLCStore:
             df = pd.read_parquet(file_path)
             # Ensure the data is sorted by timestamp before taking the last N rows
             df = df.sort_index().tail(lookback)
-            return [OHLCBar(**row) for row in df.reset_index().to_dict("records")]
+            records = df.reset_index().to_dict("records")
+            # Explicitly cast timestamp to int to ensure strict type compliance
+            for row in records:
+                row["timestamp"] = int(row["timestamp"])
+            return [OHLCBar(**row) for row in records]
         except Exception as e:
             logger.error(f"Error reading from {file_path}: {e}")
             return []
@@ -113,7 +117,11 @@ class FileOHLCStore:
         try:
             df = pd.read_parquet(file_path)
             df = df[df.index >= since_ts].sort_index()
-            return [OHLCBar(**row) for row in df.reset_index().to_dict("records")]
+            records = df.reset_index().to_dict("records")
+            # Explicitly cast timestamp to int to ensure strict type compliance
+            for row in records:
+                row["timestamp"] = int(row["timestamp"])
+            return [OHLCBar(**row) for row in records]
         except Exception as e:
             logger.error(f"Error reading from {file_path}: {e}")
             return []

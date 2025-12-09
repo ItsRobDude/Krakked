@@ -85,11 +85,19 @@ def _filter_by_volume(
     )
 
     pair_names = [p.rest_symbol for p in pairs]
+    ticker_response = {}
+    chunk_size = 50
+
     try:
-        # Kraken's Ticker endpoint accepts multiple pairs, comma-separated
-        ticker_response = client.get_public(
-            "Ticker", params={"pair": ",".join(pair_names)}
-        )
+        # Kraken's Ticker endpoint accepts multiple pairs, comma-separated.
+        # We batch requests to avoid hitting URL length limits.
+        for i in range(0, len(pair_names), chunk_size):
+            chunk = pair_names[i : i + chunk_size]
+            chunk_response = client.get_public(
+                "Ticker", params={"pair": ",".join(chunk)}
+            )
+            if chunk_response:
+                ticker_response.update(chunk_response)
     except Exception as e:
         logger.error(f"Failed to fetch ticker data for volume filtering: {e}")
         return pairs  # Return unfiltered list on error
