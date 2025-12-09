@@ -8,7 +8,7 @@ import sqlite3
 import threading
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Tuple, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Tuple, Union, cast
 
 from kraken_bot.logging_config import structured_log_extra
 
@@ -430,6 +430,7 @@ class PortfolioStore(abc.ABC):
         since: Optional[int] = None,
         limit: Optional[int] = None,
         strategy_name: Optional[str] = None,
+        pair: Optional[str] = None,
     ) -> List["DecisionRecord"]:
         """Retrieves strategy decision records."""
         pass
@@ -477,7 +478,7 @@ class PortfolioStore(abc.ABC):
     def get_execution_plans(
         self,
         plan_id: Optional[str] = None,
-        since: Optional[int] = None,
+        since: Optional[Union[int, float, datetime]] = None,
         limit: Optional[int] = None,
     ) -> List["ExecutionPlan"]:
         """Fetch stored execution plans."""
@@ -1460,7 +1461,7 @@ class SQLitePortfolioStore(PortfolioStore):
     def get_execution_plans(
         self,
         plan_id: Optional[str] = None,
-        since: Optional[datetime] = None,
+        since: Optional[Union[int, float, datetime]] = None,
         limit: Optional[int] = None,
     ) -> List["ExecutionPlan"]:
         with self._lock:
