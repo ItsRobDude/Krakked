@@ -131,9 +131,6 @@ def backfill_ohlc(
             # No more pages
             break
 
-        # A small sleep to be polite, even with the rate limiter
-        time.sleep(0.5)
-
     logger.info(
         f"Completed backfill for {pair_metadata.canonical} ({timeframe}). Fetched {total_bars_fetched} new bars."
     )

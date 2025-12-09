@@ -9,7 +9,6 @@ from kraken_bot.config import (
     AppConfig,
     ConnectionStatus,
     MarketDataConfig,
-    OHLCBar,
     PortfolioConfig,
 )
 from kraken_bot.market_data.api import MarketDataAPI
@@ -145,6 +144,7 @@ def test_ohlc_staleness_independent_from_ticker(mock_config):
     mock_ws = MagicMock()
     api._ws_client = mock_ws
 
+    # Ticker is stale, OHLC is fresh
     mock_ws.last_ticker_update_ts = {"XBTUSD": time.monotonic() - 120}
     mock_ws.ticker_cache = {"XBTUSD": {"bid": "1.0", "ask": "3.0"}}
     mock_ws.last_ohlc_update_ts = {"XBTUSD": {"1m": time.monotonic()}}
@@ -161,29 +161,44 @@ def test_ohlc_staleness_independent_from_ticker(mock_config):
         }
     }
 
+    # Ensure REST client also fails/returns None so we get DataStaleError
+    api._rest_client = MagicMock()
+    api._rest_client.get_public.return_value = None
+
     with pytest.raises(DataStaleError):
         api.get_latest_price("XBTUSD")
 
+    # OHLC should still work because it checks OHLC staleness separately
     ohlc_bar = api.get_live_ohlc("XBTUSD", "1m")
     assert ohlc_bar is not None
     assert ohlc_bar.close == 1.5
 
 
-def test_get_latest_price_uses_store_when_ws_missing(mock_config):
+def test_get_latest_price_falls_back_to_rest_when_ws_missing(mock_config):
+    """
+    Replaces the old test_get_latest_price_uses_store_when_ws_missing.
+    Now we assert that it falls back to REST, not the store.
+    """
     mock_config.market_data.backfill_timeframes = ["1m"]
 
     api = MarketDataAPI(mock_config)
     api._universe_map = {"XBTUSD": MagicMock()}
     api._ws_client = None
+
+    # Store should NOT be called
     api._ohlc_store = MagicMock()
-    api._ohlc_store.get_bars.return_value = [
-        OHLCBar(timestamp=1, open=100.0, high=110.0, low=90.0, close=105.5, volume=10.0)
-    ]
+
+    # REST client SHOULD be called
+    api._rest_client = MagicMock()
+    api._rest_client.get_public.return_value = {
+        "XXBTZUSD": {"a": ["105.0", "1", "1"], "b": ["106.0", "1", "1"], "c": ["105.5", "1"]}
+    }
 
     price = api.get_latest_price("XBTUSD")
 
     assert price == 105.5
-    api._ohlc_store.get_bars.assert_called_with("XBTUSD", "1m", 1)
+    api._ohlc_store.get_bars.assert_not_called()
+    api._rest_client.get_public.assert_called_once()
 
 
 def test_get_latest_price_falls_back_to_rest_when_ws_stale(mock_config):
@@ -219,8 +234,8 @@ def test_get_latest_price_raises_when_all_sources_stale(mock_config):
     mock_ws.ticker_cache = {"XBTUSD": {"bid": "1.0", "ask": "3.0"}}
     api._ws_client = mock_ws
 
+    # Store shouldn't be involved, but good to ensure no calls
     api._ohlc_store = MagicMock()
-    api._ohlc_store.get_bars.return_value = []
 
     api._rest_client = MagicMock()
     api._rest_client.get_public.return_value = {}
