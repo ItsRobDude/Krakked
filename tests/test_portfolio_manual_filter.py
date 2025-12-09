@@ -228,11 +228,12 @@ def test_realized_pnl_tags_and_manual_filtering(portfolio):
 
     portfolio.ingest_trades([tagged_buy, tagged_sell], persist=False)
 
-    assert len(portfolio.realized_pnl_history) == 1
-    record = portfolio.realized_pnl_history[0]
-    assert record.strategy_tag is None
-    assert record.raw_userref == "123"
-    assert record.comment == "note"
+    assert len(portfolio.realized_pnl_history) == 2
+    # First record is buy (fee), second is sell
+    rec = portfolio.realized_pnl_history[1]
+    assert rec.strategy_tag is None
+    assert rec.raw_userref == "123"
+    assert rec.comment == "note"
 
     manual_filtered = portfolio.equity_view()
     assert pytest.approx(manual_filtered.realized_pnl_base_total, rel=1e-6) == 0.0
