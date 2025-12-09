@@ -82,6 +82,22 @@ class Portfolio:
         )
         self._last_snapshot_ts: int = 0
 
+    def _round_vol(self, pair: str, vol: float) -> float:
+        """Round volume to the pair's configured lot decimals."""
+        try:
+            meta = self.market_data.get_pair_metadata(pair)
+            return round(vol, meta.volume_decimals)
+        except Exception:
+            return vol
+
+    def _round_price(self, pair: str, price: float) -> float:
+        """Round price to the pair's configured price decimals."""
+        try:
+            meta = self.market_data.get_pair_metadata(pair)
+            return round(price, meta.price_decimals)
+        except Exception:
+            return price
+
     # ------------------------------------------------------------------
     # Ingestion helpers
     # ------------------------------------------------------------------
@@ -165,9 +181,11 @@ class Portfolio:
 
         if side == "buy":
             previous_cost = position.base_size * position.avg_entry_price
-            new_total_qty = position.base_size + vol
+            new_total_qty = self._round_vol(pair, position.base_size + vol)
             position.avg_entry_price = (
-                (previous_cost + cost) / new_total_qty if new_total_qty else 0.0
+                self._round_price(pair, (previous_cost + cost) / new_total_qty)
+                if new_total_qty
+                else 0.0
             )
             position.base_size = new_total_qty
         else:
@@ -178,7 +196,9 @@ class Portfolio:
             pnl_base = pnl_conversion.value_base - fee_in_base
             position.realized_pnl_base += pnl_base
             self.realized_pnl_base_by_pair[pair] += pnl_base
-            position.base_size = max(0.0, position.base_size - vol)
+            position.base_size = self._round_vol(
+                pair, max(0.0, position.base_size - vol)
+            )
             self.realized_pnl_history.append(
                 RealizedPnLRecord(
                     trade_id=trade.get("id", ""),
@@ -462,33 +482,10 @@ class Portfolio:
         return (fallback_price, True) if fallback_price is not None else (None, True)
 
     def _get_fallback_price(self, pair: str) -> Optional[float]:
-        """Attempt to retrieve a non-live price from stored OHLC bars or REST."""
-
-        cached_fn_raw = getattr(self.market_data, "_get_cached_price_from_store", None)
-        cached_fn = cast(
-            Optional[Callable[[str], Optional[float]]],
-            cached_fn_raw if callable(cached_fn_raw) else None,
-        )
-        if cached_fn is not None:
-            try:
-                cached_price = cached_fn(pair)
-                if cached_price is not None:
-                    return float(cached_price)
-            except Exception:
-                pass
-
-        rest_fn_raw = getattr(self.market_data, "_get_rest_ticker_price", None)
-        rest_fn = cast(
-            Optional[Callable[[str], Optional[float]]],
-            rest_fn_raw if callable(rest_fn_raw) else None,
-        )
-        if rest_fn is not None:
-            try:
-                rest_price = rest_fn(pair)
-                if rest_price is not None:
-                    return float(rest_price)
-            except Exception:
-                pass
+        """Attempt to retrieve a non-live price from stored OHLC bars."""
+        # Note: We rely on public methods only.
+        # This fallback is strictly for VALUATION (equity approximation),
+        # not for active trading decisions.
 
         cfg = getattr(self.market_data, "_config", None)
         timeframes: List[str] = []
@@ -499,20 +496,17 @@ class Portfolio:
         if not timeframes:
             timeframes = ["1m", "5m", "15m"]
 
-        get_ohlc_raw = getattr(self.market_data, "get_ohlc", None)
-        get_ohlc = cast(
-            Optional[Callable[[str, str, int], Sequence[OHLCBar]]],
-            get_ohlc_raw if callable(get_ohlc_raw) else None,
-        )
-        if get_ohlc is not None:
+        # Use the public get_ohlc method
+        get_ohlc = getattr(self.market_data, "get_ohlc", None)
+        if callable(get_ohlc):
             for timeframe in dict.fromkeys(timeframes):
                 try:
                     bars = get_ohlc(pair, timeframe, 1)
+                    if bars:
+                        last_bar = bars[-1]
+                        return float(last_bar.close)
                 except Exception:
                     continue
-                if bars:
-                    last_bar = bars[-1]
-                    return float(last_bar.close)
 
         return None
 

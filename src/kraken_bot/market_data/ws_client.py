@@ -84,16 +84,20 @@ class KrakenWSClientV2:
         if not self._websocket:
             return
 
+        chunk_size = 50
+
         # Ticker subscription
-        ticker_sub = {
-            "method": "subscribe",
-            "params": {
-                "channel": "ticker",
-                "symbol": self._ws_symbols,
-            },
-            "req_id": int(time.time() * 1000),
-        }
-        await self._websocket.send(json.dumps(ticker_sub))
+        for i in range(0, len(self._ws_symbols), chunk_size):
+            chunk = self._ws_symbols[i : i + chunk_size]
+            ticker_sub = {
+                "method": "subscribe",
+                "params": {
+                    "channel": "ticker",
+                    "symbol": chunk,
+                },
+                "req_id": int(time.time() * 1000),
+            }
+            await self._websocket.send(json.dumps(ticker_sub))
         logger.info(f"Subscribed to ticker for {len(self._ws_symbols)} pairs.")
 
         # OHLC subscriptions
@@ -103,16 +107,18 @@ class KrakenWSClientV2:
                 if tf.endswith("m")
                 else int(tf[:-1]) * 60 if tf.endswith("h") else int(tf[:-1]) * 1440
             )
-            ohlc_sub = {
-                "method": "subscribe",
-                "params": {
-                    "channel": "ohlc",
-                    "symbol": self._ws_symbols,
-                    "interval": interval,
-                },
-                "req_id": int(time.time() * 1000) + 1,
-            }
-            await self._websocket.send(json.dumps(ohlc_sub))
+            for i in range(0, len(self._ws_symbols), chunk_size):
+                chunk = self._ws_symbols[i : i + chunk_size]
+                ohlc_sub = {
+                    "method": "subscribe",
+                    "params": {
+                        "channel": "ohlc",
+                        "symbol": chunk,
+                        "interval": interval,
+                    },
+                    "req_id": int(time.time() * 1000) + 1,
+                }
+                await self._websocket.send(json.dumps(ohlc_sub))
             logger.info(f"Subscribed to OHLC ({tf}) for {len(self._ws_symbols)} pairs.")
 
     def _get_timeframe_from_interval(self, interval: int) -> Optional[str]:

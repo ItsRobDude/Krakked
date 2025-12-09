@@ -226,26 +226,6 @@ class MarketDataAPI:
         if stale_time > self._ws_stale_tolerance:
             raise DataStaleError(pair, stale_time, self._ws_stale_tolerance)
 
-    def _get_fallback_timeframes(self) -> List[str]:
-        """Combines configured timeframes for fallback lookups without duplicates."""
-        timeframes: List[str] = []
-        seen = set()
-        for tf in (
-            self._config.market_data.ws_timeframes
-            + self._config.market_data.backfill_timeframes
-        ):
-            if tf not in seen:
-                seen.add(tf)
-                timeframes.append(tf)
-        return timeframes
-
-    def _get_cached_price_from_store(self, pair: str) -> Optional[float]:
-        for timeframe in self._get_fallback_timeframes():
-            bars = self._ohlc_store.get_bars(pair, timeframe, 1)
-            if bars:
-                return bars[-1].close
-        return None
-
     def _get_rest_ticker_price(self, pair: str) -> Optional[float]:
         assert self._rest_client is not None
         try:
@@ -297,13 +277,10 @@ class MarketDataAPI:
                 # Return mid-price (avg of best bid and ask)
                 return (float(ticker["bid"]) + float(ticker["ask"])) / 2
 
-        if self._get_fallback_timeframes():
-            fallback_price = self._get_cached_price_from_store(pair)
-            if fallback_price is None:
-                fallback_price = self._get_rest_ticker_price(pair)
-
-            if fallback_price is not None:
-                return fallback_price
+        # Fallback to REST ticker
+        fallback_price = self._get_rest_ticker_price(pair)
+        if fallback_price is not None:
+            return fallback_price
 
         raise DataStaleError(pair, stale_time, self._ws_stale_tolerance)
 
