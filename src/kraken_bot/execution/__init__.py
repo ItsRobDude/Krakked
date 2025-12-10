@@ -1,9 +1,9 @@
 # src/kraken_bot/execution/__init__.py
 
 from .adapter import (
+    DryRunExecutionAdapter,
     ExecutionAdapter,
     KrakenExecutionAdapter,
-    PaperExecutionAdapter,
     get_execution_adapter,
 )
 from .exceptions import (
@@ -23,6 +23,7 @@ from .router import (
 )
 
 __all__ = [
+    "DryRunExecutionAdapter",
     "ExecutionAdapter",
     "ExecutionError",
     "ExecutionResult",
@@ -33,7 +34,6 @@ __all__ = [
     "OrderCancelError",
     "OrderRejectedError",
     "OrderValidationError",
-    "PaperExecutionAdapter",
     "build_order_payload",
     "determine_order_type",
     "get_execution_adapter",
