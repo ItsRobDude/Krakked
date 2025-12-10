@@ -195,45 +195,20 @@ class PortfolioService:
             self.store.save_trades(normalized_trades)
 
         # 2. Fetch Ledgers (New Flow)
-        # Find the latest ledger entry we have to determine start time
-        # Note: we use "start" parameter with timestamp.
-        all_ledgers = self.store.get_ledger_entries(limit=1) # Get latest is tricky with limit=1 unless desc
-        # Actually store.get_ledger_entries returns ascending order, so the last one is the latest.
-        # But efficiently we should query the DB for max time.
-        # For now, let's just use what we have in memory or query specifically.
-        # Since I didn't add get_latest_ledger_timestamp to Store, I will iterate or fetch 1 desc if I had that option.
-        # Wait, get_ledger_entries(limit=1) returns the *first* (oldest) because of ASC order.
-        # I should probably just fetch the latest ledgers using a DESC query if I could, but I can't.
-        # I will rely on `get_latest_balance_snapshot` last_ledger_id time? No.
-        # I will fetch the most recent ledger entry time from DB directly? No direct access here.
-        # I will use `store` method to get all and take last? No, expensive.
-        # I will trust the user to have implemented `get_ledger_entries` efficiently or add a helper.
-        # For this turn, I will assume we can rely on `last_ledger_id` if available, or just use 0.
-        # Actually, standard Kraken pattern is to track `last` from response.
-        # But we are restarting.
-        # I'll implement a naive `get_latest_ledger_time` query via `get_ledger_entries` is hard.
-        # I'll just check `self.portfolio.cash_flows`? No, that's partial.
-        # Let's add `get_latest_ledger_entry` to Store?
-        # I can't easily modify the interface again without updating Abstract and SQLite.
-        # I'll modify `get_ledger_entries` to allow `ascending=False`.
-        # Wait, `get_ledger_entries` signature I added is `(after_id=None, limit=None)`.
-        # It forces ASC.
-        # I will just fetch the last known time from the bootstrap phase if possible?
-        # I can inspect `self.portfolio.balances`? No.
-        # I will use a reasonable default (0) if I can't find it.
-        # But wait, I can modify `sync` to just use `end` from response?
-        # No, request needs start.
-        # I'll use `time` from the last item in `self.store.get_ledger_entries()`?
-        # If I call it without args it fetches ALL. That's bad for perf eventually.
-        # I'll stick to a safe default for now or maybe I can query the DB roughly?
-        # Let's assume for Phase 2 that getting all is fine for the scale we have.
-
-        known_ledgers = self.store.get_ledger_entries()
-        last_ledger_time = known_ledgers[-1].time if known_ledgers else 0
+        # Find the latest ledger entry to determine start time
+        last_entry = self.store.get_latest_ledger_entry()
+        last_ledger_time = last_entry.time if last_entry else 0
 
         ledger_params = {}
         if last_ledger_time > 0:
             ledger_params["start"] = last_ledger_time
+
+        # Efficient duplicate detection for boundary
+        known_ids_at_boundary = set()
+        if last_ledger_time > 0:
+            # Fetch only entries at or after the last timestamp (small window usually)
+            boundary_entries = self.store.get_ledger_entries(since=last_ledger_time)
+            known_ids_at_boundary = {e.id for e in boundary_entries}
 
         from decimal import Decimal
         ledger_resp = self.rest_client.get_ledgers(params=ledger_params)
@@ -246,9 +221,17 @@ class PortfolioService:
             # Normalize and store
             for lid, info in ledger_dict.items():
                 # info has refid, time, type, aclass, asset, amount, fee, balance
+                entry_time = info.get("time", 0.0)
+
+                # Deduplication logic
+                if entry_time < last_ledger_time:
+                    continue
+                if entry_time == last_ledger_time and lid in known_ids_at_boundary:
+                    continue
+
                 entry = LedgerEntry(
                     id=lid,
-                    time=info.get("time", 0.0),
+                    time=entry_time,
                     type=info.get("type", ""),
                     subtype=info.get("subtype", ""),
                     aclass=info.get("aclass", ""),
@@ -260,10 +243,6 @@ class PortfolioService:
                     misc=None, # Not always present or needs extraction
                     raw=info
                 )
-
-                # Check duplication if we used inclusive start
-                if entry.time <= last_ledger_time and any(l.id == lid for l in known_ledgers):
-                     continue
 
                 new_ledger_entries.append(entry)
 

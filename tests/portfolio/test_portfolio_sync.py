@@ -20,8 +20,8 @@ def test_sync_ingests_before_saving():
     api_client = Mock()
 
     store.get_trades.return_value = []
-    # Mock get_ledger_entries to return empty list to avoid subscriptable error
-    store.get_ledger_entries.return_value = []
+    # Mock get_latest_ledger_entry for start time
+    store.get_latest_ledger_entry.return_value = None
     store.get_cash_flows.return_value = []
     portfolio._normalize_trade_payload.side_effect = lambda t: t
     # Ensure portfolio has a balances dict for BalanceEngine
@@ -64,7 +64,7 @@ def test_sync_does_not_save_when_ingest_fails():
     api_client = Mock()
 
     store.get_trades.return_value = []
-    store.get_ledger_entries.return_value = []
+    store.get_latest_ledger_entry.return_value = None
     store.get_cash_flows.return_value = []
     portfolio._normalize_trade_payload.side_effect = lambda t: t
     portfolio.ingest_trades.side_effect = RuntimeError("boom")
@@ -110,7 +110,7 @@ def test_sync_does_not_persist_cash_flows_on_failure():
     api_client = Mock()
 
     store.get_trades.return_value = []
-    store.get_ledger_entries.return_value = []
+    store.get_latest_ledger_entry.return_value = None
     store.get_cash_flows.return_value = []
     portfolio._normalize_trade_payload.side_effect = lambda t: t
     portfolio.balances = {}

@@ -453,14 +453,22 @@ class PortfolioStore(abc.ABC):
 
     @abc.abstractmethod
     def get_ledger_entries(
-        self, after_id: Optional[str] = None, limit: Optional[int] = None
+        self,
+        after_id: Optional[str] = None,
+        limit: Optional[int] = None,
+        since: Optional[float] = None,
     ) -> List[LedgerEntry]:
-        """Retrieves ledger entries, optionally after a given ID."""
+        """Retrieves ledger entries, optionally after a given ID or since a timestamp."""
         pass
 
     @abc.abstractmethod
     def get_all_ledger_entries(self) -> List[LedgerEntry]:
         """Retrieves all ledger entries."""
+        pass
+
+    @abc.abstractmethod
+    def get_latest_ledger_entry(self) -> Optional[LedgerEntry]:
+        """Retrieves the most recent ledger entry."""
         pass
 
     @abc.abstractmethod
@@ -927,7 +935,10 @@ class SQLitePortfolioStore(PortfolioStore):
                 conn.close()
 
     def get_ledger_entries(
-        self, after_id: Optional[str] = None, limit: Optional[int] = None
+        self,
+        after_id: Optional[str] = None,
+        limit: Optional[int] = None,
+        since: Optional[float] = None,
     ) -> List[LedgerEntry]:
         from decimal import Decimal
 
@@ -939,26 +950,20 @@ class SQLitePortfolioStore(PortfolioStore):
             FROM ledger_entries
             WHERE 1=1
         """
-        params = []
+        params: List[Any] = []
 
-        if after_id:
-            # We assume we can filter by ID strictly, but time ordering is safer for replay.
-            # However, prompt suggested "rebuild balances from 'last snapshot -> now'".
-            # If after_id is given, we need to find entries strictly AFTER that ID.
-            # Since IDs are not guaranteed monotonic, we rely on time, but if time is equal, we rely on ID.
-            # To simplify, if we have a robust (time, id) index, we could filter by that.
-            # But here we just fetch all and filter in app or rely on fetching by time if we had a timestamp.
-            # The prompt suggested "last_ledger_id included in this snapshot".
-            # If we store 'time' in snapshot, we can fetch ledgers > snapshot.time.
-            # Let's support naive "get everything" or "get > id" if we can efficiently find it.
-            # For now, let's assume we use time filtering mostly, but the interface asked for after_id.
-            # We'll actually fetch ALL and filter in Python OR fetch by time if we change the signature.
-            # Wait, the interface I designed has `after_id`.
-            # Let's fetch all sorted by (time, id) and filter in Python for simplicity unless volume is huge.
-            pass
+        if since is not None:
+            query += " AND time >= ?"
+            params.append(since)
 
         # Always order by time, then id for deterministic replay
         query += " ORDER BY time ASC, id ASC"
+
+        if limit and not after_id:
+            # If we are filtering by ID in python, we can't limit in SQL efficiently without subquery
+            # But if no after_id, we can limit.
+            query += " LIMIT ?"
+            params.append(limit)
 
         cursor.execute(query, params)
         rows = cursor.fetchall()
@@ -991,13 +996,48 @@ class SQLitePortfolioStore(PortfolioStore):
                 )
             )
 
-        if limit and len(entries) > limit:
+        # Apply limit if we had after_id logic
+        if after_id and limit and len(entries) > limit:
             entries = entries[:limit]
 
         return entries
 
     def get_all_ledger_entries(self) -> List[LedgerEntry]:
         return self.get_ledger_entries(after_id=None)
+
+    def get_latest_ledger_entry(self) -> Optional[LedgerEntry]:
+        from decimal import Decimal
+
+        conn = self._get_conn()
+        cursor = conn.cursor()
+
+        query = """
+            SELECT id, time, type, subtype, aclass, asset, amount, fee, balance, refid, misc, raw_json
+            FROM ledger_entries
+            ORDER BY time DESC, id DESC
+            LIMIT 1
+        """
+        cursor.execute(query)
+        row = cursor.fetchone()
+        conn.close()
+
+        if not row:
+            return None
+
+        return LedgerEntry(
+            id=row[0],
+            time=row[1],
+            type=row[2],
+            subtype=row[3],
+            aclass=row[4],
+            asset=row[5],
+            amount=Decimal(str(row[6])),
+            fee=Decimal(str(row[7])),
+            balance=Decimal(str(row[8])) if row[8] is not None else None,
+            refid=row[9],
+            misc=row[10],
+            raw=json.loads(row[11]),
+        )
 
     def save_balance_snapshot(self, snapshot: BalanceSnapshot):
         with self._lock:

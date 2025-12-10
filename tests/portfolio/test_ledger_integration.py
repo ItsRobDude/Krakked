@@ -3,9 +3,9 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from src.kraken_bot.config import AppConfig
-from src.kraken_bot.portfolio.manager import PortfolioService
-from src.kraken_bot.portfolio.models import AssetBalance, LedgerEntry
+from kraken_bot.config import AppConfig
+from kraken_bot.portfolio.manager import PortfolioService
+from kraken_bot.portfolio.models import AssetBalance, LedgerEntry
 
 
 @pytest.fixture
@@ -13,6 +13,7 @@ def mock_store():
     store = MagicMock()
     # Default mocks
     store.get_ledger_entries.return_value = []
+    store.get_latest_ledger_entry.return_value = None
     store.get_latest_balance_snapshot.return_value = None
     store.get_trades.return_value = []
     store.get_all_ledger_entries.return_value = []

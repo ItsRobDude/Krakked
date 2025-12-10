@@ -561,7 +561,7 @@ class Portfolio:
             for timeframe in dict.fromkeys(timeframes):
                 try:
                     bars = get_ohlc(pair, timeframe, 1)
-                    if bars:
+                    if isinstance(bars, Sequence) and bars:
                         last_bar = bars[-1]
                         return float(last_bar.close)
                 except Exception:
