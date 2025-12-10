@@ -70,6 +70,9 @@ def test_ml_model_roundtrip(tmp_path):
         model=model,
     )
 
-    loaded = store.load_ml_model("ml_strategy", "global|1h")
+    result = store.load_ml_model("ml_strategy", "global|1h")
+    assert result is not None
+    loaded, updated_at = result
     assert isinstance(loaded, DummyModel)
     assert loaded.value == 42
+    assert isinstance(updated_at, datetime)

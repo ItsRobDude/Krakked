@@ -3,7 +3,8 @@ from __future__ import annotations
 import logging
 import math
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
+from datetime import datetime, timedelta, timezone
+from typing import List, Optional, Tuple
 
 from kraken_bot.config import StrategyConfig
 from kraken_bot.market_data.api import MarketDataAPI
@@ -64,7 +65,6 @@ class AIPredictorStrategy(Strategy):
         self.model = PassiveAggressiveClassifier(max_iter=1000, tol=1e-3)
         self.classes = [0, 1]
         self.model_initialized = False
-        self._last_observation: Dict[Tuple[str, str], Tuple[List[float], float]] = {}
 
     def warmup(self, market_data: MarketDataAPI, portfolio: PortfolioService) -> None:
         return None
@@ -82,12 +82,21 @@ class AIPredictorStrategy(Strategy):
             return
 
         model_key = self._model_key(timeframe)
-        restored_model = load_model(ctx, self.id, model_key)
-        if restored_model is not None:
-            self.model = restored_model
-            self.model_initialized = True
+        loaded = load_model(ctx, self.id, model_key)
+        updated_at = None
+
+        if loaded is not None:
+            restored_model, updated_at = loaded
+            if restored_model is not None:
+                self.model = restored_model
+                self.model_initialized = True
+
+        if self.model_initialized:
+            if updated_at and self._learning_enabled():
+                self._catch_up_model(ctx, timeframe, updated_at)
             return
 
+        # If no model exists, bootstrap from stored examples if available
         X, y = load_training_window(
             ctx,
             strategy_id=self.id,
@@ -103,19 +112,118 @@ class AIPredictorStrategy(Strategy):
         except Exception as exc:  # pragma: no cover - defensive
             logger.debug("ML bootstrap failed for %s: %s", self.id, exc)
 
-    def _extract_features(
-        self, ctx: StrategyContext, pair: str, timeframe: str
-    ) -> Optional[List[float]]:
-        lookback = max(
-            self.params.lookback_bars,
-            self.params.long_window + 1,
-            self.params.short_window + 1,
+    def _catch_up_model(
+        self, ctx: StrategyContext, timeframe: str, last_updated: datetime
+    ) -> None:
+        """Backfill training on candles missed while the bot was offline."""
+
+        now = ctx.now
+        if not isinstance(now, datetime):
+            now = datetime.now(timezone.utc)
+
+        if (now - last_updated).total_seconds() < 60:
+            return
+
+        logger.info(
+            "Catching up ML model for %s (last updated: %s)",
+            timeframe,
+            last_updated.isoformat(),
         )
-        ohlc = ctx.market_data.get_ohlc(pair, timeframe, lookback=lookback)
-        if not ohlc or len(ohlc) < 3:
+
+        pairs = self.params.pairs or list(ctx.universe or [])
+        if not pairs:
+            return
+
+        # We limit catch-up to a reasonable window to avoid excessive load
+        catch_up_start = max(last_updated, now - timedelta(days=7))
+
+        # Simple heuristic: fetch data for one representative pair to get timestamps,
+        # then iterate and train. Or iterate per pair.
+        # Since this is a global model, we should train on all pairs in the window.
+
+        # NOTE: Full multi-pair catch-up logic can be complex.
+        # Here we perform a simplified catch-up: iterate configured pairs and
+        # extract training examples from the gap.
+
+        training_count = 0
+
+        # To avoid re-training on the last seen candle, add a small buffer
+        start_ts = catch_up_start.timestamp() + 1
+
+        # We need OHLC since start_ts.
+        # But `_extract_training_example` works by `shift=1` (T-1).
+        # We can re-use `_extract_features` on historical bars if we can access them.
+        # MarketDataAPI `get_ohlc` gets *recent* bars.
+        # To robustly catch up, we rely on `get_ohlc_since` logic or just fetch a sufficient lookback.
+
+        # Simplified approach: Train on the last N bars that cover the gap.
+        # Calculate how many bars fit in the gap.
+        # e.g. 1h timeframe, gap 10 hours -> last 10 bars.
+
+        try:
+            # Parse timeframe to seconds (rough approx for estimation)
+            tf_seconds = 3600
+            if timeframe.endswith("m"):
+                tf_seconds = int(timeframe[:-1]) * 60
+            elif timeframe.endswith("h"):
+                tf_seconds = int(timeframe[:-1]) * 3600
+            elif timeframe.endswith("d"):
+                tf_seconds = int(timeframe[:-1]) * 86400
+
+            gap_seconds = (now - last_updated).total_seconds()
+            bars_missed = int(gap_seconds / tf_seconds)
+
+            if bars_missed <= 0:
+                return
+
+            lookback = min(bars_missed + 5, 500) # Cap at 500 bars catch-up
+
+            for pair in pairs:
+                # Get history covering the gap
+                ohlc = ctx.market_data.get_ohlc(pair, timeframe, lookback=lookback + self.params.lookback_bars)
+                if not ohlc or len(ohlc) < 2:
+                    continue
+
+                # We iterate through history to reconstruct (Feature(T-1), Label(T-1)) pairs.
+                # Label(T-1) requires Close(T) and Close(T-1).
+                # Feature(T-1) requires OHLC up to T-1.
+
+                # Iterate from index that corresponds to last_updated up to end
+                for i in range(self.params.lookback_bars, len(ohlc)):
+                    bar_t = ohlc[i]
+                    bar_prev = ohlc[i-1]
+
+                    if bar_t.timestamp <= start_ts:
+                        continue
+
+                    # Reconstruct features for T-1
+                    # Slice ohlc up to i-1 (inclusive)
+                    # We need a slice of length `lookback_bars` ending at i-1
+                    start_slice = i - self.params.lookback_bars
+                    if start_slice < 0:
+                        continue
+
+                    window_slice = ohlc[start_slice:i]
+                    features = self._compute_features_from_window(window_slice)
+                    if not features:
+                        continue
+
+                    label = 1 if bar_t.close > bar_prev.close else 0
+
+                    self.model.partial_fit([features], [label], classes=self.classes)
+                    training_count += 1
+
+        except Exception as exc:
+            logger.warning("Error during ML catch-up: %s", exc)
+
+        if training_count > 0:
+            logger.info("Caught up ML model with %d examples", training_count)
+
+    def _compute_features_from_window(self, ohlc_window: list) -> Optional[List[float]]:
+        if not ohlc_window or len(ohlc_window) < 3:
             return None
 
-        closes = [float(bar.close) for bar in ohlc]
+        closes = [float(bar.close) for bar in ohlc_window]
         last_close, prev_close = closes[-1], closes[-2]
         if prev_close <= 0:
             return None
@@ -128,14 +236,66 @@ class AIPredictorStrategy(Strategy):
         long_ma = sum(closes[-long_len:]) / long_len if long_len > 0 else 0.0
         trend_diff = ((short_ma - long_ma) / long_ma) if long_ma > 0 else 0.0
 
-        window = closes[-self.params.lookback_bars :]
-        mean_close = sum(window) / len(window)
+        mean_close = sum(closes) / len(closes)
         volatility = 0.0
-        if mean_close > 0 and len(window) > 1:
-            variance = sum((c - mean_close) ** 2 for c in window) / len(window)
+        if mean_close > 0 and len(closes) > 1:
+            variance = sum((c - mean_close) ** 2 for c in closes) / len(closes)
             volatility = math.sqrt(variance) / mean_close
 
         return [pct_change, trend_diff, volatility]
+
+    def _extract_features(
+        self, ctx: StrategyContext, pair: str, timeframe: str
+    ) -> Optional[List[float]]:
+        # This wrapper retrieves OHLC and delegates to _compute_features_from_window
+        lookback = max(
+            self.params.lookback_bars,
+            self.params.long_window + 1,
+            self.params.short_window + 1,
+        )
+        ohlc = ctx.market_data.get_ohlc(pair, timeframe, lookback=lookback)
+        return self._compute_features_from_window(ohlc)
+
+    def _extract_training_example(
+        self, ctx: StrategyContext, pair: str, timeframe: str
+    ) -> Optional[Tuple[List[float], float]]:
+        """Reconstruct the training example for the previous completed candle (T-1).
+
+        Returns (features, label) where:
+          - features are calculated from OHLC history up to T-1.
+          - label is 1 if Close(T) > Close(T-1), else 0.
+        """
+        # We need OHLC including the just-closed bar (T) and enough history for T-1 features.
+        # T-1 features require `lookback` bars ending at T-1.
+        # So we need `lookback + 1` bars total (the +1 is bar T for the label).
+        lookback = max(
+            self.params.lookback_bars,
+            self.params.long_window + 1,
+            self.params.short_window + 1,
+        )
+        # Fetch lookback + 1 bars
+        ohlc = ctx.market_data.get_ohlc(pair, timeframe, lookback=lookback + 1)
+
+        if not ohlc or len(ohlc) < lookback + 1:
+            return None
+
+        # Bar T is ohlc[-1] (latest closed candle)
+        # Bar T-1 is ohlc[-2]
+        bar_t = ohlc[-1]
+        bar_prev = ohlc[-2]
+
+        # Label: did T close higher than T-1?
+        label = 1.0 if bar_t.close > bar_prev.close else 0.0
+
+        # Features for T-1: use window ohlc[:-1] (excluding T)
+        # And we take the last `lookback` bars of THAT slice.
+        # But we fetched exactly `lookback + 1`, so ohlc[:-1] has length `lookback`.
+        features_window = ohlc[:-1]
+        features = self._compute_features_from_window(features_window)
+
+        if features:
+            return features, label
+        return None
 
     def _confidence(self, features: List[float]) -> float:
         try:
@@ -173,46 +333,37 @@ class AIPredictorStrategy(Strategy):
         open_positions_count = len(positions_by_pair)
 
         for pair in pairs:
-            try:
-                current_price = ctx.market_data.get_latest_price(pair)
-            except DataStaleError as exc:
-                logger.debug("Skipping stale data for %s: %s", pair, exc)
-                continue
-            except Exception as exc:  # pragma: no cover - defensive
-                logger.debug("Skipping price fetch error for %s: %s", pair, exc)
-                continue
+            # 1. Train on the previous completed candle (Deterministic Learning)
+            if self._learning_enabled():
+                train_data = self._extract_training_example(ctx, pair, timeframe)
+                if train_data:
+                    features_prev, label_prev = train_data
 
-            if current_price is None:
-                continue
+                    # Persist example
+                    record_example(
+                        ctx,
+                        strategy_id=self.id,
+                        model_key=model_key,
+                        label_type="classification",
+                        features=features_prev,
+                        label=label_prev,
+                    )
 
-            last_obs = self._last_observation.get((pair, timeframe))
-            if last_obs:
-                last_features, last_price = last_obs
-                label = 1 if current_price > last_price else 0
-                record_example(
-                    ctx,
-                    strategy_id=self.id,
-                    model_key=model_key,
-                    label_type="classification",
-                    features=last_features,
-                    label=float(label),
-                )
-                try:
-                    if not self.model_initialized:
-                        self.model.partial_fit(
-                            [last_features], [label], classes=self.classes
-                        )
-                        self.model_initialized = True
-                    elif self._learning_enabled():
-                        self.model.partial_fit([last_features], [label])
-                except Exception as exc:  # pragma: no cover - defensive
-                    logger.debug("Model update failed for %s: %s", pair, exc)
+                    try:
+                        if not self.model_initialized:
+                            self.model.partial_fit(
+                                [features_prev], [label_prev], classes=self.classes
+                            )
+                            self.model_initialized = True
+                        else:
+                            self.model.partial_fit([features_prev], [label_prev])
+                    except Exception as exc:  # pragma: no cover - defensive
+                        logger.debug("Model update failed for %s: %s", pair, exc)
 
+            # 2. Predict for the current state (T) to target T+1
             features = self._extract_features(ctx, pair, timeframe)
             if not features:
                 continue
-
-            self._last_observation[(pair, timeframe)] = (features, current_price)
 
             if not self.model_initialized:
                 continue

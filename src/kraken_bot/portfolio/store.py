@@ -624,8 +624,10 @@ class PortfolioStore(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def load_ml_model(self, strategy_id: str, model_key: str) -> Optional[object]:
-        """Load a serialized ML model if present."""
+    def load_ml_model(
+        self, strategy_id: str, model_key: str
+    ) -> Optional[Tuple[object, datetime]]:
+        """Load a serialized ML model if present, returning (model, updated_at)."""
         pass
 
     def get_schema_version(self) -> Optional[int]:
@@ -2089,7 +2091,9 @@ class SQLitePortfolioStore(PortfolioStore):
             finally:
                 conn.close()
 
-    def load_ml_model(self, strategy_id: str, model_key: str) -> Optional[object]:
+    def load_ml_model(
+        self, strategy_id: str, model_key: str
+    ) -> Optional[Tuple[object, datetime]]:
         """Load a persisted ML model if present, otherwise return None."""
 
         with self._lock:
@@ -2098,7 +2102,7 @@ class SQLitePortfolioStore(PortfolioStore):
                 cursor = conn.cursor()
                 cursor.execute(
                     """
-                    SELECT model_blob
+                    SELECT model_blob, updated_at
                     FROM ml_models
                     WHERE strategy_id = ?
                       AND model_key   = ?
@@ -2113,7 +2117,12 @@ class SQLitePortfolioStore(PortfolioStore):
             return None
 
         try:
-            return pickle.loads(row[0])
+            model = pickle.loads(row[0])
+            updated_at_str = row[1]
+            updated_at = datetime.fromisoformat(updated_at_str)
+            if updated_at.tzinfo is None:
+                updated_at = updated_at.replace(tzinfo=UTC)
+            return model, updated_at
         except Exception:
             # If the pickled model is corrupt or incompatible, we fail soft:
             # callers go on to bootstrap from raw examples instead.
