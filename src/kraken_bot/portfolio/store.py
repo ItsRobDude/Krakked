@@ -14,15 +14,24 @@ from kraken_bot.logging_config import structured_log_extra
 
 from .exceptions import PortfolioSchemaError
 from .migrations import _ensure_meta_table, _set_schema_version, run_migrations
-from .models import AssetValuation, CashFlowRecord, PortfolioSnapshot
+from .models import (
+    AssetBalance,
+    AssetValuation,
+    BalanceSnapshot,
+    CashFlowRecord,
+    LedgerEntry,
+    PortfolioSnapshot,
+)
 
 if TYPE_CHECKING:
+    from decimal import Decimal
+
     from kraken_bot.execution.models import ExecutionResult, LocalOrder
     from kraken_bot.strategy.models import DecisionRecord, ExecutionPlan
 
 logger = logging.getLogger(__name__)
 
-CURRENT_SCHEMA_VERSION = 7
+CURRENT_SCHEMA_VERSION = 8
 
 MAX_ML_TRAINING_EXAMPLES = 5000
 MIN_ML_BOOTSTRAP_EXAMPLES = 50
@@ -364,6 +373,41 @@ def ensure_portfolio_tables(conn: sqlite3.Connection) -> None:
         """
     )
 
+    # Ledger Entries Table
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS ledger_entries (
+            id TEXT PRIMARY KEY,
+            time REAL,
+            type TEXT,
+            subtype TEXT,
+            aclass TEXT,
+            asset TEXT,
+            amount REAL,
+            fee REAL,
+            balance REAL,
+            refid TEXT,
+            misc TEXT,
+            raw_json TEXT
+        )
+        """
+    )
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_ledger_entries_time ON ledger_entries(time)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_ledger_entries_refid ON ledger_entries(refid)")
+
+    # Balance Snapshots Table
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS balance_snapshots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            time REAL,
+            last_ledger_id TEXT,
+            balances_json TEXT
+        )
+        """
+    )
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_balance_snapshots_time ON balance_snapshots(time)")
+
     conn.commit()
 
 
@@ -400,6 +444,33 @@ class PortfolioStore(abc.ABC):
         ascending: bool = False,
     ) -> List[CashFlowRecord]:
         """Retrieves cash flow records with optional filtering and ordering."""
+        pass
+
+    @abc.abstractmethod
+    def save_ledger_entry(self, entry: LedgerEntry):
+        """Saves a single ledger entry."""
+        pass
+
+    @abc.abstractmethod
+    def get_ledger_entries(
+        self, after_id: Optional[str] = None, limit: Optional[int] = None
+    ) -> List[LedgerEntry]:
+        """Retrieves ledger entries, optionally after a given ID."""
+        pass
+
+    @abc.abstractmethod
+    def get_all_ledger_entries(self) -> List[LedgerEntry]:
+        """Retrieves all ledger entries."""
+        pass
+
+    @abc.abstractmethod
+    def save_balance_snapshot(self, snapshot: BalanceSnapshot):
+        """Saves a balance replay snapshot."""
+        pass
+
+    @abc.abstractmethod
+    def get_latest_balance_snapshot(self) -> Optional[BalanceSnapshot]:
+        """Retrieves the most recent balance snapshot."""
         pass
 
     @abc.abstractmethod
@@ -822,6 +893,173 @@ class SQLitePortfolioStore(PortfolioStore):
             )
             for row in rows
         ]
+
+    def save_ledger_entry(self, entry: LedgerEntry):
+        from decimal import Decimal
+
+        with self._lock:
+            conn = self._get_conn()
+            try:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    INSERT OR REPLACE INTO ledger_entries (
+                        id, time, type, subtype, aclass, asset, amount, fee, balance, refid, misc, raw_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        entry.id,
+                        entry.time,
+                        entry.type,
+                        entry.subtype,
+                        entry.aclass,
+                        entry.asset,
+                        float(entry.amount),
+                        float(entry.fee),
+                        float(entry.balance) if entry.balance is not None else None,
+                        entry.refid,
+                        entry.misc,
+                        json.dumps(entry.raw, default=str),
+                    ),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
+    def get_ledger_entries(
+        self, after_id: Optional[str] = None, limit: Optional[int] = None
+    ) -> List[LedgerEntry]:
+        from decimal import Decimal
+
+        conn = self._get_conn()
+        cursor = conn.cursor()
+
+        query = """
+            SELECT id, time, type, subtype, aclass, asset, amount, fee, balance, refid, misc, raw_json
+            FROM ledger_entries
+            WHERE 1=1
+        """
+        params = []
+
+        if after_id:
+            # We assume we can filter by ID strictly, but time ordering is safer for replay.
+            # However, prompt suggested "rebuild balances from 'last snapshot -> now'".
+            # If after_id is given, we need to find entries strictly AFTER that ID.
+            # Since IDs are not guaranteed monotonic, we rely on time, but if time is equal, we rely on ID.
+            # To simplify, if we have a robust (time, id) index, we could filter by that.
+            # But here we just fetch all and filter in app or rely on fetching by time if we had a timestamp.
+            # The prompt suggested "last_ledger_id included in this snapshot".
+            # If we store 'time' in snapshot, we can fetch ledgers > snapshot.time.
+            # Let's support naive "get everything" or "get > id" if we can efficiently find it.
+            # For now, let's assume we use time filtering mostly, but the interface asked for after_id.
+            # We'll actually fetch ALL and filter in Python OR fetch by time if we change the signature.
+            # Wait, the interface I designed has `after_id`.
+            # Let's fetch all sorted by (time, id) and filter in Python for simplicity unless volume is huge.
+            pass
+
+        # Always order by time, then id for deterministic replay
+        query += " ORDER BY time ASC, id ASC"
+
+        cursor.execute(query, params)
+        rows = cursor.fetchall()
+        conn.close()
+
+        entries = []
+        skip = True if after_id else False
+
+        for row in rows:
+            lid = row[0]
+            if skip:
+                if lid == after_id:
+                    skip = False
+                continue
+
+            entries.append(
+                LedgerEntry(
+                    id=lid,
+                    time=row[1],
+                    type=row[2],
+                    subtype=row[3],
+                    aclass=row[4],
+                    asset=row[5],
+                    amount=Decimal(str(row[6])),
+                    fee=Decimal(str(row[7])),
+                    balance=Decimal(str(row[8])) if row[8] is not None else None,
+                    refid=row[9],
+                    misc=row[10],
+                    raw=json.loads(row[11]),
+                )
+            )
+
+        if limit and len(entries) > limit:
+            entries = entries[:limit]
+
+        return entries
+
+    def get_all_ledger_entries(self) -> List[LedgerEntry]:
+        return self.get_ledger_entries(after_id=None)
+
+    def save_balance_snapshot(self, snapshot: BalanceSnapshot):
+        with self._lock:
+            conn = self._get_conn()
+            try:
+                cursor = conn.cursor()
+                # serialize balances
+                balances_dict = {
+                    a: {"total": b.total, "free": b.free, "reserved": b.reserved}
+                    for a, b in snapshot.balances.items()
+                }
+
+                cursor.execute(
+                    """
+                    INSERT INTO balance_snapshots (
+                        time, last_ledger_id, balances_json
+                    ) VALUES (?, ?, ?)
+                    """,
+                    (
+                        snapshot.time,
+                        snapshot.last_ledger_id,
+                        json.dumps(balances_dict),
+                    ),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
+    def get_latest_balance_snapshot(self) -> Optional[BalanceSnapshot]:
+        conn = self._get_conn()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT id, time, last_ledger_id, balances_json
+            FROM balance_snapshots
+            ORDER BY time DESC
+            LIMIT 1
+            """
+        )
+        row = cursor.fetchone()
+        conn.close()
+
+        if not row:
+            return None
+
+        balances_raw = json.loads(row[3])
+        balances = {
+            k: AssetBalance(
+                asset=k,
+                total=v["total"],
+                free=v["free"],
+                reserved=v["reserved"],
+            )
+            for k, v in balances_raw.items()
+        }
+
+        return BalanceSnapshot(
+            id=row[0],
+            time=row[1],
+            last_ledger_id=row[2],
+            balances=balances,
+        )
 
     def save_snapshot(self, snapshot: PortfolioSnapshot):
         with self._lock:

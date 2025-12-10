@@ -1,7 +1,49 @@
 # src/kraken_bot/portfolio/models.py
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from decimal import Decimal
+from enum import Enum
+from typing import Any, Dict, List, Optional
+
+
+@dataclass
+class LedgerEntry:
+    id: str  # txid / ledger id
+    time: float  # unix timestamp
+    type: str  # "trade", "deposit", "withdrawal", ...
+    subtype: str  # "spottofutures", "reward", ...
+    aclass: str  # usually "currency"
+    asset: str  # e.g. "XXBT", "ZUSD"
+    amount: Decimal  # signed: +credit, -debit
+    fee: Decimal
+    balance: Optional[Decimal]  # post-transaction balance from Kraken
+    refid: Optional[str]  # trade id / withdrawal id / etc.
+    misc: Optional[str]  # raw `misc` from API
+    raw: Dict[str, Any]  # full original payload for safety
+
+
+@dataclass
+class BalanceSnapshot:
+    id: Optional[int]
+    time: float  # timestamp of snapshot
+    last_ledger_id: str  # last ledger id included in this snapshot
+    balances: Dict[
+        str, "AssetBalance"
+    ]  # {asset: AssetBalance(total, free, reserved)}
+
+
+class CashFlowCategory(Enum):
+    DEPOSIT = "deposit"
+    WITHDRAWAL = "withdrawal"
+    FEE = "fee"
+    STAKING_REWARD = "staking_reward"
+    STAKING_ALLOCATION = "staking_allocation"
+    STAKING_DEALLOCATION = "staking_deallocation"
+    SPOT_TO_FUTURES = "spot_to_futures"
+    FUTURES_TO_SPOT = "futures_to_spot"
+    ADJUSTMENT = "adjustment"
+    TRADE_PNL = "trade_pnl"
+    INTERNAL = "internal"  # neutral internal shuffles
 
 
 @dataclass
