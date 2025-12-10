@@ -560,6 +560,107 @@ class StrategyEngine:
     def clear_manual_kill_switch(self) -> None:
         self.risk_engine.clear_manual_kill_switch()
 
+    def reload_config(self, new_config: AppConfig) -> None:
+        """Reload configuration at runtime."""
+        logger.info(
+            "Reloading StrategyEngine config...",
+            extra=structured_log_extra(event="strategy_reload_start"),
+        )
+        self.config = new_config
+
+        # 1. Update RiskEngine
+        strategy_userrefs = {
+            cfg.name: str(cfg.userref) if cfg.userref is not None else None
+            for cfg in new_config.strategies.configs.values()
+        }
+        self.risk_engine = RiskEngine(
+            new_config.risk,
+            self.market_data,
+            self.portfolio,
+            strategy_userrefs=strategy_userrefs,
+            strategy_tags={
+                cfg.name: cfg.name for cfg in new_config.strategies.configs.values()
+            },
+        )
+
+        # 2. Update Strategies
+        # For simplicity in Phase 4/6, we re-initialize strategies if config changed
+        # or if enabled list changed.
+        registry = _strategy_registry()
+        current_strategy_ids = set(self.strategies.keys())
+        new_enabled_ids = set(new_config.strategies.enabled)
+
+        # Remove disabled strategies
+        to_remove = current_strategy_ids - new_enabled_ids
+        for sid in to_remove:
+            logger.info(
+                "Unloading disabled strategy %s",
+                sid,
+                extra=structured_log_extra(event="strategy_unload", strategy_id=sid),
+            )
+            del self.strategies[sid]
+            # Keep state history? Or clear it?
+            # Keeping state allows viewing history even if disabled.
+            if sid in self.strategy_states:
+                self.strategy_states[sid].enabled = False
+
+        # Add or update enabled strategies
+        for sid in new_enabled_ids:
+            strat_cfg = new_config.strategies.configs.get(sid)
+            if not strat_cfg:
+                logger.warning(
+                    "Enabled strategy %s missing from config definitions",
+                    sid,
+                    extra=structured_log_extra(
+                        event="strategy_config_missing", strategy_id=sid
+                    ),
+                )
+                continue
+
+            # Update state enabled flag
+            if sid not in self.strategy_states:
+                self.strategy_states[sid] = StrategyState(
+                    strategy_id=sid,
+                    enabled=True,
+                    last_intents_at=None,
+                    last_actions_at=None,
+                    current_positions=[],
+                    pnl_summary={},
+                    last_intents=None,
+                    params=dict(strat_cfg.params),
+                )
+            else:
+                self.strategy_states[sid].enabled = True
+                self.strategy_states[sid].params = dict(strat_cfg.params)
+
+            # Re-instantiate strategy to pick up new params
+            strat_class = registry.get(strat_cfg.type)
+            if not strat_class:
+                continue
+
+            try:
+                new_strategy = strat_class(strat_cfg)
+                # Ideally we check if params actually changed before re-init?
+                # But inexpensive strategies are fine to re-init.
+                self.strategies[sid] = new_strategy
+                new_strategy.warmup(self.market_data, self.portfolio)
+            except Exception as exc:  # pragma: no cover
+                logger.error(
+                    "Failed to reload strategy %s: %s",
+                    sid,
+                    exc,
+                    extra=structured_log_extra(
+                        event="strategy_reload_error", strategy_id=sid
+                    ),
+                )
+
+        logger.info(
+            "StrategyEngine reload complete",
+            extra=structured_log_extra(
+                event="strategy_reload_complete", active_count=len(self.strategies)
+            ),
+        )
+
 
 # Backwards compatibility alias
 StrategyRiskEngine = StrategyEngine
