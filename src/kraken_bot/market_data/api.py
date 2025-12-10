@@ -88,7 +88,9 @@ class MarketDataAPI:
         # 2. Start the WebSocket client
         if self._universe:
             self._ws_client = KrakenWSClientV2(
-                self._universe, timeframes=self._config.market_data.ws_timeframes
+                self._universe,
+                timeframes=self._config.market_data.ws_timeframes,
+                on_candle_closed=self._on_candle_closed,
             )
             self._ws_client.start()
             logger.info("WebSocket client started.")
@@ -106,6 +108,27 @@ class MarketDataAPI:
                         store=self._ohlc_store,
                     )
         logger.info("MarketDataAPI initialized.")
+
+    def _on_candle_closed(
+        self, pair: str, timeframe: str, candle_data: Dict[str, Any]
+    ) -> None:
+        """Callback to persist a closed candle from the WS stream."""
+        try:
+            bar = OHLCBar(
+                timestamp=int(float(candle_data["timestamp"])),
+                open=float(candle_data["open"]),
+                high=float(candle_data["high"]),
+                low=float(candle_data["low"]),
+                close=float(candle_data["close"]),
+                volume=float(candle_data["volume"]),
+            )
+            # Append to persistent store
+            self._ohlc_store.append_bars(pair, timeframe, [bar])
+            logger.debug(f"Persisted closed candle for {pair} {timeframe}")
+        except Exception as exc:
+            logger.error(
+                f"Failed to persist closed candle for {pair} {timeframe}: {exc}"
+            )
 
     def shutdown(self):
         """Gracefully shuts down the WebSocket client."""
