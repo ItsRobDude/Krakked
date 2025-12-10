@@ -133,19 +133,34 @@ def test_process_trade_sell_pnl(service):
 
 
 def test_reconciliation_drift(service):
-    # Setup internal state
+    # Setup internal state (Positions)
     pos = SpotPosition("XBTUSD", "XBT", "USD", 1.0, 50000, 0, 0)
     service.positions["XBTUSD"] = pos
 
-    # Mock Balance response
+    # Setup Ledger Balances (Source of Truth)
+    from kraken_bot.portfolio.models import AssetBalance
+
+    service.balances["XBT"] = AssetBalance("XBT", 1.0, 0.0, 1.0)
+
+    # Mock Balance response (Live)
     # Case 1: Match
+    # Live matches Ledger (1.0 XBT)
+    # Positions match Ledger (1.0 XBT)
     service.rest_client.get_private.return_value = {"XXBT": "1.0"}
     service._reconcile()
     assert not service.drift_flag
 
-    # Case 2: Drift
+    # Case 2: Live Drift (Live Balance != Ledger Balance)
     service.rest_client.get_private.return_value = {"XXBT": "0.5"}
     # Tolerance is 1.0 USD. Drift is 0.5 BTC * 50k = 25k USD.
+    service._reconcile()
+    assert service.drift_flag
+
+    # Case 3: Position Drift (Positions != Ledger Balance)
+    # Reset Live to match Ledger so we isolate Position drift
+    service.rest_client.get_private.return_value = {"XXBT": "1.0"}
+    # Change Ledger Balance to mismatch Position (Position=1.0, Ledger=2.0)
+    service.balances["XBT"].total = 2.0
     service._reconcile()
     assert service.drift_flag
 

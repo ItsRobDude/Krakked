@@ -1,4 +1,3 @@
-
 import logging
 from collections import defaultdict
 from decimal import Decimal
@@ -6,7 +5,13 @@ from typing import Dict, Iterable, Optional
 
 from kraken_bot.logging_config import structured_log_extra
 
-from .models import AssetBalance, BalanceSnapshot, CashFlowCategory, CashFlowRecord, LedgerEntry
+from .models import (
+    AssetBalance,
+    BalanceSnapshot,
+    CashFlowCategory,
+    CashFlowRecord,
+    LedgerEntry,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +51,7 @@ class BalanceEngine:
 
         # Basic sanity check if Kraken provides the resulting balance
         if e.balance is not None:
-             # Tolerance check (e.g. 1e-8)
+            # Tolerance check (e.g. 1e-8)
             if abs(computed_new - e.balance) > Decimal("0.00000001"):
                 logger.warning(
                     "Balance mismatch during replay",
@@ -87,7 +92,9 @@ def rebuild_balances(
     if snapshot:
         # Deep copy to avoid mutating snapshot
         initial_balances = {
-            k: AssetBalance(asset=v.asset, total=v.total, free=v.free, reserved=v.reserved)
+            k: AssetBalance(
+                asset=v.asset, total=v.total, free=v.free, reserved=v.reserved
+            )
             for k, v in snapshot.balances.items()
         }
         start_from_id = snapshot.last_ledger_id
@@ -150,10 +157,10 @@ def classify_cashflow(e: LedgerEntry) -> Optional[CashFlowRecord]:
     if cat:
         return CashFlowRecord(
             id=e.id,
-            time=int(e.time), # CashFlowRecord expects int timestamp
+            time=int(e.time),  # CashFlowRecord expects int timestamp
             asset=e.asset,
             amount=float(e.amount),
-            type=cat.value, # CashFlowRecord expects string type
+            type=cat.value,  # CashFlowRecord expects string type
             note=e.misc,
             # refid is not in CashFlowRecord, but maybe I should add it?
             # The prompt suggested refid in CashFlowRecord dataclass update,
