@@ -11,7 +11,8 @@ from kraken_bot.logging_config import structured_log_extra
 from kraken_bot.market_data.api import MarketDataAPI
 from kraken_bot.strategy.performance import compute_strategy_performance
 
-from .models import CashFlowRecord, PortfolioSnapshot
+from .balance_engine import classify_cashflow, rebuild_balances
+from .models import CashFlowRecord, LedgerEntry, PortfolioSnapshot
 from .portfolio import Portfolio
 from .store import PortfolioStore, SQLitePortfolioStore
 
@@ -88,16 +89,23 @@ class PortfolioService:
         if self._bootstrapped:
             return
 
+        # 1. Load latest BalanceSnapshot
+        snapshot = self.store.get_latest_balance_snapshot()
+        start_id = snapshot.last_ledger_id if snapshot else None
+
+        # 2. Load ledger entries after snapshot
+        ledgers = self.store.get_ledger_entries(after_id=start_id)
+
+        # 3. Rebuild balances
+        balances = rebuild_balances(ledgers, snapshot)
+        # We need to manually inject these balances into the portfolio
+        self.portfolio.balances = balances
+
+        # 4. Ingest trades for positions
         trades = self.store.get_trades(limit=None)
         trades.sort(key=lambda t: t.get("time", 0))
         if trades:
             self.portfolio.ingest_trades(trades, persist=False)
-
-        cash_flows = self.store.get_cash_flows(limit=None)
-        cash_flows.sort(key=lambda c: c.time)
-        for record in cash_flows:
-            # Safe internal call to rebuild balances from persisted cash flows.
-            self.portfolio.apply_cash_flow(record)
 
         self._bootstrapped = True
 
@@ -186,32 +194,95 @@ class PortfolioService:
             ]
             self.store.save_trades(normalized_trades)
 
-        # 2. Fetch Ledgers for Cash Flows
-        latest_cashflows = self.store.get_cash_flows(limit=1)
-        since_ledger = latest_cashflows[0].time if latest_cashflows else None
+        # 2. Fetch Ledgers (New Flow)
+        # Find the latest ledger entry to determine start time
+        last_entry = self.store.get_latest_ledger_entry()
+        last_ledger_time = last_entry.time if last_entry else 0
 
         ledger_params = {}
-        if since_ledger:
-            ledger_params["start"] = since_ledger
+        if last_ledger_time > 0:
+            ledger_params["start"] = last_ledger_time
 
+        # Efficient duplicate detection for boundary
+        known_ids_at_boundary = set()
+        if last_ledger_time > 0:
+            # Fetch only entries at or after the last timestamp (small window usually)
+            boundary_entries = self.store.get_ledger_entries(since=last_ledger_time)
+            known_ids_at_boundary = {e.id for e in boundary_entries}
+
+        from decimal import Decimal
         ledger_resp = self.rest_client.get_ledgers(params=ledger_params)
-        ledger_entries = ledger_resp.get("ledger", {})
+        ledger_dict = ledger_resp.get("ledger", {})
 
+        new_ledger_entries = []
         cash_flow_records = []
-        if ledger_entries:
-            try:
-                cash_flow_records = self.portfolio.ingest_cashflows(
-                    ledger_entries, persist=False
-                )
-            except Exception:  # noqa: BLE001
-                logger.exception(
-                    "portfolio.sync.ingest_cash_flows_failed",
-                    extra={"since": since_ledger, "count": len(ledger_entries)},
-                )
-                return {"new_trades": len(new_trades), "new_cash_flows": 0}
 
-            if cash_flow_records:
-                self.store.save_cash_flows(cash_flow_records)
+        if ledger_dict:
+            # Normalize and store
+            for lid, info in ledger_dict.items():
+                # info has refid, time, type, aclass, asset, amount, fee, balance
+                entry_time = info.get("time", 0.0)
+
+                # Deduplication logic
+                if entry_time < last_ledger_time:
+                    continue
+                if entry_time == last_ledger_time and lid in known_ids_at_boundary:
+                    continue
+
+                entry = LedgerEntry(
+                    id=lid,
+                    time=entry_time,
+                    type=info.get("type", ""),
+                    subtype=info.get("subtype", ""),
+                    aclass=info.get("aclass", ""),
+                    asset=self.portfolio._normalize_asset(info.get("asset", "")),
+                    amount=Decimal(str(info.get("amount", 0))),
+                    fee=Decimal(str(info.get("fee", 0))),
+                    balance=Decimal(str(info.get("balance", 0))) if info.get("balance") is not None else None,
+                    refid=info.get("refid"),
+                    misc=None, # Not always present or needs extraction
+                    raw=info
+                )
+
+                new_ledger_entries.append(entry)
+
+            # Sort by time
+            new_ledger_entries.sort(key=lambda x: (x.time, x.id))
+
+            for entry in new_ledger_entries:
+                self.store.save_ledger_entry(entry)
+
+                # Update in-memory balances
+                # We need a BalanceEngine instance that wraps self.portfolio.balances
+                # But self.portfolio.balances is a Dict[str, AssetBalance].
+                # We can reuse the one from bootstrap?
+                # Yes, but we need to update it.
+                # Let's duplicate the logic of apply_entry here or expose it in Portfolio.
+                # Portfolio class doesn't have apply_entry yet (it has apply_cash_flow).
+                # We can update self.portfolio.balances directly.
+
+                # Update Balance
+                # bal = self.portfolio.balances.get(entry.asset, AssetBalance(entry.asset, 0, 0, 0))
+                # ... logic ...
+                # Easier: use BalanceEngine on the live dict?
+                # BalanceEngine takes a dict in constructor.
+                # engine = BalanceEngine(self.portfolio.balances)
+                # engine.apply_entry(entry)
+                # This works because BalanceEngine modifies the dict in place?
+                # BalanceEngine.__init__ copies reference? "self.balances = initial_balances"
+                # Yes.
+                # So:
+                from .balance_engine import BalanceEngine
+                engine = BalanceEngine(self.portfolio.balances)
+                engine.apply_entry(entry)
+
+                # Classify and record Cash Flow (but do NOT apply to portfolio balances again, as engine.apply_entry did it)
+                cf = classify_cashflow(entry)
+                if cf:
+                    cash_flow_records.append(cf)
+
+        if cash_flow_records:
+            self.store.save_cash_flows(cash_flow_records)
 
         # 3. Reconcile
         self._reconcile()
@@ -224,8 +295,25 @@ class PortfolioService:
 
     def _reconcile(self):
         """Fetch live balances and flag drift."""
-        balance_resp = self.rest_client.get_private("Balance")
+        try:
+            balance_resp = self.rest_client.get_private("Balance")
+        except Exception: # noqa: BLE001
+            # Offline mode: use local balances
+            logger.warning(
+                "Failed to fetch live balance. Using local ledger balances.",
+                extra=structured_log_extra(event="portfolio_offline_mode"),
+            )
+            # Drift is not checked since we have no source of truth
+            # But we can still report status
+            return
+
         drift_detected = self.portfolio.reconcile(balance_resp)
+
+        # Additional: Compare Ledger Balances vs Live Balances
+        # self.portfolio.balances IS the ledger balance now.
+        # self.portfolio.reconcile compares self.balances vs API.
+        # So it ALREADY does exactly what we want: verify ledger vs live.
+
         if drift_detected:
             logger.warning(
                 "Portfolio Drift Detected during reconciliation.",

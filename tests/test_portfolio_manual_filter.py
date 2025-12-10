@@ -77,6 +77,41 @@ class InMemoryStore(PortfolioStore):
     def get_execution_results(self, limit: int = 10):
         return getattr(self, "execution_results", [])[:limit]
 
+    def save_ledger_entry(self, entry):
+        ledgers = getattr(self, "ledger_entries", [])
+        ledgers.append(entry)
+        self.ledger_entries = ledgers
+
+    def get_ledger_entries(self, after_id=None, limit=None, since=None):
+        entries = getattr(self, "ledger_entries", [])
+        # Naive implementation: assume sorted insertion or don't care about order for basic tests
+        if since:
+            entries = [e for e in entries if e.time >= since]
+        if after_id:
+            # Find index
+            try:
+                idx = next(i for i, e in enumerate(entries) if e.id == after_id)
+                entries = entries[idx + 1 :]
+            except StopIteration:
+                pass  # or empty?
+        if limit:
+            entries = entries[:limit]
+        return entries
+
+    def get_all_ledger_entries(self):
+        return getattr(self, "ledger_entries", [])
+
+    def get_latest_ledger_entry(self):
+        entries = getattr(self, "ledger_entries", [])
+        return entries[-1] if entries else None
+
+    def save_balance_snapshot(self, snapshot):
+        self.balance_snapshots = getattr(self, "balance_snapshots", []) + [snapshot]
+
+    def get_latest_balance_snapshot(self):
+        snaps = getattr(self, "balance_snapshots", [])
+        return snaps[-1] if snaps else None
+
     def record_ml_example(
         self,
         strategy_id: str,

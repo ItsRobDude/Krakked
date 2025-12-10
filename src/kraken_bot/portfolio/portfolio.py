@@ -267,39 +267,75 @@ class Portfolio:
     # Equity & reconciliation
     # ------------------------------------------------------------------
     def reconcile(self, live_balances: Dict[str, str]) -> bool:
-        """Reconcile live balances and flag drift based on the configured tolerance."""
+        """Reconcile live balances and flag drift based on the configured tolerance.
 
-        self.balances = {
-            self._normalize_asset(asset): AssetBalance(
-                asset=self._normalize_asset(asset),
-                free=float(amount),
-                reserved=0.0,
-                total=float(amount),
-            )
-            for asset, amount in live_balances.items()
-        }
+        This method compares the local ledger-based balances (self.balances) with
+        the live balances reported by the API. It also compares the positions (from trades)
+        against the local balances.
+        """
+
+        # 1. Compare Ledger (self.balances) vs Live (live_balances)
+        live_assets = set()
+        drift_detected = False
+
+        # We use a tolerance for comparison
+        tolerance_base = self.config.reconciliation_tolerance
+
+        # Helper to convert drift to base currency
+        def to_base(amt, asset):
+            return self._convert_to_base_currency(amt, asset).value_base
+
+        for asset_raw, amount_str in live_balances.items():
+            asset = self._normalize_asset(asset_raw)
+            live_assets.add(asset)
+
+            live_qty = float(amount_str)
+
+            # Local ledger balance
+            local_bal = self.balances.get(asset, AssetBalance(asset, 0.0, 0.0, 0.0)).total
+
+            diff_qty = abs(live_qty - local_bal)
+            diff_val = to_base(diff_qty, asset)
+
+            if diff_val > tolerance_base:
+                drift_detected = True
+                # Log happens in manager, but we could add detailed mismatch info here?
+                # For now, we rely on the returned DriftStatus which we populate below.
+
+        # Check for assets in local but not in live (implying 0 live)
+        for asset, bal in self.balances.items():
+            if asset not in live_assets and bal.total > 0:
+                 # Check value
+                 val = to_base(bal.total, asset)
+                 if val > tolerance_base:
+                     drift_detected = True
+
+        # 2. Compare Positions (Trades) vs Ledger Balances (self.balances)
+        # This is the "internal consistency" check.
 
         position_totals: DefaultDict[str, float] = defaultdict(float)
         for position in self.positions.values():
             position_totals[position.base_asset] += position.base_size
 
-        drift_detected = False
         mismatched_assets: List[DriftMismatchedAsset] = []
         expected_position_value_base = 0.0
         actual_balance_value_base = 0.0
+
         for asset, pos_total in position_totals.items():
             balance_total = self.balances.get(
                 asset, AssetBalance(asset, 0.0, 0.0, 0.0)
             ).total
+
             diff_qty = abs(pos_total - balance_total)
-            diff_value = self._convert_to_base_currency(diff_qty, asset).value_base
-            expected_position_value_base += self._convert_to_base_currency(
-                pos_total, asset
-            ).value_base
-            actual_balance_value_base += self._convert_to_base_currency(
-                balance_total, asset
-            ).value_base
-            if diff_value > self.config.reconciliation_tolerance:
+            diff_value = to_base(diff_qty, asset)
+
+            expected_position_value_base += to_base(pos_total, asset)
+            actual_balance_value_base += to_base(balance_total, asset)
+
+            if diff_value > tolerance_base:
+                # This flags "Trades vs Ledger" drift
+                # We count this as drift_detected too, or separate?
+                # existing logic combined them.
                 drift_detected = True
                 mismatched_assets.append(
                     DriftMismatchedAsset(
@@ -315,7 +351,7 @@ class Portfolio:
             drift_flag=drift_detected,
             expected_position_value_base=expected_position_value_base,
             actual_balance_value_base=actual_balance_value_base,
-            tolerance_base=self.config.reconciliation_tolerance,
+            tolerance_base=tolerance_base,
             mismatched_assets=mismatched_assets,
         )
         return drift_detected
@@ -525,7 +561,7 @@ class Portfolio:
             for timeframe in dict.fromkeys(timeframes):
                 try:
                     bars = get_ohlc(pair, timeframe, 1)
-                    if bars:
+                    if isinstance(bars, Sequence) and bars:
                         last_bar = bars[-1]
                         return float(last_bar.close)
                 except Exception:

@@ -295,6 +295,7 @@ def run_migrations(
         4: migrate_4_to_5,
         5: migrate_5_to_6,
         6: migrate_6_to_7,
+        7: migrate_7_to_8,
     }
 
     for version in range(from_version, to_version):
@@ -306,3 +307,42 @@ def run_migrations(
 
         migrate(conn)
         _set_schema_version(conn, version + 1)
+
+def migrate_7_to_8(conn: sqlite3.Connection) -> None:
+    """Add ledger entries and balance snapshots tables."""
+    cursor = conn.cursor()
+
+    # Ledger Entries Table
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS ledger_entries (
+            id TEXT PRIMARY KEY,
+            time REAL,
+            type TEXT,
+            subtype TEXT,
+            aclass TEXT,
+            asset TEXT,
+            amount REAL,
+            fee REAL,
+            balance REAL,
+            refid TEXT,
+            misc TEXT,
+            raw_json TEXT
+        )
+        """
+    )
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_ledger_entries_time ON ledger_entries(time)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_ledger_entries_refid ON ledger_entries(refid)")
+
+    # Balance Snapshots Table
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS balance_snapshots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            time REAL,
+            last_ledger_id TEXT,
+            balances_json TEXT
+        )
+        """
+    )
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_balance_snapshots_time ON balance_snapshots(time)")
