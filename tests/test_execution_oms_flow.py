@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from kraken_bot.config import ExecutionConfig
-from kraken_bot.execution.adapter import PaperExecutionAdapter
+from kraken_bot.execution.adapter import DryRunExecutionAdapter
 from kraken_bot.execution.models import LocalOrder
 from kraken_bot.execution.oms import ExecutionService
 from kraken_bot.market_data.models import PairMetadata
@@ -316,7 +316,7 @@ def test_execute_plan_allows_fresh_plan_with_ttl(inactive_risk_status):
 
 def test_refresh_open_orders_updates_tracked_orders(inactive_risk_status):
     client = MagicMock()
-    adapter = PaperExecutionAdapter()
+    adapter = DryRunExecutionAdapter()
     adapter.client = client
     service = ExecutionService(
         adapter=adapter,
@@ -358,7 +358,7 @@ def test_refresh_open_orders_updates_tracked_orders(inactive_risk_status):
 
 def test_reconcile_orders_closes_and_updates_local_order(inactive_risk_status):
     client = MagicMock()
-    adapter = PaperExecutionAdapter()
+    adapter = DryRunExecutionAdapter()
     adapter.client = client
     service = ExecutionService(
         adapter=adapter,
@@ -460,7 +460,7 @@ def test_execute_plan_applies_slippage_from_market_data_for_buy_and_sell(
     inactive_risk_status,
 ):
     config = ExecutionConfig(max_slippage_bps=100, validate_only=True)
-    adapter = PaperExecutionAdapter(config=config)
+    adapter = DryRunExecutionAdapter(config=config)
     market_data = _market_data(mid_price=100.0)
     service = ExecutionService(
         adapter=adapter,
@@ -484,7 +484,7 @@ def test_execute_plan_applies_slippage_from_market_data_for_buy_and_sell(
 
 
 def test_execute_plan_records_warning_when_market_data_missing(inactive_risk_status):
-    adapter = PaperExecutionAdapter(config=ExecutionConfig(validate_only=True))
+    adapter = DryRunExecutionAdapter(config=ExecutionConfig(validate_only=True))
     market_data = MagicMock()
     market_data.get_best_bid_ask.return_value = None
     service = ExecutionService(

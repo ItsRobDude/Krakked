@@ -36,6 +36,15 @@ class ExecutionAdapter(Protocol):
 
 
 class KrakenExecutionAdapter:
+    """Adapter for live and paper execution against the Kraken API.
+
+    Handles:
+      - Live execution: Real orders with ``validate=0`` (if allowed).
+      - Paper execution: Validation calls with ``validate=1``.
+      - Retry logic, backoff, and error mapping.
+      - Dead-man switch heartbeat handling.
+    """
+
     def __init__(
         self, client: KrakenRESTClient, config: Optional[ExecutionConfig] = None
     ):
@@ -322,13 +331,21 @@ class KrakenExecutionAdapter:
             raise OrderCancelError("; ".join(errors))
 
 
-class PaperExecutionAdapter:
+class DryRunExecutionAdapter:
+    """Offline execution adapter for dry-run mode.
+
+    Performs NO network calls to Kraken. It validates local constraints (e.g. min
+    order volume) and marks orders as 'validated' (if validate_only=True) or
+    'filled' (if acting as a mock).
+    """
+
     def __init__(
         self,
         config: Optional[ExecutionConfig] = None,
         rate_limiter: Optional[RateLimiter] = None,
     ):
         self.config = config or ExecutionConfig()
+        # Initialize client but do NOT use it for network calls.
         self.client: Optional[KrakenRESTClient] = KrakenRESTClient(
             rate_limiter=rate_limiter
         )
@@ -387,7 +404,7 @@ class PaperExecutionAdapter:
             order.status = "validated"
             return order
 
-        order.kraken_order_id = order.kraken_order_id or f"paper-{order.local_id}"
+        order.kraken_order_id = order.kraken_order_id or f"dry-{order.local_id}"
         order.status = "filled"
         order.cumulative_base_filled = order.requested_base_size
         order.avg_fill_price = price_for_notional
@@ -396,6 +413,7 @@ class PaperExecutionAdapter:
             "txid": [order.kraken_order_id],
             "filled": order.cumulative_base_filled,
             "avg_fill_price": order.avg_fill_price,
+            "dry_run": True,
         }
         return order
 
@@ -407,6 +425,11 @@ class PaperExecutionAdapter:
 
 
 class SimulationExecutionAdapter:
+    """Internal simulation adapter for backtesting or integration tests.
+
+    Provides a callback hook for fill logic.
+    """
+
     def __init__(
         self,
         config: Optional[ExecutionConfig] = None,
@@ -457,12 +480,34 @@ def get_execution_adapter(
     config: ExecutionConfig,
     rate_limiter: Optional[RateLimiter] = None,
 ) -> ExecutionAdapter:
+    """Factory to create the appropriate execution adapter.
+
+    Mapping:
+      - mode='live'     -> KrakenExecutionAdapter (real orders)
+      - mode='paper'    -> KrakenExecutionAdapter (validate-only orders)
+      - mode='dry_run'  -> DryRunExecutionAdapter (offline)
+      - mode='simulation' -> SimulationExecutionAdapter (with callback hooks)
+
+    Default fall-through for unknown modes is DryRunExecutionAdapter.
+    """
     if config.mode == "live":
         if client is None:
             raise ExecutionError("Live execution requires a KrakenRESTClient")
         return KrakenExecutionAdapter(client=client, config=config)
 
+    if config.mode == "paper":
+        if client is None:
+            # Paper mode now requires a client for validation calls.
+            # If strictly no client is available, one might fall back to dry-run,
+            # but that masks the user intent of 'paper' (verify with Kraken).
+            # We raise an error to enforce proper setup.
+            raise ExecutionError(
+                "Paper execution mode requires a KrakenRESTClient for validation calls."
+            )
+        return KrakenExecutionAdapter(client=client, config=config)
+
     if config.mode == "simulation":
         return SimulationExecutionAdapter(config=config)
 
-    return PaperExecutionAdapter(config=config, rate_limiter=rate_limiter)
+    # mode='dry_run' or any other string defaults to offline/dry-run behavior.
+    return DryRunExecutionAdapter(config=config, rate_limiter=rate_limiter)

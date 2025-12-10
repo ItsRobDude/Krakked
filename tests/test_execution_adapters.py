@@ -5,7 +5,10 @@ import pytest
 
 from kraken_bot.config import ExecutionConfig
 from kraken_bot.connection.exceptions import RateLimitError, ServiceUnavailableError
-from kraken_bot.execution.adapter import KrakenExecutionAdapter, PaperExecutionAdapter
+from kraken_bot.execution.adapter import (
+    DryRunExecutionAdapter,
+    KrakenExecutionAdapter,
+)
 from kraken_bot.execution.exceptions import ExecutionError, OrderRejectedError
 from kraken_bot.execution.models import LocalOrder
 from kraken_bot.execution.oms import ExecutionService
@@ -58,8 +61,38 @@ def _pair_metadata(pair: str = "XBTUSD") -> PairMetadata:
     )
 
 
-def test_execution_service_uses_paper_adapter_for_paper_mode(inactive_risk_status):
+def test_execution_service_uses_kraken_adapter_for_paper_mode(inactive_risk_status):
     config = ExecutionConfig(mode="paper", validate_only=False)
+    client = MagicMock()
+    # Paper mode validates the order (returns no error) but no txid if validate=1
+    client.add_order.return_value = {"error": []}
+    market_data = MagicMock()
+    market_data.get_best_bid_ask.return_value = {"bid": 30.0, "ask": 30.0}
+    market_data.get_pair_metadata_or_raise.side_effect = lambda pair: _pair_metadata(
+        pair
+    )
+
+    service = ExecutionService(
+        config=config,
+        client=client,
+        market_data=market_data,
+        risk_status_provider=inactive_risk_status,
+    )
+
+    assert isinstance(service.adapter, KrakenExecutionAdapter)
+
+    plan = _plan(_action("XBTUSD"))
+    result = service.execute_plan(plan)
+
+    assert result.success
+    # In validate-only mode (implied by paper), status is "validated"
+    assert result.orders[0].status == "validated"
+    client.add_order.assert_called_once()
+    assert result.orders[0].raw_request["validate"] == 1
+
+
+def test_execution_service_uses_dry_run_adapter_for_dry_run_mode(inactive_risk_status):
+    config = ExecutionConfig(mode="dry_run", validate_only=False)
     client = MagicMock()
     market_data = MagicMock()
     market_data.get_best_bid_ask.return_value = {"bid": 30.0, "ask": 30.0}
@@ -74,7 +107,7 @@ def test_execution_service_uses_paper_adapter_for_paper_mode(inactive_risk_statu
         risk_status_provider=inactive_risk_status,
     )
 
-    assert isinstance(service.adapter, PaperExecutionAdapter)
+    assert isinstance(service.adapter, DryRunExecutionAdapter)
 
     plan = _plan(_action("XBTUSD"))
     result = service.execute_plan(plan)
@@ -107,7 +140,7 @@ def test_execution_service_uses_kraken_adapter_for_live_mode(inactive_risk_statu
     plan = _plan(_action("XBTUSD", price=25.0))
     result = service.execute_plan(plan)
 
-    assert result.orders[0].status in {"open", "validated"}
+    assert result.orders[0].status == "open"
     client.add_order.assert_called_once()
 
 
