@@ -20,6 +20,8 @@ logger = logging.getLogger(__name__)
 
 
 class ExecutionAdapter(Protocol):
+    """Protocol defining the interface for execution adapters."""
+
     client: Optional[KrakenRESTClient]
     config: ExecutionConfig
 
@@ -28,11 +30,48 @@ class ExecutionAdapter(Protocol):
         order: LocalOrder,
         pair_metadata: PairMetadata,
         latest_price: Optional[float] = None,
-    ) -> LocalOrder: ...
+    ) -> LocalOrder:
+        """
+        Submit an order for execution.
 
-    def cancel_order(self, order: LocalOrder) -> None: ...
+        Depending on the adapter implementation and configuration, this may:
+        - Send a live order to Kraken (Live mode)
+        - Send a validate-only order to Kraken (Paper mode)
+        - Simulate an order fill locally (Dry Run / Simulation)
 
-    def cancel_all_orders(self) -> None: ...
+        Args:
+            order: The local order object containing order details.
+            pair_metadata: Metadata for the trading pair (min size, decimals, etc.).
+            latest_price: Optional latest known price for notional calculations.
+
+        Returns:
+            The updated LocalOrder object with status, IDs, and any errors.
+        """
+        ...
+
+    def cancel_order(self, order: LocalOrder) -> None:
+        """
+        Cancel a specific order.
+
+        Args:
+            order: The local order object to cancel. Must have a kraken_order_id
+                   if canceling a live/paper order.
+
+        Raises:
+            OrderCancelError: If cancellation fails.
+        """
+        ...
+
+    def cancel_all_orders(self) -> None:
+        """
+        Cancel all open orders for the account.
+
+        This acts as a "panic" button to clear all working orders.
+
+        Raises:
+            OrderCancelError: If the bulk cancellation fails.
+        """
+        ...
 
 
 class KrakenExecutionAdapter:
@@ -70,8 +109,14 @@ class KrakenExecutionAdapter:
         latest_price: Optional[float] = None,
     ) -> LocalOrder:
         """
-        Prepare and submit an order to Kraken. The payload construction is delegated
-        to routing helpers and the actual REST call is handled here.
+        Prepare and submit an order to Kraken.
+
+        The payload construction is delegated to routing helpers and the actual
+        REST call is handled here. Validates volume and notional constraints
+        before submission.
+
+        In 'paper' mode (or validate_only=True), the order is sent with validate=True.
+        In 'live' mode, the order is executed if allow_live_trading is enabled.
         """
         payload: Dict[str, Any] = build_order_payload(order, self.config, pair_metadata)
         order.raw_request = payload
@@ -303,7 +348,13 @@ class KrakenExecutionAdapter:
         raise ExecutionError(order.last_error)
 
     def cancel_order(self, order: LocalOrder) -> None:
-        """Cancel a single order identified by its Kraken order id."""
+        """
+        Cancel a single order identified by its Kraken order id.
+
+        Raises:
+            ExecutionError: If the order has no Kraken order ID.
+            OrderCancelError: If the API call fails or returns errors.
+        """
         if not order.kraken_order_id:
             raise ExecutionError("Cannot cancel order without a Kraken order id")
 
@@ -355,6 +406,13 @@ class DryRunExecutionAdapter:
         pair_metadata: PairMetadata,
         latest_price: Optional[float] = None,
     ) -> LocalOrder:
+        """
+        Simulate order submission without network calls.
+
+        Validates local constraints (min size, min notional) and immediately
+        fills the order at the requested price (or latest price) if successful.
+        If validate_only is True, marks as 'validated' instead of 'filled'.
+        """
         payload: Dict[str, Any] = build_order_payload(order, self.config, pair_metadata)
         order.raw_request = payload
 
@@ -417,9 +475,11 @@ class DryRunExecutionAdapter:
         return order
 
     def cancel_order(self, order: LocalOrder) -> None:
+        """Locally mark the order as canceled."""
         order.status = "canceled"
 
     def cancel_all_orders(self) -> None:
+        """No-op for dry run adapter as there is no remote state to clear."""
         return None
 
 
@@ -444,6 +504,13 @@ class SimulationExecutionAdapter:
         pair_metadata: PairMetadata,
         latest_price: Optional[float] = None,
     ) -> LocalOrder:
+        """
+        Submit a simulated order.
+
+        Immediately fills the order and triggers the configured fill callback.
+        Useful for backtesting or integration tests where deterministic behavior
+        is required.
+        """
         price = order.requested_price
         order.kraken_order_id = order.kraken_order_id or f"sim-{order.local_id}"
         order.status = "filled"
@@ -467,10 +534,12 @@ class SimulationExecutionAdapter:
         return order
 
     def cancel_order(self, order: LocalOrder) -> None:
+        """Locally mark the order as canceled and update timestamp."""
         order.status = "canceled"
         order.updated_at = datetime.now(UTC)
 
     def cancel_all_orders(self) -> None:
+        """No-op for simulation adapter."""
         return None
 
 
