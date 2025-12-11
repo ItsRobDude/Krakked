@@ -23,6 +23,8 @@ from typing import (
     cast,
 )
 
+from decimal import Decimal, ROUND_FLOOR, ROUND_HALF_UP
+
 from kraken_bot.config import PortfolioConfig
 from kraken_bot.market_data.api import MarketDataAPI
 from kraken_bot.portfolio.models import (
@@ -82,18 +84,26 @@ class Portfolio:
         self._last_snapshot_ts: int = 0
 
     def _round_vol(self, pair: str, vol: float) -> float:
-        """Round volume to the pair's configured lot decimals."""
+        """Round volume to the pair's configured lot decimals using ROUND_FLOOR."""
         try:
             meta = self.market_data.get_pair_metadata(pair)
-            return round(vol, meta.volume_decimals)
+            d_vol = Decimal(str(vol))
+            quantizer = Decimal("1." + "0" * meta.volume_decimals)
+            return float(d_vol.quantize(quantizer, rounding=ROUND_FLOOR))
         except Exception:
+            # Fallback for missing metadata:
+            # If it's effectively zero (float error), snap it.
+            if vol < 1e-9:
+                return 0.0
             return vol
 
     def _round_price(self, pair: str, price: float) -> float:
-        """Round price to the pair's configured price decimals."""
+        """Round price to the pair's configured price decimals using ROUND_HALF_UP."""
         try:
             meta = self.market_data.get_pair_metadata(pair)
-            return round(price, meta.price_decimals)
+            d_price = Decimal(str(price))
+            quantizer = Decimal("1." + "0" * meta.price_decimals)
+            return float(d_price.quantize(quantizer, rounding=ROUND_HALF_UP))
         except Exception:
             return price
 
@@ -218,9 +228,11 @@ class Portfolio:
             pnl_base = pnl_conversion.value_base - fee_in_base
             position.realized_pnl_base += pnl_base
             self.realized_pnl_base_by_pair[pair] += pnl_base
-            position.base_size = self._round_vol(
-                pair, max(0.0, position.base_size - vol)
-            )
+
+            # Use max(0.0, ...) combined with _round_vol to safely close positions
+            raw_new_size = max(0.0, position.base_size - vol)
+            position.base_size = self._round_vol(pair, raw_new_size)
+
             self.realized_pnl_history.append(
                 RealizedPnLRecord(
                     trade_id=trade.get("id", ""),

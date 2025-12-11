@@ -2,79 +2,76 @@
 from unittest.mock import MagicMock
 from kraken_bot.portfolio.portfolio import Portfolio
 
-def test_portfolio_rounding_handles_dust():
+def test_portfolio_rounding_handles_dust_and_flooring():
     """
-    Test that the portfolio logic correctly rounds floating point dust
-    when closing a position completely.
+    Test that the portfolio logic correctly handles:
+    1. ROUND_FLOOR for volumes (avoiding overestimation).
+    2. Snap-to-zero for phantom dust via Decimal quantization.
+    3. Negative dust drift is clamped to zero (e.g. 1.0 - 1.0 = -1e-17).
     """
-    # Mock Config
     mock_config = MagicMock()
     mock_config.valuation_pairs = {}
     mock_config.base_currency = "USD"
 
-    # Mock MarketData
     mock_market_data = MagicMock()
-    # Setup BTCUSD metadata with 8 decimal places for volume
     meta = MagicMock()
     meta.canonical = "XBTUSD"
-    meta.base = "XBT"
-    meta.quote = "USD"
-    meta.volume_decimals = 8
+    meta.volume_decimals = 8  # BTC Standard
     meta.price_decimals = 2
     mock_market_data.get_pair_metadata.return_value = meta
-
-    # Setup price for valuation (not strictly needed for size logic but used in flow)
     mock_market_data.get_latest_price.return_value = 50000.0
-
-    # Mock Store
-    mock_store = MagicMock()
 
     portfolio = Portfolio(
         config=mock_config,
         market_data=mock_market_data,
-        store=mock_store
+        store=MagicMock()
     )
 
-    # 1. Buy 1.00000001 BTC
-    # Using a float that might introduce representation error if we weren't careful,
-    # though 1.00000001 is usually fine. Let's try to construct a case or just trust the logic.
-    # The key test is: does it round?
-
-    buy_vol = 1.00000001
-    buy_trade = {
-        "pair": "XBTUSD",
-        "type": "buy",
-        "price": "50000.0",
-        "vol": str(buy_vol),
-        "cost": str(buy_vol * 50000.0),
-        "time": 1000,
-        "ordertxid": "ord1"
-    }
-    portfolio._process_trade(buy_trade)
+    # 1. Test ROUND_FLOOR
+    # If we buy 1.000000019, it should truncate to 1.00000001 (8 decimals)
+    # Standard round() would make this 1.00000002
+    buy_vol = 1.000000019
+    portfolio._process_trade({
+        "pair": "XBTUSD", "type": "buy", "price": "50000.0",
+        "vol": str(buy_vol), "cost": "50000.0", "time": 1000, "ordertxid": "ord1"
+    })
 
     pos = portfolio.get_position("XBTUSD")
+    # Verify flooring behavior
     assert pos.base_size == 1.00000001
 
-    # 2. Sell exactly that amount.
-    # In pure float math, 1.00000001 - 1.00000001 is usually 0.0, but let's try a case that drifts.
-    # E.g. 0.3 can be tricky.
+    # 2. Test Phantom Dust / Snap-to-Zero (Positive Drift)
+    # We hold 1.00000001. We sell 1.00000001.
+    # In float math, this might leave positive dust.
+    sell_vol = 1.00000001
 
-    sell_trade = {
-        "pair": "XBTUSD",
-        "type": "sell",
-        "price": "55000.0",
-        "vol": str(buy_vol),
-        "cost": str(buy_vol * 55000.0),
-        "time": 2000,
-        "ordertxid": "ord2"
-    }
+    # Manually inject a tiny positive float error into the position before selling
+    pos.base_size = 1.0000000100000005
 
-    # We expect _process_trade to subtract and then ROUND.
-    # If we manually injected dust, say:
-    portfolio.positions["XBTUSD"].base_size = 1.0000000100000002  # tiny dust
+    portfolio._process_trade({
+        "pair": "XBTUSD", "type": "sell", "price": "55000.0",
+        "vol": str(sell_vol), "cost": "55000.0", "time": 2000, "ordertxid": "ord2"
+    })
 
-    portfolio._process_trade(sell_trade)
+    # Verify snap-to-zero
+    assert pos.base_size == 0.0
 
-    pos = portfolio.get_position("XBTUSD")
-    # With rounding (8 decimals), 0.0000000000000002 should become 0.0
+    # 3. Test Negative Dust / Safety Clamp
+    # Simulate a case where floating point subtraction yields a negative tiny number.
+    # e.g. 1.0 - 1.0000000000000002 -> -2e-16
+    # We want max(0.0, ...) to catch this before flooring.
+
+    # Reset position to exactly 1.0
+    pos.base_size = 1.0
+
+    # Sell exactly 1.0, but we'll simulate the position being ever-so-slightly less than 1.0 internally
+    # due to previous float math, or we sell slightly more than we think we have (e.g. rounding diffs).
+    # Let's just simulate the internal state being slightly "under" what we are selling.
+    pos.base_size = 0.9999999999999999  # Effectively 1.0 but float < 1.0
+
+    portfolio._process_trade({
+        "pair": "XBTUSD", "type": "sell", "price": "55000.0",
+        "vol": "1.0", "cost": "55000.0", "time": 3000, "ordertxid": "ord3"
+    })
+
     assert pos.base_size == 0.0
