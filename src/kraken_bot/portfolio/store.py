@@ -24,8 +24,6 @@ from .models import (
 )
 
 if TYPE_CHECKING:
-    from decimal import Decimal
-
     from kraken_bot.execution.models import ExecutionResult, LocalOrder
     from kraken_bot.strategy.models import DecisionRecord, ExecutionPlan
 
@@ -905,8 +903,6 @@ class SQLitePortfolioStore(PortfolioStore):
         ]
 
     def save_ledger_entry(self, entry: LedgerEntry):
-        from decimal import Decimal
-
         with self._lock:
             conn = self._get_conn()
             try:

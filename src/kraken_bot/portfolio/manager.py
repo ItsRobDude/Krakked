@@ -240,7 +240,7 @@ class PortfolioService:
                     fee=Decimal(str(info.get("fee", 0))),
                     balance=Decimal(str(info.get("balance", 0))) if info.get("balance") is not None else None,
                     refid=info.get("refid"),
-                    misc=None, # Not always present or needs extraction
+                    misc=None,  # Not always present or needs extraction
                     raw=info
                 )
 
@@ -297,7 +297,7 @@ class PortfolioService:
         """Fetch live balances and flag drift."""
         try:
             balance_resp = self.rest_client.get_private("Balance")
-        except Exception: # noqa: BLE001
+        except Exception:  # noqa: BLE001
             # Offline mode: use local balances
             logger.warning(
                 "Failed to fetch live balance. Using local ledger balances.",

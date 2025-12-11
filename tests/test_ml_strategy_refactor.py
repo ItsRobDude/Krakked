@@ -8,7 +8,6 @@ from kraken_bot.config import StrategyConfig
 from kraken_bot.strategy.strategies.ml_strategy import AIPredictorStrategy
 from kraken_bot.strategy.strategies.ml_regression_strategy import AIRegressionStrategy
 from kraken_bot.strategy.base import StrategyContext
-from kraken_bot.market_data.models import OHLCBar
 
 @dataclass
 class MockBar:
@@ -65,7 +64,7 @@ def mock_ctx():
 
 def test_extract_training_example(strategy, mock_ctx):
     start_ts = 1000000
-    prices = [100.0 + i for i in range(10)] # 100..109
+    prices = [100.0 + i for i in range(10)]  # 100..109
     bars = _make_bars(start_ts, prices)
     mock_ctx.market_data.get_ohlc.return_value = bars
 
@@ -122,7 +121,7 @@ def test_generate_intents_trains_and_predicts(strategy, mock_ctx):
 def test_regression_extract_training_example(regression_strategy, mock_ctx):
     # Regression label is (Close(T) - Close(T-1)) / Close(T-1)
     start_ts = 1000000
-    prices = [100.0] * 8 + [100.0, 110.0] # T-1=100, T=110. Return = 0.1
+    prices = [100.0] * 8 + [100.0, 110.0]  # T-1=100, T=110. Return = 0.1
     bars = _make_bars(start_ts, prices)
     mock_ctx.market_data.get_ohlc.return_value = bars
 

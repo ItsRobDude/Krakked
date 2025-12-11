@@ -1,8 +1,6 @@
 
-import pytest
 from unittest.mock import MagicMock
 from kraken_bot.portfolio.portfolio import Portfolio
-from kraken_bot.portfolio.models import SpotPosition
 
 def test_portfolio_rounding_handles_dust():
     """
@@ -73,7 +71,7 @@ def test_portfolio_rounding_handles_dust():
 
     # We expect _process_trade to subtract and then ROUND.
     # If we manually injected dust, say:
-    portfolio.positions["XBTUSD"].base_size = 1.0000000100000002 # tiny dust
+    portfolio.positions["XBTUSD"].base_size = 1.0000000100000002  # tiny dust
 
     portfolio._process_trade(sell_trade)
 

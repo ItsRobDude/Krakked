@@ -1,8 +1,7 @@
 
-import pytest
 from unittest.mock import MagicMock
 from kraken_bot.portfolio.portfolio import Portfolio
-from kraken_bot.portfolio.models import SpotPosition, AssetBalance
+from kraken_bot.portfolio.models import AssetBalance
 
 def test_pnl_consistency_buy_fees():
     """
@@ -63,7 +62,7 @@ def test_pnl_consistency_buy_fees():
     }
 
     # Update balances manually to simulate the trade effect on cash/asset
-    portfolio.balances["USD"].total -= 101.0 # 100 cost + 1 fee
+    portfolio.balances["USD"].total -= 101.0  # 100 cost + 1 fee
     portfolio.balances["USD"].free -= 101.0
     portfolio.balances["XBT"] = AssetBalance(asset="XBT", free=1.0, reserved=0.0, total=1.0)
 
@@ -76,8 +75,7 @@ def test_pnl_consistency_buy_fees():
     final_equity = portfolio.equity_view().equity_base
     assert final_equity == 999.0
 
-    equity_delta = final_equity - initial_equity # -1.0
-
+    equity_delta = final_equity - initial_equity  # -1.0
     # Check PnL
     # Unrealized: (Current Price 100 - Avg Entry 100) * 1 = 0.0
     # Realized: Should be -1.0 (the fee)

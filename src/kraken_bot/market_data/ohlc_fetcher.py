@@ -1,7 +1,6 @@
 # src/kraken_bot/market_data/ohlc_fetcher.py
 
 import logging
-import time
 from typing import Any, Dict, List, Optional
 
 from kraken_bot.config import OHLCBar, PairMetadata

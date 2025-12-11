@@ -128,7 +128,6 @@ class KrakenExecutionAdapter:
 
         if self.config.dead_man_switch_seconds > 0:
             if live_trading_allowed:
-                payload["expiretm"] = f"+{self.config.dead_man_switch_seconds}"
                 if hasattr(self.client, "cancel_all_orders_after"):
                     try:
                         self.client.cancel_all_orders_after(

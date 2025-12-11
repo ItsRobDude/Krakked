@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import List, Sequence, Tuple
+from typing import List, Optional, Sequence, Tuple
 
 from kraken_bot.portfolio.manager import PortfolioService
 from kraken_bot.strategy.base import StrategyContext

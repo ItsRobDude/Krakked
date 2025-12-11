@@ -8,7 +8,6 @@ from typing import List, Optional, Tuple
 
 from kraken_bot.config import StrategyConfig
 from kraken_bot.market_data.api import MarketDataAPI
-from kraken_bot.market_data.exceptions import DataStaleError
 from kraken_bot.portfolio.manager import PortfolioService
 from kraken_bot.strategy.base import Strategy, StrategyContext
 from kraken_bot.strategy.ml_models import PassiveAggressiveClassifier
@@ -87,7 +86,7 @@ class AIPredictorStrategy(Strategy):
 
         if loaded is not None:
             restored_model, updated_at = loaded
-            if restored_model is not None:
+            if isinstance(restored_model, PassiveAggressiveClassifier):
                 self.model = restored_model
                 self.model_initialized = True
 
@@ -176,7 +175,7 @@ class AIPredictorStrategy(Strategy):
             if bars_missed <= 0:
                 return
 
-            lookback = min(bars_missed + 5, 500) # Cap at 500 bars catch-up
+            lookback = min(bars_missed + 5, 500)  # Cap at 500 bars catch-up
 
             for pair in pairs:
                 # Get history covering the gap
