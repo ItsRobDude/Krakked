@@ -11,7 +11,7 @@ from kraken_bot.logging_config import structured_log_extra
 from kraken_bot.market_data.api import MarketDataAPI
 from kraken_bot.strategy.performance import compute_strategy_performance
 
-from .balance_engine import classify_cashflow, rebuild_balances
+from .balance_engine import BalanceEngine, classify_cashflow, rebuild_balances
 from .models import CashFlowRecord, LedgerEntry, PortfolioSnapshot
 from .portfolio import Portfolio
 from .store import PortfolioStore, SQLitePortfolioStore
@@ -249,31 +249,13 @@ class PortfolioService:
             # Sort by time
             new_ledger_entries.sort(key=lambda x: (x.time, x.id))
 
+            engine = BalanceEngine(self.portfolio.balances)
+
             for entry in new_ledger_entries:
                 self.store.save_ledger_entry(entry)
 
                 # Update in-memory balances
-                # We need a BalanceEngine instance that wraps self.portfolio.balances
-                # But self.portfolio.balances is a Dict[str, AssetBalance].
-                # We can reuse the one from bootstrap?
-                # Yes, but we need to update it.
-                # Let's duplicate the logic of apply_entry here or expose it in Portfolio.
-                # Portfolio class doesn't have apply_entry yet (it has apply_cash_flow).
-                # We can update self.portfolio.balances directly.
-
-                # Update Balance
-                # bal = self.portfolio.balances.get(entry.asset, AssetBalance(entry.asset, 0, 0, 0))
-                # ... logic ...
-                # Easier: use BalanceEngine on the live dict?
-                # BalanceEngine takes a dict in constructor.
-                # engine = BalanceEngine(self.portfolio.balances)
-                # engine.apply_entry(entry)
-                # This works because BalanceEngine modifies the dict in place?
-                # BalanceEngine.__init__ copies reference? "self.balances = initial_balances"
-                # Yes.
-                # So:
-                from .balance_engine import BalanceEngine
-                engine = BalanceEngine(self.portfolio.balances)
+                # BalanceEngine modifies self.portfolio.balances in-place (reference copy)
                 engine.apply_entry(entry)
 
                 # Classify and record Cash Flow (but do NOT apply to portfolio balances again, as engine.apply_entry did it)
