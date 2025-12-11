@@ -334,6 +334,21 @@ class StrategyEngine:
 
         for action in risk_actions:
             strat_cfg = self.config.strategies.configs.get(action.strategy_id)
+
+            # Handling Composite IDs (e.g., "dca_rebalance,trend_core")
+            if not strat_cfg and "," in action.strategy_id:
+                # 1. Split the ID
+                parts = action.strategy_id.split(",")
+                # 2. Sort for determinism (ensures "a,b" and "b,a" always resolve to "a")
+                parts.sort()
+
+                # 3. Find the first constituent strategy that has a valid config
+                for sub_id in parts:
+                    candidate_cfg = self.config.strategies.configs.get(sub_id)
+                    if candidate_cfg and candidate_cfg.userref is not None:
+                        strat_cfg = candidate_cfg
+                        break
+
             if strat_cfg and strat_cfg.userref is not None:
                 action.userref = str(strat_cfg.userref)
 
