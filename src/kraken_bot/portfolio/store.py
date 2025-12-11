@@ -639,40 +639,42 @@ class SQLitePortfolioStore(PortfolioStore):
         self.db_path = db_path
         self.auto_migrate_schema = auto_migrate_schema
         self._lock = threading.RLock()
+
+        # 1. Open persistent connection immediately
+        # check_same_thread=False is required because we handle locking ourselves
+        self._conn = sqlite3.connect(self.db_path, check_same_thread=False)
+
+        # 2. Initialize using the persistent connection
         self._init_db()
+
+    def _get_conn(self) -> sqlite3.Connection:
+        return self._conn
+
+    def close(self) -> None:
+        """Explicitly close the persistent database connection."""
+        with self._lock:
+            if self._conn:
+                self._conn.close()
 
     def _init_db(self) -> None:
         """
-        Initialize the portfolio database with strict schema handling.
-
-        Rules:
-        - If auto_migrate_schema=True:
-            * Run migrations up to CURRENT_SCHEMA_VERSION.
-            * Create all required tables.
-        - If auto_migrate_schema=False:
-            * Do NOT migrate.
-            * Require on-disk schema to already be exactly CURRENT_SCHEMA_VERSION.
-            * Raise PortfolioSchemaError if the DB is behind or ahead.
+        Initialize the portfolio database with strict schema handling using the persistent connection.
         """
-
         # 1. Guard / migrate schema version via the shared helpers.
         if self.auto_migrate_schema:
             # May create meta table and run migrations.
-            ensure_portfolio_schema(self.db_path, CURRENT_SCHEMA_VERSION, migrate=True)
+            ensure_portfolio_schema(self._conn, CURRENT_SCHEMA_VERSION, migrate=True)
         else:
             # Strict: only accept an exact match; behind/ahead → PortfolioSchemaError.
-            assert_portfolio_schema(self.db_path)
+            # We call ensure_portfolio_schema directly with migrate=False to use the connection object.
+            status = ensure_portfolio_schema(self._conn, CURRENT_SCHEMA_VERSION, migrate=False)
+            if status.version < CURRENT_SCHEMA_VERSION:
+                raise PortfolioSchemaError(found=status.version, expected=CURRENT_SCHEMA_VERSION)
 
         # 2. Ensure all logical portfolio tables exist.
-        conn = sqlite3.connect(self.db_path)
-        try:
-            ensure_portfolio_tables(conn)
-            conn.commit()
-        finally:
-            conn.close()
-
-    def _get_conn(self):
-        return sqlite3.connect(self.db_path)
+        # No inner try/finally needed here since we don't want to close self._conn
+        ensure_portfolio_tables(self._conn)
+        self._conn.commit()
 
     def _to_timestamp(self, val: Union[int, float, datetime]) -> float:
         """Normalize various time inputs to a float timestamp."""
@@ -683,13 +685,14 @@ class SQLitePortfolioStore(PortfolioStore):
         raise TypeError(f"Cannot convert {type(val)} to timestamp")
 
     def get_schema_version(self) -> Optional[int]:
-        conn = None
         try:
-            conn = self._get_conn()
-            cursor = conn.cursor()
-            row = cursor.execute(
-                "SELECT value FROM meta WHERE key = 'schema_version'"
-            ).fetchone()
+            with self._lock:
+                conn = self._get_conn()
+                cursor = conn.cursor()
+                row = cursor.execute(
+                    "SELECT value FROM meta WHERE key = 'schema_version'"
+                ).fetchone()
+
             if row is None:
                 return None
 
@@ -704,12 +707,6 @@ class SQLitePortfolioStore(PortfolioStore):
         except sqlite3.Error as exc:  # pragma: no cover - defensive logging
             logger.warning("Unable to read portfolio schema version: %s", exc)
             return None
-        finally:
-            if conn is not None:
-                try:
-                    conn.close()
-                except Exception:  # pragma: no cover - best effort cleanup
-                    pass
 
     def save_trades(self, trades: List[Dict[str, Any]]):
         if not trades:
@@ -717,73 +714,65 @@ class SQLitePortfolioStore(PortfolioStore):
 
         with self._lock:
             conn = self._get_conn()
-            try:
-                cursor = conn.cursor()
+            cursor = conn.cursor()
 
-                for trade in trades:
-                    # We assume 'trade' is the raw dictionary from Kraken API or internal representation
-                    # The 'id' in our table maps to the trade ID (key in the dictionary usually)
-                    # However, Kraken 'TradesHistory' returns a dict where keys are trade IDs.
-                    # We need to handle that before calling this, or assume 'trades' here is a list of flattened dicts with 'id' field.
-                    # Let's assume flattened dict with 'id'.
+            for trade in trades:
+                # We assume 'trade' is the raw dictionary from Kraken API or internal representation
+                raw_json = json.dumps(trade)
 
-                    raw_json = json.dumps(trade)
+                # Handle 'trades' field which can be a list of strings
+                trades_val = trade.get("trades")
+                trades_csv = None
+                if isinstance(trades_val, list):
+                    trades_csv = ",".join(str(t) for t in trades_val)
+                elif trades_val is not None:
+                    trades_csv = str(trades_val)
 
-                    # Handle 'trades' field which can be a list of strings
-                    trades_val = trade.get("trades")
-                    trades_csv = None
-                    if isinstance(trades_val, list):
-                        trades_csv = ",".join(str(t) for t in trades_val)
-                    elif trades_val is not None:
-                        trades_csv = str(trades_val)
-
-                    cursor.execute(
-                        """
-                        INSERT OR IGNORE INTO trades (
-                            id, ordertxid, pair, time, type, ordertype, price, cost, fee, vol,
-                            margin, misc, posstatus, cprice, ccost, cfee, cvol, cmargin, net,
-                            trades_csv, raw_json
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
+                cursor.execute(
+                    """
+                    INSERT OR IGNORE INTO trades (
+                        id, ordertxid, pair, time, type, ordertype, price, cost, fee, vol,
+                        margin, misc, posstatus, cprice, ccost, cfee, cvol, cmargin, net,
+                        trades_csv, raw_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                    (
+                        trade.get("id"),
+                        trade.get("ordertxid"),
+                        trade.get("pair"),
+                        trade.get("time"),
+                        trade.get("type"),
+                        trade.get("ordertype"),
+                        float(trade.get("price", 0)),
+                        float(trade.get("cost", 0)),
+                        float(trade.get("fee", 0)),
+                        float(trade.get("vol", 0)),
+                        float(trade.get("margin", 0)),
+                        trade.get("misc"),
+                        trade.get("posstatus"),
                         (
-                            trade.get("id"),
-                            trade.get("ordertxid"),
-                            trade.get("pair"),
-                            trade.get("time"),
-                            trade.get("type"),
-                            trade.get("ordertype"),
-                            float(trade.get("price", 0)),
-                            float(trade.get("cost", 0)),
-                            float(trade.get("fee", 0)),
-                            float(trade.get("vol", 0)),
-                            float(trade.get("margin", 0)),
-                            trade.get("misc"),
-                            trade.get("posstatus"),
-                            (
-                                float(trade.get("cprice", 0))
-                                if trade.get("cprice")
-                                else None
-                            ),
-                            (
-                                float(trade.get("ccost", 0))
-                                if trade.get("ccost")
-                                else None
-                            ),
-                            float(trade.get("cfee", 0)) if trade.get("cfee") else None,
-                            float(trade.get("cvol", 0)) if trade.get("cvol") else None,
-                            (
-                                float(trade.get("cmargin", 0))
-                                if trade.get("cmargin")
-                                else None
-                            ),
-                            float(trade.get("net", 0)) if trade.get("net") else None,
-                            trades_csv,  # trades list CSV
-                            raw_json,
+                            float(trade.get("cprice", 0))
+                            if trade.get("cprice")
+                            else None
                         ),
-                    )
-                conn.commit()
-            finally:
-                conn.close()
+                        (
+                            float(trade.get("ccost", 0))
+                            if trade.get("ccost")
+                            else None
+                        ),
+                        float(trade.get("cfee", 0)) if trade.get("cfee") else None,
+                        float(trade.get("cvol", 0)) if trade.get("cvol") else None,
+                        (
+                            float(trade.get("cmargin", 0))
+                            if trade.get("cmargin")
+                            else None
+                        ),
+                        float(trade.get("net", 0)) if trade.get("net") else None,
+                        trades_csv,  # trades list CSV
+                        raw_json,
+                    ),
+                )
+            conn.commit()
 
     def get_trades(
         self,
@@ -793,34 +782,34 @@ class SQLitePortfolioStore(PortfolioStore):
         until: Optional[int] = None,
         ascending: bool = False,
     ) -> List[Dict[str, Any]]:
-        conn = self._get_conn()
-        cursor = conn.cursor()
+        with self._lock:
+            conn = self._get_conn()
+            cursor = conn.cursor()
 
-        query = "SELECT raw_json FROM trades WHERE 1=1"
-        params: List[Any] = []
+            query = "SELECT raw_json FROM trades WHERE 1=1"
+            params: List[Any] = []
 
-        if pair:
-            query += " AND pair = ?"
-            params.append(pair)
+            if pair:
+                query += " AND pair = ?"
+                params.append(pair)
 
-        if since is not None:
-            query += " AND time >= ?"
-            params.append(self._to_timestamp(since))
+            if since is not None:
+                query += " AND time >= ?"
+                params.append(self._to_timestamp(since))
 
-        if until is not None:
-            query += " AND time <= ?"
-            params.append(self._to_timestamp(until))
+            if until is not None:
+                query += " AND time <= ?"
+                params.append(self._to_timestamp(until))
 
-        order = "ASC" if ascending else "DESC"
-        query += f" ORDER BY time {order}"
+            order = "ASC" if ascending else "DESC"
+            query += f" ORDER BY time {order}"
 
-        if limit:
-            query += " LIMIT ?"
-            params.append(limit)
+            if limit:
+                query += " LIMIT ?"
+                params.append(limit)
 
-        cursor.execute(query, params)
-        rows = cursor.fetchall()
-        conn.close()
+            cursor.execute(query, params)
+            rows = cursor.fetchall()
 
         return [json.loads(row[0]) for row in rows]
 
@@ -830,28 +819,25 @@ class SQLitePortfolioStore(PortfolioStore):
 
         with self._lock:
             conn = self._get_conn()
-            try:
-                cursor = conn.cursor()
+            cursor = conn.cursor()
 
-                for record in records:
-                    cursor.execute(
-                        """
-                        INSERT OR IGNORE INTO cash_flows (
-                            id, time, asset, amount, type, note
-                        ) VALUES (?, ?, ?, ?, ?, ?)
-                    """,
-                        (
-                            record.id,
-                            record.time,
-                            record.asset,
-                            record.amount,
-                            record.type,
-                            record.note,
-                        ),
-                    )
-                conn.commit()
-            finally:
-                conn.close()
+            for record in records:
+                cursor.execute(
+                    """
+                    INSERT OR IGNORE INTO cash_flows (
+                        id, time, asset, amount, type, note
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                    (
+                        record.id,
+                        record.time,
+                        record.asset,
+                        record.amount,
+                        record.type,
+                        record.note,
+                    ),
+                )
+            conn.commit()
 
     def get_cash_flows(
         self,
@@ -861,34 +847,34 @@ class SQLitePortfolioStore(PortfolioStore):
         until: Optional[int] = None,
         ascending: bool = False,
     ) -> List[CashFlowRecord]:
-        conn = self._get_conn()
-        cursor = conn.cursor()
+        with self._lock:
+            conn = self._get_conn()
+            cursor = conn.cursor()
 
-        query = "SELECT id, time, asset, amount, type, note FROM cash_flows WHERE 1=1"
-        params: List[Any] = []
+            query = "SELECT id, time, asset, amount, type, note FROM cash_flows WHERE 1=1"
+            params: List[Any] = []
 
-        if asset:
-            query += " AND asset = ?"
-            params.append(asset)
+            if asset:
+                query += " AND asset = ?"
+                params.append(asset)
 
-        if since is not None:
-            query += " AND time >= ?"
-            params.append(self._to_timestamp(since))
+            if since is not None:
+                query += " AND time >= ?"
+                params.append(self._to_timestamp(since))
 
-        if until is not None:
-            query += " AND time <= ?"
-            params.append(self._to_timestamp(until))
+            if until is not None:
+                query += " AND time <= ?"
+                params.append(self._to_timestamp(until))
 
-        order = "ASC" if ascending else "DESC"
-        query += f" ORDER BY time {order}"
+            order = "ASC" if ascending else "DESC"
+            query += f" ORDER BY time {order}"
 
-        if limit:
-            query += " LIMIT ?"
-            params.append(limit)
+            if limit:
+                query += " LIMIT ?"
+                params.append(limit)
 
-        cursor.execute(query, params)
-        rows = cursor.fetchall()
-        conn.close()
+            cursor.execute(query, params)
+            rows = cursor.fetchall()
 
         return [
             CashFlowRecord(
@@ -905,32 +891,29 @@ class SQLitePortfolioStore(PortfolioStore):
     def save_ledger_entry(self, entry: LedgerEntry):
         with self._lock:
             conn = self._get_conn()
-            try:
-                cursor = conn.cursor()
-                cursor.execute(
-                    """
-                    INSERT OR REPLACE INTO ledger_entries (
-                        id, time, type, subtype, aclass, asset, amount, fee, balance, refid, misc, raw_json
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        entry.id,
-                        entry.time,
-                        entry.type,
-                        entry.subtype,
-                        entry.aclass,
-                        entry.asset,
-                        float(entry.amount),
-                        float(entry.fee),
-                        float(entry.balance) if entry.balance is not None else None,
-                        entry.refid,
-                        entry.misc,
-                        json.dumps(entry.raw, default=str),
-                    ),
-                )
-                conn.commit()
-            finally:
-                conn.close()
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT OR REPLACE INTO ledger_entries (
+                    id, time, type, subtype, aclass, asset, amount, fee, balance, refid, misc, raw_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    entry.id,
+                    entry.time,
+                    entry.type,
+                    entry.subtype,
+                    entry.aclass,
+                    entry.asset,
+                    float(entry.amount),
+                    float(entry.fee),
+                    float(entry.balance) if entry.balance is not None else None,
+                    entry.refid,
+                    entry.misc,
+                    json.dumps(entry.raw, default=str),
+                ),
+            )
+            conn.commit()
 
     def get_ledger_entries(
         self,
@@ -940,32 +923,32 @@ class SQLitePortfolioStore(PortfolioStore):
     ) -> List[LedgerEntry]:
         from decimal import Decimal
 
-        conn = self._get_conn()
-        cursor = conn.cursor()
+        with self._lock:
+            conn = self._get_conn()
+            cursor = conn.cursor()
 
-        query = """
-            SELECT id, time, type, subtype, aclass, asset, amount, fee, balance, refid, misc, raw_json
-            FROM ledger_entries
-            WHERE 1=1
-        """
-        params: List[Any] = []
+            query = """
+                SELECT id, time, type, subtype, aclass, asset, amount, fee, balance, refid, misc, raw_json
+                FROM ledger_entries
+                WHERE 1=1
+            """
+            params: List[Any] = []
 
-        if since is not None:
-            query += " AND time >= ?"
-            params.append(since)
+            if since is not None:
+                query += " AND time >= ?"
+                params.append(since)
 
-        # Always order by time, then id for deterministic replay
-        query += " ORDER BY time ASC, id ASC"
+            # Always order by time, then id for deterministic replay
+            query += " ORDER BY time ASC, id ASC"
 
-        if limit and not after_id:
-            # If we are filtering by ID in python, we can't limit in SQL efficiently without subquery
-            # But if no after_id, we can limit.
-            query += " LIMIT ?"
-            params.append(limit)
+            if limit and not after_id:
+                # If we are filtering by ID in python, we can't limit in SQL efficiently without subquery
+                # But if no after_id, we can limit.
+                query += " LIMIT ?"
+                params.append(limit)
 
-        cursor.execute(query, params)
-        rows = cursor.fetchall()
-        conn.close()
+            cursor.execute(query, params)
+            rows = cursor.fetchall()
 
         entries = []
         skip = True if after_id else False
@@ -1006,18 +989,18 @@ class SQLitePortfolioStore(PortfolioStore):
     def get_latest_ledger_entry(self) -> Optional[LedgerEntry]:
         from decimal import Decimal
 
-        conn = self._get_conn()
-        cursor = conn.cursor()
+        with self._lock:
+            conn = self._get_conn()
+            cursor = conn.cursor()
 
-        query = """
-            SELECT id, time, type, subtype, aclass, asset, amount, fee, balance, refid, misc, raw_json
-            FROM ledger_entries
-            ORDER BY time DESC, id DESC
-            LIMIT 1
-        """
-        cursor.execute(query)
-        row = cursor.fetchone()
-        conn.close()
+            query = """
+                SELECT id, time, type, subtype, aclass, asset, amount, fee, balance, refid, misc, raw_json
+                FROM ledger_entries
+                ORDER BY time DESC, id DESC
+                LIMIT 1
+            """
+            cursor.execute(query)
+            row = cursor.fetchone()
 
         if not row:
             return None
@@ -1040,43 +1023,40 @@ class SQLitePortfolioStore(PortfolioStore):
     def save_balance_snapshot(self, snapshot: BalanceSnapshot):
         with self._lock:
             conn = self._get_conn()
-            try:
-                cursor = conn.cursor()
-                # serialize balances
-                balances_dict = {
-                    a: {"total": b.total, "free": b.free, "reserved": b.reserved}
-                    for a, b in snapshot.balances.items()
-                }
+            cursor = conn.cursor()
+            # serialize balances
+            balances_dict = {
+                a: {"total": b.total, "free": b.free, "reserved": b.reserved}
+                for a, b in snapshot.balances.items()
+            }
 
-                cursor.execute(
-                    """
-                    INSERT INTO balance_snapshots (
-                        time, last_ledger_id, balances_json
-                    ) VALUES (?, ?, ?)
-                    """,
-                    (
-                        snapshot.time,
-                        snapshot.last_ledger_id,
-                        json.dumps(balances_dict),
-                    ),
-                )
-                conn.commit()
-            finally:
-                conn.close()
+            cursor.execute(
+                """
+                INSERT INTO balance_snapshots (
+                    time, last_ledger_id, balances_json
+                ) VALUES (?, ?, ?)
+                """,
+                (
+                    snapshot.time,
+                    snapshot.last_ledger_id,
+                    json.dumps(balances_dict),
+                ),
+            )
+            conn.commit()
 
     def get_latest_balance_snapshot(self) -> Optional[BalanceSnapshot]:
-        conn = self._get_conn()
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            SELECT id, time, last_ledger_id, balances_json
-            FROM balance_snapshots
-            ORDER BY time DESC
-            LIMIT 1
-            """
-        )
-        row = cursor.fetchone()
-        conn.close()
+        with self._lock:
+            conn = self._get_conn()
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT id, time, last_ledger_id, balances_json
+                FROM balance_snapshots
+                ORDER BY time DESC
+                LIMIT 1
+                """
+            )
+            row = cursor.fetchone()
 
         if not row:
             return None
@@ -1102,66 +1082,63 @@ class SQLitePortfolioStore(PortfolioStore):
     def save_snapshot(self, snapshot: PortfolioSnapshot):
         with self._lock:
             conn = self._get_conn()
-            try:
-                cursor = conn.cursor()
+            cursor = conn.cursor()
 
-                # We store the heavy lifting in JSON
-                data = {
-                    "asset_valuations": [
-                        {
-                            "asset": av.asset,
-                            "amount": av.amount,
-                            "value_base": av.value_base,
-                            "source_pair": av.source_pair,
-                            "valuation_status": av.valuation_status,
-                        }
-                        for av in snapshot.asset_valuations
-                    ],
-                    "realized_pnl_base_total": snapshot.realized_pnl_base_total,
-                    "unrealized_pnl_base_total": snapshot.unrealized_pnl_base_total,
-                    "realized_pnl_base_by_pair": snapshot.realized_pnl_base_by_pair,
-                    "unrealized_pnl_base_by_pair": snapshot.unrealized_pnl_base_by_pair,
-                }
+            # We store the heavy lifting in JSON
+            data = {
+                "asset_valuations": [
+                    {
+                        "asset": av.asset,
+                        "amount": av.amount,
+                        "value_base": av.value_base,
+                        "source_pair": av.source_pair,
+                        "valuation_status": av.valuation_status,
+                    }
+                    for av in snapshot.asset_valuations
+                ],
+                "realized_pnl_base_total": snapshot.realized_pnl_base_total,
+                "unrealized_pnl_base_total": snapshot.unrealized_pnl_base_total,
+                "realized_pnl_base_by_pair": snapshot.realized_pnl_base_by_pair,
+                "unrealized_pnl_base_by_pair": snapshot.unrealized_pnl_base_by_pair,
+            }
 
-                cursor.execute(
-                    """
-                    INSERT OR REPLACE INTO snapshots (
-                        timestamp, equity_base, cash_base, data_json
-                    ) VALUES (?, ?, ?, ?)
-                """,
-                    (
-                        snapshot.timestamp,
-                        snapshot.equity_base,
-                        snapshot.cash_base,
-                        json.dumps(data),
-                    ),
-                )
-                conn.commit()
-            finally:
-                conn.close()
+            cursor.execute(
+                """
+                INSERT OR REPLACE INTO snapshots (
+                    timestamp, equity_base, cash_base, data_json
+                ) VALUES (?, ?, ?, ?)
+            """,
+                (
+                    snapshot.timestamp,
+                    snapshot.equity_base,
+                    snapshot.cash_base,
+                    json.dumps(data),
+                ),
+            )
+            conn.commit()
 
     def get_snapshots(
         self, since: Optional[int] = None, limit: Optional[int] = None
     ) -> List[PortfolioSnapshot]:
-        conn = self._get_conn()
-        cursor = conn.cursor()
+        with self._lock:
+            conn = self._get_conn()
+            cursor = conn.cursor()
 
-        query = "SELECT timestamp, equity_base, cash_base, data_json FROM snapshots WHERE 1=1"
-        params = []
+            query = "SELECT timestamp, equity_base, cash_base, data_json FROM snapshots WHERE 1=1"
+            params = []
 
-        if since is not None:
-            query += " AND timestamp >= ?"
-            params.append(self._to_timestamp(since))
+            if since is not None:
+                query += " AND timestamp >= ?"
+                params.append(self._to_timestamp(since))
 
-        query += " ORDER BY timestamp DESC"
+            query += " ORDER BY timestamp DESC"
 
-        if limit:
-            query += " LIMIT ?"
-            params.append(limit)
+            if limit:
+                query += " LIMIT ?"
+                params.append(limit)
 
-        cursor.execute(query, params)
-        rows = cursor.fetchall()
-        conn.close()
+            cursor.execute(query, params)
+            rows = cursor.fetchall()
 
         snapshots = []
         for row in rows:
@@ -1192,160 +1169,148 @@ class SQLitePortfolioStore(PortfolioStore):
     def prune_snapshots(self, older_than_ts: int):
         with self._lock:
             conn = self._get_conn()
-            try:
-                cursor = conn.cursor()
-                cursor.execute(
-                    "DELETE FROM snapshots WHERE timestamp < ?", (older_than_ts,)
-                )
-                conn.commit()
-            finally:
-                conn.close()
+            cursor = conn.cursor()
+            cursor.execute(
+                "DELETE FROM snapshots WHERE timestamp < ?", (older_than_ts,)
+            )
+            conn.commit()
 
     def add_decision(self, record: "DecisionRecord"):
         with self._lock:
             conn = self._get_conn()
-            try:
-                cursor = conn.cursor()
+            cursor = conn.cursor()
 
-                cursor.execute(
-                    """
-                    INSERT INTO decisions (
-                        time, plan_id, strategy_name, pair, action_type,
-                        target_position_usd, blocked, block_reason, kill_switch_active, raw_json
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                    (
-                        record.time,
-                        record.plan_id,
-                        record.strategy_name,
-                        record.pair,
-                        record.action_type,
-                        record.target_position_usd,
-                        1 if record.blocked else 0,
-                        record.block_reason,
-                        1 if record.kill_switch_active else 0,
-                        record.raw_json,
-                    ),
-                )
+            cursor.execute(
+                """
+                INSERT INTO decisions (
+                    time, plan_id, strategy_name, pair, action_type,
+                    target_position_usd, blocked, block_reason, kill_switch_active, raw_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+                (
+                    record.time,
+                    record.plan_id,
+                    record.strategy_name,
+                    record.pair,
+                    record.action_type,
+                    record.target_position_usd,
+                    1 if record.blocked else 0,
+                    record.block_reason,
+                    1 if record.kill_switch_active else 0,
+                    record.raw_json,
+                ),
+            )
 
-                conn.commit()
-            finally:
-                conn.close()
+            conn.commit()
 
     def save_execution_plan(self, plan: "ExecutionPlan"):
         with self._lock:
             conn = self._get_conn()
-            try:
-                cursor = conn.cursor()
+            cursor = conn.cursor()
 
-                plan_json = json.dumps(
-                    {
-                        "plan_id": plan.plan_id,
-                        "generated_at": plan.generated_at,
-                        "actions": [asdict(a) for a in plan.actions],
-                        "metadata": plan.metadata,
-                    },
-                    default=str,
-                )
+            plan_json = json.dumps(
+                {
+                    "plan_id": plan.plan_id,
+                    "generated_at": plan.generated_at,
+                    "actions": [asdict(a) for a in plan.actions],
+                    "metadata": plan.metadata,
+                },
+                default=str,
+            )
 
-                cursor.execute(
-                    """
-                    INSERT OR REPLACE INTO execution_plans (
-                        plan_id, generated_at, action_count, blocked_actions, metadata_json, plan_json
-                    ) VALUES (?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        plan.plan_id,
-                        plan.generated_at.timestamp(),
-                        len(plan.actions),
-                        len([a for a in plan.actions if a.blocked]),
-                        json.dumps(plan.metadata, default=str),
-                        plan_json,
-                    ),
-                )
+            cursor.execute(
+                """
+                INSERT OR REPLACE INTO execution_plans (
+                    plan_id, generated_at, action_count, blocked_actions, metadata_json, plan_json
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    plan.plan_id,
+                    plan.generated_at.timestamp(),
+                    len(plan.actions),
+                    len([a for a in plan.actions if a.blocked]),
+                    json.dumps(plan.metadata, default=str),
+                    plan_json,
+                ),
+            )
 
-                conn.commit()
-            finally:
-                conn.close()
+            conn.commit()
 
     def save_order(self, order: "LocalOrder"):
         with self._lock:
             conn = self._get_conn()
-            try:
-                cursor = conn.cursor()
+            cursor = conn.cursor()
 
-                created_ts = (
-                    order.created_at.timestamp()
-                    if isinstance(order.created_at, datetime)
-                    else None
-                )
-                updated_ts = (
-                    order.updated_at.timestamp()
-                    if isinstance(order.updated_at, datetime)
-                    else None
-                )
+            created_ts = (
+                order.created_at.timestamp()
+                if isinstance(order.created_at, datetime)
+                else None
+            )
+            updated_ts = (
+                order.updated_at.timestamp()
+                if isinstance(order.updated_at, datetime)
+                else None
+            )
 
-                cursor.execute(
-                    """
-                    INSERT OR REPLACE INTO execution_orders (
-                        local_id, plan_id, strategy_id, pair, side, order_type, kraken_order_id, userref,
-                        requested_base_size, requested_price, status, created_at, updated_at,
-                        cumulative_base_filled, avg_fill_price, last_error, raw_request_json, raw_response_json
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
+            cursor.execute(
+                """
+                INSERT OR REPLACE INTO execution_orders (
+                    local_id, plan_id, strategy_id, pair, side, order_type, kraken_order_id, userref,
+                    requested_base_size, requested_price, status, created_at, updated_at,
+                    cumulative_base_filled, avg_fill_price, last_error, raw_request_json, raw_response_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    order.local_id,
+                    order.plan_id,
+                    order.strategy_id,
+                    order.pair,
+                    order.side,
+                    order.order_type,
+                    order.kraken_order_id,
+                    order.userref,
+                    order.requested_base_size,
+                    order.requested_price,
+                    order.status,
+                    created_ts,
+                    updated_ts,
+                    order.cumulative_base_filled,
+                    order.avg_fill_price,
+                    order.last_error,
                     (
-                        order.local_id,
-                        order.plan_id,
-                        order.strategy_id,
-                        order.pair,
-                        order.side,
-                        order.order_type,
-                        order.kraken_order_id,
-                        order.userref,
-                        order.requested_base_size,
-                        order.requested_price,
-                        order.status,
-                        created_ts,
-                        updated_ts,
-                        order.cumulative_base_filled,
-                        order.avg_fill_price,
-                        order.last_error,
-                        (
-                            json.dumps(order.raw_request, default=str)
-                            if order.raw_request
-                            else None
-                        ),
-                        (
-                            json.dumps(order.raw_response, default=str)
-                            if order.raw_response
-                            else None
-                        ),
+                        json.dumps(order.raw_request, default=str)
+                        if order.raw_request
+                        else None
                     ),
-                )
-
-                cursor.execute(
-                    """
-                    INSERT INTO execution_order_events (
-                        local_order_id, plan_id, event_time, status, message, raw_json
-                    ) VALUES (?, ?, ?, ?, ?, ?)
-                    """,
                     (
-                        order.local_id,
-                        order.plan_id,
-                        updated_ts or created_ts or datetime.now(UTC).timestamp(),
-                        order.status,
-                        order.last_error,
-                        (
-                            json.dumps(order.raw_response, default=str)
-                            if order.raw_response
-                            else None
-                        ),
+                        json.dumps(order.raw_response, default=str)
+                        if order.raw_response
+                        else None
                     ),
-                )
+                ),
+            )
 
-                conn.commit()
-            finally:
-                conn.close()
+            cursor.execute(
+                """
+                INSERT INTO execution_order_events (
+                    local_order_id, plan_id, event_time, status, message, raw_json
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    order.local_id,
+                    order.plan_id,
+                    updated_ts or created_ts or datetime.now(UTC).timestamp(),
+                    order.status,
+                    order.last_error,
+                    (
+                        json.dumps(order.raw_response, default=str)
+                        if order.raw_response
+                        else None
+                    ),
+                ),
+            )
+
+            conn.commit()
 
     def update_order_status(
         self,
@@ -1360,100 +1325,94 @@ class SQLitePortfolioStore(PortfolioStore):
     ):
         with self._lock:
             conn = self._get_conn()
-            try:
-                cursor = conn.cursor()
+            cursor = conn.cursor()
 
-                cursor.execute(
-                    "SELECT plan_id FROM execution_orders WHERE local_id = ?",
-                    (local_id,),
-                )
-                order_row = cursor.fetchone()
+            cursor.execute(
+                "SELECT plan_id FROM execution_orders WHERE local_id = ?",
+                (local_id,),
+            )
+            order_row = cursor.fetchone()
 
-                now_ts = datetime.now(UTC).timestamp()
-                updates: Dict[str, Any] = {
-                    "status": status,
-                    "updated_at": now_ts,
-                }
+            now_ts = datetime.now(UTC).timestamp()
+            updates: Dict[str, Any] = {
+                "status": status,
+                "updated_at": now_ts,
+            }
 
-                if kraken_order_id is not None:
-                    updates["kraken_order_id"] = kraken_order_id
-                if cumulative_base_filled is not None:
-                    updates["cumulative_base_filled"] = cumulative_base_filled
-                if avg_fill_price is not None:
-                    updates["avg_fill_price"] = avg_fill_price
-                if last_error is not None:
-                    updates["last_error"] = last_error
-                if raw_response is not None:
-                    updates["raw_response_json"] = json.dumps(raw_response, default=str)
+            if kraken_order_id is not None:
+                updates["kraken_order_id"] = kraken_order_id
+            if cumulative_base_filled is not None:
+                updates["cumulative_base_filled"] = cumulative_base_filled
+            if avg_fill_price is not None:
+                updates["avg_fill_price"] = avg_fill_price
+            if last_error is not None:
+                updates["last_error"] = last_error
+            if raw_response is not None:
+                updates["raw_response_json"] = json.dumps(raw_response, default=str)
 
-                set_clause = ", ".join(f"{k} = ?" for k in updates)
-                params = list(updates.values()) + [local_id]
-                cursor.execute(
-                    f"UPDATE execution_orders SET {set_clause} WHERE local_id = ?",
-                    params,
-                )
+            set_clause = ", ".join(f"{k} = ?" for k in updates)
+            params = list(updates.values()) + [local_id]
+            cursor.execute(
+                f"UPDATE execution_orders SET {set_clause} WHERE local_id = ?",
+                params,
+            )
 
-                cursor.execute(
-                    """
-                    INSERT INTO execution_order_events (
-                        local_order_id, plan_id, event_time, status, message, raw_json
-                    ) VALUES (?, ?, ?, ?, ?, ?)
-                    """,
+            cursor.execute(
+                """
+                INSERT INTO execution_order_events (
+                    local_order_id, plan_id, event_time, status, message, raw_json
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    local_id,
+                    order_row[0] if order_row else None,
+                    now_ts,
+                    status,
+                    event_message or last_error,
                     (
-                        local_id,
-                        order_row[0] if order_row else None,
-                        now_ts,
-                        status,
-                        event_message or last_error,
-                        (
-                            json.dumps(raw_response, default=str)
-                            if raw_response is not None
-                            else None
-                        ),
+                        json.dumps(raw_response, default=str)
+                        if raw_response is not None
+                        else None
                     ),
-                )
+                ),
+            )
 
-                conn.commit()
-            finally:
-                conn.close()
+            conn.commit()
 
     def save_execution_result(self, result: "ExecutionResult"):
         with self._lock:
             conn = self._get_conn()
-            try:
-                cursor = conn.cursor()
+            cursor = conn.cursor()
 
-                cursor.execute(
-                    """
-                    INSERT OR REPLACE INTO execution_results (
-                        plan_id, started_at, completed_at, success, errors_json, warnings_json
-                    ) VALUES (?, ?, ?, ?, ?, ?)
-                    """,
+            cursor.execute(
+                """
+                INSERT OR REPLACE INTO execution_results (
+                    plan_id, started_at, completed_at, success, errors_json, warnings_json
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    result.plan_id,
+                    result.started_at.timestamp() if result.started_at else None,
                     (
-                        result.plan_id,
-                        result.started_at.timestamp() if result.started_at else None,
-                        (
-                            result.completed_at.timestamp()
-                            if result.completed_at
-                            else None
-                        ),
-                        1 if result.success else 0,
-                        (
-                            json.dumps(result.errors, default=str)
-                            if result.errors
-                            else json.dumps([])
-                        ),
-                        (
-                            json.dumps(result.warnings, default=str)
-                            if result.warnings
-                            else json.dumps([])
-                        ),
+                        result.completed_at.timestamp()
+                        if result.completed_at
+                        else None
                     ),
-                )
+                    1 if result.success else 0,
+                    (
+                        json.dumps(result.errors, default=str)
+                        if result.errors
+                        else json.dumps([])
+                    ),
+                    (
+                        json.dumps(result.warnings, default=str)
+                        if result.warnings
+                        else json.dumps([])
+                    ),
+                ),
+            )
 
-                conn.commit()
-            finally:
-                conn.close()
+            conn.commit()
 
     def get_order_by_reference(
         self,
@@ -1462,40 +1421,37 @@ class SQLitePortfolioStore(PortfolioStore):
     ) -> Optional["LocalOrder"]:
         with self._lock:
             conn = self._get_conn()
-            try:
-                cursor = conn.cursor()
+            cursor = conn.cursor()
 
-                conditions = []
-                params: List[Any] = []
+            conditions = []
+            params: List[Any] = []
 
-                if kraken_order_id:
-                    conditions.append("kraken_order_id = ?")
-                    params.append(kraken_order_id)
-                if userref is not None:
-                    conditions.append("userref = ?")
-                    params.append(userref)
+            if kraken_order_id:
+                conditions.append("kraken_order_id = ?")
+                params.append(kraken_order_id)
+            if userref is not None:
+                conditions.append("userref = ?")
+                params.append(userref)
 
-                if not conditions:
-                    raise ValueError("Must provide either kraken_order_id or userref")
+            if not conditions:
+                raise ValueError("Must provide either kraken_order_id or userref")
 
-                where_clause = " OR ".join(conditions)
-                cursor.execute(
-                    f"""
-                    SELECT
-                        local_id, plan_id, strategy_id, pair, side, order_type, kraken_order_id, userref,
-                        requested_base_size, requested_price, status, created_at, updated_at,
-                        cumulative_base_filled, avg_fill_price, last_error, raw_request_json, raw_response_json
-                    FROM execution_orders
-                    WHERE {where_clause}
-                    ORDER BY updated_at DESC
-                    LIMIT 1
-                    """,
-                    params,
-                )
+            where_clause = " OR ".join(conditions)
+            cursor.execute(
+                f"""
+                SELECT
+                    local_id, plan_id, strategy_id, pair, side, order_type, kraken_order_id, userref,
+                    requested_base_size, requested_price, status, created_at, updated_at,
+                    cumulative_base_filled, avg_fill_price, last_error, raw_request_json, raw_response_json
+                FROM execution_orders
+                WHERE {where_clause}
+                ORDER BY updated_at DESC
+                LIMIT 1
+                """,
+                params,
+            )
 
-                row = cursor.fetchone()
-            finally:
-                conn.close()
+            row = cursor.fetchone()
 
         if not row:
             return None
@@ -1514,43 +1470,40 @@ class SQLitePortfolioStore(PortfolioStore):
 
         with self._lock:
             conn = self._get_conn()
-            try:
-                cursor = conn.cursor()
+            cursor = conn.cursor()
 
-                query = """
-                    SELECT time, plan_id, strategy_name, pair, action_type, target_position_usd,
-                           blocked, block_reason, kill_switch_active, raw_json
-                    FROM decisions
-                    WHERE 1=1
-                """
-                params: List[Any] = []
+            query = """
+                SELECT time, plan_id, strategy_name, pair, action_type, target_position_usd,
+                       blocked, block_reason, kill_switch_active, raw_json
+                FROM decisions
+                WHERE 1=1
+            """
+            params: List[Any] = []
 
-                if plan_id:
-                    query += " AND plan_id = ?"
-                    params.append(plan_id)
+            if plan_id:
+                query += " AND plan_id = ?"
+                params.append(plan_id)
 
-                if strategy_name:
-                    query += " AND strategy_name = ?"
-                    params.append(strategy_name)
+            if strategy_name:
+                query += " AND strategy_name = ?"
+                params.append(strategy_name)
 
-                if pair:
-                    query += " AND pair = ?"
-                    params.append(pair)
+            if pair:
+                query += " AND pair = ?"
+                params.append(pair)
 
-                if since is not None:
-                    query += " AND time >= ?"
-                    params.append(self._to_timestamp(since))
+            if since is not None:
+                query += " AND time >= ?"
+                params.append(self._to_timestamp(since))
 
-                query += " ORDER BY time DESC"
+            query += " ORDER BY time DESC"
 
-                if limit:
-                    query += " LIMIT ?"
-                    params.append(limit)
+            if limit:
+                query += " LIMIT ?"
+                params.append(limit)
 
-                cursor.execute(query, params)
-                rows = cursor.fetchall()
-            finally:
-                conn.close()
+            cursor.execute(query, params)
+            rows = cursor.fetchall()
 
         return [
             DecisionRecord(
@@ -1756,53 +1709,47 @@ class SQLitePortfolioStore(PortfolioStore):
     ) -> List["ExecutionPlan"]:
         with self._lock:
             conn = self._get_conn()
-            try:
-                cursor = conn.cursor()
+            cursor = conn.cursor()
 
-                query = """
-                    SELECT plan_id, generated_at, plan_json, metadata_json
-                    FROM execution_plans
-                    WHERE 1=1
-                """
-                params: List[Any] = []
+            query = """
+                SELECT plan_id, generated_at, plan_json, metadata_json
+                FROM execution_plans
+                WHERE 1=1
+            """
+            params: List[Any] = []
 
-                if plan_id is not None:
-                    query += " AND plan_id = ?"
-                    params.append(plan_id)
+            if plan_id is not None:
+                query += " AND plan_id = ?"
+                params.append(plan_id)
 
-                if since is not None:
-                    query += " AND generated_at >= ?"
-                    params.append(self._to_timestamp(since))
+            if since is not None:
+                query += " AND generated_at >= ?"
+                params.append(self._to_timestamp(since))
 
-                query += " ORDER BY generated_at DESC"
+            query += " ORDER BY generated_at DESC"
 
-                if limit is not None:
-                    query += " LIMIT ?"
-                    params.append(limit)
+            if limit is not None:
+                query += " LIMIT ?"
+                params.append(limit)
 
-                cursor.execute(query, params)
-                rows = cursor.fetchall()
-            finally:
-                conn.close()
+            cursor.execute(query, params)
+            rows = cursor.fetchall()
 
         return [self._deserialize_execution_plan_row(row) for row in rows]
 
     def get_execution_plan(self, plan_id: str) -> Optional["ExecutionPlan"]:
         with self._lock:
             conn = self._get_conn()
-            try:
-                cursor = conn.cursor()
-                cursor.execute(
-                    """
-                    SELECT plan_id, generated_at, plan_json, metadata_json
-                    FROM execution_plans
-                    WHERE plan_id = ?
-                    """,
-                    (plan_id,),
-                )
-                row = cursor.fetchone()
-            finally:
-                conn.close()
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT plan_id, generated_at, plan_json, metadata_json
+                FROM execution_plans
+                WHERE plan_id = ?
+                """,
+                (plan_id,),
+            )
+            row = cursor.fetchone()
 
         if row is None:
             return None
@@ -1827,77 +1774,71 @@ class SQLitePortfolioStore(PortfolioStore):
 
         with self._lock:
             conn = self._get_conn()
-            try:
-                cursor = conn.cursor()
+            cursor = conn.cursor()
 
-                query = """
-                    SELECT
-                        local_id,
-                        plan_id,
-                        strategy_id,
-                        pair,
-                        side,
-                        order_type,
-                        kraken_order_id,
-                        userref,
-                        requested_base_size,
-                        requested_price,
-                        status,
-                        created_at,
-                        updated_at,
-                        cumulative_base_filled,
-                        avg_fill_price,
-                        last_error,
-                        raw_request_json,
-                        raw_response_json
-                    FROM execution_orders
-                    WHERE status IS NULL OR status IN ({statuses})
-                """.format(
-                    statuses=", ".join("?" for _ in open_statuses)
-                )
+            query = """
+                SELECT
+                    local_id,
+                    plan_id,
+                    strategy_id,
+                    pair,
+                    side,
+                    order_type,
+                    kraken_order_id,
+                    userref,
+                    requested_base_size,
+                    requested_price,
+                    status,
+                    created_at,
+                    updated_at,
+                    cumulative_base_filled,
+                    avg_fill_price,
+                    last_error,
+                    raw_request_json,
+                    raw_response_json
+                FROM execution_orders
+                WHERE status IS NULL OR status IN ({statuses})
+            """.format(
+                statuses=", ".join("?" for _ in open_statuses)
+            )
 
-                params: List[Any] = list(open_statuses)
+            params: List[Any] = list(open_statuses)
 
-                if plan_id is not None:
-                    query += " AND plan_id = ?"
-                    params.append(plan_id)
+            if plan_id is not None:
+                query += " AND plan_id = ?"
+                params.append(plan_id)
 
-                if strategy_id is not None:
-                    query += " AND strategy_id = ?"
-                    params.append(strategy_id)
+            if strategy_id is not None:
+                query += " AND strategy_id = ?"
+                params.append(strategy_id)
 
-                query += " ORDER BY created_at DESC"
+            query += " ORDER BY created_at DESC"
 
-                cursor.execute(query, params)
-                rows = cursor.fetchall()
-            finally:
-                conn.close()
+            cursor.execute(query, params)
+            rows = cursor.fetchall()
 
         return [self._row_to_local_order(row) for row in rows]
 
     def get_execution_results(self, limit: int = 10) -> List["ExecutionResult"]:
         with self._lock:
             conn = self._get_conn()
-            try:
-                cursor = conn.cursor()
-                cursor.execute(
-                    """
-                    SELECT
-                        plan_id,
-                        started_at,
-                        completed_at,
-                        success,
-                        errors_json,
-                        warnings_json
-                    FROM execution_results
-                    ORDER BY COALESCE(completed_at, started_at) DESC, started_at DESC
-                    LIMIT ?
-                    """,
-                    (limit,),
-                )
-                rows = cursor.fetchall()
-            finally:
-                conn.close()
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT
+                    plan_id,
+                    started_at,
+                    completed_at,
+                    success,
+                    errors_json,
+                    warnings_json
+                FROM execution_results
+                ORDER BY COALESCE(completed_at, started_at) DESC, started_at DESC
+                LIMIT ?
+                """,
+                (limit,),
+            )
+            rows = cursor.fetchall()
         return [self._deserialize_execution_result_row(row) for row in rows]
 
     # --- ML persistence -------------------------------------------------
@@ -1925,64 +1866,61 @@ class SQLitePortfolioStore(PortfolioStore):
 
         with self._lock:
             conn = self._get_conn()
-            try:
-                cursor = conn.cursor()
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO ml_training_examples (
+                    strategy_id,
+                    model_key,
+                    created_at,
+                    source_mode,
+                    label_type,
+                    features,
+                    label,
+                    sample_weight
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    strategy_id,
+                    model_key,
+                    created_at_iso,
+                    str(source_mode),
+                    str(label_type),
+                    features_json,
+                    float(label),
+                    float(sample_weight),
+                ),
+            )
+
+            cursor.execute(
+                """
+                SELECT COUNT(*)
+                FROM ml_training_examples
+                WHERE strategy_id = ? AND model_key = ?
+                """,
+                (strategy_id, model_key),
+            )
+            (count,) = cursor.fetchone()
+
+            excess = max((count or 0) - MAX_ML_TRAINING_EXAMPLES, 0)
+
+            if excess > 0:
                 cursor.execute(
                     """
-                    INSERT INTO ml_training_examples (
-                        strategy_id,
-                        model_key,
-                        created_at,
-                        source_mode,
-                        label_type,
-                        features,
-                        label,
-                        sample_weight
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        strategy_id,
-                        model_key,
-                        created_at_iso,
-                        str(source_mode),
-                        str(label_type),
-                        features_json,
-                        float(label),
-                        float(sample_weight),
-                    ),
-                )
-
-                cursor.execute(
-                    """
-                    SELECT COUNT(*)
-                    FROM ml_training_examples
-                    WHERE strategy_id = ? AND model_key = ?
-                    """,
-                    (strategy_id, model_key),
-                )
-                (count,) = cursor.fetchone()
-
-                excess = max((count or 0) - MAX_ML_TRAINING_EXAMPLES, 0)
-
-                if excess > 0:
-                    cursor.execute(
-                        """
-                        DELETE FROM ml_training_examples
-                        WHERE id IN (
-                            SELECT id
-                            FROM ml_training_examples
-                            WHERE strategy_id = ?
-                              AND model_key   = ?
-                            ORDER BY created_at ASC, id ASC
-                            LIMIT ?
-                        )
-                        """,
-                        (strategy_id, model_key, excess),
+                    DELETE FROM ml_training_examples
+                    WHERE id IN (
+                        SELECT id
+                        FROM ml_training_examples
+                        WHERE strategy_id = ?
+                            AND model_key   = ?
+                        ORDER BY created_at ASC, id ASC
+                        LIMIT ?
                     )
+                    """,
+                    (strategy_id, model_key, excess),
+                )
 
-                conn.commit()
-            finally:
-                conn.close()
+            conn.commit()
 
     def load_ml_training_window(
         self,
@@ -2002,22 +1940,19 @@ class SQLitePortfolioStore(PortfolioStore):
 
         with self._lock:
             conn = self._get_conn()
-            try:
-                cursor = conn.cursor()
-                cursor.execute(
-                    """
-                    SELECT features, label, sample_weight
-                    FROM ml_training_examples
-                    WHERE strategy_id = ?
-                      AND model_key   = ?
-                    ORDER BY created_at DESC
-                    LIMIT ?
-                    """,
-                    (strategy_id, model_key, max_examples),
-                )
-                rows = cursor.fetchall()
-            finally:
-                conn.close()
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT features, label, sample_weight
+                FROM ml_training_examples
+                WHERE strategy_id = ?
+                    AND model_key   = ?
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (strategy_id, model_key, max_examples),
+            )
+            rows = cursor.fetchall()
 
         X: List[List[float]] = []
         y: List[float] = []
@@ -2053,39 +1988,36 @@ class SQLitePortfolioStore(PortfolioStore):
 
         with self._lock:
             conn = self._get_conn()
-            try:
-                cursor = conn.cursor()
-                cursor.execute(
-                    """
-                    INSERT INTO ml_models (
-                        strategy_id,
-                        model_key,
-                        label_type,
-                        framework,
-                        version,
-                        updated_at,
-                        model_blob
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(strategy_id, model_key) DO UPDATE SET
-                        label_type = excluded.label_type,
-                        framework  = excluded.framework,
-                        version    = excluded.version,
-                        updated_at = excluded.updated_at,
-                        model_blob = excluded.model_blob
-                    """,
-                    (
-                        strategy_id,
-                        model_key,
-                        str(label_type),
-                        str(framework),
-                        int(version),
-                        updated_at,
-                        blob,
-                    ),
-                )
-                conn.commit()
-            finally:
-                conn.close()
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO ml_models (
+                    strategy_id,
+                    model_key,
+                    label_type,
+                    framework,
+                    version,
+                    updated_at,
+                    model_blob
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(strategy_id, model_key) DO UPDATE SET
+                    label_type = excluded.label_type,
+                    framework  = excluded.framework,
+                    version    = excluded.version,
+                    updated_at = excluded.updated_at,
+                    model_blob = excluded.model_blob
+                """,
+                (
+                    strategy_id,
+                    model_key,
+                    str(label_type),
+                    str(framework),
+                    int(version),
+                    updated_at,
+                    blob,
+                ),
+            )
+            conn.commit()
 
     def load_ml_model(
         self, strategy_id: str, model_key: str
@@ -2094,20 +2026,17 @@ class SQLitePortfolioStore(PortfolioStore):
 
         with self._lock:
             conn = self._get_conn()
-            try:
-                cursor = conn.cursor()
-                cursor.execute(
-                    """
-                    SELECT model_blob, updated_at
-                    FROM ml_models
-                    WHERE strategy_id = ?
-                      AND model_key   = ?
-                    """,
-                    (strategy_id, model_key),
-                )
-                row = cursor.fetchone()
-            finally:
-                conn.close()
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT model_blob, updated_at
+                FROM ml_models
+                WHERE strategy_id = ?
+                    AND model_key   = ?
+                """,
+                (strategy_id, model_key),
+            )
+            row = cursor.fetchone()
 
         if not row or row[0] is None:
             return None
