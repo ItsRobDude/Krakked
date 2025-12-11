@@ -12,7 +12,6 @@ import time
 from collections import defaultdict
 from dataclasses import dataclass
 from typing import (
-    Callable,
     DefaultDict,
     Dict,
     Iterable,
@@ -24,7 +23,7 @@ from typing import (
     cast,
 )
 
-from kraken_bot.config import OHLCBar, PortfolioConfig
+from kraken_bot.config import PortfolioConfig
 from kraken_bot.market_data.api import MarketDataAPI
 from kraken_bot.portfolio.models import (
     AssetBalance,
@@ -305,10 +304,10 @@ class Portfolio:
         # Check for assets in local but not in live (implying 0 live)
         for asset, bal in self.balances.items():
             if asset not in live_assets and bal.total > 0:
-                 # Check value
-                 val = to_base(bal.total, asset)
-                 if val > tolerance_base:
-                     drift_detected = True
+                # Check value
+                val = to_base(bal.total, asset)
+                if val > tolerance_base:
+                    drift_detected = True
 
         # 2. Compare Positions (Trades) vs Ledger Balances (self.balances)
         # This is the "internal consistency" check.

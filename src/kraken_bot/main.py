@@ -572,7 +572,7 @@ def run(allow_interactive_setup: bool = True) -> int:
                                 extra=structured_log_extra(event="setup_failed_retry"),
                             )
 
-                    except Exception as e:
+                    except Exception:
                         logger.exception(
                             "Critical error during re-initialization",
                             extra=structured_log_extra(event="reinit_error"),
@@ -673,7 +673,11 @@ def run(allow_interactive_setup: bool = True) -> int:
         logger.critical(
             "Portfolio schema mismatch: %s",
             exc,
-            extra=structured_log_extra(event="schema_mismatch"),
+            extra=structured_log_extra(
+                event="schema_mismatch",
+                found_schema=exc.found,
+                expected_schema=exc.expected,
+            ),
         )
         return 1
     except RuntimeError as exc:

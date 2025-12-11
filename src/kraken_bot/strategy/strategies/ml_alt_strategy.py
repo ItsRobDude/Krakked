@@ -84,10 +84,12 @@ class AIPredictorAltStrategy(Strategy):
         pair, timeframe = key
         model_key = self._model_key(pair, timeframe)
 
-        restored_model = load_model(ctx, self.id, model_key)
-        if restored_model is not None:
-            self.models[key] = restored_model
-            self.model_initialized[key] = True
+        loaded = load_model(ctx, self.id, model_key)
+        if loaded is not None:
+            restored_model, _ = loaded
+            if isinstance(restored_model, PassiveAggressiveClassifier):
+                self.models[key] = restored_model
+                self.model_initialized[key] = True
             return
 
         X, y = load_training_window(

@@ -8,7 +8,6 @@ from typing import List, Optional, Tuple
 
 from kraken_bot.config import StrategyConfig
 from kraken_bot.market_data.api import MarketDataAPI
-from kraken_bot.market_data.exceptions import DataStaleError
 from kraken_bot.portfolio.manager import PortfolioService
 from kraken_bot.strategy.base import Strategy, StrategyContext
 from kraken_bot.strategy.features import compute_features_from_window
@@ -89,7 +88,7 @@ class AIRegressionStrategy(Strategy):
 
         if loaded is not None:
             restored_model, updated_at = loaded
-            if restored_model is not None:
+            if isinstance(restored_model, PassiveAggressiveRegressor):
                 self.model = restored_model
                 self.model_initialized = True
 
