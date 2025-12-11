@@ -190,13 +190,28 @@ class AIRegressionStrategy(Strategy):
             logger.info("Caught up ML model with %d examples", training_count)
 
     def _compute_features_from_window(self, ohlc_window: list) -> Optional[List[float]]:
+        if not ohlc_window or len(ohlc_window) < 3:
+            return None
+
         closes = [float(bar.close) for bar in ohlc_window]
-        return compute_features_from_window(
-            closes,
-            self.params.short_window,
-            self.params.long_window,
-            self.params.lookback_bars
-        )
+        last_close, prev_close = closes[-1], closes[-2]
+        if prev_close <= 0:
+            return None
+
+        bar_t = ohlc[-1]
+        bar_prev = ohlc[-2]
+
+        label = (bar_t.close - bar_prev.close) / bar_prev.close if bar_prev.close > 0 else 0.0
+
+        mean_close = sum(closes) / len(closes)
+        volatility = 0.0
+        if mean_close > 0 and len(closes) > 1:
+            variance = sum((c - mean_close) ** 2 for c in closes) / len(closes)
+            volatility = math.sqrt(variance) / mean_close
+
+        if features:
+            return features, label
+        return None
 
     def _extract_features(
         self, ctx: StrategyContext, pair: str, timeframe: str
