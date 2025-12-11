@@ -22,7 +22,7 @@ def client():
 
 
 def test_public_request_success(client):
-    with patch.object(client.session, "get") as mock_get:
+    with patch.object(client.session, "request") as mock_request:
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json.return_value = {
@@ -30,15 +30,17 @@ def test_public_request_success(client):
             "result": {"server_time": 123456},
         }
         mock_response.raise_for_status.return_value = None
-        mock_get.return_value = mock_response
+        mock_request.return_value = mock_response
 
         result = client.get_public("Time")
         assert result == {"server_time": 123456}
-        mock_get.assert_called_once()
+        mock_request.assert_called_once()
+        args, kwargs = mock_request.call_args
+        assert args[0] == "GET"
 
 
 def test_request_timeout_forwarded_to_public_calls(client):
-    with patch.object(client.session, "get") as mock_get:
+    with patch.object(client.session, "request") as mock_request:
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json.return_value = {
@@ -46,11 +48,11 @@ def test_request_timeout_forwarded_to_public_calls(client):
             "result": {"server_time": 123456},
         }
         mock_response.raise_for_status.return_value = None
-        mock_get.return_value = mock_response
+        mock_request.return_value = mock_response
 
         client.get_public("Time")
 
-        _, kwargs = mock_get.call_args
+        _, kwargs = mock_request.call_args
         assert kwargs["timeout"] == client.request_timeout
 
 
@@ -65,15 +67,16 @@ def test_private_request_signature_generation(client):
     # Provide a valid base64 string. "Secret" -> base64 encoded
     client.api_secret = "U2VjcmV0"
 
-    with patch.object(client.session, "post") as mock_post:
+    with patch.object(client.session, "request") as mock_request:
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json.return_value = {"error": [], "result": {"balance": 100}}
-        mock_post.return_value = mock_response
+        mock_request.return_value = mock_response
 
         client.get_private("Balance")
 
-        args, kwargs = mock_post.call_args
+        args, kwargs = mock_request.call_args
+        assert args[0] == "POST"
         headers = kwargs["headers"]
 
         assert "API-Key" in headers
@@ -90,36 +93,36 @@ def test_request_timeout_forwarded_to_private_calls():
         request_timeout=3.5,
     )
 
-    with patch.object(client.session, "post") as mock_post:
+    with patch.object(client.session, "request") as mock_request:
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json.return_value = {"error": [], "result": {"balance": 100}}
         mock_response.raise_for_status.return_value = None
-        mock_post.return_value = mock_response
+        mock_request.return_value = mock_response
 
         client.get_private("Balance")
 
-        _, kwargs = mock_post.call_args
+        _, kwargs = mock_request.call_args
         assert kwargs["timeout"] == pytest.approx(3.5)
 
 
 def test_api_error_handling(client):
-    with patch.object(client.session, "get") as mock_get:
+    with patch.object(client.session, "request") as mock_request:
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json.return_value = {"error": ["EGeneral:Invalid arguments"]}
-        mock_get.return_value = mock_response
+        mock_request.return_value = mock_response
 
         with pytest.raises(KrakenAPIError, match="EGeneral:Invalid arguments"):
             client.get_public("AssetPairs")
 
 
 def test_rate_limit_error_handling(client):
-    with patch.object(client.session, "get") as mock_get:
+    with patch.object(client.session, "request") as mock_request:
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json.return_value = {"error": ["EAPI:Rate limit exceeded"]}
-        mock_get.return_value = mock_response
+        mock_request.return_value = mock_response
 
         start_time = time.monotonic()
         with pytest.raises(RateLimitError):
@@ -129,11 +132,11 @@ def test_rate_limit_error_handling(client):
 
 
 def test_service_unavailable_error_handling(client):
-    with patch.object(client.session, "get") as mock_get:
+    with patch.object(client.session, "request") as mock_request:
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json.return_value = {"error": ["EService:Unavailable"]}
-        mock_get.return_value = mock_response
+        mock_request.return_value = mock_response
 
         with pytest.raises(ServiceUnavailableError):
             client.get_public("Time")
@@ -141,21 +144,21 @@ def test_service_unavailable_error_handling(client):
 
 def test_timeout_maps_to_service_unavailable(client):
     with patch.object(
-        client.session, "get", side_effect=requests.exceptions.Timeout("timeout")
+        client.session, "request", side_effect=requests.exceptions.Timeout("timeout")
     ):
         with pytest.raises(ServiceUnavailableError):
             client.get_public("Time")
 
 
 def test_http_rate_limit_status_maps_to_rate_limit_error(client):
-    with patch.object(client.session, "get") as mock_get:
+    with patch.object(client.session, "request") as mock_request:
         mock_response = MagicMock()
         mock_response.status_code = 429
         mock_response.raise_for_status.side_effect = requests.exceptions.HTTPError(
             response=mock_response
         )
         mock_response.json.return_value = {"error": []}
-        mock_get.return_value = mock_response
+        mock_request.return_value = mock_response
 
         with pytest.raises(RateLimitError):
             client.get_public("Time")
@@ -171,7 +174,7 @@ def test_shared_rate_limiter_enforces_combined_rate():
         response.status_code = 200
         response.json.return_value = {"error": [], "result": {"ok": True}}
         response.raise_for_status.return_value = None
-        client.session.get = MagicMock(return_value=response)
+        client.session.request = MagicMock(return_value=response)
 
     start = time.monotonic()
     client_one.get_public("Time")
