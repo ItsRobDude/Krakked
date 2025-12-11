@@ -13,7 +13,8 @@ from typing import Callable, Optional, Tuple
 import uvicorn
 
 from kraken_bot import APP_VERSION
-from kraken_bot.bootstrap import bootstrap
+from kraken_bot.bootstrap import CredentialBootstrapError, bootstrap
+from kraken_bot.config_loader import load_config
 from kraken_bot.execution.oms import ExecutionService
 from kraken_bot.logging_config import (
     configure_logging,
@@ -84,7 +85,7 @@ def _start_ui_server(
 
 
 def _shutdown(
-    context: AppContext,
+    context: Optional[AppContext],
     stop_event: threading.Event,
     ui_server: Optional[uvicorn.Server],
     ui_thread: Optional[threading.Thread],
@@ -98,7 +99,7 @@ def _shutdown(
     stop_event.set()
 
     metrics_snapshot = None
-    if isinstance(context.metrics, SystemMetrics):
+    if context and isinstance(context.metrics, SystemMetrics):
         metrics_snapshot = context.metrics.snapshot()
 
     shutdown_extra = structured_log_extra(
@@ -112,7 +113,9 @@ def _shutdown(
             "strategy_engine": True,
         },
         portfolio_db_path=getattr(
-            getattr(context.portfolio, "store", None), "db_path", None
+            getattr(context.portfolio if context else None, "store", None),
+            "db_path",
+            None,
         ),
     )
 
@@ -133,15 +136,17 @@ def _shutdown(
     if ui_thread and ui_thread.is_alive():
         ui_thread.join(timeout=5)
 
-    try:
-        context.execution_service.cancel_all()
-    except Exception as exc:  # pragma: no cover - defensive logging
-        logger.error("Error canceling open orders during shutdown: %s", exc)
+    if context and context.execution_service:
+        try:
+            context.execution_service.cancel_all()
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logger.error("Error canceling open orders during shutdown: %s", exc)
 
-    try:
-        context.market_data.shutdown()
-    except Exception as exc:  # pragma: no cover - defensive logging
-        logger.error("Error shutting down market data: %s", exc)
+    if context and context.market_data:
+        try:
+            context.market_data.shutdown()
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logger.error("Error shutting down market data: %s", exc)
 
     logger.info(
         "Shutdown complete",
@@ -358,173 +363,283 @@ def run(allow_interactive_setup: bool = True) -> int:
     db_path = "portfolio.db"
     schema_status = None
 
-    try:
-        client, config, rate_limiter = bootstrap(
-            allow_interactive_setup=allow_interactive_setup
-        )
+    # Context components (mutable references for reloading)
+    context_ref: list[Optional[AppContext]] = [None]
+    ui_server_ref: list[Optional[uvicorn.Server]] = [None]
+    ui_thread_ref: list[Optional[threading.Thread]] = [None]
 
-        db_path = getattr(getattr(config, "portfolio", None), "db_path", "portfolio.db")
-        auto_migrate = config.portfolio.auto_migrate_schema
-        execution_mode = getattr(config.execution, "mode", "unknown")
+    # Flags to control the main loop state
+    is_setup_mode = False
 
-        if auto_migrate and execution_mode in {"paper", "live"}:
-            raise RuntimeError(
-                "auto_migrate_schema must be False in paper/live mode. "
-                "Run `krakked portfolio-migrate` to upgrade the DB schema first."
+    def _bootstrap_and_create_context() -> AppContext:
+        """
+        Attempts to bootstrap the application.
+        If it fails due to credentials/config, returns a setup-mode context.
+        """
+        nonlocal is_setup_mode
+        try:
+            # We disable interactive setup in headless/daemon mode to force
+            # CredentialBootstrapError if keys are missing.
+            client, config, rate_limiter = bootstrap(
+                allow_interactive_setup=allow_interactive_setup
             )
 
-        if auto_migrate:
-            schema_status = ensure_portfolio_schema(
-                db_path, CURRENT_SCHEMA_VERSION, migrate=True
+            db_path = getattr(
+                getattr(config, "portfolio", None), "db_path", "portfolio.db"
             )
-            with sqlite3.connect(db_path) as conn:
-                ensure_portfolio_tables(conn)
-                conn.commit()
-        else:
-            schema_status = assert_portfolio_schema(db_path)
+            auto_migrate = config.portfolio.auto_migrate_schema
+            execution_mode = getattr(config.execution, "mode", "unknown")
 
-        market_data = MarketDataAPI(
-            config, rest_client=client, rate_limiter=rate_limiter
-        )
-        market_data.initialize()
+            if auto_migrate and execution_mode in {"paper", "live"}:
+                raise RuntimeError(
+                    "auto_migrate_schema must be False in paper/live mode. "
+                    "Run `krakked portfolio-migrate` to upgrade the DB schema first."
+                )
 
-        portfolio = PortfolioService(
-            config,
-            market_data,
-            db_path=db_path,
-            rest_client=client,
-            rate_limiter=rate_limiter,
-        )
-        portfolio.initialize()
+            if auto_migrate:
+                schema_status_local = ensure_portfolio_schema(
+                    db_path, CURRENT_SCHEMA_VERSION, migrate=True
+                )
+                with sqlite3.connect(db_path) as conn:
+                    ensure_portfolio_tables(conn)
+                    conn.commit()
+            else:
+                schema_status_local = assert_portfolio_schema(db_path)
+                # Assign to outer scope if needed, though mostly for logging
+                nonlocal schema_status
+                schema_status = schema_status_local
 
-        logger.info(
-            "Portfolio schema ready",
-            extra=structured_log_extra(
-                event="schema_status",
-                env=get_log_environment(),
-                schema_version=portfolio.store.get_schema_version(),
-            ),
-        )
+            market_data = MarketDataAPI(
+                config, rest_client=client, rate_limiter=rate_limiter
+            )
+            market_data.initialize()
 
-        strategy_engine = StrategyEngine(config, market_data, portfolio)
-        strategy_engine.initialize()
-
-        execution_service = ExecutionService(
-            client=client,
-            config=config.execution,
-            market_data=market_data,
-            store=portfolio.store,
-            rate_limiter=rate_limiter,
-            risk_status_provider=strategy_engine.get_risk_status,
-        )
-
-        metrics = SystemMetrics()
-
-        session_state = SessionState(
-            active=config.session.active,
-            mode=config.session.mode,
-            loop_interval_sec=config.session.loop_interval_sec,
-            profile_name=config.session.profile_name,
-            ml_enabled=config.session.ml_enabled,
-        )
-
-        context = AppContext(
-            config=config,
-            client=client,
-            market_data=market_data,
-            portfolio_service=portfolio,
-            portfolio=portfolio,
-            strategy_engine=strategy_engine,
-            execution_service=execution_service,
-            metrics=metrics,
-            session=session_state,
-        )
-    except PortfolioSchemaError as exc:
-        logger.critical(
-            "Portfolio schema mismatch: expected %s but found %s",
-            exc.expected,
-            exc.found,
-            extra=structured_log_extra(
-                event="schema_mismatch",
-                expected_schema=exc.expected,
-                found_schema=exc.found,
+            portfolio = PortfolioService(
+                config,
+                market_data,
                 db_path=db_path,
-            ),
-        )
-        return 1
-    except RuntimeError as exc:
-        logger.critical(
-            "%s", exc, extra=structured_log_extra(event="schema_guard_failed")
-        )
-        return 1
+                rest_client=client,
+                rate_limiter=rate_limiter,
+            )
+            portfolio.initialize()
 
-    logger.info(
-        "Starting Kraken bot",
-        extra=structured_log_extra(
-            event="startup",
-            env=get_log_environment(),
-            app_version=APP_VERSION,
-            execution_mode=getattr(config.execution, "mode", "unknown"),
-            portfolio_db_path=getattr(portfolio.store, "db_path", None),
-            schema_version=getattr(schema_status, "version", None)
-            or getattr(portfolio.store, "get_schema_version", lambda: None)(),
-        ),
-    )
+            logger.info(
+                "Portfolio schema ready",
+                extra=structured_log_extra(
+                    event="schema_status",
+                    env=get_log_environment(),
+                    schema_version=portfolio.store.get_schema_version(),
+                ),
+            )
 
-    ui_server, ui_thread = _start_ui_server(context)
+            strategy_engine = StrategyEngine(config, market_data, portfolio)
+            strategy_engine.initialize()
 
-    strategy_interval = _coerce_interval(
-        getattr(config.strategies, "loop_interval_seconds", None),
-        60,
-        "strategy interval",
-    )
-    portfolio_interval = _coerce_interval(
-        getattr(config.portfolio, "sync_interval_seconds", None),
-        300,
-        "portfolio sync interval",
-    )
-
-    def refresh_metrics_state() -> None:
-        _refresh_metrics_state(portfolio, execution_service, metrics)
-
-    last_strategy_cycle = datetime.now(timezone.utc) - timedelta(
-        seconds=strategy_interval
-    )
-    last_portfolio_sync = datetime.now(timezone.utc) - timedelta(
-        seconds=portfolio_interval
-    )
-
-    def _signal_handler(signum, _frame) -> None:  # pragma: no cover - signal driven
-        _shutdown(
-            context,
-            stop_event,
-            ui_server,
-            ui_thread,
-            reason="signal",
-            signal_number=signum,
-        )
-
-    signal.signal(signal.SIGINT, _signal_handler)
-    signal.signal(signal.SIGTERM, _signal_handler)
-
-    try:
-        while not stop_event.is_set():
-            now = datetime.now(timezone.utc)
-
-            last_portfolio_sync, last_strategy_cycle = _run_loop_iteration(
-                now=now,
-                strategy_interval=strategy_interval,
-                portfolio_interval=portfolio_interval,
-                last_strategy_cycle=last_strategy_cycle,
-                last_portfolio_sync=last_portfolio_sync,
-                portfolio=portfolio,
+            execution_service = ExecutionService(
+                client=client,
+                config=config.execution,
                 market_data=market_data,
+                store=portfolio.store,
+                rate_limiter=rate_limiter,
+                risk_status_provider=strategy_engine.get_risk_status,
+            )
+
+            metrics = SystemMetrics()
+
+            session_state = SessionState(
+                active=config.session.active,
+                mode=config.session.mode,
+                loop_interval_sec=config.session.loop_interval_sec,
+                profile_name=config.session.profile_name,
+                ml_enabled=config.session.ml_enabled,
+            )
+
+            is_setup_mode = False
+            return AppContext(
+                config=config,
+                client=client,
+                market_data=market_data,
+                portfolio_service=portfolio,
+                portfolio=portfolio,
                 strategy_engine=strategy_engine,
                 execution_service=execution_service,
                 metrics=metrics,
-                refresh_metrics_state=refresh_metrics_state,
-                session_active=context.session.active,
+                session=session_state,
+                is_setup_mode=False,
             )
+
+        except (CredentialBootstrapError, FileNotFoundError) as exc:
+            logger.warning(
+                "Bootstrap failed (%s); entering setup mode",
+                exc,
+                extra=structured_log_extra(event="enter_setup_mode"),
+            )
+            # Load basic config just for UI settings if available, else default
+            config = load_config()
+            is_setup_mode = True
+            return AppContext(
+                config=config,
+                client=None,
+                market_data=None,
+                portfolio_service=None,
+                portfolio=None,
+                strategy_engine=None,
+                execution_service=None,
+                metrics=None,
+                is_setup_mode=True,
+            )
+
+    try:
+        # Initial Bootstrap
+        context = _bootstrap_and_create_context()
+        context_ref[0] = context
+
+        logger.info(
+            "Starting Kraken bot",
+            extra=structured_log_extra(
+                event="startup",
+                env=get_log_environment(),
+                app_version=APP_VERSION,
+                setup_mode=is_setup_mode,
+            ),
+        )
+
+        ui_server, ui_thread = _start_ui_server(context)
+        ui_server_ref[0] = ui_server
+        ui_thread_ref[0] = ui_thread
+
+        def _signal_handler(signum, _frame) -> None:
+            _shutdown(
+                context_ref[0],
+                stop_event,
+                ui_server_ref[0],
+                ui_thread_ref[0],
+                reason="signal",
+                signal_number=signum,
+            )
+
+        signal.signal(signal.SIGINT, _signal_handler)
+        signal.signal(signal.SIGTERM, _signal_handler)
+
+        while not stop_event.is_set():
+            if is_setup_mode:
+                # Wait for UI to signal re-initialization
+                logger.info("Waiting for setup completion...")
+                context.reinitialize_event.wait(timeout=1.0)
+
+                if context.reinitialize_event.is_set():
+                    logger.info("Re-initialization signal received. reloading...")
+                    # Stop old services if any (unlikely in setup mode, but safe)
+                    if context.market_data:
+                        context.market_data.shutdown()
+
+                    # Re-run bootstrap
+                    try:
+                        new_context = _bootstrap_and_create_context()
+                        # Update the global context reference in place if possible,
+                        # or update the app.state.context reference if we can reach it.
+                        # The UI holds a reference to 'context'. We should update its internals.
+                        # But AppContext is immutable dataclass mostly.
+                        # Actually, we can just replace the object in app.state
+                        # BUT the UI server is running in a thread with the old app instance.
+                        # We must update the attributes of the existing context object?
+                        # Dataclasses are mutable by default unless frozen=True.
+                        # AppContext is not frozen.
+
+                        context.config = new_context.config
+                        context.client = new_context.client
+                        context.market_data = new_context.market_data
+                        context.portfolio = new_context.portfolio
+                        context.portfolio_service = new_context.portfolio_service
+                        context.strategy_engine = new_context.strategy_engine
+                        context.execution_service = new_context.execution_service
+                        context.metrics = new_context.metrics
+                        context.session = new_context.session
+                        context.is_setup_mode = new_context.is_setup_mode
+                        context.reinitialize_event.clear()
+
+                        # Re-evaluate setup mode flag
+                        is_setup_mode = new_context.is_setup_mode
+
+                        if not is_setup_mode:
+                            logger.info(
+                                "System successfully initialized from setup mode",
+                                extra=structured_log_extra(event="setup_complete"),
+                            )
+                        else:
+                            logger.warning(
+                                "Re-initialization failed to clear setup mode",
+                                extra=structured_log_extra(event="setup_failed_retry"),
+                            )
+
+                    except Exception as e:
+                        logger.exception(
+                            "Critical error during re-initialization",
+                            extra=structured_log_extra(event="reinit_error"),
+                        )
+                        # Keep waiting in setup mode
+                        context.reinitialize_event.clear()
+
+                continue
+
+            # --- Normal Operation Loop ---
+            strategy_interval = _coerce_interval(
+                getattr(context.config.strategies, "loop_interval_seconds", None),
+                60,
+                "strategy interval",
+            )
+            portfolio_interval = _coerce_interval(
+                getattr(context.config.portfolio, "sync_interval_seconds", None),
+                300,
+                "portfolio sync interval",
+            )
+
+            # Initialize timers if fresh from setup
+            if "last_strategy_cycle" not in locals():
+                last_strategy_cycle = datetime.now(timezone.utc) - timedelta(
+                    seconds=strategy_interval
+                )
+            if "last_portfolio_sync" not in locals():
+                last_portfolio_sync = datetime.now(timezone.utc) - timedelta(
+                    seconds=portfolio_interval
+                )
+
+            # Define refresh closure locally to capture current context
+            def refresh_metrics_state() -> None:
+                if context.portfolio and context.execution_service and context.metrics:
+                    _refresh_metrics_state(
+                        context.portfolio, context.execution_service, context.metrics
+                    )
+
+            now = datetime.now(timezone.utc)
+
+            if (
+                context.portfolio
+                and context.market_data
+                and context.strategy_engine
+                and context.execution_service
+                and context.metrics
+            ):
+                last_portfolio_sync, last_strategy_cycle = _run_loop_iteration(
+                    now=now,
+                    strategy_interval=strategy_interval,
+                    portfolio_interval=portfolio_interval,
+                    last_strategy_cycle=last_strategy_cycle,
+                    last_portfolio_sync=last_portfolio_sync,
+                    portfolio=context.portfolio,
+                    market_data=context.market_data,
+                    strategy_engine=context.strategy_engine,
+                    execution_service=context.execution_service,
+                    metrics=context.metrics,
+                    refresh_metrics_state=refresh_metrics_state,
+                    session_active=context.session.active,
+                )
+            else:
+                logger.error(
+                    "Invalid state: not in setup mode but services are missing; forcing setup mode"
+                )
+                is_setup_mode = True
+                continue
 
             session_interval = getattr(context.session, "loop_interval_sec", None)
             loop_interval = _coerce_interval(
@@ -534,8 +649,27 @@ def run(allow_interactive_setup: bool = True) -> int:
             )
 
             stop_event.wait(loop_interval)
+
+    except PortfolioSchemaError as exc:
+        logger.critical(
+            "Portfolio schema mismatch: %s",
+            exc,
+            extra=structured_log_extra(event="schema_mismatch"),
+        )
+        return 1
+    except RuntimeError as exc:
+        logger.critical(
+            "%s", exc, extra=structured_log_extra(event="schema_guard_failed")
+        )
+        return 1
     finally:
-        _shutdown(context, stop_event, ui_server, ui_thread, reason="loop_exit")
+        _shutdown(
+            context_ref[0],
+            stop_event,
+            ui_server_ref[0],
+            ui_thread_ref[0],
+            reason="loop_exit",
+        )
 
     return 0
 

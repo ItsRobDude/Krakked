@@ -104,6 +104,40 @@ def dump_runtime_overrides(
                 pass
 
 
+def write_initial_config(config_data: dict, config_dir: Path | None = None) -> None:
+    """
+    Writes the initial configuration file to disk.
+
+    Args:
+        config_data: A dictionary representing the full configuration structure.
+        config_dir: Optional override for the target directory.
+    """
+    config_dir = config_dir or get_config_dir()
+    config_dir.mkdir(parents=True, exist_ok=True)
+    path = config_dir / "config.yaml"
+
+    if path.exists():
+        raise FileExistsError(f"Configuration file already exists at {path}")
+
+    # Ensure critical sections exist to prevent invalid configs
+    if "region" not in config_data:
+        config_data["region"] = {"code": "US_CA", "default_quote": "USD"}
+    if "universe" not in config_data:
+        config_data["universe"] = {"include_pairs": [], "min_24h_volume_usd": 0.0}
+
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    try:
+        with open(tmp_path, "w") as f:
+            yaml.safe_dump(config_data, f, default_flow_style=False)
+        tmp_path.replace(path)
+    finally:
+        if tmp_path.exists() and tmp_path != path:
+            try:
+                tmp_path.unlink()
+            except Exception:
+                pass
+
+
 def load_config(
     config_path: Optional[Path] = None, env: Optional[str] = None
 ) -> AppConfig:

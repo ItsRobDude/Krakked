@@ -265,6 +265,14 @@ def persist_api_keys(
     )
 
 
+def unlock_secrets(password: str) -> dict:
+    """
+    Attempts to decrypt the secrets file with the provided password.
+    Returns the dictionary of secrets if successful.
+    """
+    return _decrypt_secrets(password)
+
+
 # --- Core Credential Loading ---
 
 

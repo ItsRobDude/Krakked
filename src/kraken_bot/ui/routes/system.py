@@ -6,12 +6,13 @@ import logging
 from dataclasses import asdict
 from typing import Literal, Optional
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 import kraken_bot.connection.validation as validation_mod
 from kraken_bot import APP_VERSION
-from kraken_bot.config import dump_runtime_overrides
+from kraken_bot.config import dump_runtime_overrides, get_config_dir
+from kraken_bot.config_loader import write_initial_config
 from kraken_bot.connection.exceptions import (
     AuthError,
     KrakenAPIError,
@@ -19,6 +20,12 @@ from kraken_bot.connection.exceptions import (
 )
 from kraken_bot.credentials import CredentialStatus
 from kraken_bot.market_data.api import MarketDataStatus
+from kraken_bot.secrets import (
+    SECRETS_FILE_NAME,
+    SecretsDecryptionError,
+    persist_api_keys,
+    unlock_secrets,
+)
 from kraken_bot.ui.logging import build_request_log_extra
 from kraken_bot.ui.models import ApiEnvelope, SystemHealthPayload, SystemMetricsPayload
 
@@ -33,6 +40,36 @@ class CredentialPayload(BaseModel):
     apiKey: str
     apiSecret: str
     region: str
+
+
+class SetupCredentialsPayload(BaseModel):
+    """Payload for saving credentials during setup."""
+
+    apiKey: str
+    apiSecret: str
+    password: str
+    region: Optional[str] = "US"
+
+
+class SetupUnlockPayload(BaseModel):
+    """Payload for unlocking secrets."""
+
+    password: str
+
+
+class SetupConfigPayload(BaseModel):
+    """Payload for creating initial configuration."""
+
+    region_code: str
+    universe_pairs: list[str] = Field(default_factory=list)
+
+
+class SetupStatusPayload(BaseModel):
+    """Status of the setup/onboarding process."""
+
+    configured: bool
+    secrets_exist: bool
+    unlocked: bool
 
 
 class ModeChangePayload(BaseModel):
@@ -91,10 +128,177 @@ def _session_payload(ctx) -> SessionStatePayload:
     )
 
 
+def _check_setup_mode(ctx):
+    """Raises 503 if the system is in setup mode."""
+    if ctx.is_setup_mode:
+        raise HTTPException(
+            status_code=503,
+            detail="System is in setup mode. Please complete configuration.",
+        )
+
+
+@router.get("/setup/status", response_model=ApiEnvelope[SetupStatusPayload])
+async def setup_status(request: Request) -> ApiEnvelope[SetupStatusPayload]:
+    """Returns the current setup status (config present? secrets present? unlocked?)."""
+    ctx = _context(request)
+    config_dir = get_config_dir()
+    config_path = config_dir / "config.yaml"
+    secrets_path = config_dir / SECRETS_FILE_NAME
+
+    configured = config_path.exists()
+    secrets_exist = secrets_path.exists()
+    # If secrets exist but we are still in setup mode, it means they are locked
+    # (or config is missing, but 'configured' flag covers that).
+    # If ctx.is_setup_mode is False, we are unlocked.
+    unlocked = not ctx.is_setup_mode if secrets_exist else False
+
+    # Edge case: If secrets exist but we are in setup mode, we are locked.
+    # If secrets don't exist, 'unlocked' is False (conceptually locked/missing).
+
+    return ApiEnvelope(
+        data=SetupStatusPayload(
+            configured=configured, secrets_exist=secrets_exist, unlocked=unlocked
+        ),
+        error=None,
+    )
+
+
+@router.post("/setup/config", response_model=ApiEnvelope[dict])
+async def setup_config(
+    payload: SetupConfigPayload, request: Request
+) -> ApiEnvelope[dict]:
+    """Writes the initial configuration file."""
+    try:
+        config_data = {
+            "region": {"code": payload.region_code, "default_quote": "USD"},
+            "universe": {"include_pairs": payload.universe_pairs},
+            # Default minimal structure
+            "execution": {"mode": "paper"},
+            "ui": {"enabled": True, "port": 8000},
+        }
+        write_initial_config(config_data)
+        logger.info(
+            "Initial configuration written",
+            extra=build_request_log_extra(request, event="setup_config_written"),
+        )
+        return ApiEnvelope(data={"success": True}, error=None)
+    except Exception as exc:
+        logger.exception(
+            "Failed to write configuration",
+            extra=build_request_log_extra(request, event="setup_config_failed"),
+        )
+        return ApiEnvelope(data=None, error=str(exc))
+
+
+@router.post("/setup/credentials", response_model=ApiEnvelope[dict])
+async def setup_credentials(
+    payload: SetupCredentialsPayload, request: Request
+) -> ApiEnvelope[dict]:
+    """Validates and saves encrypted credentials."""
+    try:
+        # 1. Validate against Kraken
+        result = validation_mod.validate_credentials(
+            payload.apiKey, payload.apiSecret, region=payload.region
+        )
+
+        if not result.validated:
+            return ApiEnvelope(
+                data={"valid": False},
+                error=f"Validation failed: {result.validation_error or result.error}",
+            )
+
+        # 2. Persist
+        persist_api_keys(
+            api_key=payload.apiKey,
+            api_secret=payload.apiSecret,
+            password=payload.password,
+            validated=True,
+        )
+
+        logger.info(
+            "Credentials saved via setup",
+            extra=build_request_log_extra(request, event="setup_credentials_saved"),
+        )
+        return ApiEnvelope(data={"success": True}, error=None)
+
+    except Exception as exc:
+        logger.exception(
+            "Failed to save credentials",
+            extra=build_request_log_extra(request, event="setup_credentials_failed"),
+        )
+        return ApiEnvelope(data=None, error=str(exc))
+
+
+@router.post("/setup/unlock", response_model=ApiEnvelope[dict])
+async def setup_unlock(
+    payload: SetupUnlockPayload, request: Request
+) -> ApiEnvelope[dict]:
+    """Attempts to unlock the system with the master password."""
+    ctx = _context(request)
+    try:
+        # Verify password by attempting decryption
+        _ = unlock_secrets(payload.password)
+
+        # Signal main loop to re-bootstrap
+        # We store the password in the process env temporarily so bootstrap can find it
+        # This is a trade-off: The bootstrap function looks at env var KRAKEN_BOT_SECRET_PW
+        # or prompts user. Since we are headless, we must set the env var.
+        import os
+
+        os.environ["KRAKEN_BOT_SECRET_PW"] = payload.password
+
+        if ctx.is_setup_mode:
+            logger.info(
+                "Unlock successful, signaling re-initialization",
+                extra=build_request_log_extra(request, event="setup_unlock_success"),
+            )
+            ctx.reinitialize_event.set()
+
+        return ApiEnvelope(data={"success": True}, error=None)
+
+    except SecretsDecryptionError:
+        logger.warning(
+            "Unlock failed: invalid password",
+            extra=build_request_log_extra(request, event="setup_unlock_failed"),
+        )
+        return ApiEnvelope(data=None, error="Invalid password")
+    except Exception as exc:
+        logger.exception(
+            "Unlock failed with error",
+            extra=build_request_log_extra(request, event="setup_unlock_error"),
+        )
+        return ApiEnvelope(data=None, error=str(exc))
+
+
 @router.get("/health", response_model=ApiEnvelope[SystemHealthPayload])
 async def system_health(request: Request) -> ApiEnvelope[SystemHealthPayload]:
     try:
         ctx = _context(request)
+        if ctx.is_setup_mode:
+            # Return a limited health payload in setup mode
+            return ApiEnvelope(
+                data=SystemHealthPayload(
+                    app_version=APP_VERSION,
+                    execution_mode="setup",
+                    rest_api_reachable=False,
+                    websocket_connected=False,
+                    streaming_pairs=0,
+                    stale_pairs=0,
+                    subscription_errors=0,
+                    market_data_ok=False,
+                    market_data_status="unavailable",
+                    market_data_reason="setup_required",
+                    market_data_stale=False,
+                    execution_ok=False,
+                    current_mode="setup",
+                    ui_read_only=False,
+                    kill_switch_active=False,
+                    drift_detected=False,
+                    market_data_max_staleness=None,
+                ),
+                error=None,
+            )
+
         data_status = ctx.market_data.get_data_status()
         metrics_snapshot = ctx.metrics.snapshot()
         execution_config = ctx.config.execution
@@ -202,6 +406,7 @@ async def start_session(
     payload: SessionConfigPayload, request: Request
 ) -> ApiEnvelope[SessionStatePayload]:
     ctx = _context(request)
+    _check_setup_mode(ctx)
 
     if ctx.config.ui.read_only:
         logger.warning(
@@ -295,6 +500,7 @@ async def start_session(
 @router.post("/session/stop", response_model=ApiEnvelope[SessionStatePayload])
 async def stop_session(request: Request) -> ApiEnvelope[SessionStatePayload]:
     ctx = _context(request)
+    _check_setup_mode(ctx)
 
     if ctx.config.ui.read_only:
         logger.warning(
@@ -322,6 +528,7 @@ async def stop_session(request: Request) -> ApiEnvelope[SessionStatePayload]:
 async def list_profiles(request: Request) -> ApiEnvelope[list[ProfileSummaryPayload]]:
     try:
         ctx = _context(request)
+        _check_setup_mode(ctx)
         profiles = [
             ProfileSummaryPayload(name=name, description=cfg.description)
             for name, cfg in ctx.config.profiles.items()
@@ -338,7 +545,9 @@ async def list_profiles(request: Request) -> ApiEnvelope[list[ProfileSummaryPayl
 @router.get("/metrics", response_model=ApiEnvelope[SystemMetricsPayload])
 async def system_metrics(request: Request) -> ApiEnvelope[SystemMetricsPayload]:
     try:
-        metrics = _context(request).metrics
+        ctx = _context(request)
+        _check_setup_mode(ctx)
+        metrics = ctx.metrics
         # Thin wrapper around the shared SystemMetrics snapshot to avoid duplicating logic.
         snapshot = metrics.snapshot()
         payload = SystemMetricsPayload(**snapshot)
@@ -355,6 +564,7 @@ async def system_metrics(request: Request) -> ApiEnvelope[SystemMetricsPayload]:
 async def get_config(request: Request) -> ApiEnvelope[dict]:
     try:
         ctx = _context(request)
+        _check_setup_mode(ctx)
         return ApiEnvelope(data=_redacted_config(ctx.config), error=None)
     except Exception as exc:  # pragma: no cover - defensive
         logger.exception(
@@ -369,6 +579,7 @@ async def set_execution_mode(
     payload: ModeChangePayload, request: Request
 ) -> ApiEnvelope[dict]:
     ctx = _context(request)
+    _check_setup_mode(ctx)
 
     if ctx.config.ui.read_only:
         logger.warning(
