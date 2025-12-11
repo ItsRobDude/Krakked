@@ -330,7 +330,21 @@ class StrategyEngine:
                 )[:MAX_INTENTS_PER_CYCLE]
             ]
 
-        risk_actions = self.risk_engine.process_intents(filtered, weights=weights)
+        # Fetch pending orders from the store to prevent double-spending in risk checks
+        pending_orders = []
+        if self.portfolio.store and hasattr(self.portfolio.store, "get_open_orders"):
+            try:
+                pending_orders = self.portfolio.store.get_open_orders()
+            except Exception as exc:  # pragma: no cover - defensive logging
+                logger.warning(
+                    "Failed to fetch pending orders for risk check: %s",
+                    exc,
+                    extra=structured_log_extra(event="pending_orders_fetch_error"),
+                )
+
+        risk_actions = self.risk_engine.process_intents(
+            filtered, weights=weights, pending_orders=pending_orders
+        )
 
         for action in risk_actions:
             strat_cfg = self.config.strategies.configs.get(action.strategy_id)

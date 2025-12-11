@@ -14,6 +14,7 @@ from kraken_bot.config import RiskConfig
 from kraken_bot.logging_config import structured_log_extra
 from kraken_bot.market_data.api import MarketDataAPI
 from kraken_bot.market_data.exceptions import DataStaleError
+from kraken_bot.execution.models import LocalOrder
 from kraken_bot.portfolio.manager import PortfolioService
 from kraken_bot.portfolio.models import DriftStatus
 
@@ -98,7 +99,9 @@ class RiskEngine:
     def clear_manual_kill_switch(self) -> None:
         self._manual_kill_switch_active = False
 
-    def build_risk_context(self) -> RiskContext:
+    def build_risk_context(
+        self, pending_orders: Optional[List[LocalOrder]] = None
+    ) -> RiskContext:
         equity_view = self.portfolio.get_equity(include_manual=True)
         try:
             drift_status_candidate = self.portfolio.get_drift_status()
@@ -122,6 +125,40 @@ class RiskEngine:
         _ = self.portfolio.get_asset_exposure(include_manual=False)
         _ = self.portfolio.get_realized_pnl_by_strategy(include_manual=True)
         _ = self.portfolio.get_realized_pnl_by_strategy(include_manual=False)
+
+        # Integrate pending BUY orders as synthetic positions to prevent double-spending
+        if pending_orders:
+            for order in pending_orders:
+                # Conservative: Only count BUYS as committed exposure.
+                # Ignore SELLS (treat as if we still hold the asset until filled).
+                if order.side != "buy":
+                    continue
+
+                # Use limit price if available, else mark-to-market
+                price = order.requested_price
+                if not price or price <= 0:
+                    price = self.market_data.get_latest_price(order.pair) or 0.0
+
+                # Determine base asset (best effort)
+                try:
+                    meta = self.market_data.get_pair_metadata(order.pair)
+                    base_asset = meta.base if meta else order.pair.split("/")[0]
+                except Exception:
+                    base_asset = "UNKNOWN"
+
+                syn_pos = SpotPosition(
+                    pair=order.pair,
+                    base_asset=base_asset,
+                    quote_asset="USD",  # Simplified assumption
+                    base_size=order.requested_base_size,
+                    avg_entry_price=price,
+                    realized_pnl_base=0.0,
+                    fees_paid_base=0.0,
+                    strategy_tag=order.strategy_id,
+                    raw_userref=str(order.userref) if order.userref else None,
+                    comment="pending_buy",
+                )
+                positions.append(syn_pos)
 
         manual_positions: List[Any] = []
         strategy_positions: List[Any] = []
@@ -216,8 +253,9 @@ class RiskEngine:
         self,
         intents: List[StrategyIntent],
         weights: StrategyWeights | None = None,
+        pending_orders: Optional[List[LocalOrder]] = None,
     ) -> List[RiskAdjustedAction]:
-        ctx = self.build_risk_context()
+        ctx = self.build_risk_context(pending_orders=pending_orders)
 
         per_strategy_caps = self._build_effective_caps(weights)
 
