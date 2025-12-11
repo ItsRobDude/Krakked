@@ -686,11 +686,13 @@ class SQLitePortfolioStore(PortfolioStore):
 
     def get_schema_version(self) -> Optional[int]:
         try:
-            conn = self._get_conn()
-            cursor = conn.cursor()
-            row = cursor.execute(
-                "SELECT value FROM meta WHERE key = 'schema_version'"
-            ).fetchone()
+            with self._lock:
+                conn = self._get_conn()
+                cursor = conn.cursor()
+                row = cursor.execute(
+                    "SELECT value FROM meta WHERE key = 'schema_version'"
+                ).fetchone()
+
             if row is None:
                 return None
 

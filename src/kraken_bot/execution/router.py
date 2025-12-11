@@ -3,7 +3,7 @@
 import logging
 from decimal import Decimal, ROUND_FLOOR, ROUND_HALF_UP
 from typing import TYPE_CHECKING, Any, Optional, Tuple
-from uuid import uuid4
+from uuid import NAMESPACE_DNS, uuid5
 
 from kraken_bot.config import ExecutionConfig
 from kraken_bot.market_data.models import PairMetadata
@@ -179,8 +179,14 @@ def build_order_from_plan_action(
     if requested_price is not None:
         rounded_price = round_order_price(pair_metadata, requested_price)
 
+    # Create a unique seed string
+    seed_str = f"{plan.plan_id}-{action.strategy_id}-{action.pair}-{side}"
+
+    # Generate deterministic UUID
+    local_id = str(uuid5(NAMESPACE_DNS, seed_str))
+
     order = LocalOrder(
-        local_id=str(uuid4()),
+        local_id=local_id,
         plan_id=plan.plan_id,
         strategy_id=action.strategy_id,
         pair=action.pair,
