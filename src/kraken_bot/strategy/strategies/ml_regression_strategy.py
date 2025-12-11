@@ -11,6 +11,7 @@ from kraken_bot.market_data.api import MarketDataAPI
 from kraken_bot.market_data.exceptions import DataStaleError
 from kraken_bot.portfolio.manager import PortfolioService
 from kraken_bot.strategy.base import Strategy, StrategyContext
+from kraken_bot.strategy.features import compute_features_from_window
 from kraken_bot.strategy.ml_models import PassiveAggressiveRegressor
 from kraken_bot.strategy.ml_persistence import (
     load_model,
@@ -197,13 +198,10 @@ class AIRegressionStrategy(Strategy):
         if prev_close <= 0:
             return None
 
-        pct_change = (last_close - prev_close) / prev_close
+        bar_t = ohlc[-1]
+        bar_prev = ohlc[-2]
 
-        short_len = min(self.params.short_window, len(closes))
-        long_len = min(self.params.long_window, len(closes))
-        short_ma = sum(closes[-short_len:]) / short_len if short_len > 0 else 0.0
-        long_ma = sum(closes[-long_len:]) / long_len if long_len > 0 else 0.0
-        trend_diff = ((short_ma - long_ma) / long_ma) if long_ma > 0 else 0.0
+        label = (bar_t.close - bar_prev.close) / bar_prev.close if bar_prev.close > 0 else 0.0
 
         mean_close = sum(closes) / len(closes)
         volatility = 0.0
@@ -211,7 +209,9 @@ class AIRegressionStrategy(Strategy):
             variance = sum((c - mean_close) ** 2 for c in closes) / len(closes)
             volatility = math.sqrt(variance) / mean_close
 
-        return [pct_change, trend_diff, volatility]
+        if features:
+            return features, label
+        return None
 
     def _extract_features(
         self, ctx: StrategyContext, pair: str, timeframe: str
