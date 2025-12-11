@@ -110,7 +110,7 @@ def test_submit_order_sets_dead_man_switch(sample_order, pair_metadata):
 
     order = adapter.submit_order(sample_order, pair_metadata)
 
-    assert order.raw_request["expiretm"] == "+15"
+    assert "expiretm" not in order.raw_request
     client.cancel_all_orders_after.assert_called_once_with(15)
 
 
