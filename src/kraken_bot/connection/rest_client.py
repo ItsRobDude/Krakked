@@ -68,6 +68,24 @@ class KrakenRESTClient:
         sigdigest = base64.b64encode(mac.digest())
         return sigdigest.decode()
 
+    def _handle_api_error(self, error_messages: list[str]) -> None:
+        """Categorizes and raises exceptions based on Kraken API error messages."""
+        error_msg = "; ".join(error_messages)
+
+        if "EAPI:Rate limit exceeded" in error_msg:
+            time.sleep(1)  # Backoff slightly
+            raise RateLimitError(error_msg)
+        elif (
+            "EAPI:Invalid key" in error_msg
+            or "EAPI:Invalid signature" in error_msg
+            or "EAPI:Invalid nonce" in error_msg
+        ):
+            raise AuthError(error_msg)
+        elif "EService:Unavailable" in error_msg or "EService:Busy" in error_msg:
+            raise ServiceUnavailableError(error_msg)
+        else:
+            raise KrakenAPIError(error_msg)
+
     def _request(
         self,
         endpoint: str,
@@ -79,7 +97,7 @@ class KrakenRESTClient:
         """
         self.rate_limiter.wait()
 
-        method = "post" if private else "get"
+        method = "POST" if private else "GET"
         url = self._get_url(endpoint, private)
         headers = {}
         data: Dict[str, Any] = dict(params or {})
@@ -101,16 +119,14 @@ class KrakenRESTClient:
             headers["API-Sign"] = signature
 
         try:
-            if method == "get":
-                response = self.session.get(
-                    url, params=data, headers=headers, timeout=self.request_timeout
-                )
-            elif method == "post":
-                response = self.session.post(
-                    url, data=data, headers=headers, timeout=self.request_timeout
-                )
-            else:
-                raise ValueError(f"Unsupported method: {method}")
+            response = self.session.request(
+                method,
+                url,
+                params=data if method == "GET" else None,
+                data=data if method == "POST" else None,
+                headers=headers,
+                timeout=self.request_timeout,
+            )
 
             if response.status_code == 429:
                 raise RateLimitError("Rate limit exceeded")
@@ -123,26 +139,8 @@ class KrakenRESTClient:
             response.raise_for_status()
             response_json = response.json()
 
-            error_messages = response_json.get("error") or []
-            if error_messages:
-                error_msg = "; ".join(error_messages)
-
-                # Categorize errors
-                if "EAPI:Rate limit exceeded" in error_msg:
-                    time.sleep(1)  # Backoff slightly
-                    raise RateLimitError(error_msg)
-                elif (
-                    "EAPI:Invalid key" in error_msg
-                    or "EAPI:Invalid signature" in error_msg
-                    or "EAPI:Invalid nonce" in error_msg
-                ):
-                    raise AuthError(error_msg)
-                elif (
-                    "EService:Unavailable" in error_msg or "EService:Busy" in error_msg
-                ):
-                    raise ServiceUnavailableError(error_msg)
-                else:
-                    raise KrakenAPIError(error_msg)
+            if error_messages := response_json.get("error"):
+                self._handle_api_error(error_messages)
 
             return response_json.get("result", {})
 
