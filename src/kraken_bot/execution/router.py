@@ -1,7 +1,7 @@
 # src/kraken_bot/execution/router.py
 
 import logging
-import math
+from decimal import Decimal, ROUND_FLOOR, ROUND_HALF_UP
 from typing import TYPE_CHECKING, Any, Optional, Tuple
 from uuid import uuid4
 
@@ -18,17 +18,23 @@ logger = logging.getLogger(__name__)
 
 
 def round_order_size(metadata: PairMetadata, size: float) -> float:
-    """Round order volume using PairMetadata volume precision."""
-
-    factor = 10**metadata.volume_decimals
-    rounded = math.floor(size * factor) / factor
-    return rounded
+    """Round order volume using PairMetadata volume precision (FLOOR)."""
+    try:
+        d_size = Decimal(str(size))
+        quantizer = Decimal("1." + "0" * metadata.volume_decimals)
+        return float(d_size.quantize(quantizer, rounding=ROUND_FLOOR))
+    except Exception:
+        return size
 
 
 def round_order_price(metadata: PairMetadata, price: float) -> float:
-    """Round order price using PairMetadata price precision."""
-
-    return round(price, metadata.price_decimals)
+    """Round order price using PairMetadata price precision (HALF_UP)."""
+    try:
+        d_price = Decimal(str(price))
+        quantizer = Decimal("1." + "0" * metadata.price_decimals)
+        return float(d_price.quantize(quantizer, rounding=ROUND_HALF_UP))
+    except Exception:
+        return price
 
 
 def determine_order_type(order: LocalOrder, config: ExecutionConfig) -> str:

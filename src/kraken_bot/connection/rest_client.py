@@ -73,7 +73,6 @@ class KrakenRESTClient:
         error_msg = "; ".join(error_messages)
 
         if "EAPI:Rate limit exceeded" in error_msg:
-            time.sleep(1)  # Backoff slightly
             raise RateLimitError(error_msg)
         elif (
             "EAPI:Invalid key" in error_msg
@@ -128,23 +127,34 @@ class KrakenRESTClient:
                 timeout=self.request_timeout,
             )
 
+            # 1. Attempt to parse JSON first to catch API-specific errors
+            # even if the status code implies a generic failure (e.g. 500 or 520)
+            try:
+                response_json = response.json()
+                if error_messages := response_json.get("error"):
+                    self._handle_api_error(error_messages)
+            except ValueError:
+                # Not JSON, proceed to status checks
+                response_json = {}
+
+            # 2. Handle HTTP Errors if no API error was caught above
             if response.status_code == 429:
                 raise RateLimitError("Rate limit exceeded")
 
             if 500 <= response.status_code < 600:
+                # Include the first 200 chars of body for debugging context
+                body_preview = response.text[:200] if response.text else "No body"
                 raise ServiceUnavailableError(
-                    f"Kraken API Service Error: HTTP {response.status_code}"
+                    f"Kraken API Service Error: HTTP {response.status_code} - {body_preview}"
                 )
 
             response.raise_for_status()
-            response_json = response.json()
 
-            if error_messages := response_json.get("error"):
-                self._handle_api_error(error_messages)
-
+            # 3. Return successful result
             return response_json.get("result", {})
 
         except HTTPError as e:
+            # Re-check status codes in case raise_for_status() triggered this
             status_code = e.response.status_code if e.response else None
             if status_code == 429:
                 raise RateLimitError("Rate limit exceeded") from e

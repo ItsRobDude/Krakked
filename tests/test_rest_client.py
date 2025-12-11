@@ -124,11 +124,8 @@ def test_rate_limit_error_handling(client):
         mock_response.json.return_value = {"error": ["EAPI:Rate limit exceeded"]}
         mock_request.return_value = mock_response
 
-        start_time = time.monotonic()
         with pytest.raises(RateLimitError):
             client.get_public("Time")
-        duration = time.monotonic() - start_time
-        assert duration >= 1.0  # Verify backoff sleep
 
 
 def test_service_unavailable_error_handling(client):
@@ -184,3 +181,41 @@ def test_shared_rate_limiter_enforces_combined_rate():
     assert client_one.rate_limiter is shared_limiter
     assert client_two.rate_limiter is shared_limiter
     assert elapsed >= shared_limiter.interval
+
+
+def test_error_priority_over_status(client):
+    """
+    Test that a JSON error in the body takes precedence over a 500 status code.
+    Kraken sometimes returns 5xx but with a specific error message we want to catch.
+    """
+    with patch.object(client.session, "request") as mock_request:
+        mock_response = MagicMock()
+        mock_response.status_code = 520
+        # Valid JSON with specific error
+        mock_response.json.return_value = {"error": ["EAPI:Invalid key"]}
+        # Parsing succeeds
+        mock_request.return_value = mock_response
+
+        # Should raise AuthError because of "EAPI:Invalid key", NOT ServiceUnavailableError
+        with pytest.raises(AuthError, match="EAPI:Invalid key"):
+            client.get_public("Time")
+
+
+def test_5xx_with_non_json_body(client):
+    """
+    Test that a 502 Bad Gateway with raw HTML body raises ServiceUnavailableError
+    and includes the body text in the exception message.
+    """
+    with patch.object(client.session, "request") as mock_request:
+        mock_response = MagicMock()
+        mock_response.status_code = 502
+        mock_response.text = "<html>Bad Gateway</html>"
+        # JSON parsing fails
+        mock_response.json.side_effect = ValueError("No JSON")
+        mock_request.return_value = mock_response
+
+        with pytest.raises(ServiceUnavailableError) as exc:
+            client.get_public("Time")
+
+        assert "HTTP 502" in str(exc.value)
+        assert "Bad Gateway" in str(exc.value)
