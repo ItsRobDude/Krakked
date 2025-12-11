@@ -1,5 +1,6 @@
 """UI application context helpers."""
 
+import threading
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -29,14 +30,16 @@ class AppContext:
     """Bundled services and configuration for UI consumers."""
 
     config: AppConfig
-    client: KrakenRESTClient
-    market_data: MarketDataAPI
-    portfolio_service: PortfolioService
-    portfolio: PortfolioService
-    strategy_engine: StrategyEngine
-    execution_service: ExecutionService
-    metrics: SystemMetrics
+    client: Optional[KrakenRESTClient]
+    market_data: Optional[MarketDataAPI]
+    portfolio_service: Optional[PortfolioService]
+    portfolio: Optional[PortfolioService]
+    strategy_engine: Optional[StrategyEngine]
+    execution_service: Optional[ExecutionService]
+    metrics: Optional[SystemMetrics]
     session: SessionState = field(default_factory=SessionState)
+    is_setup_mode: bool = False
+    reinitialize_event: threading.Event = field(default_factory=threading.Event)
 
 
 def build_app_context(allow_interactive_setup: bool = True) -> AppContext:
