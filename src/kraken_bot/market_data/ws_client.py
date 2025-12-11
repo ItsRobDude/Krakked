@@ -6,7 +6,7 @@ import logging
 import threading
 import time
 from collections import defaultdict
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from websockets.exceptions import ConnectionClosed
 from websockets.legacy.client import WebSocketClientProtocol, connect
@@ -24,11 +24,17 @@ class KrakenWSClientV2:
     and maintains an in-memory cache of the latest market data.
     """
 
-    def __init__(self, pairs: List[PairMetadata], timeframes: List[str] = ["1m"]):
+    def __init__(
+        self,
+        pairs: List[PairMetadata],
+        timeframes: List[str] = ["1m"],
+        on_candle_closed: Optional[Callable[[str, str, Dict[str, Any]], None]] = None,
+    ):
         self._url = KRAKEN_WS_V2_URL
         self._pairs = pairs
         self._ws_symbols = [p.ws_symbol for p in self._pairs]
         self._timeframes = timeframes
+        self._on_candle_closed = on_candle_closed
         self._running = False
         self._thread: Optional[threading.Thread] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
@@ -39,9 +45,13 @@ class KrakenWSClientV2:
         self.last_ticker_update_ts: Dict[str, float] = defaultdict(float)
         self.last_ohlc_update_ts: Dict[str, Dict[str, float]] = defaultdict(dict)
         self.ticker_cache: Dict[str, Dict[str, Any]] = {}
-        self.ohlc_cache: Dict[str, Dict[str, Any]] = (
-            {}
-        )  # key: pair, value: {timeframe: ohlc_data}
+        # ohlc_cache structure: {pair: {timeframe: latest_ohlc_data_dict}}
+        self.ohlc_cache: Dict[str, Dict[str, Any]] = {}
+
+        # Track last closed timestamp to detect rollovers
+        # {pair: {timeframe: last_seen_endtime_str}}
+        self._last_candle_endtime: Dict[str, Dict[str, str]] = defaultdict(dict)
+
         self.subscription_status: Dict[str, Dict[str, Dict[str, Any]]] = defaultdict(
             dict
         )
@@ -193,9 +203,37 @@ class KrakenWSClientV2:
                     )
                     return
 
+                candle_data = data["data"][0]
+
+                # Check for candle rollover
+                # 'endtime' identifies the candle interval.
+                current_endtime = candle_data.get("endtime")
+                last_endtime = self._last_candle_endtime[canonical_pair].get(timeframe_key)
+
+                # If we have a new endtime, the previous candle (if any) is closed.
+                # However, we only have the 'current' update message.
+                # To capture the *closed* state of the previous candle, we should have cached it.
+                # BUT, WS streams updates. The update with the NEW endtime is for the NEW candle.
+                # The FINAL state of the OLD candle was the last update we received with `last_endtime`.
+
+                if last_endtime and current_endtime != last_endtime:
+                    # Previous candle closed. Retrieve its last known state from cache.
+                    last_candle = self.ohlc_cache.get(canonical_pair, {}).get(timeframe_key)
+                    if last_candle and self._on_candle_closed:
+                        # Ensure we are persisting the candle associated with last_endtime
+                        if last_candle.get("endtime") == last_endtime:
+                            try:
+                                self._on_candle_closed(canonical_pair, timeframe_key, last_candle)
+                            except Exception as exc:
+                                logger.error(f"Error in on_candle_closed callback: {exc}")
+
+                # Update trackers
+                if current_endtime:
+                    self._last_candle_endtime[canonical_pair][timeframe_key] = current_endtime
+
                 if canonical_pair not in self.ohlc_cache:
                     self.ohlc_cache[canonical_pair] = {}
-                self.ohlc_cache[canonical_pair][timeframe_key] = data["data"][0]
+                self.ohlc_cache[canonical_pair][timeframe_key] = candle_data
                 self.last_ohlc_update_ts[canonical_pair][
                     timeframe_key
                 ] = time.monotonic()

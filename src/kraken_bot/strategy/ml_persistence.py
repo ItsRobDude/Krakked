@@ -95,7 +95,9 @@ def save_model(
         return
 
 
-def load_model(ctx: StrategyContext, strategy_id: str, model_key: str):
+def load_model(
+    ctx: StrategyContext, strategy_id: str, model_key: str
+) -> Optional[Tuple[object, datetime]]:
     store = _get_ml_store(ctx.portfolio)
     if store is None or not hasattr(store, "load_ml_model"):
         return None
