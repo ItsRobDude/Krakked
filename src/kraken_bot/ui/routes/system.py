@@ -23,6 +23,7 @@ from kraken_bot.market_data.api import MarketDataStatus
 from kraken_bot.secrets import (
     SECRETS_FILE_NAME,
     SecretsDecryptionError,
+    delete_secrets,
     persist_api_keys,
     unlock_secrets,
 )
@@ -266,6 +267,27 @@ async def setup_unlock(
         logger.exception(
             "Unlock failed with error",
             extra=build_request_log_extra(request, event="setup_unlock_error"),
+        )
+        return ApiEnvelope(data=None, error=str(exc))
+
+
+@router.post("/reset", response_model=ApiEnvelope[dict])
+async def system_reset(request: Request) -> ApiEnvelope[dict]:
+    """Resets the system by deleting credentials and entering setup mode."""
+    ctx = _context(request)
+    try:
+        delete_secrets()
+        ctx.is_setup_mode = True
+
+        logger.info(
+            "System reset requested: credentials deleted",
+            extra=build_request_log_extra(request, event="system_reset"),
+        )
+        return ApiEnvelope(data={"success": True}, error=None)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.exception(
+            "System reset failed",
+            extra=build_request_log_extra(request, event="system_reset_failed"),
         )
         return ApiEnvelope(data=None, error=str(exc))
 

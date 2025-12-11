@@ -273,6 +273,15 @@ def unlock_secrets(password: str) -> dict:
     return _decrypt_secrets(password)
 
 
+def delete_secrets() -> None:
+    """
+    Safely deletes the secrets file if it exists.
+    """
+    secrets_path = get_config_dir() / SECRETS_FILE_NAME
+    if secrets_path.exists():
+        secrets_path.unlink()
+
+
 # --- Core Credential Loading ---
 
 

@@ -583,6 +583,25 @@ def run(allow_interactive_setup: bool = True) -> int:
                 continue
 
             # --- Normal Operation Loop ---
+
+            # Check if reset was requested via UI (which sets context.is_setup_mode=True)
+            if context.is_setup_mode and not is_setup_mode:
+                logger.info(
+                    "Reset detected (context.is_setup_mode=True). Entering setup mode...",
+                    extra=structured_log_extra(event="enter_setup_mode_runtime"),
+                )
+                if context.market_data:
+                    context.market_data.shutdown()
+
+                # Update local flag to enter the setup loop on next iteration
+                is_setup_mode = True
+
+                # Clear services to prevent usage (optional, but cleaner)
+                context.market_data = None
+                context.execution_service = None
+
+                continue
+
             strategy_interval = _coerce_interval(
                 getattr(context.config.strategies, "loop_interval_seconds", None),
                 60,
