@@ -124,11 +124,8 @@ def test_rate_limit_error_handling(client):
         mock_response.json.return_value = {"error": ["EAPI:Rate limit exceeded"]}
         mock_request.return_value = mock_response
 
-        start_time = time.monotonic()
         with pytest.raises(RateLimitError):
             client.get_public("Time")
-        duration = time.monotonic() - start_time
-        assert duration >= 1.0  # Verify backoff sleep
 
 
 def test_service_unavailable_error_handling(client):

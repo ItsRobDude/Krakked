@@ -73,7 +73,6 @@ class KrakenRESTClient:
         error_msg = "; ".join(error_messages)
 
         if "EAPI:Rate limit exceeded" in error_msg:
-            time.sleep(1)  # Backoff slightly
             raise RateLimitError(error_msg)
         elif (
             "EAPI:Invalid key" in error_msg
