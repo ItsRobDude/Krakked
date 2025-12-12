@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from typing import Callable, Dict
 
@@ -346,3 +347,83 @@ def migrate_7_to_8(conn: sqlite3.Connection) -> None:
         """
     )
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_balance_snapshots_time ON balance_snapshots(time)")
+
+
+def migrate_8_to_9(conn: sqlite3.Connection) -> None:
+    """Migrate ledger_entries numeric columns from REAL to TEXT for exact precision."""
+    cursor = conn.cursor()
+
+    # 1. Create new table with TEXT columns for amount, fee, balance
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS ledger_entries_new (
+            id TEXT PRIMARY KEY,
+            time REAL,
+            type TEXT,
+            subtype TEXT,
+            aclass TEXT,
+            asset TEXT,
+            amount TEXT,   -- Changed from REAL
+            fee TEXT,      -- Changed from REAL
+            balance TEXT,  -- Changed from REAL
+            refid TEXT,
+            misc TEXT,
+            raw_json TEXT
+        )
+        """
+    )
+
+    # 2. Migrate data
+    # We fetch all rows and attempt to reconstruct exact values from raw_json
+    cursor.execute("SELECT * FROM ledger_entries")
+    rows = cursor.fetchall()
+    # Schema of old table:
+    # 0:id, 1:time, 2:type, 3:subtype, 4:aclass, 5:asset, 6:amount(REAL), 7:fee(REAL), 8:balance(REAL), 9:refid, 10:misc, 11:raw_json
+
+    migrated_count = 0
+    for row in rows:
+        lid = row[0]
+        raw_json_str = row[11]
+
+        # Default to existing values cast to string
+        amount_str = str(row[6])
+        fee_str = str(row[7])
+        balance_str = str(row[8]) if row[8] is not None else None
+
+        # Try to get exact values from raw JSON
+        if raw_json_str:
+            try:
+                raw_data = json.loads(raw_json_str)
+                # Kraken API returns these as strings or numbers.
+                # If they are strings in JSON, we prefer that.
+                if "amount" in raw_data:
+                    amount_str = str(raw_data["amount"])
+                if "fee" in raw_data:
+                    fee_str = str(raw_data["fee"])
+                if "balance" in raw_data:
+                    balance_str = str(raw_data["balance"])
+            except Exception:
+                # Fallback to DB values if JSON parsing fails
+                pass
+
+        cursor.execute(
+            """
+            INSERT INTO ledger_entries_new (
+                id, time, type, subtype, aclass, asset, amount, fee, balance, refid, misc, raw_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                row[0], row[1], row[2], row[3], row[4], row[5],
+                amount_str, fee_str, balance_str,
+                row[9], row[10], row[11]
+            )
+        )
+        migrated_count += 1
+
+    # 3. Drop old table and rename new one
+    cursor.execute("DROP TABLE ledger_entries")
+    cursor.execute("ALTER TABLE ledger_entries_new RENAME TO ledger_entries")
+
+    # 4. Re-create indexes
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_ledger_entries_time ON ledger_entries(time)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_ledger_entries_refid ON ledger_entries(refid)")

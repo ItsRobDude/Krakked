@@ -69,6 +69,7 @@ class MarketDataAPI:
 
         self._universe: List[PairMetadata] = []
         self._universe_map: Dict[str, PairMetadata] = {}
+        self._alias_map: Dict[str, PairMetadata] = {}
 
         self._ws_client: Optional[KrakenWSClientV2] = None
         self._ws_stale_tolerance = config.market_data.ws.get(
@@ -160,7 +161,73 @@ class MarketDataAPI:
                 self._universe = cached
 
         self._universe_map = {p.canonical: p for p in self._universe}
+
+        # Build dynamic alias map
+        self._alias_map = {}
+        for p in self._universe:
+            # Add standard identifiers
+            self._alias_map[p.canonical] = p
+            self._alias_map[p.raw_name] = p
+            self._alias_map[p.rest_symbol] = p
+            if p.ws_symbol:
+                self._alias_map[p.ws_symbol] = p
+
+            # Add slash-less variants (e.g., XBT/USD -> XBTUSD) if applicable
+            # Many pairs come as "XBT/USD" in ws_symbol or altname.
+            slashless_ws = p.ws_symbol.replace("/", "") if p.ws_symbol else ""
+            if slashless_ws:
+                self._alias_map[slashless_ws] = p
+
+            slashless_rest = p.rest_symbol.replace("/", "") if p.rest_symbol else ""
+            if slashless_rest:
+                self._alias_map[slashless_rest] = p
+
         logger.info(f"Universe refreshed. Contains {len(self._universe)} pairs.")
+
+    def normalize_pair(self, pair: str) -> str:
+        """
+        Normalize a pair string (e.g., 'BTC/USD', 'XBTUSD') to its canonical form (e.g., 'XBTUSD').
+        Uses a dynamic alias index and falls back to asset aliasing for robustness.
+        """
+        # 1. Direct lookup in alias map
+        if pair in self._alias_map:
+            return self._alias_map[pair].canonical
+
+        # 2. Try removing slashes
+        slashless = pair.replace("/", "")
+        if slashless in self._alias_map:
+            return self._alias_map[slashless].canonical
+
+        # 3. Apply asset aliases (human-friendly -> Kraken canonical)
+        # Only support minimal stable aliases for common assets
+        asset_aliases = {
+            "BTC": "XBT",
+            "DOGE": "XDG",
+        }
+
+        # Split pair (assuming / separator or 3-char split if no slash?)
+        # Kraken pairs can be messy. If there is a slash, it's easy.
+        normalized_attempt = pair
+        if "/" in pair:
+            base, quote = pair.split("/", 1)
+            base = asset_aliases.get(base, base)
+            quote = asset_aliases.get(quote, quote)
+            # Try reconstructed with slash and without
+            candidates = [f"{base}/{quote}", f"{base}{quote}"]
+            for c in candidates:
+                if c in self._alias_map:
+                    return self._alias_map[c].canonical
+        else:
+            # Heuristic: if starts with alias key
+            for alias, target in asset_aliases.items():
+                if pair.startswith(alias):
+                    # Replace prefix
+                    replaced = target + pair[len(alias):]
+                    if replaced in self._alias_map:
+                        return self._alias_map[replaced].canonical
+
+        # 4. Return original if resolution fails (caller will likely fail on lookup)
+        return pair
 
     def get_universe(self) -> List[str]:
         """Returns the canonical symbols for all pairs in the universe."""
@@ -171,9 +238,10 @@ class MarketDataAPI:
         return self._universe
 
     def get_pair_metadata(self, pair: str) -> PairMetadata:
-        if pair not in self._universe_map:
+        canonical = self.normalize_pair(pair)
+        if canonical not in self._universe_map:
             raise PairNotFoundError(pair)
-        return self._universe_map[pair]
+        return self._universe_map[canonical]
 
     def get_pair_metadata_or_raise(self, pair: str) -> PairMetadata:
         """Return metadata for ``pair`` or raise a :class:`ValueError` if missing."""
@@ -189,14 +257,16 @@ class MarketDataAPI:
         return metadata
 
     def get_ohlc(self, pair: str, timeframe: str, lookback: int) -> List[OHLCBar]:
-        if pair not in self._universe_map:
+        canonical = self.normalize_pair(pair)
+        if canonical not in self._universe_map:
             raise PairNotFoundError(pair)
-        return self._ohlc_store.get_bars(pair, timeframe, lookback)
+        return self._ohlc_store.get_bars(canonical, timeframe, lookback)
 
     def get_ohlc_since(self, pair: str, timeframe: str, since_ts: int) -> List[OHLCBar]:
-        if pair not in self._universe_map:
+        canonical = self.normalize_pair(pair)
+        if canonical not in self._universe_map:
             raise PairNotFoundError(pair)
-        return self._ohlc_store.get_bars_since(pair, timeframe, since_ts)
+        return self._ohlc_store.get_bars_since(canonical, timeframe, since_ts)
 
     def backfill_ohlc(
         self, pair: str, timeframe: str, since: Optional[int] = None
@@ -205,10 +275,11 @@ class MarketDataAPI:
         Backfills historical OHLC data for the given pair and timeframe.
         Returns the number of bars fetched.
         """
-        if pair not in self._universe_map:
+        canonical = self.normalize_pair(pair)
+        if canonical not in self._universe_map:
             raise PairNotFoundError(pair)
 
-        pair_meta = self._universe_map[pair]
+        pair_meta = self._universe_map[canonical]
         return backfill_ohlc(
             pair_metadata=pair_meta,
             timeframe=timeframe,
@@ -223,6 +294,7 @@ class MarketDataAPI:
         staleness value (monotonic seconds since last update). A missing client
         or missing update yields a staleness of -1.
         """
+        # Note: pair should be canonical here, but we rely on public methods to normalize
         if not self._ws_client:
             return False, -1
 
@@ -237,11 +309,13 @@ class MarketDataAPI:
         return True, stale_time
 
     def _check_ticker_staleness(self, pair: str):
+        # pair is expected to be canonical when calling this internal helper from normalized public methods
         is_fresh, stale_time = self._ticker_freshness(pair)
         if not is_fresh:
             raise DataStaleError(pair, stale_time, self._ws_stale_tolerance)
 
     def _check_ohlc_staleness(self, pair: str, timeframe: str):
+        # pair is expected to be canonical
         if not self._ws_client:
             raise DataStaleError(
                 pair, -1, self._ws_stale_tolerance
@@ -256,6 +330,7 @@ class MarketDataAPI:
             raise DataStaleError(pair, stale_time, self._ws_stale_tolerance)
 
     def _get_rest_ticker_price(self, pair: str) -> Optional[float]:
+        # pair is expected to be canonical
         assert self._rest_client is not None
         try:
             result = self._rest_client.get_public("Ticker", params={"pair": pair})
@@ -266,6 +341,8 @@ class MarketDataAPI:
         if not result:
             return None
 
+        # The key in result depends on what we passed. If we passed XBTUSD, we get XBTUSD or XXBTZUSD.
+        # Since we use normalized pairs, we should try to match flexibly or grab the first value.
         ticker_values = next(iter(result.values()), None)
         if not ticker_values:
             return None
@@ -298,34 +375,37 @@ class MarketDataAPI:
         return None
 
     def get_latest_price(self, pair: str) -> Optional[float]:
-        is_fresh, stale_time = self._ticker_freshness(pair)
+        canonical = self.normalize_pair(pair)
+        is_fresh, stale_time = self._ticker_freshness(canonical)
 
         if is_fresh and self._ws_client:
-            ticker = self._ws_client.ticker_cache.get(pair)
+            ticker = self._ws_client.ticker_cache.get(canonical)
             if ticker:
                 # Return mid-price (avg of best bid and ask)
                 return (float(ticker["bid"]) + float(ticker["ask"])) / 2
 
         # Fallback to REST ticker
-        fallback_price = self._get_rest_ticker_price(pair)
+        fallback_price = self._get_rest_ticker_price(canonical)
         if fallback_price is not None:
             return fallback_price
 
-        raise DataStaleError(pair, stale_time, self._ws_stale_tolerance)
+        raise DataStaleError(canonical, stale_time, self._ws_stale_tolerance)
 
     def get_best_bid_ask(self, pair: str) -> Optional[Dict[str, float]]:
-        self._check_ticker_staleness(pair)
+        canonical = self.normalize_pair(pair)
+        self._check_ticker_staleness(canonical)
         if not self._ws_client:
             return None
-        ticker = self._ws_client.ticker_cache.get(pair)
+        ticker = self._ws_client.ticker_cache.get(canonical)
         if ticker:
             return {"bid": float(ticker["bid"]), "ask": float(ticker["ask"])}
         return None
 
     def get_live_ohlc(self, pair: str, timeframe: str) -> Optional[OHLCBar]:
-        self._check_ohlc_staleness(pair, timeframe)
+        canonical = self.normalize_pair(pair)
+        self._check_ohlc_staleness(canonical, timeframe)
         assert self._ws_client is not None
-        ohlc_data = self._ws_client.ohlc_cache.get(pair, {}).get(timeframe)
+        ohlc_data = self._ws_client.ohlc_cache.get(canonical, {}).get(timeframe)
         if ohlc_data:
             return OHLCBar(
                 timestamp=int(float(ohlc_data["timestamp"])),

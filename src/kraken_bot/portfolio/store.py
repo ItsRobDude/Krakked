@@ -29,7 +29,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-CURRENT_SCHEMA_VERSION = 8
+CURRENT_SCHEMA_VERSION = 9
 
 MAX_ML_TRAINING_EXAMPLES = 5000
 MIN_ML_BOOTSTRAP_EXAMPLES = 50
@@ -905,9 +905,9 @@ class SQLitePortfolioStore(PortfolioStore):
                     entry.subtype,
                     entry.aclass,
                     entry.asset,
-                    float(entry.amount),
-                    float(entry.fee),
-                    float(entry.balance) if entry.balance is not None else None,
+                    str(entry.amount),
+                    str(entry.fee),
+                    str(entry.balance) if entry.balance is not None else None,
                     entry.refid,
                     entry.misc,
                     json.dumps(entry.raw, default=str),
@@ -968,9 +968,9 @@ class SQLitePortfolioStore(PortfolioStore):
                     subtype=row[3],
                     aclass=row[4],
                     asset=row[5],
-                    amount=Decimal(str(row[6])),
-                    fee=Decimal(str(row[7])),
-                    balance=Decimal(str(row[8])) if row[8] is not None else None,
+                    amount=Decimal(row[6]),
+                    fee=Decimal(row[7]),
+                    balance=Decimal(row[8]) if row[8] is not None else None,
                     refid=row[9],
                     misc=row[10],
                     raw=json.loads(row[11]),
@@ -1012,9 +1012,9 @@ class SQLitePortfolioStore(PortfolioStore):
             subtype=row[3],
             aclass=row[4],
             asset=row[5],
-            amount=Decimal(str(row[6])),
-            fee=Decimal(str(row[7])),
-            balance=Decimal(str(row[8])) if row[8] is not None else None,
+            amount=Decimal(row[6]),
+            fee=Decimal(row[7]),
+            balance=Decimal(row[8]) if row[8] is not None else None,
             refid=row[9],
             misc=row[10],
             raw=json.loads(row[11]),

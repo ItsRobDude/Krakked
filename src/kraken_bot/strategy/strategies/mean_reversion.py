@@ -25,11 +25,11 @@ class MeanReversionStrategy(Strategy):
     def __init__(self, base_cfg: StrategyConfig):
         super().__init__(base_cfg)
         params = base_cfg.params or {}
-        pairs_param = params.get("pairs") or ["BTC/USD", "ETH/USD"]
+        pairs_param = params.get("pairs") or ["XBTUSD", "ETHUSD"]
         pairs = (
             list(pairs_param)
             if isinstance(pairs_param, list)
-            else ["BTC/USD", "ETH/USD"]
+            else ["XBTUSD", "ETHUSD"]
         )
         self.params = MeanReversionConfig(
             pairs=pairs,

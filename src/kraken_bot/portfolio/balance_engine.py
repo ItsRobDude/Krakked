@@ -37,16 +37,9 @@ class BalanceEngine:
 
         # Convert current float balance to Decimal for calculation
         current_total = Decimal(str(bal.total))
+        current_reserved = Decimal(str(bal.reserved))
 
         # Kraken invariant: new_balance = old_balance + amount - fee
-        # Note: fee is positive in ledger usually, but amount is signed.
-        # Wait, Kraken ledger 'amount' is signed change. 'fee' is usually absolute cost.
-        # Does 'amount' already include fee deduction?
-        # Kraken docs: "amount: The amount of the transaction." "fee: The fee paid for the transaction."
-        # If I buy 1 BTC, amount=+1, fee=0.001. Net change = +1 - 0.001?
-        # Let's check the prompt's reference: "computed_new = bal.total + e.amount - e.fee"
-        # I will stick to that formula.
-
         computed_new = current_total + e.amount - e.fee
 
         # Basic sanity check if Kraken provides the resulting balance
@@ -67,17 +60,13 @@ class BalanceEngine:
                 # Trust Kraken's balance ultimately
                 computed_new = e.balance
 
+        # Calculate new free balance respecting reserved amount
+        # free = max(total - reserved, 0)
+        computed_free = max(computed_new - current_reserved, Decimal("0.0"))
+
         bal.total = float(computed_new)
-        # For now, assume free == total (reserved handled by open orders separately / later)
-        bal.free = bal.total
-        # bal.reserved is kept as 0 or whatever it was, but prompt says "reserved handled separately".
-        # If we just rebuilt from scratch, reserved is 0.
-        # If we are updating live, we might want to preserve it?
-        # The prompt says: "For now, assume `free == total` (reserved handled separately by open orders engine)"
-        # So we set free = total, implying reserved = 0 effectively in this view,
-        # OR we just don't touch reserved if we are updating incrementally?
-        # The BalanceEngine seems to be a "rebuild from history" tool.
-        # If I strictly follow: "bal.free = bal.total", then reserved = 0.
+        bal.free = float(computed_free)
+        # bal.reserved is preserved as-is
 
         self.balances[e.asset] = bal
 
