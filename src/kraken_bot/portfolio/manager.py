@@ -2,7 +2,8 @@
 
 import logging
 from datetime import timedelta
-from typing import TYPE_CHECKING, Dict, List, Optional, Union
+from decimal import Decimal
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from kraken_bot.config import AppConfig
 from kraken_bot.connection.rate_limiter import RateLimiter
@@ -210,7 +211,6 @@ class PortfolioService:
             boundary_entries = self.store.get_ledger_entries(since=last_ledger_time)
             known_ids_at_boundary = {e.id for e in boundary_entries}
 
-        from decimal import Decimal
         ledger_resp = self.rest_client.get_ledgers(params=ledger_params)
         ledger_dict = ledger_resp.get("ledger", {})
 
@@ -229,22 +229,7 @@ class PortfolioService:
                 if entry_time == last_ledger_time and lid in known_ids_at_boundary:
                     continue
 
-                entry = LedgerEntry(
-                    id=lid,
-                    time=entry_time,
-                    type=info.get("type", ""),
-                    subtype=info.get("subtype", ""),
-                    aclass=info.get("aclass", ""),
-                    asset=self.portfolio._normalize_asset(info.get("asset", "")),
-                    amount=Decimal(str(info.get("amount", 0))),
-                    fee=Decimal(str(info.get("fee", 0))),
-                    balance=Decimal(str(info.get("balance", 0))) if info.get("balance") is not None else None,
-                    refid=info.get("refid"),
-                    misc=None,  # Not always present or needs extraction
-                    raw=info
-                )
-
-                new_ledger_entries.append(entry)
+                new_ledger_entries.append(self._create_ledger_entry(lid, info))
 
             # Sort by time
             new_ledger_entries.sort(key=lambda x: (x.time, x.id))
@@ -420,3 +405,28 @@ class PortfolioService:
 
     def get_latest_snapshot(self) -> Optional[PortfolioSnapshot]:
         return self.portfolio.get_latest_snapshot()
+
+    def _create_ledger_entry(self, lid: str, info: Dict[str, Any]) -> LedgerEntry:
+        """Helper to instantiate LedgerEntry from raw API response."""
+        entry_time = info.get("time", 0.0)
+
+        # Handle optional balance field
+        raw_balance = info.get("balance")
+        balance_decimal = (
+            Decimal(str(raw_balance)) if raw_balance is not None else None
+        )
+
+        return LedgerEntry(
+            id=lid,
+            time=entry_time,
+            type=info.get("type", ""),
+            subtype=info.get("subtype", ""),
+            aclass=info.get("aclass", ""),
+            asset=self.portfolio._normalize_asset(info.get("asset", "")),
+            amount=Decimal(str(info.get("amount", 0))),
+            fee=Decimal(str(info.get("fee", 0))),
+            balance=balance_decimal,
+            refid=info.get("refid"),
+            misc=None,  # Not always present or needs extraction
+            raw=info,
+        )
