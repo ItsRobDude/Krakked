@@ -565,14 +565,21 @@ def load_config(
         )
         execution_data = {}
 
+    allowed_execution_modes = {"live", "paper", "dry_run", "simulation"}
     execution_mode = execution_data.get("mode", "paper")
-    if execution_mode not in allowed_envs:
+
+    # Map 'dev' to 'dry_run' for convenience / legacy support
+    if execution_mode == "dev":
+        execution_mode = "dry_run"
+
+    if execution_mode not in allowed_execution_modes:
         logger.warning(
             "Invalid execution mode '%s'; defaulting to 'paper'",
             execution_mode,
             extra={
                 "event": "config_invalid_execution_mode",
                 "config_path": str(config_path),
+                "allowed_modes": list(allowed_execution_modes),
             },
         )
         execution_mode = "paper"

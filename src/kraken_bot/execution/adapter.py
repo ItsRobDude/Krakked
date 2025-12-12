@@ -171,6 +171,21 @@ class KrakenExecutionAdapter:
             and getattr(self.config, "allow_live_trading", False)
         )
 
+        if live_trading_allowed and not getattr(self.config, "paper_tests_completed", False):
+            order.status = "rejected"
+            order.last_error = "Live trading blocked: paper_tests_completed is False"
+            logger.error(
+                order.last_error,
+                extra=structured_log_extra(
+                    event="order_rejected_paper_tests_incomplete",
+                    plan_id=order.plan_id,
+                    strategy_id=order.strategy_id,
+                    pair=order.pair,
+                    local_order_id=order.local_id,
+                ),
+            )
+            return order
+
         if self.config.dead_man_switch_seconds > 0:
             if live_trading_allowed:
                 if hasattr(self.client, "cancel_all_orders_after"):
