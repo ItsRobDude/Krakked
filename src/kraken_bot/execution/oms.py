@@ -379,27 +379,44 @@ class ExecutionService:
                 try:
                     latest_price = self.market_data.get_latest_price(order.pair)
                 except DataStaleError as exc:
+                    reason = f"Latest price unavailable for notional guardrail: {exc}"
                     logger.warning(
-                        "Latest price unavailable for notional guardrail; proceeding without it",
+                        "Order blocked: latest price unavailable",
                         extra=structured_log_extra(
-                            event="latest_price_unavailable",
+                            event="order_rejected_price_unavailable",
                             plan_id=plan.plan_id,
                             strategy_id=action.strategy_id,
                             pair=action.pair,
                             error=str(exc),
                         ),
                     )
+                    order.status = "rejected"
+                    order.last_error = reason
+                    result.errors.append(reason)
+                    if self.store:
+                        self.store.save_order(order)
+                    result.orders.append(order)
+                    continue
+
                 except Exception as exc:  # pragma: no cover - defensive logging
+                    reason = f"Unexpected error fetching latest price: {exc}"
                     logger.exception(
-                        "Unexpected error fetching latest price for notional guardrail",
+                        "Order blocked: latest price error",
                         extra=structured_log_extra(
-                            event="latest_price_error",
+                            event="order_rejected_price_error",
                             plan_id=plan.plan_id,
                             strategy_id=action.strategy_id,
                             pair=action.pair,
                             error=str(exc),
                         ),
                     )
+                    order.status = "rejected"
+                    order.last_error = reason
+                    result.errors.append(reason)
+                    if self.store:
+                        self.store.save_order(order)
+                    result.orders.append(order)
+                    continue
 
             try:
                 logger.info(
