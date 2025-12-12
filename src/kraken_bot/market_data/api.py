@@ -134,7 +134,13 @@ class MarketDataAPI:
         """Gracefully shuts down the WebSocket client."""
         if self._ws_client:
             self._ws_client.stop()
-            logger.info("MarketDataAPI shutdown complete.")
+
+        # Shutdown OHLC store worker if supported
+        shutdown_store = getattr(self._ohlc_store, "shutdown", None)
+        if callable(shutdown_store):
+            shutdown_store()
+
+        logger.info("MarketDataAPI shutdown complete.")
 
     def refresh_universe(self):
         """Re-fetches the asset pairs and rebuilds the universe."""
