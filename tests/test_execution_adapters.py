@@ -119,7 +119,12 @@ def test_execution_service_uses_dry_run_adapter_for_dry_run_mode(inactive_risk_s
 
 
 def test_execution_service_uses_kraken_adapter_for_live_mode(inactive_risk_status):
-    config = ExecutionConfig(mode="live", validate_only=False, allow_live_trading=True)
+    config = ExecutionConfig(
+        mode="live",
+        validate_only=False,
+        allow_live_trading=True,
+        paper_tests_completed=True,
+    )
     client = MagicMock()
     client.add_order.return_value = {"txid": ["ABC123"], "error": []}
     market_data = MagicMock()
@@ -175,7 +180,12 @@ def test_kraken_execution_adapter_validate_only_success():
 def test_kraken_execution_adapter_live_success_sets_txid():
     client = MagicMock()
     client.add_order.return_value = {"error": [], "txid": ["ABC123"]}
-    config = ExecutionConfig(mode="live", validate_only=False, allow_live_trading=True)
+    config = ExecutionConfig(
+        mode="live",
+        validate_only=False,
+        allow_live_trading=True,
+        paper_tests_completed=True,
+    )
     adapter = KrakenExecutionAdapter(client=client, config=config)
 
     local_order = adapter.submit_order(
@@ -189,7 +199,12 @@ def test_kraken_execution_adapter_live_success_sets_txid():
 def test_kraken_execution_adapter_handles_kraken_errors():
     client = MagicMock()
     client.add_order.return_value = {"error": ["EOrder:Invalid"]}
-    config = ExecutionConfig(mode="live", validate_only=False, allow_live_trading=True)
+    config = ExecutionConfig(
+        mode="live",
+        validate_only=False,
+        allow_live_trading=True,
+        paper_tests_completed=True,
+    )
     adapter = KrakenExecutionAdapter(client=client, config=config)
 
     with pytest.raises(OrderRejectedError):
@@ -199,7 +214,12 @@ def test_kraken_execution_adapter_handles_kraken_errors():
 def test_kraken_execution_adapter_client_exception():
     client = MagicMock()
     client.add_order.side_effect = RuntimeError("network down")
-    config = ExecutionConfig(mode="live", validate_only=False, allow_live_trading=True)
+    config = ExecutionConfig(
+        mode="live",
+        validate_only=False,
+        allow_live_trading=True,
+        paper_tests_completed=True,
+    )
     adapter = KrakenExecutionAdapter(client=client, config=config)
 
     with pytest.raises(ExecutionError):
@@ -216,6 +236,7 @@ def test_kraken_execution_adapter_retries_on_transient_error_then_succeeds(monke
         mode="live",
         validate_only=False,
         allow_live_trading=True,
+        paper_tests_completed=True,
         max_retries=2,
         retry_backoff_seconds=0,
         retry_backoff_factor=2.0,
@@ -238,6 +259,7 @@ def test_kraken_execution_adapter_retries_exhausted_sets_error(monkeypatch):
         mode="live",
         validate_only=False,
         allow_live_trading=True,
+        paper_tests_completed=True,
         max_retries=1,
         retry_backoff_seconds=0,
         retry_backoff_factor=2.0,
@@ -254,3 +276,21 @@ def test_kraken_execution_adapter_retries_exhausted_sets_error(monkeypatch):
     assert client.add_order.call_count == 2
     assert order.status == "error"
     assert order.last_error == "down"
+
+
+def test_kraken_execution_adapter_blocks_live_trading_without_paper_tests():
+    client = MagicMock()
+    config = ExecutionConfig(
+        mode="live",
+        validate_only=False,
+        allow_live_trading=True,
+        paper_tests_completed=False,  # Explicitly False
+    )
+    adapter = KrakenExecutionAdapter(client=client, config=config)
+
+    # Should return a rejected order immediately (not raise)
+    order = adapter.submit_order(_local_order(), _pair_metadata())
+
+    assert order.status == "rejected"
+    assert "paper_tests_completed is False" in order.last_error
+    client.add_order.assert_not_called()
