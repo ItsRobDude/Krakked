@@ -68,7 +68,7 @@ def _start_ui_server(
         port=context.config.ui.port,
         log_level="info",
         log_config=None,
-        install_signal_handlers=False,
+        install_signal_handlers=False,  # type: ignore[call-arg]
     )
     server = uvicorn.Server(config)
 

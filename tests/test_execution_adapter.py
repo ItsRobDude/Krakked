@@ -85,7 +85,12 @@ def test_submit_order_live_success_sets_txid(sample_order, pair_metadata):
     client.add_order.return_value = {"error": [], "txid": ["ABC123"]}
     adapter = KrakenExecutionAdapter(
         client,
-        ExecutionConfig(mode="live", validate_only=False, allow_live_trading=True),
+        ExecutionConfig(
+            mode="live",
+            validate_only=False,
+            allow_live_trading=True,
+            paper_tests_completed=True,
+        ),
     )
 
     order = adapter.submit_order(sample_order, pair_metadata)
@@ -104,6 +109,7 @@ def test_submit_order_sets_dead_man_switch(sample_order, pair_metadata):
             mode="live",
             validate_only=False,
             allow_live_trading=True,
+            paper_tests_completed=True,
             dead_man_switch_seconds=15,
         ),
     )
@@ -125,6 +131,7 @@ def test_submit_order_with_zero_dead_man_switch_leaves_payload(
             mode="live",
             validate_only=False,
             allow_live_trading=True,
+            paper_tests_completed=True,
             dead_man_switch_seconds=0,
         ),
     )
@@ -140,7 +147,12 @@ def test_submit_order_rejected_raises(sample_order, pair_metadata):
     client.add_order.return_value = {"error": ["EGeneral:failure"]}
     adapter = KrakenExecutionAdapter(
         client,
-        ExecutionConfig(mode="live", validate_only=False, allow_live_trading=True),
+        ExecutionConfig(
+            mode="live",
+            validate_only=False,
+            allow_live_trading=True,
+            paper_tests_completed=True,
+        ),
     )
 
     with pytest.raises(OrderRejectedError, match="EGeneral:failure"):

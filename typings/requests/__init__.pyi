@@ -16,8 +16,21 @@ class Session:
         self,
         method: str,
         url: str,
+        params: Any | None = None,
+        data: Any | None = None,
+        headers: Any | None = None,
+        cookies: Any | None = None,
+        files: Any | None = None,
+        auth: Any | None = None,
+        timeout: float | tuple[float, float] | None = None,
+        allow_redirects: bool = True,
+        proxies: Any | None = None,
+        hooks: Any | None = None,
+        stream: bool | None = None,
+        verify: bool | str | None = None,
+        cert: str | tuple[str, str] | None = None,
         json: Any | None = None,
-        timeout: float | None = None,
+        **kwargs: Any,
     ) -> Response: ...
     def get(self, url: str, **kwargs: Any) -> Response: ...
     def post(self, url: str, **kwargs: Any) -> Response: ...
