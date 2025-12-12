@@ -211,6 +211,8 @@ class MarketDataAPI:
                     # Map raw base asset code (from 'base' field in API) to canonical base
                     if p.base:
                         self._asset_map[p.base] = canonical_base
+                    # Ensure identity mapping for the canonical base itself
+                    self._asset_map[canonical_base] = canonical_base
 
             # Fallback if we couldn't derive from ws_symbol, use what we have if available
             if not canonical_base and p.base:
@@ -223,17 +225,48 @@ class MarketDataAPI:
                     # But for now, let's assume ws_symbol is robust for USD pairs.
                     pass
 
-            # --- Valuation Mapping ---
-            # If this is a USD pair, map the canonical base asset to this pair
-            if p.quote == "USD":
-                target_asset = canonical_base or p.base
-                if target_asset:
-                    # Prefer pairs with higher volume/liquidity if we had that metric easily available
-                    # For now, we overwrite, assuming the universe filter gave us the "main" pair.
-                    self._valuation_map[target_asset] = p.canonical
-                    # Also map the raw asset
-                    if p.base:
-                        self._valuation_map[p.base] = p.canonical
+        # --- Valuation Mapping ---
+        # Two-pass approach to prioritize "clean" spot pairs over marked ones (e.g. .M, .F)
+        # Pass 1: Clean pairs
+        for p in self._universe:
+            if p.quote != "USD":
+                continue
+
+            # Check for markers in the canonical name or ws_symbol
+            is_clean = "." not in p.canonical and (not p.ws_symbol or "." not in p.ws_symbol)
+            if not is_clean:
+                continue
+
+            # Resolve canonical base asset
+            canonical_base = ""
+            if p.ws_symbol and "/" in p.ws_symbol:
+                parts = p.ws_symbol.split("/")
+                canonical_base = parts[0]
+
+            target_asset = canonical_base or p.base
+            if target_asset:
+                self._valuation_map[target_asset] = p.canonical
+                # Also map the raw asset if different
+                if p.base and p.base != target_asset:
+                    self._valuation_map[p.base] = p.canonical
+
+        # Pass 2: Marked pairs (fill gaps only)
+        for p in self._universe:
+            if p.quote != "USD":
+                continue
+
+            # Resolve canonical base asset
+            canonical_base = ""
+            if p.ws_symbol and "/" in p.ws_symbol:
+                parts = p.ws_symbol.split("/")
+                canonical_base = parts[0]
+
+            target_asset = canonical_base or p.base
+            if target_asset and target_asset not in self._valuation_map:
+                self._valuation_map[target_asset] = p.canonical
+
+            if p.base and p.base not in self._valuation_map:
+                self._valuation_map[p.base] = p.canonical
 
         # Explicitly ensure USD values to itself (identity)
         self._valuation_map["USD"] = "USD"  # Special case: USD is valued as 1.0 USD
@@ -293,9 +326,9 @@ class MarketDataAPI:
         if asset in self._asset_map:
             return self._asset_map[asset]
 
-        # Alias lookup
-        if asset in ASSET_ALIASES:
-            return ASSET_ALIASES[asset]
+        # Note: We intentionally do NOT use ASSET_ALIASES here to avoid flip-flopping
+        # (e.g. DOGE <-> XDG). Asset normalization should settle on one stable
+        # representation derived from the universe.
 
         # Fallback: return as-is (better than guessing incorrectly)
         return asset

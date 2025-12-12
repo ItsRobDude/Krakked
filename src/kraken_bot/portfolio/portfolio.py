@@ -158,8 +158,9 @@ class Portfolio:
     def _process_trade(self, trade: Dict):
         pair_meta = self.market_data.get_pair_metadata(trade["pair"])
         pair = pair_meta.canonical
-        base_asset = pair_meta.base
-        quote_asset = pair_meta.quote
+        # Normalize assets to ensure positions are keyed by the canonical symbol (e.g. DOGE not XDG)
+        base_asset = self.market_data.normalize_asset(pair_meta.base)
+        quote_asset = self.market_data.normalize_asset(pair_meta.quote)
 
         side = trade["type"]
         price = float(trade["price"])
