@@ -381,9 +381,9 @@ def ensure_portfolio_tables(conn: sqlite3.Connection) -> None:
             subtype TEXT,
             aclass TEXT,
             asset TEXT,
-            amount REAL,
-            fee REAL,
-            balance REAL,
+            amount TEXT,
+            fee TEXT,
+            balance TEXT,
             refid TEXT,
             misc TEXT,
             raw_json TEXT

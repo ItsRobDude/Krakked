@@ -9,7 +9,7 @@ def test_sqlite_portfolio_store_not_abstract():
 
 
 def test_current_schema_version_is_latest():
-    assert CURRENT_SCHEMA_VERSION == 8
+    assert CURRENT_SCHEMA_VERSION == 9
 
 
 def test_run_migrations_reaches_latest_and_creates_ml_tables(tmp_path):

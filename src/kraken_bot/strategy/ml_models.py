@@ -44,11 +44,11 @@ _PassiveAggressiveRegressorImpl: type
 if _sklearn_spec:
     # Real sklearn models at runtime. mypy doesn’t have stubs for scikit-learn,
     # so we tell it to treat these imports as untyped.
-    from sklearn.linear_model import (
+    from sklearn.linear_model import (  # pyright: ignore[reportMissingTypeStubs]
         PassiveAggressiveClassifier as _SklearnPassiveAggressiveClassifier,  # type: ignore[import-untyped]
     )
-    from sklearn.linear_model import (
-        PassiveAggressiveRegressor as _SklearnPassiveAggressiveRegressor,
+    from sklearn.linear_model import (  # pyright: ignore[reportMissingTypeStubs]
+        PassiveAggressiveRegressor as _SklearnPassiveAggressiveRegressor,  # type: ignore[import-untyped]
     )
 
     _PassiveAggressiveClassifierImpl = _SklearnPassiveAggressiveClassifier
