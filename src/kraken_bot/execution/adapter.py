@@ -146,6 +146,24 @@ class KrakenExecutionAdapter:
         price_for_notional = (
             payload.get("price") or latest_price or order.requested_price
         )
+
+        if price_for_notional is None and self.config.min_order_notional_usd > 0:
+            order.status = "rejected"
+            order.last_error = (
+                "Unable to verify minimum notional: price unavailable"
+            )
+            logger.error(
+                order.last_error,
+                extra=structured_log_extra(
+                    event="order_rejected_missing_price",
+                    plan_id=order.plan_id,
+                    strategy_id=order.strategy_id,
+                    pair=order.pair,
+                    local_order_id=order.local_id,
+                ),
+            )
+            return order
+
         if price_for_notional is not None:
             notional = float(payload["volume"]) * float(price_for_notional)
             if notional < self.config.min_order_notional_usd:
@@ -454,6 +472,24 @@ class DryRunExecutionAdapter:
         price_for_notional = (
             payload.get("price") or latest_price or order.requested_price
         )
+
+        if price_for_notional is None and self.config.min_order_notional_usd > 0:
+            order.status = "rejected"
+            order.last_error = (
+                "Unable to verify minimum notional: price unavailable"
+            )
+            logger.error(
+                order.last_error,
+                extra=structured_log_extra(
+                    event="order_rejected_missing_price",
+                    plan_id=order.plan_id,
+                    strategy_id=order.strategy_id,
+                    pair=order.pair,
+                    local_order_id=order.local_id,
+                ),
+            )
+            return order
+
         if price_for_notional is not None:
             notional = float(payload["volume"]) * float(price_for_notional)
             if notional < self.config.min_order_notional_usd:
