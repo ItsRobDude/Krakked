@@ -40,7 +40,7 @@ The bot is organized into distinct modules:
 
 ### Prerequisites
 
-*   **Python 3.10+**: Ensure Python is installed and added to your PATH.
+*   **Python 3.11+**: Ensure Python is installed and added to your PATH.
 *   **Poetry**: The dependency manager used for this project.
 
 ### 🐧 Linux / macOS
@@ -60,7 +60,7 @@ The bot is organized into distinct modules:
 ### 🪟 Windows 10 / 11
 
 1.  **Install Python**:
-    Download and install Python 3.10+ from [python.org](https://www.python.org/downloads/).
+    Download and install Python 3.11+ from [python.org](https://www.python.org/downloads/).
     *   *Important*: Check the box **"Add Python to PATH"** during installation.
 
 2.  **Install Poetry** (via PowerShell):
