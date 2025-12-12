@@ -179,7 +179,9 @@ class AIPredictorStrategy(Strategy):
 
             for pair in pairs:
                 # Get history covering the gap
-                ohlc = ctx.market_data.get_ohlc(pair, timeframe, lookback=lookback + self.params.lookback_bars)
+                ohlc = ctx.market_data.get_ohlc(
+                    pair, timeframe, lookback=lookback + self.params.lookback_bars
+                )
                 if not ohlc or len(ohlc) < 2:
                     continue
 
@@ -190,7 +192,7 @@ class AIPredictorStrategy(Strategy):
                 # Iterate from index that corresponds to last_updated up to end
                 for i in range(self.params.lookback_bars, len(ohlc)):
                     bar_t = ohlc[i]
-                    bar_prev = ohlc[i-1]
+                    bar_prev = ohlc[i - 1]
 
                     if bar_t.timestamp <= start_ts:
                         continue

@@ -1,5 +1,5 @@
-
 from unittest.mock import MagicMock
+
 from kraken_bot.execution.router import round_order_price, round_order_size
 from kraken_bot.market_data.models import PairMetadata
 

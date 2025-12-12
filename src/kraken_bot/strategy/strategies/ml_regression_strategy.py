@@ -157,13 +157,15 @@ class AIRegressionStrategy(Strategy):
             lookback = min(bars_missed + 5, 500)
 
             for pair in pairs:
-                ohlc = ctx.market_data.get_ohlc(pair, timeframe, lookback=lookback + self.params.lookback_bars)
+                ohlc = ctx.market_data.get_ohlc(
+                    pair, timeframe, lookback=lookback + self.params.lookback_bars
+                )
                 if not ohlc or len(ohlc) < 2:
                     continue
 
                 for i in range(self.params.lookback_bars, len(ohlc)):
                     bar_t = ohlc[i]
-                    bar_prev = ohlc[i-1]
+                    bar_prev = ohlc[i - 1]
 
                     if bar_t.timestamp <= start_ts:
                         continue
@@ -177,7 +179,11 @@ class AIRegressionStrategy(Strategy):
                     if not features:
                         continue
 
-                    delta = (bar_t.close - bar_prev.close) / bar_prev.close if bar_prev.close > 0 else 0.0
+                    delta = (
+                        (bar_t.close - bar_prev.close) / bar_prev.close
+                        if bar_prev.close > 0
+                        else 0.0
+                    )
 
                     self.model.partial_fit([features], [delta])
                     training_count += 1
@@ -194,7 +200,7 @@ class AIRegressionStrategy(Strategy):
             closes,
             self.params.short_window,
             self.params.long_window,
-            self.params.lookback_bars
+            self.params.lookback_bars,
         )
 
     def _extract_features(
@@ -230,7 +236,11 @@ class AIRegressionStrategy(Strategy):
         bar_t = ohlc[-1]
         bar_prev = ohlc[-2]
 
-        label = (bar_t.close - bar_prev.close) / bar_prev.close if bar_prev.close > 0 else 0.0
+        label = (
+            (bar_t.close - bar_prev.close) / bar_prev.close
+            if bar_prev.close > 0
+            else 0.0
+        )
 
         features_window = ohlc[:-1]
         features = self._compute_features_from_window(features_window)

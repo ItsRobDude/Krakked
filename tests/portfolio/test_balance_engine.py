@@ -5,10 +5,7 @@ from kraken_bot.portfolio.balance_engine import (
     classify_cashflow,
     rebuild_balances,
 )
-from kraken_bot.portfolio.models import (
-    CashFlowCategory,
-    LedgerEntry,
-)
+from kraken_bot.portfolio.models import CashFlowCategory, LedgerEntry
 
 
 def test_balance_engine_apply_entry():

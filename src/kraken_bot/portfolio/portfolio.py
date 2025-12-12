@@ -11,6 +11,7 @@ from __future__ import annotations
 import time
 from collections import defaultdict
 from dataclasses import dataclass
+from decimal import ROUND_FLOOR, ROUND_HALF_UP, Decimal
 from typing import (
     DefaultDict,
     Dict,
@@ -22,8 +23,6 @@ from typing import (
     Union,
     cast,
 )
-
-from decimal import Decimal, ROUND_FLOOR, ROUND_HALF_UP
 
 from kraken_bot.config import PortfolioConfig
 from kraken_bot.market_data.api import MarketDataAPI
@@ -303,7 +302,9 @@ class Portfolio:
             live_qty = float(amount_str)
 
             # Local ledger balance
-            local_bal = self.balances.get(asset, AssetBalance(asset, 0.0, 0.0, 0.0)).total
+            local_bal = self.balances.get(
+                asset, AssetBalance(asset, 0.0, 0.0, 0.0)
+            ).total
 
             diff_qty = abs(live_qty - local_bal)
             diff_val = to_base(diff_qty, asset)

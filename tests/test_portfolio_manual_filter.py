@@ -136,7 +136,10 @@ class InMemoryStore(PortfolioStore):
         *,
         max_examples: int = MAX_ML_TRAINING_EXAMPLES,
         return_weights: bool = False,
-    ) -> tuple[list[list[float]], list[float]] | tuple[list[list[float]], list[float], list[float]]:
+    ) -> (
+        tuple[list[list[float]], list[float]]
+        | tuple[list[list[float]], list[float], list[float]]
+    ):
         examples = self.ml_examples.get((strategy_id, model_key), [])
         # keep only the newest max_examples
         window = examples[-max_examples:]

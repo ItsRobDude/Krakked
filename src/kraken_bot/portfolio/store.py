@@ -8,7 +8,17 @@ import sqlite3
 import threading
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Tuple, Union, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    List,
+    Optional,
+    Sequence,
+    Tuple,
+    Union,
+    cast,
+)
 
 from kraken_bot.logging_config import structured_log_extra
 
@@ -390,8 +400,12 @@ def ensure_portfolio_tables(conn: sqlite3.Connection) -> None:
         )
         """
     )
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_ledger_entries_time ON ledger_entries(time)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_ledger_entries_refid ON ledger_entries(refid)")
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_ledger_entries_time ON ledger_entries(time)"
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_ledger_entries_refid ON ledger_entries(refid)"
+    )
 
     # Balance Snapshots Table
     cursor.execute(
@@ -404,7 +418,9 @@ def ensure_portfolio_tables(conn: sqlite3.Connection) -> None:
         )
         """
     )
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_balance_snapshots_time ON balance_snapshots(time)")
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_balance_snapshots_time ON balance_snapshots(time)"
+    )
 
     conn.commit()
 
@@ -603,7 +619,10 @@ class PortfolioStore(abc.ABC):
         *,
         max_examples: int = MAX_ML_TRAINING_EXAMPLES,
         return_weights: bool = False,
-    ) -> Tuple[List[List[float]], List[float]] | Tuple[List[List[float]], List[float], List[float]]:
+    ) -> (
+        Tuple[List[List[float]], List[float]]
+        | Tuple[List[List[float]], List[float], List[float]]
+    ):
         """Load a rolling window of ML training examples for a model key."""
         pass
 
@@ -667,9 +686,13 @@ class SQLitePortfolioStore(PortfolioStore):
         else:
             # Strict: only accept an exact match; behind/ahead → PortfolioSchemaError.
             # We call ensure_portfolio_schema directly with migrate=False to use the connection object.
-            status = ensure_portfolio_schema(self._conn, CURRENT_SCHEMA_VERSION, migrate=False)
+            status = ensure_portfolio_schema(
+                self._conn, CURRENT_SCHEMA_VERSION, migrate=False
+            )
             if status.version < CURRENT_SCHEMA_VERSION:
-                raise PortfolioSchemaError(found=status.version, expected=CURRENT_SCHEMA_VERSION)
+                raise PortfolioSchemaError(
+                    found=status.version, expected=CURRENT_SCHEMA_VERSION
+                )
 
         # 2. Ensure all logical portfolio tables exist.
         # No inner try/finally needed here since we don't want to close self._conn
@@ -755,11 +778,7 @@ class SQLitePortfolioStore(PortfolioStore):
                             if trade.get("cprice")
                             else None
                         ),
-                        (
-                            float(trade.get("ccost", 0))
-                            if trade.get("ccost")
-                            else None
-                        ),
+                        (float(trade.get("ccost", 0)) if trade.get("ccost") else None),
                         float(trade.get("cfee", 0)) if trade.get("cfee") else None,
                         float(trade.get("cvol", 0)) if trade.get("cvol") else None,
                         (
@@ -851,7 +870,9 @@ class SQLitePortfolioStore(PortfolioStore):
             conn = self._get_conn()
             cursor = conn.cursor()
 
-            query = "SELECT id, time, asset, amount, type, note FROM cash_flows WHERE 1=1"
+            query = (
+                "SELECT id, time, asset, amount, type, note FROM cash_flows WHERE 1=1"
+            )
             params: List[Any] = []
 
             if asset:
@@ -1393,11 +1414,7 @@ class SQLitePortfolioStore(PortfolioStore):
                 (
                     result.plan_id,
                     result.started_at.timestamp() if result.started_at else None,
-                    (
-                        result.completed_at.timestamp()
-                        if result.completed_at
-                        else None
-                    ),
+                    (result.completed_at.timestamp() if result.completed_at else None),
                     1 if result.success else 0,
                     (
                         json.dumps(result.errors, default=str)
@@ -1929,7 +1946,10 @@ class SQLitePortfolioStore(PortfolioStore):
         *,
         max_examples: int = MAX_ML_TRAINING_EXAMPLES,
         return_weights: bool = False,
-    ) -> Tuple[List[List[float]], List[float]] | Tuple[List[List[float]], List[float], List[float]]:
+    ) -> (
+        Tuple[List[List[float]], List[float]]
+        | Tuple[List[List[float]], List[float], List[float]]
+    ):
         """Load a rolling window of ML training examples for a model key.
 
         Returns features and labels in chronological order (oldest → newest).

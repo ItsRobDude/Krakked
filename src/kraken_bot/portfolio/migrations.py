@@ -310,6 +310,7 @@ def run_migrations(
         migrate(conn)
         _set_schema_version(conn, version + 1)
 
+
 def migrate_7_to_8(conn: sqlite3.Connection) -> None:
     """Add ledger entries and balance snapshots tables."""
     cursor = conn.cursor()
@@ -333,8 +334,12 @@ def migrate_7_to_8(conn: sqlite3.Connection) -> None:
         )
         """
     )
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_ledger_entries_time ON ledger_entries(time)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_ledger_entries_refid ON ledger_entries(refid)")
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_ledger_entries_time ON ledger_entries(time)"
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_ledger_entries_refid ON ledger_entries(refid)"
+    )
 
     # Balance Snapshots Table
     cursor.execute(
@@ -347,7 +352,9 @@ def migrate_7_to_8(conn: sqlite3.Connection) -> None:
         )
         """
     )
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_balance_snapshots_time ON balance_snapshots(time)")
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_balance_snapshots_time ON balance_snapshots(time)"
+    )
 
 
 def migrate_8_to_9(conn: sqlite3.Connection) -> None:
@@ -381,8 +388,12 @@ def migrate_8_to_9(conn: sqlite3.Connection) -> None:
             )
             """
         )
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_ledger_entries_time ON ledger_entries(time)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_ledger_entries_refid ON ledger_entries(refid)")
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_ledger_entries_time ON ledger_entries(time)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_ledger_entries_refid ON ledger_entries(refid)"
+        )
         return
 
     # 1. Create new table with TEXT columns for amount, fee, balance
@@ -450,10 +461,19 @@ def migrate_8_to_9(conn: sqlite3.Connection) -> None:
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                row[0], row[1], row[2], row[3], row[4], row[5],
-                amount_str, fee_str, balance_str,
-                row[9], row[10], row[11]
-            )
+                row[0],
+                row[1],
+                row[2],
+                row[3],
+                row[4],
+                row[5],
+                amount_str,
+                fee_str,
+                balance_str,
+                row[9],
+                row[10],
+                row[11],
+            ),
         )
 
     # 3. Drop old table and rename new one
@@ -461,5 +481,9 @@ def migrate_8_to_9(conn: sqlite3.Connection) -> None:
     cursor.execute("ALTER TABLE ledger_entries_new RENAME TO ledger_entries")
 
     # 4. Re-create indexes
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_ledger_entries_time ON ledger_entries(time)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_ledger_entries_refid ON ledger_entries(refid)")
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_ledger_entries_time ON ledger_entries(time)"
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_ledger_entries_refid ON ledger_entries(refid)"
+    )

@@ -1,7 +1,7 @@
 # src/kraken_bot/execution/router.py
 
 import logging
-from decimal import Decimal, ROUND_FLOOR, ROUND_HALF_UP
+from decimal import ROUND_FLOOR, ROUND_HALF_UP, Decimal
 from typing import TYPE_CHECKING, Any, Optional, Tuple
 from uuid import NAMESPACE_DNS, uuid5
 

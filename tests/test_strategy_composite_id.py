@@ -1,4 +1,3 @@
-
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -8,12 +7,7 @@ from kraken_bot.market_data.api import MarketDataAPI
 from kraken_bot.portfolio.manager import PortfolioService
 from kraken_bot.strategy.base import Strategy
 from kraken_bot.strategy.engine import StrategyRiskEngine
-from kraken_bot.strategy.models import (
-    RiskAdjustedAction,
-    RiskStatus,
-    StrategyIntent,
-    StrategyState,
-)
+from kraken_bot.strategy.models import RiskAdjustedAction, RiskStatus, StrategyState
 
 
 def test_strategy_engine_composite_id_resolution():
@@ -98,8 +92,11 @@ def test_strategy_engine_composite_id_resolution():
 
     # Mock Strategies
     class FakeStrategy(Strategy):
-        def warmup(self, market_data, portfolio): pass
-        def generate_intents(self, ctx): return [] # We'll bypass intent generation
+        def warmup(self, market_data, portfolio):
+            pass
+
+        def generate_intents(self, ctx):
+            return []  # We'll bypass intent generation
 
     engine.strategies = {
         "stratA": FakeStrategy(config_a),
@@ -121,7 +118,7 @@ def test_strategy_engine_composite_id_resolution():
     # Case 1: "stratB,stratA" -> Should resolve to "stratA" (userref 100) because "stratA" < "stratB"
     action_1 = RiskAdjustedAction(
         pair="XBTUSD",
-        strategy_id="stratB,stratA", # Composite ID
+        strategy_id="stratB,stratA",  # Composite ID
         action_type="open",
         target_base_size=1.0,
         target_notional_usd=100.0,
@@ -130,7 +127,7 @@ def test_strategy_engine_composite_id_resolution():
         blocked=False,
         blocked_reasons=[],
         risk_limits_snapshot={},
-        userref=None # Currently None
+        userref=None,  # Currently None
     )
 
     # Case 2: "stratC,stratB" -> "stratC" has no userref. "stratB" has 200.
@@ -146,7 +143,7 @@ def test_strategy_engine_composite_id_resolution():
         blocked=False,
         blocked_reasons=[],
         risk_limits_snapshot={},
-        userref=None
+        userref=None,
     )
 
     # Case 3: "stratC,stratD" -> "stratD" doesn't exist. "stratC" has no userref.
@@ -162,7 +159,7 @@ def test_strategy_engine_composite_id_resolution():
         blocked=False,
         blocked_reasons=[],
         risk_limits_snapshot={},
-        userref=None
+        userref=None,
     )
 
     engine.risk_engine.process_intents.return_value = [action_1, action_2, action_3]

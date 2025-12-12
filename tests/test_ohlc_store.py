@@ -22,7 +22,9 @@ def mock_market_data_config(tmp_path: Path) -> MarketDataConfig:
 
 
 @pytest.fixture
-def store(mock_market_data_config: MarketDataConfig) -> Generator[FileOHLCStore, None, None]:
+def store(
+    mock_market_data_config: MarketDataConfig,
+) -> Generator[FileOHLCStore, None, None]:
     """Provides a FileOHLCStore instance and ensures shutdown."""
     s = FileOHLCStore(mock_market_data_config)
     yield s
@@ -40,15 +42,15 @@ def sample_bars() -> list[OHLCBar]:
     ]
 
 
-def test_file_ohlc_store_init(store: FileOHLCStore, mock_market_data_config: MarketDataConfig):
+def test_file_ohlc_store_init(
+    store: FileOHLCStore, mock_market_data_config: MarketDataConfig
+):
     """Tests that the store initializes correctly and creates the root directory."""
     assert store.root_dir == Path(mock_market_data_config.ohlc_store["root_dir"])
     assert Path(mock_market_data_config.ohlc_store["root_dir"]).exists()
 
 
-def test_append_and_get_bars(
-    store: FileOHLCStore, sample_bars: list[OHLCBar]
-):
+def test_append_and_get_bars(store: FileOHLCStore, sample_bars: list[OHLCBar]):
     """Tests appending bars and retrieving them with a lookback."""
     pair = "XBTUSD"
     timeframe = "1m"
@@ -69,9 +71,7 @@ def test_append_and_get_bars(
     assert len(all_bars) == 4
 
 
-def test_append_deduplication(
-    store: FileOHLCStore, sample_bars: list[OHLCBar]
-):
+def test_append_deduplication(store: FileOHLCStore, sample_bars: list[OHLCBar]):
     """Tests that appending overlapping data does not create duplicates."""
     pair = "XBTUSD"
     timeframe = "1m"
@@ -94,9 +94,7 @@ def test_append_deduplication(
     ]
 
 
-def test_get_bars_since(
-    store: FileOHLCStore, sample_bars: list[OHLCBar]
-):
+def test_get_bars_since(store: FileOHLCStore, sample_bars: list[OHLCBar]):
     """Tests retrieving bars since a specific timestamp."""
     pair = "XBTUSD"
     timeframe = "1m"

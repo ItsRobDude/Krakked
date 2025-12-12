@@ -191,7 +191,11 @@ def test_get_latest_price_falls_back_to_rest_when_ws_missing(mock_config):
     # REST client SHOULD be called
     api._rest_client = MagicMock()
     api._rest_client.get_public.return_value = {
-        "XXBTZUSD": {"a": ["105.0", "1", "1"], "b": ["106.0", "1", "1"], "c": ["105.5", "1"]}
+        "XXBTZUSD": {
+            "a": ["105.0", "1", "1"],
+            "b": ["106.0", "1", "1"],
+            "c": ["105.5", "1"],
+        }
     }
 
     price = api.get_latest_price("XBTUSD")
