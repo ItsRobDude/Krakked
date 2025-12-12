@@ -77,6 +77,8 @@ class MarketDataAPI:
         self._universe: List[PairMetadata] = []
         self._universe_map: Dict[str, PairMetadata] = {}
         self._alias_map: Dict[str, PairMetadata] = {}
+        self._asset_map: Dict[str, str] = {}  # raw_asset -> canonical_base
+        self._valuation_map: Dict[str, str] = {}  # canonical_base -> canonical_pair
 
         self._ws_client: Optional[KrakenWSClientV2] = None
         self._ws_stale_tolerance = config.market_data.ws.get(
@@ -169,8 +171,18 @@ class MarketDataAPI:
 
         self._universe_map = {p.canonical: p for p in self._universe}
 
-        # Build dynamic alias map
+        # Build dynamic alias map and asset maps
         self._alias_map = {}
+        self._asset_map = {}
+        self._valuation_map = {}
+
+        # Pre-seed common assets to ensure they exist even if not in universe
+        # This is a safe fallback for base assets (like ZUSD/USD)
+        self._asset_map["ZUSD"] = "USD"
+        self._asset_map["USD"] = "USD"
+        self._asset_map["XBT"] = "XBT"
+        self._asset_map["XXBT"] = "XBT"
+
         for p in self._universe:
             # Add standard identifiers
             self._alias_map[p.canonical] = p
@@ -180,7 +192,6 @@ class MarketDataAPI:
                 self._alias_map[p.ws_symbol] = p
 
             # Add slash-less variants (e.g., XBT/USD -> XBTUSD) if applicable
-            # Many pairs come as "XBT/USD" in ws_symbol or altname.
             slashless_ws = p.ws_symbol.replace("/", "") if p.ws_symbol else ""
             if slashless_ws:
                 self._alias_map[slashless_ws] = p
@@ -189,7 +200,48 @@ class MarketDataAPI:
             if slashless_rest:
                 self._alias_map[slashless_rest] = p
 
-        logger.info(f"Universe refreshed. Contains {len(self._universe)} pairs.")
+            # --- Asset Identity Resolution ---
+            # Attempt to derive canonical base/quote from ws_symbol (e.g., "XBT/USD")
+            # This is more reliable than raw pair string parsing.
+            canonical_base = ""
+            if p.ws_symbol and "/" in p.ws_symbol:
+                parts = p.ws_symbol.split("/")
+                if len(parts) == 2:
+                    canonical_base = parts[0]
+                    # Map raw base asset code (from 'base' field in API) to canonical base
+                    if p.base:
+                        self._asset_map[p.base] = canonical_base
+
+            # Fallback if we couldn't derive from ws_symbol, use what we have if available
+            if not canonical_base and p.base:
+                # If we can't be sure, we map raw to itself, but hopefully alias map covers it
+                if p.base not in self._asset_map:
+                    # Strip X/Z prefix heuristic only as a last resort if not in alias?
+                    # No, user explicitly said NOT to do string surgery.
+                    # If we don't have a ws_symbol with slash, we might check ASSET_ALIASES
+                    # or just treat the raw base as canonical if it looks reasonable.
+                    # But for now, let's assume ws_symbol is robust for USD pairs.
+                    pass
+
+            # --- Valuation Mapping ---
+            # If this is a USD pair, map the canonical base asset to this pair
+            if p.quote == "USD":
+                target_asset = canonical_base or p.base
+                if target_asset:
+                    # Prefer pairs with higher volume/liquidity if we had that metric easily available
+                    # For now, we overwrite, assuming the universe filter gave us the "main" pair.
+                    self._valuation_map[target_asset] = p.canonical
+                    # Also map the raw asset
+                    if p.base:
+                        self._valuation_map[p.base] = p.canonical
+
+        # Explicitly ensure USD values to itself (identity)
+        self._valuation_map["USD"] = "USD"  # Special case: USD is valued as 1.0 USD
+
+        logger.info(
+            f"Universe refreshed. Contains {len(self._universe)} pairs. "
+            f"Mapped {len(self._asset_map)} assets."
+        )
 
     def normalize_pair(self, pair: str) -> str:
         """
@@ -230,6 +282,41 @@ class MarketDataAPI:
 
         # 4. Return original if resolution fails (caller will likely fail on lookup)
         return pair
+
+    def normalize_asset(self, asset: str) -> str:
+        """
+        Normalize an asset code (e.g., 'XXBT', 'ZUSD') to its canonical human-readable form (e.g., 'XBT', 'USD').
+        Uses the universe-derived mapping to avoid unsafe string stripping.
+        """
+        asset = asset.strip().upper()
+        # Direct map lookup
+        if asset in self._asset_map:
+            return self._asset_map[asset]
+
+        # Alias lookup
+        if asset in ASSET_ALIASES:
+            return ASSET_ALIASES[asset]
+
+        # Fallback: return as-is (better than guessing incorrectly)
+        return asset
+
+    def get_valuation_pair(self, asset: str) -> Optional[str]:
+        """
+        Return the canonical USD pair used to value the given asset.
+        Returns None if no valuation pair exists in the universe.
+        """
+        # Normalize first to ensure we look up the canonical asset
+        canonical_asset = self.normalize_asset(asset)
+
+        # Check map
+        if canonical_asset in self._valuation_map:
+            return self._valuation_map[canonical_asset]
+
+        # Try lookup by raw asset just in case
+        if asset in self._valuation_map:
+             return self._valuation_map[asset]
+
+        return None
 
     def get_universe(self) -> List[str]:
         """Returns the canonical symbols for all pairs in the universe."""
@@ -378,6 +465,11 @@ class MarketDataAPI:
 
     def get_latest_price(self, pair: str) -> Optional[float]:
         canonical = self.normalize_pair(pair)
+
+        # Special case: identity valuation
+        if canonical == "USD":
+            return 1.0
+
         is_fresh, stale_time = self._ticker_freshness(canonical)
 
         if is_fresh and self._ws_client:

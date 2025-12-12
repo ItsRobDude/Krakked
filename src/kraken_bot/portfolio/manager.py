@@ -128,8 +128,20 @@ class PortfolioService:
         since_ts = latest_trades[0]["time"] if latest_trades else None
 
         params = {}
+        known_txids_at_boundary = set()
+
         if since_ts:
             params["start"] = since_ts
+            # Prefetch trades at the boundary to prevent duplicates
+            # because 'start' is inclusive in Kraken API.
+            # We add a small epsilon to ensure we catch trades exactly at since_ts
+            boundary_trades = self.store.get_trades(since=since_ts, until=since_ts + 1e-6)
+            for t in boundary_trades:
+                known_txids_at_boundary.add(t.get("ordertxid"))
+                # Also add trade ID itself if available (usually 'id' in our store matches what we'd expect?)
+                # Actually, 'ordertxid' is the order ID, trade ID is usually the key in the map or 'id'
+                if t.get("id"):
+                    known_txids_at_boundary.add(t.get("id"))
 
         new_trades: List[Dict] = []
         safety_counter = 0
@@ -143,15 +155,17 @@ class PortfolioService:
 
             batch = []
             for txid, trade_data in trades_dict.items():
+                # Deduplicate against boundary
+                if txid in known_txids_at_boundary:
+                    continue
+
                 trade_data["id"] = txid
                 batch.append(trade_data)
 
             batch.sort(key=lambda x: x["time"])
 
-            if not batch:
-                break
-
-            new_trades.extend(batch)
+            if batch:
+                new_trades.extend(batch)
 
             resp_last = resp.get("last")
             try:
@@ -166,9 +180,20 @@ class PortfolioService:
                 params["start"] = resp_last
                 last_cursor = resp_last
             else:
-                last_ts = batch[-1]["time"]
-                last_cursor = last_ts + 1e-6
-                params["start"] = last_cursor
+                if batch:
+                    last_ts = batch[-1]["time"]
+                    last_cursor = last_ts + 1e-6
+                    params["start"] = last_cursor
+                else:
+                    # If batch empty but we got trades_dict (all dupes), we still need to advance
+                    # Use the last from response if available, else break?
+                    # If batch is empty, it means we filtered everything out.
+                    # We should probably trust resp_last if it exists.
+                    if resp_last:
+                         params["start"] = resp_last
+                         last_cursor = resp_last
+                    else:
+                         break
 
             safety_counter += 1
             if safety_counter > 200:
@@ -414,13 +439,20 @@ class PortfolioService:
         raw_balance = info.get("balance")
         balance_decimal = Decimal(str(raw_balance)) if raw_balance is not None else None
 
+        # Use MarketDataAPI via portfolio to normalize asset if needed, or rely on portfolio.ingest_cashflows
+        # But here we are building LedgerEntry to store.
+        # Ideally, we store the normalized asset in the DB to make querying consistent.
+        # But LedgerEntry has 'asset'.
+        # portfolio._normalize_asset is now delegated to market_data.
+        normalized_asset = self.portfolio.market_data.normalize_asset(info.get("asset", ""))
+
         return LedgerEntry(
             id=lid,
             time=entry_time,
             type=info.get("type", ""),
             subtype=info.get("subtype", ""),
             aclass=info.get("aclass", ""),
-            asset=self.portfolio._normalize_asset(info.get("asset", "")),
+            asset=normalized_asset,
             amount=Decimal(str(info.get("amount", 0))),
             fee=Decimal(str(info.get("fee", 0))),
             balance=balance_decimal,

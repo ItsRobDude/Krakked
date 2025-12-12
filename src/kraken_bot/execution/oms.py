@@ -434,9 +434,14 @@ class ExecutionService:
                 order = self.adapter.submit_order(
                     order, pair_metadata, latest_price=latest_price
                 )
-                self.register_order(order)
+
+                # Only track non-validated orders in memory
+                if order.status != "validated":
+                    self.register_order(order)
+
                 if self.store:
                     self.store.save_order(order)
+
                 logger.info(
                     "Order submission result",
                     extra=structured_log_extra(
@@ -512,6 +517,10 @@ class ExecutionService:
 
     def register_order(self, order: LocalOrder) -> None:
         """Track an order locally and index it by Kraken order id when available."""
+        # Safety check: do not register validated orders
+        if order.status == "validated":
+            return
+
         self.open_orders[order.local_id] = order
         if order.kraken_order_id:
             self.kraken_to_local[order.kraken_order_id] = order.local_id
@@ -572,7 +581,7 @@ class ExecutionService:
             order.kraken_order_id = kraken_order_id
             self.kraken_to_local[kraken_order_id] = local_id
 
-        if status in {"filled", "canceled", "rejected", "error"}:
+        if status in {"filled", "canceled", "rejected", "error", "validated"}:
             self.open_orders.pop(local_id, None)
 
         if self.store:
@@ -656,6 +665,7 @@ class ExecutionService:
             "expired",
             "rejected",
             "filled",
+            "validated",
         }:
             self.open_orders.pop(order.local_id, None)
 

@@ -178,7 +178,7 @@ def test_portfolio_auto_migrate_defaults_follow_env(monkeypatch, tmp_path: Path)
 
     monkeypatch.setenv("KRAKEN_BOT_ENV", "paper")
     paper_config = load_config()
-    assert paper_config.portfolio.auto_migrate_schema is True
+    assert paper_config.portfolio.auto_migrate_schema is False
 
 
 def test_live_env_disables_ui_without_auth(monkeypatch, tmp_path: Path, caplog):

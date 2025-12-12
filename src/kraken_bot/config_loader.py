@@ -683,6 +683,14 @@ def load_config(
         )
         risk_tolerance = 1.0
 
+    # Safety: Auto-migration defaults to False in live/paper modes unless explicitly enabled
+    default_auto_migrate = True
+    if execution_mode in ("live", "paper"):
+        default_auto_migrate = False
+
+    # We prioritize the user's config value if present, otherwise use our safe default
+    auto_migrate_schema = portfolio_data.get("auto_migrate_schema", default_auto_migrate)
+
     portfolio_config = PortfolioConfig(
         base_currency=portfolio_data.get("base_currency", "USD"),
         valuation_pairs=valuation_pairs,
@@ -693,10 +701,7 @@ def load_config(
         snapshot_retention_days=portfolio_data.get("snapshot_retention_days", 30),
         reconciliation_tolerance=risk_tolerance,
         db_path=portfolio_data.get("db_path", "portfolio.db"),
-        auto_migrate_schema=portfolio_data.get(
-            "auto_migrate_schema",
-            False if is_live_env else True,
-        ),
+        auto_migrate_schema=auto_migrate_schema,
     )
 
     # Execution/Risk validation for per-mode settings
