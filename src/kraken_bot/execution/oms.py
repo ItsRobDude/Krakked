@@ -381,7 +381,7 @@ class ExecutionService:
                 except DataStaleError as exc:
                     reason = f"Latest price unavailable for notional guardrail: {exc}"
                     logger.warning(
-                        "Order blocked: latest price unavailable",
+                        "Order rejected: latest price unavailable",
                         extra=structured_log_extra(
                             event="order_rejected_price_unavailable",
                             plan_id=plan.plan_id,
@@ -401,7 +401,7 @@ class ExecutionService:
                 except Exception as exc:  # pragma: no cover - defensive logging
                     reason = f"Unexpected error fetching latest price: {exc}"
                     logger.exception(
-                        "Order blocked: latest price error",
+                        "Order rejected: latest price error",
                         extra=structured_log_extra(
                             event="order_rejected_price_error",
                             plan_id=plan.plan_id,
