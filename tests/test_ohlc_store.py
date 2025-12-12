@@ -1,6 +1,7 @@
 # tests/test_ohlc_store.py
 
 from pathlib import Path
+from typing import Generator
 
 import appdirs  # type: ignore[import-untyped]
 import pytest
@@ -21,6 +22,14 @@ def mock_market_data_config(tmp_path: Path) -> MarketDataConfig:
 
 
 @pytest.fixture
+def store(mock_market_data_config: MarketDataConfig) -> Generator[FileOHLCStore, None, None]:
+    """Provides a FileOHLCStore instance and ensures shutdown."""
+    s = FileOHLCStore(mock_market_data_config)
+    yield s
+    s.shutdown()
+
+
+@pytest.fixture
 def sample_bars() -> list[OHLCBar]:
     """Provides a list of sample OHLC bars for testing."""
     return [
@@ -31,23 +40,23 @@ def sample_bars() -> list[OHLCBar]:
     ]
 
 
-def test_file_ohlc_store_init(mock_market_data_config: MarketDataConfig):
+def test_file_ohlc_store_init(store: FileOHLCStore, mock_market_data_config: MarketDataConfig):
     """Tests that the store initializes correctly and creates the root directory."""
-    store = FileOHLCStore(mock_market_data_config)
     assert store.root_dir == Path(mock_market_data_config.ohlc_store["root_dir"])
-
     assert Path(mock_market_data_config.ohlc_store["root_dir"]).exists()
 
 
 def test_append_and_get_bars(
-    mock_market_data_config: MarketDataConfig, sample_bars: list[OHLCBar]
+    store: FileOHLCStore, sample_bars: list[OHLCBar]
 ):
     """Tests appending bars and retrieving them with a lookback."""
-    store = FileOHLCStore(mock_market_data_config)
     pair = "XBTUSD"
     timeframe = "1m"
 
     store.append_bars(pair, timeframe, sample_bars)
+
+    # Wait for async write to complete
+    store._write_queue.join()
 
     # Test lookback
     retrieved_bars = store.get_bars(pair, timeframe, lookback=2)
@@ -61,18 +70,19 @@ def test_append_and_get_bars(
 
 
 def test_append_deduplication(
-    mock_market_data_config: MarketDataConfig, sample_bars: list[OHLCBar]
+    store: FileOHLCStore, sample_bars: list[OHLCBar]
 ):
     """Tests that appending overlapping data does not create duplicates."""
-    store = FileOHLCStore(mock_market_data_config)
     pair = "XBTUSD"
     timeframe = "1m"
 
     # Append the first 3 bars
     store.append_bars(pair, timeframe, sample_bars[:3])
+    store._write_queue.join()
 
     # Append the last 3 bars (overlapping)
     store.append_bars(pair, timeframe, sample_bars[1:])
+    store._write_queue.join()
 
     all_bars = store.get_bars(pair, timeframe, lookback=10)
     assert len(all_bars) == 4  # Should still be 4 unique bars
@@ -85,13 +95,13 @@ def test_append_deduplication(
 
 
 def test_get_bars_since(
-    mock_market_data_config: MarketDataConfig, sample_bars: list[OHLCBar]
+    store: FileOHLCStore, sample_bars: list[OHLCBar]
 ):
     """Tests retrieving bars since a specific timestamp."""
-    store = FileOHLCStore(mock_market_data_config)
     pair = "XBTUSD"
     timeframe = "1m"
     store.append_bars(pair, timeframe, sample_bars)
+    store._write_queue.join()
 
     since_ts = 1672531300  # Retrieve bars from 00:02:00 onwards
     retrieved_bars = store.get_bars_since(pair, timeframe, since_ts=since_ts)
@@ -101,9 +111,8 @@ def test_get_bars_since(
     assert retrieved_bars[1].timestamp == 1672531380
 
 
-def test_get_bars_non_existent(mock_market_data_config: MarketDataConfig):
+def test_get_bars_non_existent(store: FileOHLCStore):
     """Tests that retrieving from a non-existent store returns an empty list."""
-    store = FileOHLCStore(mock_market_data_config)
     bars = store.get_bars("NONEXISTENT", "1h", lookback=100)
     assert bars == []
 
@@ -117,7 +126,11 @@ def test_file_ohlc_store_defaults(monkeypatch: pytest.MonkeyPatch, tmp_path: Pat
     )
     store = FileOHLCStore(config)
 
-    expected_root = tmp_path / "data" / "ohlc"
-    assert store.root_dir == expected_root
-    assert store.backend == "parquet"
-    assert expected_root.exists()
+    # We must shut down the worker manually here since we don't use the fixture
+    try:
+        expected_root = tmp_path / "data" / "ohlc"
+        assert store.root_dir == expected_root
+        assert store.backend == "parquet"
+        assert expected_root.exists()
+    finally:
+        store.shutdown()

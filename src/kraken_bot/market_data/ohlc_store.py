@@ -1,8 +1,10 @@
 # src/kraken_bot/market_data/ohlc_store.py
 
 import logging
+import queue
+import threading
 from pathlib import Path
-from typing import List, Protocol
+from typing import List, Protocol, Tuple
 
 import pandas as pd
 
@@ -24,10 +26,13 @@ class OHLCStore(Protocol):
         self, pair: str, timeframe: str, since_ts: int
     ) -> List[OHLCBar]: ...
 
+    def shutdown(self) -> None: ...
+
 
 class FileOHLCStore:
     """
     A file-based implementation of OHLCStore that saves data in Parquet format.
+    Persistence is offloaded to a background thread to prevent blocking.
 
     The directory structure is: <root_dir>/<timeframe>/<pair>.parquet
     """
@@ -58,14 +63,59 @@ class FileOHLCStore:
 
         logger.info(f"Initialized FileOHLCStore with root directory: {self.root_dir}")
 
+        # Async persistence setup
+        self._write_queue: queue.Queue[Tuple[str, str, List[OHLCBar]] | None] = (
+            queue.Queue()
+        )
+        self._stop_event = threading.Event()
+        self._file_lock = threading.RLock()
+        self._worker_thread = threading.Thread(
+            target=self._worker, daemon=True, name="OHLCStoreWorker"
+        )
+        self._worker_thread.start()
+
     def _get_file_path(self, pair: str, timeframe: str) -> Path:
         """Constructs the file path for a given pair and timeframe."""
         directory = self.root_dir / timeframe
         directory.mkdir(parents=True, exist_ok=True)
         return directory / f"{pair}.{self.backend}"
 
-    def append_bars(self, pair: str, timeframe: str, bars: List[OHLCBar]) -> None:
-        """Appends new OHLC bars to the store, ensuring no duplicates."""
+    def _worker(self) -> None:
+        """Background worker to process write requests from the queue."""
+        logger.debug("OHLC Store worker thread started")
+        while not self._stop_event.is_set():
+            try:
+                task = self._write_queue.get(timeout=1.0)
+            except queue.Empty:
+                continue
+
+            if task is None:
+                self._write_queue.task_done()
+                break
+
+            pair, timeframe, bars = task
+            try:
+                self._persist_bars(pair, timeframe, bars)
+            except Exception as e:
+                logger.error(
+                    f"Worker failed to persist bars for {pair} {timeframe}: {e}"
+                )
+            finally:
+                self._write_queue.task_done()
+
+        logger.debug("OHLC Store worker thread stopped")
+
+    def shutdown(self) -> None:
+        """Stops the background worker thread and waits for pending writes."""
+        logger.info("Shutting down OHLC Store worker...")
+        self._stop_event.set()
+        self._write_queue.put(None)
+        if self._worker_thread.is_alive():
+            self._worker_thread.join(timeout=5.0)
+        logger.info("OHLC Store shutdown complete.")
+
+    def _persist_bars(self, pair: str, timeframe: str, bars: List[OHLCBar]) -> None:
+        """Internal synchronous method to write bars to disk."""
         if not bars:
             return
 
@@ -73,55 +123,72 @@ class FileOHLCStore:
         new_df = pd.DataFrame([bar.__dict__ for bar in bars])
         new_df = new_df.set_index("timestamp")
 
-        if file_path.exists():
-            try:
-                existing_df = pd.read_parquet(file_path)
-                combined_df = pd.concat([existing_df, new_df])
-                # Remove duplicates, keeping the last entry
-                combined_df = combined_df[~combined_df.index.duplicated(keep="last")]
-                combined_df.to_parquet(file_path)
-                logger.debug(f"Appended {len(new_df)} bars to {file_path}")
-            except Exception as e:
-                logger.error(f"Error reading or writing to {file_path}: {e}")
-        else:
-            new_df.to_parquet(file_path)
-            logger.info(
-                f"Created new OHLC store at {file_path} with {len(new_df)} bars."
-            )
+        with self._file_lock:
+            if file_path.exists():
+                try:
+                    existing_df = pd.read_parquet(file_path)
+                    combined_df = pd.concat([existing_df, new_df])
+                    # Remove duplicates, keeping the last entry
+                    combined_df = combined_df[
+                        ~combined_df.index.duplicated(keep="last")
+                    ]
+                    combined_df.to_parquet(file_path)
+                    logger.debug(f"Appended {len(new_df)} bars to {file_path}")
+                except Exception as e:
+                    logger.error(f"Error reading or writing to {file_path}: {e}")
+            else:
+                try:
+                    new_df.to_parquet(file_path)
+                    logger.info(
+                        f"Created new OHLC store at {file_path} with {len(new_df)} bars."
+                    )
+                except Exception as e:
+                    logger.error(f"Error creating {file_path}: {e}")
+
+    def append_bars(self, pair: str, timeframe: str, bars: List[OHLCBar]) -> None:
+        """
+        Queues new OHLC bars for persistence.
+        Returns immediately to avoid blocking the caller (e.g., WebSocket loop).
+        """
+        if not bars:
+            return
+        self._write_queue.put((pair, timeframe, bars))
 
     def get_bars(self, pair: str, timeframe: str, lookback: int) -> List[OHLCBar]:
         """Retrieves the last N (lookback) bars from the store."""
         file_path = self._get_file_path(pair, timeframe)
-        if not file_path.exists():
-            return []
+        with self._file_lock:
+            if not file_path.exists():
+                return []
 
-        try:
-            df = pd.read_parquet(file_path)
-            # Ensure the data is sorted by timestamp before taking the last N rows
-            df = df.sort_index().tail(lookback)
-            records = df.reset_index().to_dict("records")
-            # Explicitly cast timestamp to int to ensure strict type compliance
-            for row in records:
-                row["timestamp"] = int(row["timestamp"])
-            return [OHLCBar(**row) for row in records]
-        except Exception as e:
-            logger.error(f"Error reading from {file_path}: {e}")
-            return []
+            try:
+                df = pd.read_parquet(file_path)
+                # Ensure the data is sorted by timestamp before taking the last N rows
+                df = df.sort_index().tail(lookback)
+                records = df.reset_index().to_dict("records")
+                # Explicitly cast timestamp to int to ensure strict type compliance
+                for row in records:
+                    row["timestamp"] = int(row["timestamp"])
+                return [OHLCBar(**row) for row in records]
+            except Exception as e:
+                logger.error(f"Error reading from {file_path}: {e}")
+                return []
 
     def get_bars_since(self, pair: str, timeframe: str, since_ts: int) -> List[OHLCBar]:
         """Retrieves all bars since a given timestamp."""
         file_path = self._get_file_path(pair, timeframe)
-        if not file_path.exists():
-            return []
+        with self._file_lock:
+            if not file_path.exists():
+                return []
 
-        try:
-            df = pd.read_parquet(file_path)
-            df = df[df.index >= since_ts].sort_index()
-            records = df.reset_index().to_dict("records")
-            # Explicitly cast timestamp to int to ensure strict type compliance
-            for row in records:
-                row["timestamp"] = int(row["timestamp"])
-            return [OHLCBar(**row) for row in records]
-        except Exception as e:
-            logger.error(f"Error reading from {file_path}: {e}")
-            return []
+            try:
+                df = pd.read_parquet(file_path)
+                df = df[df.index >= since_ts].sort_index()
+                records = df.reset_index().to_dict("records")
+                # Explicitly cast timestamp to int to ensure strict type compliance
+                for row in records:
+                    row["timestamp"] = int(row["timestamp"])
+                return [OHLCBar(**row) for row in records]
+            except Exception as e:
+                logger.error(f"Error reading from {file_path}: {e}")
+                return []
