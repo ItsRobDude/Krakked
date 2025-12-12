@@ -166,6 +166,7 @@ def test_data_stale_error_skips_timeframe():
 
     portfolio = MagicMock(spec=PortfolioService)
     portfolio.record_execution_plan = MagicMock()
+    portfolio.store = MagicMock()
 
     engine = StrategyRiskEngine(app_config, market, portfolio)
     engine._data_ready = MagicMock(return_value=True)
@@ -257,6 +258,7 @@ def test_actions_inherit_userref_and_persist_in_execution_plan():
     portfolio = MagicMock(spec=PortfolioService)
     portfolio.record_execution_plan = MagicMock()
     portfolio.record_decision = MagicMock()
+    portfolio.store = MagicMock()
 
     engine = StrategyRiskEngine(app_config, market, portfolio)
     engine._data_ready = MagicMock(return_value=True)

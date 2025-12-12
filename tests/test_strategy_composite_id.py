@@ -73,6 +73,7 @@ def test_strategy_engine_composite_id_resolution():
     portfolio.record_execution_plan = MagicMock()
     portfolio.record_decision = MagicMock()
     portfolio.get_realized_pnl_by_strategy.return_value = {}
+    portfolio.store = MagicMock()
 
     engine = StrategyRiskEngine(app_config, market, portfolio)
 
