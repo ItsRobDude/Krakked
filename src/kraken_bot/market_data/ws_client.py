@@ -208,7 +208,9 @@ class KrakenWSClientV2:
                 # Check for candle rollover
                 # 'endtime' identifies the candle interval.
                 current_endtime = candle_data.get("endtime")
-                last_endtime = self._last_candle_endtime[canonical_pair].get(timeframe_key)
+                last_endtime = self._last_candle_endtime[canonical_pair].get(
+                    timeframe_key
+                )
 
                 # If we have a new endtime, the previous candle (if any) is closed.
                 # However, we only have the 'current' update message.
@@ -218,18 +220,26 @@ class KrakenWSClientV2:
 
                 if last_endtime and current_endtime != last_endtime:
                     # Previous candle closed. Retrieve its last known state from cache.
-                    last_candle = self.ohlc_cache.get(canonical_pair, {}).get(timeframe_key)
+                    last_candle = self.ohlc_cache.get(canonical_pair, {}).get(
+                        timeframe_key
+                    )
                     if last_candle and self._on_candle_closed:
                         # Ensure we are persisting the candle associated with last_endtime
                         if last_candle.get("endtime") == last_endtime:
                             try:
-                                self._on_candle_closed(canonical_pair, timeframe_key, last_candle)
+                                self._on_candle_closed(
+                                    canonical_pair, timeframe_key, last_candle
+                                )
                             except Exception as exc:
-                                logger.error(f"Error in on_candle_closed callback: {exc}")
+                                logger.error(
+                                    f"Error in on_candle_closed callback: {exc}"
+                                )
 
                 # Update trackers
                 if current_endtime:
-                    self._last_candle_endtime[canonical_pair][timeframe_key] = current_endtime
+                    self._last_candle_endtime[canonical_pair][
+                        timeframe_key
+                    ] = current_endtime
 
                 if canonical_pair not in self.ohlc_cache:
                     self.ohlc_cache[canonical_pair] = {}

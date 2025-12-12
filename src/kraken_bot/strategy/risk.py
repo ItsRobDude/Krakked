@@ -11,10 +11,10 @@ import numpy as np
 import pandas as pd
 
 from kraken_bot.config import RiskConfig
+from kraken_bot.execution.models import LocalOrder
 from kraken_bot.logging_config import structured_log_extra
 from kraken_bot.market_data.api import MarketDataAPI
 from kraken_bot.market_data.exceptions import DataStaleError
-from kraken_bot.execution.models import LocalOrder
 from kraken_bot.portfolio.manager import PortfolioService
 from kraken_bot.portfolio.models import DriftStatus, SpotPosition
 

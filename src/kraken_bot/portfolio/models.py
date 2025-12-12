@@ -27,9 +27,7 @@ class BalanceSnapshot:
     id: Optional[int]
     time: float  # timestamp of snapshot
     last_ledger_id: str  # last ledger id included in this snapshot
-    balances: Dict[
-        str, "AssetBalance"
-    ]  # {asset: AssetBalance(total, free, reserved)}
+    balances: Dict[str, "AssetBalance"]  # {asset: AssetBalance(total, free, reserved)}
 
 
 class CashFlowCategory(Enum):

@@ -1,12 +1,9 @@
-
 import math
 from typing import List, Optional
 
+
 def compute_features_from_window(
-    closes: List[float],
-    short_window: int,
-    long_window: int,
-    lookback_bars: int
+    closes: List[float], short_window: int, long_window: int, lookback_bars: int
 ) -> Optional[List[float]]:
     """
     Compute ML features from a list of close prices.

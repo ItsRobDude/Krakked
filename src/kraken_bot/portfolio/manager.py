@@ -412,9 +412,7 @@ class PortfolioService:
 
         # Handle optional balance field
         raw_balance = info.get("balance")
-        balance_decimal = (
-            Decimal(str(raw_balance)) if raw_balance is not None else None
-        )
+        balance_decimal = Decimal(str(raw_balance)) if raw_balance is not None else None
 
         return LedgerEntry(
             id=lid,

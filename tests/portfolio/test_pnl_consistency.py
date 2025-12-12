@@ -1,7 +1,8 @@
-
 from unittest.mock import MagicMock
-from kraken_bot.portfolio.portfolio import Portfolio
+
 from kraken_bot.portfolio.models import AssetBalance
+from kraken_bot.portfolio.portfolio import Portfolio
+
 
 def test_pnl_consistency_buy_fees():
     """
@@ -33,9 +34,7 @@ def test_pnl_consistency_buy_fees():
     mock_store = MagicMock()
 
     portfolio = Portfolio(
-        config=mock_config,
-        market_data=mock_market_data,
-        store=mock_store
+        config=mock_config, market_data=mock_market_data, store=mock_store
     )
 
     # Initial State: 1000 USD Cash
@@ -58,13 +57,15 @@ def test_pnl_consistency_buy_fees():
         "cost": "100.0",
         "fee": "1.0",
         "time": 1000,
-        "ordertxid": "ord1"
+        "ordertxid": "ord1",
     }
 
     # Update balances manually to simulate the trade effect on cash/asset
     portfolio.balances["USD"].total -= 101.0  # 100 cost + 1 fee
     portfolio.balances["USD"].free -= 101.0
-    portfolio.balances["XBT"] = AssetBalance(asset="XBT", free=1.0, reserved=0.0, total=1.0)
+    portfolio.balances["XBT"] = AssetBalance(
+        asset="XBT", free=1.0, reserved=0.0, total=1.0
+    )
 
     portfolio._process_trade(buy_trade)
 
