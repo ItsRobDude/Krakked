@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from typing import Callable, Dict
+from typing import Any, Callable, Dict
 
 Migration = Callable[[sqlite3.Connection], None]
 
@@ -354,9 +354,38 @@ def migrate_8_to_9(conn: sqlite3.Connection) -> None:
     """Migrate ledger_entries numeric columns from REAL to TEXT for exact precision."""
     cursor = conn.cursor()
 
-    # 1. Create new table with TEXT columns for amount, fee, balance
     # Safety: drop partial table if prior run failed
     cursor.execute("DROP TABLE IF EXISTS ledger_entries_new")
+
+    # If the DB claims schema_version=8 but doesn't actually have ledger_entries yet,
+    # create the v9 table directly (tests + defensive real-world behavior).
+    cursor.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='ledger_entries'"
+    )
+    if cursor.fetchone() is None:
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS ledger_entries (
+                id TEXT PRIMARY KEY,
+                time REAL,
+                type TEXT,
+                subtype TEXT,
+                aclass TEXT,
+                asset TEXT,
+                amount TEXT,
+                fee TEXT,
+                balance TEXT,
+                refid TEXT,
+                misc TEXT,
+                raw_json TEXT
+            )
+            """
+        )
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_ledger_entries_time ON ledger_entries(time)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_ledger_entries_refid ON ledger_entries(refid)")
+        return
+
+    # 1. Create new table with TEXT columns for amount, fee, balance
     cursor.execute(
         """
         CREATE TABLE IF NOT EXISTS ledger_entries_new (
@@ -383,10 +412,8 @@ def migrate_8_to_9(conn: sqlite3.Connection) -> None:
     # Schema of old table:
     # 0:id, 1:time, 2:type, 3:subtype, 4:aclass, 5:asset, 6:amount(REAL), 7:fee(REAL), 8:balance(REAL), 9:refid, 10:misc, 11:raw_json
 
-    migrated_count = 0
     # Iterating cursor directly fetches rows lazily
     for row in cursor:
-        lid = row[0]
         raw_json_str = row[11]
 
         # Helper to handle None -> None (instead of "None")
@@ -428,10 +455,9 @@ def migrate_8_to_9(conn: sqlite3.Connection) -> None:
                 row[9], row[10], row[11]
             )
         )
-        migrated_count += 1
 
     # 3. Drop old table and rename new one
-    cursor.execute("DROP TABLE ledger_entries")
+    cursor.execute("DROP TABLE IF EXISTS ledger_entries")
     cursor.execute("ALTER TABLE ledger_entries_new RENAME TO ledger_entries")
 
     # 4. Re-create indexes
