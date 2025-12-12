@@ -19,6 +19,13 @@ from kraken_bot.market_data.ws_client import KrakenWSClientV2
 
 logger = logging.getLogger(__name__)
 
+# Common asset aliases for human-friendly inputs
+ASSET_ALIASES = {
+    "BTC": "XBT",
+    "DOGE": "XDG",
+    "ZUSD": "USD",
+}
+
 
 @dataclass
 class MarketDataStatus:
@@ -189,6 +196,8 @@ class MarketDataAPI:
         Normalize a pair string (e.g., 'BTC/USD', 'XBTUSD') to its canonical form (e.g., 'XBTUSD').
         Uses a dynamic alias index and falls back to asset aliasing for robustness.
         """
+        pair = pair.strip().upper()
+
         # 1. Direct lookup in alias map
         if pair in self._alias_map:
             return self._alias_map[pair].canonical
@@ -199,19 +208,12 @@ class MarketDataAPI:
             return self._alias_map[slashless].canonical
 
         # 3. Apply asset aliases (human-friendly -> Kraken canonical)
-        # Only support minimal stable aliases for common assets
-        asset_aliases = {
-            "BTC": "XBT",
-            "DOGE": "XDG",
-        }
-
         # Split pair (assuming / separator or 3-char split if no slash?)
         # Kraken pairs can be messy. If there is a slash, it's easy.
-        normalized_attempt = pair
         if "/" in pair:
             base, quote = pair.split("/", 1)
-            base = asset_aliases.get(base, base)
-            quote = asset_aliases.get(quote, quote)
+            base = ASSET_ALIASES.get(base, base)
+            quote = ASSET_ALIASES.get(quote, quote)
             # Try reconstructed with slash and without
             candidates = [f"{base}/{quote}", f"{base}{quote}"]
             for c in candidates:
@@ -219,10 +221,10 @@ class MarketDataAPI:
                     return self._alias_map[c].canonical
         else:
             # Heuristic: if starts with alias key
-            for alias, target in asset_aliases.items():
+            for alias, target in ASSET_ALIASES.items():
                 if pair.startswith(alias):
                     # Replace prefix
-                    replaced = target + pair[len(alias):]
+                    replaced = target + pair[len(alias) :]
                     if replaced in self._alias_map:
                         return self._alias_map[replaced].canonical
 

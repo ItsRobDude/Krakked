@@ -297,6 +297,7 @@ def run_migrations(
         5: migrate_5_to_6,
         6: migrate_6_to_7,
         7: migrate_7_to_8,
+        8: migrate_8_to_9,
     }
 
     for version in range(from_version, to_version):
@@ -354,6 +355,8 @@ def migrate_8_to_9(conn: sqlite3.Connection) -> None:
     cursor = conn.cursor()
 
     # 1. Create new table with TEXT columns for amount, fee, balance
+    # Safety: drop partial table if prior run failed
+    cursor.execute("DROP TABLE IF EXISTS ledger_entries_new")
     cursor.execute(
         """
         CREATE TABLE IF NOT EXISTS ledger_entries_new (
@@ -374,21 +377,26 @@ def migrate_8_to_9(conn: sqlite3.Connection) -> None:
     )
 
     # 2. Migrate data
-    # We fetch all rows and attempt to reconstruct exact values from raw_json
+    # Use iterator for memory efficiency on large DBs
     cursor.execute("SELECT * FROM ledger_entries")
-    rows = cursor.fetchall()
+
     # Schema of old table:
     # 0:id, 1:time, 2:type, 3:subtype, 4:aclass, 5:asset, 6:amount(REAL), 7:fee(REAL), 8:balance(REAL), 9:refid, 10:misc, 11:raw_json
 
     migrated_count = 0
-    for row in rows:
+    # Iterating cursor directly fetches rows lazily
+    for row in cursor:
         lid = row[0]
         raw_json_str = row[11]
 
+        # Helper to handle None -> None (instead of "None")
+        def _safe_str(val: Any) -> str | None:
+            return str(val) if val is not None else None
+
         # Default to existing values cast to string
-        amount_str = str(row[6])
-        fee_str = str(row[7])
-        balance_str = str(row[8]) if row[8] is not None else None
+        amount_str = _safe_str(row[6])
+        fee_str = _safe_str(row[7])
+        balance_str = _safe_str(row[8])
 
         # Try to get exact values from raw JSON
         if raw_json_str:
@@ -396,17 +404,19 @@ def migrate_8_to_9(conn: sqlite3.Connection) -> None:
                 raw_data = json.loads(raw_json_str)
                 # Kraken API returns these as strings or numbers.
                 # If they are strings in JSON, we prefer that.
-                if "amount" in raw_data:
+                if "amount" in raw_data and raw_data["amount"] is not None:
                     amount_str = str(raw_data["amount"])
-                if "fee" in raw_data:
+                if "fee" in raw_data and raw_data["fee"] is not None:
                     fee_str = str(raw_data["fee"])
-                if "balance" in raw_data:
+                if "balance" in raw_data and raw_data["balance"] is not None:
                     balance_str = str(raw_data["balance"])
             except Exception:
                 # Fallback to DB values if JSON parsing fails
                 pass
 
-        cursor.execute(
+        # Use a new cursor for inserts to avoid interfering with the select cursor if driver is picky
+        # (Though sqlite3 standard cursor often handles this, safe practice is good)
+        conn.execute(
             """
             INSERT INTO ledger_entries_new (
                 id, time, type, subtype, aclass, asset, amount, fee, balance, refid, misc, raw_json
