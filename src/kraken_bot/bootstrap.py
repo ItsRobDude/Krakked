@@ -22,8 +22,9 @@ def _validate_credentials(result: CredentialResult) -> Tuple[str, str]:
 
     if result.status is CredentialStatus.MISSING_PASSWORD:
         raise CredentialBootstrapError(
-            "Encrypted credentials are locked; set KRAKEN_BOT_SECRET_PW to the master "
-            "password."
+            result.validation_error
+            or "Encrypted credentials are locked. Provide the master password via KRAKEN_BOT_SECRET_PW, "
+            "a prior UI unlock (session), or OS keychain (remember me)."
         )
 
     if result.status is not CredentialStatus.LOADED:
