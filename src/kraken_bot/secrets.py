@@ -5,6 +5,7 @@ import getpass
 import json
 import logging
 import os
+import threading
 from datetime import datetime, timezone
 
 from cryptography.fernet import Fernet, InvalidToken
@@ -15,6 +16,7 @@ from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 import kraken_bot.connection.validation as validation_mod
 from kraken_bot.config import get_config_dir
 from kraken_bot.credentials import CredentialResult, CredentialStatus
+from kraken_bot.password_store import get_saved_master_password
 
 # --- Constants ---
 SECRETS_FILE_NAME = "secrets.enc"
@@ -30,6 +32,22 @@ class SecretsDecryptionError(Exception):
 
 # Add logger
 logger = logging.getLogger(__name__)
+
+# --- Session In-Memory Store ---
+
+_session_lock = threading.Lock()
+_session_master_password: str | None = None
+
+
+def set_session_master_password(password: str | None) -> None:
+    global _session_master_password
+    with _session_lock:
+        _session_master_password = password
+
+
+def get_session_master_password() -> str | None:
+    with _session_lock:
+        return _session_master_password
 
 
 # --- Cryptographic Helpers ---
@@ -319,11 +337,16 @@ def load_api_keys(allow_interactive_setup: bool = False) -> CredentialResult:
 
     secrets_path = get_config_dir() / SECRETS_FILE_NAME
     if secrets_path.exists():
-        env_password = os.getenv("KRAKEN_BOT_SECRET_PW")
-        if not env_password and not allow_interactive_setup:
+        password = (
+            os.getenv("KRAKEN_BOT_SECRET_PW")
+            or get_session_master_password()
+            or get_saved_master_password()
+        )
+
+        if not password and not allow_interactive_setup:
             message = (
-                "Encrypted credentials found but KRAKEN_BOT_SECRET_PW password environment variable "
-                "is not set; credentials are unavailable in non-interactive mode."
+                "Encrypted credentials found but master password is not available "
+                "(env var, session, or keychain). Credentials unavailable in non-interactive mode."
             )
             print(message)
             return CredentialResult(
@@ -334,9 +357,9 @@ def load_api_keys(allow_interactive_setup: bool = False) -> CredentialResult:
                 validation_error=message,
             )
 
-        password = env_password or getpass.getpass(
-            "Enter master password to decrypt API keys: "
-        )
+        if not password:
+            password = getpass.getpass("Enter master password to decrypt API keys: ")
+
         try:
             secrets = _decrypt_secrets(password)
             print("Loaded API keys from encrypted file.")
