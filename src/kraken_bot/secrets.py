@@ -3,6 +3,7 @@
 import base64
 import getpass
 import json
+import logging
 import os
 from datetime import datetime, timezone
 
@@ -25,6 +26,10 @@ class SecretsDecryptionError(Exception):
     """Raised when decryption fails (wrong password or corrupted file)."""
 
     pass
+
+
+# Add logger
+logger = logging.getLogger(__name__)
 
 
 # --- Cryptographic Helpers ---
@@ -51,15 +56,13 @@ def encrypt_secrets(
     validated_at: datetime | None = None,
     validation_error: str | None = None,
 ) -> None:
-    """Encrypts API credentials and saves them to the secrets file.
-
-    Validation metadata is stored alongside the keys to inform later flows
-    whether the credentials were confirmed against Kraken (or why they were
-    not).
-    """
+    """Encrypts API credentials and saves them to the secrets file atomically."""
     config_dir = get_config_dir()
     config_dir.mkdir(parents=True, exist_ok=True)
     secrets_path = config_dir / SECRETS_FILE_NAME
+
+    # FIX #2: Write to a temporary file first
+    tmp_path = secrets_path.with_suffix(".tmp")
 
     salt = os.urandom(_SALT_SIZE)
     key = _derive_key(password, salt)
@@ -80,11 +83,14 @@ def encrypt_secrets(
     ).encode()
     encrypted_data = fernet.encrypt(secrets_data)
 
-    # Ensure file is created with user-only permissions
-    fd = os.open(secrets_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    # FIX #2: Open tmp_path instead of secrets_path
+    fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "wb") as f:
         f.write(salt + encrypted_data)
-    secrets_path.chmod(0o600)
+    tmp_path.chmod(0o600)
+
+    # FIX #2: Atomic swap
+    tmp_path.replace(secrets_path)
 
 
 def _decrypt_secrets(password: str) -> dict:
@@ -287,32 +293,26 @@ def delete_secrets() -> None:
 
 def load_api_keys(allow_interactive_setup: bool = False) -> CredentialResult:
     """
-    Loads API keys, following a specific priority, and returns a structured result
-    describing how credentials were obtained or why they could not be retrieved.
-
-    Args:
-        allow_interactive_setup: When True, the function will prompt the user to
-            perform the interactive setup flow if no credentials are available.
-            When False, missing credentials return a NOT_FOUND status without
-            prompting, enabling non-interactive environments to detect the state.
+    Loads API keys with strict precedence checks to prevent 'Shadow Configuration'.
     """
     api_key = os.getenv("KRAKEN_API_KEY")
     api_secret = os.getenv("KRAKEN_API_SECRET")
 
-    # Check for partial credentials (XOR check).
-    # Instead of erroring out immediately, we WARN and then reset these to None.
-    # This allows the function to proceed to the 'secrets.enc' check below.
+    # FIX #4: Deep Logic for Shadow Configuration
     if bool(api_key) ^ bool(api_secret):
-        print(
-            "WARNING: Incomplete environment variables detected (one of "
-            "KRAKEN_API_KEY or KRAKEN_API_SECRET is missing). "
-            "Ignoring environment variables and proceeding to check local secrets file."
+        missing = "KRAKEN_API_SECRET" if api_key else "KRAKEN_API_KEY"
+        logger.warning(
+            "AMBIGUOUS CONFIGURATION DETECTED:\n"
+            f"   Found environment variable for API Key/Secret, but {missing} is missing.\n"
+            "   -> ACTION: Discarding broken environment variables.\n"
+            "   -> ACTION: Falling back to 'secrets.enc' (if available).\n"
+            "   PLEASE FIX YOUR ENVIRONMENT VARIABLES TO AVOID USING OLD CREDENTIALS."
         )
         api_key = None
         api_secret = None
 
     if api_key and api_secret:
-        print("Loaded API keys from environment variables.")
+        logger.info("Loaded API keys from environment variables.")
         return CredentialResult(
             api_key, api_secret, CredentialStatus.LOADED, source="environment"
         )

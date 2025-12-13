@@ -29,8 +29,7 @@ class RateLimiter:
             # Calculate the earliest time this specific call can execute.
             # It is either 'now' (if we've been idle) or 'interval' seconds
             # after the previous call (if we are busy).
-            # This 'max' logic prevents burst credits from accumulating during idle time
-            # (matches original logic).
+            # This 'max' logic prevents burst credits from accumulating during idle time.
             target_time = max(now, self.last_call_time + self.interval)
 
             # Reserve this slot immediately by updating the state.
