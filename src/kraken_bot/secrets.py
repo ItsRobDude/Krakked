@@ -3,6 +3,7 @@
 import base64
 import getpass
 import json
+import logging
 import os
 from datetime import datetime, timezone
 
@@ -19,6 +20,8 @@ from kraken_bot.credentials import CredentialResult, CredentialStatus
 SECRETS_FILE_NAME = "secrets.enc"
 _SALT_SIZE = 16
 _KDF_ITERATIONS = 480000  # Recommended by NIST for PBKDF2
+
+logger = logging.getLogger(__name__)
 
 
 class SecretsDecryptionError(Exception):
