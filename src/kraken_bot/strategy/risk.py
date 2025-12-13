@@ -126,6 +126,8 @@ class RiskEngine:
         _ = self.portfolio.get_realized_pnl_by_strategy(include_manual=True)
         _ = self.portfolio.get_realized_pnl_by_strategy(include_manual=False)
 
+        pending_orders_drift = False
+
         # Integrate pending BUY orders as synthetic positions to prevent double-spending
         if pending_orders:
             for order in pending_orders:
@@ -133,11 +135,37 @@ class RiskEngine:
                 # Ignore SELLS (treat as if we still hold the asset until filled).
                 if order.side != "buy":
                     continue
-
-                # Use limit price if available, else mark-to-market
+                # Use limit price if available, else mark-to-market.
+                #
+                # NOTE: MarketDataAPI.get_latest_price() can raise DataStaleError if
+                # websocket data is stale and REST fallback is unavailable. Risk should
+                # not crash in that case; treat it as drift and block exposure growth.
                 price = order.requested_price
                 if not price or price <= 0:
-                    price = self.market_data.get_latest_price(order.pair) or 0.0
+                    try:
+                        price = self.market_data.get_latest_price(order.pair) or 0.0
+                    except DataStaleError as exc:
+                        logger.warning(
+                            "Stale price while valuing pending order %s; defaulting to 0.0: %s",
+                            order.pair,
+                            exc,
+                            extra=structured_log_extra(
+                                event="pending_order_price_stale", pair=order.pair
+                            ),
+                        )
+                        price = 0.0
+                        pending_orders_drift = True
+                    except Exception as exc:  # noqa: BLE001
+                        logger.debug(
+                            "Error fetching price while valuing pending order %s; defaulting to 0.0: %s",
+                            order.pair,
+                            exc,
+                            extra=structured_log_extra(
+                                event="pending_order_price_error", pair=order.pair
+                            ),
+                        )
+                        price = 0.0
+                        pending_orders_drift = True
 
                 # Determine base asset (best effort)
                 try:
@@ -156,15 +184,22 @@ class RiskEngine:
                     fees_paid_base=0.0,
                     strategy_tag=order.strategy_id,
                     raw_userref=str(order.userref) if order.userref else None,
+                    current_value_base=(order.requested_base_size * price) if price else 0.0,
                     comment="pending_buy",
                 )
                 positions.append(syn_pos)
-
         manual_positions: List[Any] = []
         strategy_positions: List[Any] = []
         for pos in positions:
-            price = self.market_data.get_latest_price(pos.pair)
-            pos.current_value_base = (pos.base_size * price) if price else 0.0
+            # PortfolioService.get_equity() already performs valuation (including fallbacks)
+            # and updates position.current_value_base. Avoid calling market_data.get_latest_price()
+            # here; it can raise DataStaleError and bypass drift kill switches.
+            current_val = getattr(pos, "current_value_base", 0.0) or 0.0
+            try:
+                pos.current_value_base = float(current_val)
+            except (TypeError, ValueError):
+                pos.current_value_base = 0.0
+
             if self._is_manual_position(pos):
                 manual_positions.append(pos)
             else:
@@ -244,7 +279,7 @@ class RiskEngine:
             asset_exposures=asset_exposure_total,
             manual_positions=manual_positions,
             manual_positions_included=self.config.include_manual_positions,
-            drift_flag=equity_view.drift_flag or drift_status.drift_flag,
+            drift_flag=equity_view.drift_flag or drift_status.drift_flag or pending_orders_drift,
             drift_status=drift_status,
             daily_drawdown_pct=drawdown_pct,
         )
@@ -417,7 +452,29 @@ class RiskEngine:
         ctx: RiskContext,
         per_strategy_caps: Dict[str, float],
     ) -> RiskAdjustedAction:
-        price = self.market_data.get_latest_price(pair)
+        try:
+            price = self.market_data.get_latest_price(pair)
+        except DataStaleError as exc:
+            logger.warning(
+                "Stale price data for %s during risk processing: %s",
+                pair,
+                exc,
+                extra=structured_log_extra(event="risk_price_stale", pair=pair),
+            )
+            return self._create_blocked_action(
+                pair, intents[0].strategy_id, "Stale price data", ctx
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(
+                "Error fetching price data for %s during risk processing: %s",
+                pair,
+                exc,
+                extra=structured_log_extra(event="risk_price_error", pair=pair),
+            )
+            return self._create_blocked_action(
+                pair, intents[0].strategy_id, "Missing price data", ctx
+            )
+
         if not price or price <= 0:
             return self._create_blocked_action(
                 pair, intents[0].strategy_id, "Missing price data", ctx
@@ -645,7 +702,7 @@ class RiskEngine:
                 [
                     p
                     for p in ctx.open_positions
-                    if p.base_size * self.market_data.get_latest_price(p.pair) > 10.0
+                    if getattr(p, "current_value_base", 0.0) > 10.0
                 ]
             )
         else:
