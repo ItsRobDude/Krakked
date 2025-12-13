@@ -3,6 +3,7 @@
 import base64
 import getpass
 import json
+import logging
 import os
 from datetime import datetime, timezone
 
@@ -19,6 +20,8 @@ from kraken_bot.credentials import CredentialResult, CredentialStatus
 SECRETS_FILE_NAME = "secrets.enc"
 _SALT_SIZE = 16
 _KDF_ITERATIONS = 480000  # Recommended by NIST for PBKDF2
+
+logger = logging.getLogger(__name__)
 
 
 class SecretsDecryptionError(Exception):
@@ -298,16 +301,21 @@ def load_api_keys(allow_interactive_setup: bool = False) -> CredentialResult:
     """
     api_key = os.getenv("KRAKEN_API_KEY")
     api_secret = os.getenv("KRAKEN_API_SECRET")
+
+    # Check for partial credentials (XOR check).
+    # Instead of erroring out immediately, we WARN and then reset these to None.
+    # This allows the function to proceed to the 'secrets.enc' check below.
     if bool(api_key) ^ bool(api_secret):
-        message = "Both KRAKEN_API_KEY and KRAKEN_API_SECRET must be set together."
-        print(message)
-        return CredentialResult(
-            api_key,
-            api_secret,
-            CredentialStatus.AUTH_ERROR,
-            source="environment",
-            validation_error=message,
+        missing = "KRAKEN_API_SECRET" if api_key else "KRAKEN_API_KEY"
+        logger.warning(
+            "AMBIGUOUS CONFIGURATION DETECTED:\n"
+            f"   Found environment variable for API Key/Secret, but {missing} is missing.\n"
+            "   -> ACTION: Discarding broken environment variables.\n"
+            "   -> ACTION: Falling back to 'secrets.enc' (if available).\n"
+            "   PLEASE FIX YOUR ENVIRONMENT VARIABLES TO AVOID USING OLD CREDENTIALS."
         )
+        api_key = None
+        api_secret = None
 
     if api_key and api_secret:
         print("Loaded API keys from environment variables.")

@@ -46,24 +46,34 @@ def apply_slippage(order: LocalOrder, config: ExecutionConfig) -> Optional[float
     """
     Adjust the requested price by the configured slippage tolerance.
 
-    For buys we cap the maximum price we are willing to pay; for sells we
-    floor the minimum price we are willing to accept. Values are guarded
-    against negative prices.
+    Performs calculation in Decimal to avoid floating point drift before rounding.
     """
-
     if order.requested_price is None:
         return None
 
-    slippage_fraction = max(config.max_slippage_bps, 0) / 10_000
-    if slippage_fraction == 0:
+    # Use string conversion to preserve the "human" value of the float
+    # e.g. Decimal(str(0.1)) gives 0.1, whereas Decimal(0.1) gives 0.1000000000000000055...
+    try:
+        price_dec = Decimal(str(order.requested_price))
+        # max_slippage_bps is an int (e.g. 50), so this math is safe
+        slippage_factor_dec = Decimal(max(config.max_slippage_bps, 0)) / Decimal("10000")
+    except Exception:
+        # Fallback if conversion fails (unlikely)
+        return order.requested_price
+
+    if slippage_factor_dec == 0:
         return order.requested_price
 
     if order.side == "buy":
-        adjusted = order.requested_price * (1 + slippage_fraction)
+        # Price * (1 + factor)
+        adjusted_dec = price_dec * (Decimal("1") + slippage_factor_dec)
     else:
-        adjusted = order.requested_price * (1 - slippage_fraction)
+        # Price * (1 - factor)
+        adjusted_dec = price_dec * (Decimal("1") - slippage_factor_dec)
 
-    adjusted_price = max(adjusted, 0.0)
+    # Guard against negative prices
+    adjusted_price = float(max(adjusted_dec, Decimal("0")))
+
     logger.debug(
         "Applying slippage",
         extra={
