@@ -306,13 +306,10 @@ def load_api_keys(allow_interactive_setup: bool = False) -> CredentialResult:
     # Instead of erroring out immediately, we WARN and then reset these to None.
     # This allows the function to proceed to the 'secrets.enc' check below.
     if bool(api_key) ^ bool(api_secret):
-        missing = "KRAKEN_API_SECRET" if api_key else "KRAKEN_API_KEY"
-        logger.warning(
-            "AMBIGUOUS CONFIGURATION DETECTED:\n"
-            f"   Found environment variable for API Key/Secret, but {missing} is missing.\n"
-            "   -> ACTION: Discarding broken environment variables.\n"
-            "   -> ACTION: Falling back to 'secrets.enc' (if available).\n"
-            "   PLEASE FIX YOUR ENVIRONMENT VARIABLES TO AVOID USING OLD CREDENTIALS."
+        print(
+            "WARNING: Incomplete environment variables detected (one of "
+            "KRAKEN_API_KEY or KRAKEN_API_SECRET is missing). "
+            "Ignoring environment variables and proceeding to check local secrets file."
         )
         api_key = None
         api_secret = None
