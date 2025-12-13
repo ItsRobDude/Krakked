@@ -293,6 +293,10 @@ class ExecutionService:
         # --- Portfolio-Aware Exposure Calculation ---
         # Issue #6: "Logic Gap". We must account for passive assets (not in this plan)
         # to ensure the total portfolio exposure doesn't exceed the limit.
+        #
+        # Refined Logic (Drift-Proof):
+        # Instead of subtracting live active value from snapshot total (which causes artifacts
+        # if prices drift), we explicitly sum the snapshot value of assets *not* in the plan.
         projected_total_exposure = total_target_notional
 
         if self.store:
@@ -300,52 +304,37 @@ class ExecutionService:
                 snapshots = self.store.get_snapshots(limit=1)
                 if snapshots:
                     latest = snapshots[0]
-                    # Risk Assets = Equity - Cash
-                    # We use max(0, ...) to avoid negative exposure issues
-                    current_total_risk_exposure = max(
-                        0.0, latest.equity_base - latest.cash_base
-                    )
 
-                    current_active_exposure = 0.0
+                    # 1. Identify assets involved in the current plan (Active)
+                    active_assets = set()
                     for action in actions_to_process:
-                        if action.current_base_size <= 0:
-                            continue
+                        try:
+                            # We need the base asset name (e.g. "XBT", "ETH")
+                            meta = self.market_data.get_pair_metadata_or_raise(action.pair)
+                            active_assets.add(meta.base)
+                        except Exception:
+                            # If metadata fails, we can't safely identify the asset.
+                            # We skip adding it to active_assets, which means if it appears
+                            # in the snapshot, it will be treated as PASSIVE (double counted).
+                            # This is a safe/conservative failure mode (higher projected exposure).
+                            pass
 
-                        # Determine price to value the current size
-                        price = 0.0
-                        if (
-                            action.target_base_size > 0
-                            and action.target_notional_usd > 0
-                        ):
-                            # Implied price from the target
-                            price = action.target_notional_usd / action.target_base_size
-                        else:
-                            # Fetch live price
-                            try:
-                                price = self.market_data.get_latest_price(action.pair)
-                            except Exception as e:
-                                # Option A: Safe Conservative.
-                                # If we can't price it, we assume value is 0.
-                                # This maximizes 'passive_exposure' (Total - 0)
-                                # and thus maximizes 'projected_total_exposure'.
-                                logger.warning(
-                                    "Failed to fetch price for active exposure calculation; assuming 0 value",
-                                    extra=structured_log_extra(
-                                        event="guardrail_price_fetch_failed",
-                                        pair=action.pair,
-                                        error=str(e),
-                                    ),
-                                )
-                                price = 0.0
-
-                        current_active_exposure += action.current_base_size * price
-
-                    # Passive = Total (Snapshot) - Active (Current in Plan)
-                    # We clamp at 0 because active *valuation* might differ slightly from
-                    # snapshot *valuation* due to price moves.
-                    passive_exposure = max(
-                        0.0, current_total_risk_exposure - current_active_exposure
-                    )
+                    # 2. Sum value of assets NOT in the plan (Passive)
+                    # We use the snapshot's valuation to ensure consistency and avoid
+                    # phantom exposure from price drift between snapshot time and now.
+                    passive_exposure = 0.0
+                    if latest.asset_valuations:
+                        for av in latest.asset_valuations:
+                            # If the asset is not being traded, it's passive.
+                            # We assume 'av.asset' and 'meta.base' are normalized to the same canonical symbol.
+                            if av.asset not in active_assets:
+                                passive_exposure += av.value_base
+                    else:
+                        # Fallback for legacy snapshots without granular valuations:
+                        # Use the old "Total - Active" approximation or just Total Risk if safer?
+                        # Using Total Risk (Equity - Cash) is safest but strict.
+                        # Let's try the approximation but with 0 active deduction (Conservative).
+                        passive_exposure = max(0.0, latest.equity_base - latest.cash_base)
 
                     projected_total_exposure = passive_exposure + total_target_notional
 
