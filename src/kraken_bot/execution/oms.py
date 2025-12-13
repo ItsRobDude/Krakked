@@ -305,19 +305,9 @@ class ExecutionService:
                 if snapshots:
                     latest = snapshots[0]
 
-                    # 1. Identify assets involved in the current plan (Active)
-                    active_assets = set()
-                    for action in actions_to_process:
-                        try:
-                            # We need the base asset name (e.g. "XBT", "ETH")
-                            meta = self.market_data.get_pair_metadata_or_raise(action.pair)
-                            active_assets.add(meta.base)
-                        except Exception:
-                            # If metadata fails, we can't safely identify the asset.
-                            # We skip adding it to active_assets, which means if it appears
-                            # in the snapshot, it will be treated as PASSIVE (double counted).
-                            # This is a safe/conservative failure mode (higher projected exposure).
-                            pass
+                    # 1. Identify active pairs directly from plan actions
+                    # We use source_pair matching which is faster and aligns with snapshot creation.
+                    active_pairs = {a.pair for a in actions_to_process}
 
                     # 2. Sum value of assets NOT in the plan (Passive)
                     # We use the snapshot's valuation to ensure consistency and avoid
@@ -325,10 +315,12 @@ class ExecutionService:
                     passive_exposure = 0.0
                     if latest.asset_valuations:
                         for av in latest.asset_valuations:
-                            # If the asset is not being traded, it's passive.
-                            # We assume 'av.asset' and 'meta.base' are normalized to the same canonical symbol.
-                            if av.asset not in active_assets:
-                                passive_exposure += av.value_base
+                            # If the asset came from a pair we are currently trading, exclude it (it's active).
+                            if av.source_pair and av.source_pair in active_pairs:
+                                continue
+
+                            # Otherwise, it is a passive holding.
+                            passive_exposure += av.value_base
                     else:
                         # Fallback for legacy snapshots without granular valuations:
                         # Use the old "Total - Active" approximation or just Total Risk if safer?
