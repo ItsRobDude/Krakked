@@ -298,16 +298,18 @@ def load_api_keys(allow_interactive_setup: bool = False) -> CredentialResult:
     """
     api_key = os.getenv("KRAKEN_API_KEY")
     api_secret = os.getenv("KRAKEN_API_SECRET")
+
+    # Check for partial credentials (XOR check).
+    # Instead of erroring out immediately, we WARN and then reset these to None.
+    # This allows the function to proceed to the 'secrets.enc' check below.
     if bool(api_key) ^ bool(api_secret):
-        message = "Both KRAKEN_API_KEY and KRAKEN_API_SECRET must be set together."
-        print(message)
-        return CredentialResult(
-            api_key,
-            api_secret,
-            CredentialStatus.AUTH_ERROR,
-            source="environment",
-            validation_error=message,
+        print(
+            "WARNING: Incomplete environment variables detected (one of "
+            "KRAKEN_API_KEY or KRAKEN_API_SECRET is missing). "
+            "Ignoring environment variables and proceeding to check local secrets file."
         )
+        api_key = None
+        api_secret = None
 
     if api_key and api_secret:
         print("Loaded API keys from environment variables.")

@@ -36,7 +36,11 @@ def test_load_from_env_vars(mock_config_dir):
         assert result.source == "environment"
 
 
-def test_partial_env_vars_return_auth_error(mock_config_dir):
+def test_partial_env_vars_fall_through(mock_config_dir):
+    """
+    Ensure that incomplete env vars don't block execution (Issue #4).
+    They should be ignored, allowing fallthrough to file check (or NOT_FOUND).
+    """
     with (
         patch.dict(os.environ, {"KRAKEN_API_KEY": "env_key"}, clear=True),
         patch("getpass.getpass") as mock_getpass,
@@ -44,11 +48,11 @@ def test_partial_env_vars_return_auth_error(mock_config_dir):
         result = load_api_keys()
 
     mock_getpass.assert_not_called()
-    assert result.api_key == "env_key"
+    # Expectation: Env vars ignored, file not found -> status NOT_FOUND
+    assert result.api_key is None
     assert result.api_secret is None
-    assert result.status == CredentialStatus.AUTH_ERROR
-    assert result.source == "environment"
-    assert "both" in result.validation_error.lower()
+    assert result.status == CredentialStatus.NOT_FOUND
+    assert result.source == "none"
 
 
 def test_encrypt_and_decrypt_flow(mock_config_dir):

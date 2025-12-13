@@ -2,6 +2,7 @@
 
 import logging
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 from uuid import uuid4
 
@@ -192,9 +193,26 @@ class ExecutionService:
             if action.blocked or action.action_type == "none":
                 continue
 
-            delta = action.target_base_size - action.current_base_size
-            if delta == 0:
-                continue
+            # Calculate delta using Decimal to avoid 0.1 + 0.2 != 0.3 issues.
+            # We treat differences smaller than a tiny epsilon as zero (noise).
+            try:
+                tgt = Decimal(str(action.target_base_size))
+                cur = Decimal(str(action.current_base_size))
+                delta_dec = tgt - cur
+
+                # If the difference is extremely small (e.g. < 1 satoshi for BTC), ignore it.
+                # Kraken's smallest divisible unit is usually 1e-8.
+                # We use 1e-9 as a safe "zero" threshold.
+                if abs(delta_dec) < Decimal("1e-9"):
+                    continue
+
+                # Convert back to float for the rest of the system
+                delta = float(delta_dec)
+            except Exception:
+                # Fallback to standard float math if something bizarre happens
+                delta = action.target_base_size - action.current_base_size
+                if delta == 0:
+                    continue
 
             eligible_actions.append(action)
 
