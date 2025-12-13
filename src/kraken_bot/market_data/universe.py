@@ -117,11 +117,18 @@ def _filter_by_volume(
             retained_pairs.append(pair)
             continue
 
-        # Volume is in the 'v' field, index 1 is today's volume
-        volume_24h_base = float(ticker_info["v"][1])
-        # Last trade price is in 'c' field, index 0
-        last_price = float(ticker_info["c"][0])
-        volume_24h_usd = volume_24h_base * last_price
+        try:
+            # Volume is in the 'v' field, index 1 is today's volume
+            volume_24h_base = float(ticker_info["v"][1])
+            # Last trade price is in 'c' field, index 0
+            last_price = float(ticker_info["c"][0])
+            volume_24h_usd = volume_24h_base * last_price
+        except (KeyError, TypeError, ValueError, IndexError) as exc:
+            logger.warning(
+                f"Malformed ticker info for {pair.canonical}: {ticker_info} ({exc}). Retaining."
+            )
+            retained_pairs.append(pair)
+            continue
 
         if volume_24h_usd >= min_volume:
             pair.liquidity_24h_usd = volume_24h_usd

@@ -663,16 +663,13 @@ class ExecutionService:
 
     def refresh_open_orders(self) -> None:
         """Pull open orders from Kraken and reconcile with local state."""
-        userrefs = {
-            o.userref for o in self.open_orders.values() if o.userref is not None
-        }
-        params = {"userref": ",".join(str(u) for u in userrefs)} if userrefs else None
-
         if self.adapter.client is None:
             return
 
         try:
-            remote = self.adapter.client.get_open_orders(params=params)
+            # Kraken's OpenOrders userref filter accepts a single integer. Fetch all
+            # open orders and reconcile locally so multi-userref sessions work.
+            remote = self.adapter.client.get_open_orders()
         except Exception:
             return
 
@@ -696,13 +693,22 @@ class ExecutionService:
         self, kraken_id: str, payload: dict, is_closed: bool
     ) -> None:
         """Update a local order based on Kraken order payload."""
-        userref = payload.get("userref")
+        userref_raw = payload.get("userref")
+        userref = None
+        if userref_raw is not None:
+            try:
+                userref = int(userref_raw)
+            except (TypeError, ValueError):
+                userref = None
+
         order = self._resolve_local_order(kraken_id, userref)
         if not order:
             return
 
         self.register_order(order)
         order.kraken_order_id = kraken_id
+        if userref is not None:
+            order.userref = userref
         order.status = payload.get("status") or ("closed" if is_closed else "open")
         order.updated_at = datetime.now(UTC)
         order.raw_response = payload

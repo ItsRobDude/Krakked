@@ -608,6 +608,13 @@ def load_config(
             },
         )
 
+
+    max_plan_age_seconds = _validated_int(
+        execution_data.get("max_plan_age_seconds"),
+        ExecutionConfig().max_plan_age_seconds,
+        "config_execution_max_plan_age_seconds",
+    )
+
     execution_config = ExecutionConfig(
         mode=execution_mode,
         default_order_type=execution_data.get("default_order_type", "limit"),
@@ -625,6 +632,7 @@ def load_config(
         min_order_notional_usd=execution_data.get("min_order_notional_usd", 20.0),
         max_pair_notional_usd=execution_data.get("max_pair_notional_usd"),
         max_total_notional_usd=execution_data.get("max_total_notional_usd"),
+        max_plan_age_seconds=max_plan_age_seconds,
     )
 
     # Parsing Portfolio Config

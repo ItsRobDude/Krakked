@@ -1,0 +1,162 @@
+--- src/kraken_bot/config_loader.py
++++ src/kraken_bot/config_loader.py
+             },
+         )
+ 
++
++    max_plan_age_seconds = _validated_int(
++        execution_data.get("max_plan_age_seconds"),
++        ExecutionConfig().max_plan_age_seconds,
++        "config_execution_max_plan_age_seconds",
++    )
++
+     execution_config = ExecutionConfig(
+         mode=execution_mode,
+         default_order_type=execution_data.get("default_order_type", "limit"),
+@@ -625,6 +632,7 @@
+         min_order_notional_usd=execution_data.get("min_order_notional_usd", 20.0),
+         max_pair_notional_usd=execution_data.get("max_pair_notional_usd"),
+         max_total_notional_usd=execution_data.get("max_total_notional_usd"),
++        max_plan_age_seconds=max_plan_age_seconds,
+     )
+ 
+     # Parsing Portfolio Config
+--- src/kraken_bot/execution/oms.py
++++ src/kraken_bot/execution/oms.py
+@@ -663,16 +663,13 @@
+ 
+     def refresh_open_orders(self) -> None:
+         """Pull open orders from Kraken and reconcile with local state."""
+-        userrefs = {
+-            o.userref for o in self.open_orders.values() if o.userref is not None
+-        }
+-        params = {"userref": ",".join(str(u) for u in userrefs)} if userrefs else None
+-
+         if self.adapter.client is None:
+             return
+ 
+         try:
+-            remote = self.adapter.client.get_open_orders(params=params)
++            # Kraken's OpenOrders userref filter accepts a single integer. Fetch all
++            # open orders and reconcile locally so multi-userref sessions work.
++            remote = self.adapter.client.get_open_orders()
+         except Exception:
+             return
+ 
+@@ -696,13 +693,22 @@
+         self, kraken_id: str, payload: dict, is_closed: bool
+     ) -> None:
+         """Update a local order based on Kraken order payload."""
+-        userref = payload.get("userref")
++        userref_raw = payload.get("userref")
++        userref = None
++        if userref_raw is not None:
++            try:
++                userref = int(userref_raw)
++            except (TypeError, ValueError):
++                userref = None
++
+         order = self._resolve_local_order(kraken_id, userref)
+         if not order:
+             return
+ 
+         self.register_order(order)
+         order.kraken_order_id = kraken_id
++        if userref is not None:
++            order.userref = userref
+         order.status = payload.get("status") or ("closed" if is_closed else "open")
+         order.updated_at = datetime.now(UTC)
+         order.raw_response = payload
+--- src/kraken_bot/execution/router.py
++++ src/kraken_bot/execution/router.py
+@@ -110,14 +110,17 @@
+     if order_type == "limit" and slippage_price is not None:
+         payload["price"] = str(round_order_price(pair_metadata, slippage_price))
+ 
+-    payload["timeinforce"] = config.time_in_force
++    # Kraken market orders do not have time-in-force options. Only include
++    # time-in-force / post-only flags when they are valid for the order type.
++    if order_type == "limit":
++        payload["timeinforce"] = config.time_in_force
+ 
+-    flags = []
+-    if config.post_only:
+-        flags.append("post")
++        flags = []
++        if config.post_only:
++            flags.append("post")
+ 
+-    if flags:
+-        payload["oflags"] = ",".join(flags)
++        if flags:
++            payload["oflags"] = ",".join(flags)
+ 
+     if order.userref is not None:
+         payload["userref"] = order.userref
+--- src/kraken_bot/portfolio/portfolio.py
++++ src/kraken_bot/portfolio/portfolio.py
+@@ -318,6 +318,14 @@
+             # Drift if value > tolerance OR unvalued but non-zero quantity mismatch
+             if diff_val > tolerance_base:
+                 drift_detected = True
++                mismatched_assets.append(
++                    DriftMismatchedAsset(
++                        asset=asset,
++                        expected_quantity=local_bal,
++                        actual_quantity=live_qty,
++                        difference_base=diff_val,
++                    )
++                )
+             elif conversion.status == "unvalued" and diff_qty > 1e-9:
+                 # Treat unvalued quantity mismatch as drift
+                 drift_detected = True
+@@ -326,7 +334,7 @@
+                         asset=asset,
+                         expected_quantity=local_bal,
+                         actual_quantity=live_qty,
+-                        difference_base=0.0, # Cannot value it
++                        difference_base=0.0,  # Cannot value it
+                     )
+                 )
+ 
+@@ -339,6 +347,14 @@
+ 
+                 if val > tolerance_base:
+                     drift_detected = True
++                    mismatched_assets.append(
++                        DriftMismatchedAsset(
++                            asset=asset,
++                            expected_quantity=bal.total,
++                            actual_quantity=0.0,
++                            difference_base=val,
++                        )
++                    )
+                 elif conversion.status == "unvalued" and bal.total > 1e-9:
+                     drift_detected = True
+                     mismatched_assets.append(
+--- src/kraken_bot/market_data/universe.py
++++ src/kraken_bot/market_data/universe.py
+@@ -117,11 +117,18 @@
+             retained_pairs.append(pair)
+             continue
+ 
+-        # Volume is in the 'v' field, index 1 is today's volume
+-        volume_24h_base = float(ticker_info["v"][1])
+-        # Last trade price is in 'c' field, index 0
+-        last_price = float(ticker_info["c"][0])
+-        volume_24h_usd = volume_24h_base * last_price
++        try:
++            # Volume is in the 'v' field, index 1 is today's volume
++            volume_24h_base = float(ticker_info["v"][1])
++            # Last trade price is in 'c' field, index 0
++            last_price = float(ticker_info["c"][0])
++            volume_24h_usd = volume_24h_base * last_price
++        except (KeyError, TypeError, ValueError, IndexError) as exc:
++            logger.warning(
++                f"Malformed ticker info for {pair.canonical}: {ticker_info} ({exc}). Retaining."
++            )
++            retained_pairs.append(pair)
++            continue
+ 
+         if volume_24h_usd >= min_volume:
+             pair.liquidity_24h_usd = volume_24h_usd

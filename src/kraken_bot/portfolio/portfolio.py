@@ -318,6 +318,14 @@ class Portfolio:
             # Drift if value > tolerance OR unvalued but non-zero quantity mismatch
             if diff_val > tolerance_base:
                 drift_detected = True
+                mismatched_assets.append(
+                    DriftMismatchedAsset(
+                        asset=asset,
+                        expected_quantity=local_bal,
+                        actual_quantity=live_qty,
+                        difference_base=diff_val,
+                    )
+                )
             elif conversion.status == "unvalued" and diff_qty > 1e-9:
                 # Treat unvalued quantity mismatch as drift
                 drift_detected = True
@@ -326,7 +334,7 @@ class Portfolio:
                         asset=asset,
                         expected_quantity=local_bal,
                         actual_quantity=live_qty,
-                        difference_base=0.0, # Cannot value it
+                        difference_base=0.0,  # Cannot value it
                     )
                 )
 
@@ -339,6 +347,14 @@ class Portfolio:
 
                 if val > tolerance_base:
                     drift_detected = True
+                    mismatched_assets.append(
+                        DriftMismatchedAsset(
+                            asset=asset,
+                            expected_quantity=bal.total,
+                            actual_quantity=0.0,
+                            difference_base=val,
+                        )
+                    )
                 elif conversion.status == "unvalued" and bal.total > 1e-9:
                     drift_detected = True
                     mismatched_assets.append(

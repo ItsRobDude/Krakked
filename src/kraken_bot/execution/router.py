@@ -110,14 +110,17 @@ def build_order_payload(
     if order_type == "limit" and slippage_price is not None:
         payload["price"] = str(round_order_price(pair_metadata, slippage_price))
 
-    payload["timeinforce"] = config.time_in_force
+    # Kraken market orders do not have time-in-force options. Only include
+    # time-in-force / post-only flags when they are valid for the order type.
+    if order_type == "limit":
+        payload["timeinforce"] = config.time_in_force
 
-    flags = []
-    if config.post_only:
-        flags.append("post")
+        flags = []
+        if config.post_only:
+            flags.append("post")
 
-    if flags:
-        payload["oflags"] = ",".join(flags)
+        if flags:
+            payload["oflags"] = ",".join(flags)
 
     if order.userref is not None:
         payload["userref"] = order.userref
