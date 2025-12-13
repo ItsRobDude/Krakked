@@ -609,3 +609,51 @@ def test_ui_credential_validation_logs_do_not_include_secrets(
             if isinstance(value, str):
                 assert fake_key not in value
                 assert fake_secret not in value
+
+def test_setup_unlock_remember_failure_is_best_effort(monkeypatch, client, system_context):
+    import kraken_bot.ui.routes.system as system_routes
+
+    system_context.is_setup_mode = True
+    system_context.reinitialize_event.clear()
+
+    monkeypatch.setattr(system_routes, "unlock_secrets", lambda _pw: {"ok": True})
+    monkeypatch.setattr(system_routes, "set_session_master_password", lambda _pw: None)
+
+    # Mock save_master_password to raise
+    def fail_save(pw):
+        raise RuntimeError("keyring down")
+
+    monkeypatch.setattr(system_routes, "save_master_password", fail_save)
+
+    resp = client.post("/api/system/setup/unlock", json={"password": "pw", "remember": True})
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["error"] is None
+    assert payload["data"]["success"] is True
+    assert payload["data"]["remember_saved"] is False
+    assert "keyring down" in payload["data"]["remember_error"]
+    assert system_context.reinitialize_event.is_set() is True
+
+
+def test_setup_unlock_remember_success_sets_flag(monkeypatch, client, system_context):
+    import kraken_bot.ui.routes.system as system_routes
+
+    system_context.is_setup_mode = True
+    system_context.reinitialize_event.clear()
+
+    monkeypatch.setattr(system_routes, "unlock_secrets", lambda _pw: {"ok": True})
+    monkeypatch.setattr(system_routes, "set_session_master_password", lambda _pw: None)
+
+    saved = {}
+    def _save(pw: str) -> None:
+        saved["pw"] = pw
+
+    monkeypatch.setattr(system_routes, "save_master_password", _save)
+
+    resp = client.post("/api/system/setup/unlock", json={"password": "pw", "remember": True})
+    payload = resp.json()
+    assert payload["error"] is None
+    assert payload["data"]["success"] is True
+    assert payload["data"]["remember_saved"] is True
+    assert payload["data"]["remember_error"] is None
+    assert saved["pw"] == "pw"
