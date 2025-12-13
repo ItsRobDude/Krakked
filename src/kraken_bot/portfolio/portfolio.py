@@ -132,7 +132,10 @@ class Portfolio:
             if ltype not in {"deposit", "withdrawal", "adjustment", "staking"}:
                 continue
 
-            normalized_asset = self._normalize_asset(entry.get("asset", ""))
+            # Use MarketDataAPI to normalize the asset code
+            raw_asset = entry.get("asset", "")
+            normalized_asset = self.market_data.normalize_asset(raw_asset)
+
             record = CashFlowRecord(
                 id=ledger_id,
                 time=int(entry.get("time", 0)),
@@ -155,8 +158,9 @@ class Portfolio:
     def _process_trade(self, trade: Dict):
         pair_meta = self.market_data.get_pair_metadata(trade["pair"])
         pair = pair_meta.canonical
-        base_asset = pair_meta.base
-        quote_asset = pair_meta.quote
+        # Normalize assets to ensure positions are keyed by the canonical symbol (e.g. DOGE not XDG)
+        base_asset = self.market_data.normalize_asset(pair_meta.base)
+        quote_asset = self.market_data.normalize_asset(pair_meta.quote)
 
         side = trade["type"]
         price = float(trade["price"])
@@ -287,13 +291,14 @@ class Portfolio:
         # 1. Compare Ledger (self.balances) vs Live (live_balances)
         live_assets = set()
         drift_detected = False
+        mismatched_assets: List[DriftMismatchedAsset] = []
 
         # We use a tolerance for comparison
         tolerance_base = self.config.reconciliation_tolerance
 
         # Helper to convert drift to base currency
         def to_base(amt, asset):
-            return self._convert_to_base_currency(amt, asset).value_base
+            return self._convert_to_base_currency(amt, asset)
 
         for asset_raw, amount_str in live_balances.items():
             asset = self._normalize_asset(asset_raw)
@@ -307,20 +312,43 @@ class Portfolio:
             ).total
 
             diff_qty = abs(live_qty - local_bal)
-            diff_val = to_base(diff_qty, asset)
+            conversion = to_base(diff_qty, asset)
+            diff_val = conversion.value_base
 
+            # Drift if value > tolerance OR unvalued but non-zero quantity mismatch
             if diff_val > tolerance_base:
                 drift_detected = True
-                # Log happens in manager, but we could add detailed mismatch info here?
-                # For now, we rely on the returned DriftStatus which we populate below.
+            elif conversion.status == "unvalued" and diff_qty > 1e-9:
+                # Treat unvalued quantity mismatch as drift
+                drift_detected = True
+                mismatched_assets.append(
+                    DriftMismatchedAsset(
+                        asset=asset,
+                        expected_quantity=local_bal,
+                        actual_quantity=live_qty,
+                        difference_base=0.0, # Cannot value it
+                    )
+                )
 
         # Check for assets in local but not in live (implying 0 live)
         for asset, bal in self.balances.items():
             if asset not in live_assets and bal.total > 0:
                 # Check value
-                val = to_base(bal.total, asset)
+                conversion = to_base(bal.total, asset)
+                val = conversion.value_base
+
                 if val > tolerance_base:
                     drift_detected = True
+                elif conversion.status == "unvalued" and bal.total > 1e-9:
+                    drift_detected = True
+                    mismatched_assets.append(
+                        DriftMismatchedAsset(
+                            asset=asset,
+                            expected_quantity=bal.total,
+                            actual_quantity=0.0,
+                            difference_base=0.0,
+                        )
+                    )
 
         # 2. Compare Positions (Trades) vs Ledger Balances (self.balances)
         # This is the "internal consistency" check.
@@ -329,7 +357,6 @@ class Portfolio:
         for position in self.positions.values():
             position_totals[position.base_asset] += position.base_size
 
-        mismatched_assets: List[DriftMismatchedAsset] = []
         expected_position_value_base = 0.0
         actual_balance_value_base = 0.0
 
@@ -339,15 +366,15 @@ class Portfolio:
             ).total
 
             diff_qty = abs(pos_total - balance_total)
-            diff_value = to_base(diff_qty, asset)
+            conversion = to_base(diff_qty, asset)
+            diff_value = conversion.value_base
 
-            expected_position_value_base += to_base(pos_total, asset)
-            actual_balance_value_base += to_base(balance_total, asset)
+            pos_val = to_base(pos_total, asset).value_base
+            bal_val = to_base(balance_total, asset).value_base
+            expected_position_value_base += pos_val
+            actual_balance_value_base += bal_val
 
             if diff_value > tolerance_base:
-                # This flags "Trades vs Ledger" drift
-                # We count this as drift_detected too, or separate?
-                # existing logic combined them.
                 drift_detected = True
                 mismatched_assets.append(
                     DriftMismatchedAsset(
@@ -355,6 +382,16 @@ class Portfolio:
                         expected_quantity=pos_total,
                         actual_quantity=balance_total,
                         difference_base=diff_value,
+                    )
+                )
+            elif conversion.status == "unvalued" and diff_qty > 1e-9:
+                 drift_detected = True
+                 mismatched_assets.append(
+                    DriftMismatchedAsset(
+                        asset=asset,
+                        expected_quantity=pos_total,
+                        actual_quantity=balance_total,
+                        difference_base=0.0, # Unvalued
                     )
                 )
 
@@ -586,13 +623,18 @@ class Portfolio:
             return ConversionResult(0.0, None, "valued")
         if not self._is_asset_included(asset):
             return ConversionResult(0.0, None, "excluded")
+
+        # IMPORTANT: base currency is always 1:1
         if asset == self.config.base_currency:
             return ConversionResult(amount, None, "valued")
 
-        pair = (
-            self.config.valuation_pairs.get(asset)
-            or f"{asset}{self.config.base_currency}"
-        )
+        # Use MarketDataAPI to get valuation pair
+        pair = self.config.valuation_pairs.get(asset) or self.market_data.get_valuation_pair(asset)
+
+        # If still no pair, return unvalued.
+        if not pair:
+             return ConversionResult(0.0, None, "unvalued")
+
         price = None
         try:
             price = self.market_data.get_latest_price(pair)
@@ -604,11 +646,8 @@ class Portfolio:
         return ConversionResult(amount * price, pair, "valued")
 
     def _normalize_asset(self, asset: str) -> str:
-        return (
-            asset.replace("Z", "", 1)
-            if asset.startswith("Z")
-            else asset.replace("X", "", 1)
-        )
+        """Deprecated: delegating to MarketDataAPI."""
+        return self.market_data.normalize_asset(asset)
 
     @staticmethod
     def _normalize_trade_payload(trade: Dict) -> Dict:

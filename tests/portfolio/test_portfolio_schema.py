@@ -33,10 +33,14 @@ def test_portfolio_migrate_cli_calls_ensure_schema(tmp_path):
             version=CURRENT_SCHEMA_VERSION, migrated=True, initialized=False
         )
 
-        result = cli.main(["portfolio-migrate", "--db", str(db)])
+        result = cli.main(["migrate", "--db-path", str(db)])
 
     assert result == 0
-    ensure_mock.assert_called_once_with(str(db), CURRENT_SCHEMA_VERSION, migrate=True)
+    ensure_mock.assert_called_once()
+    args, kwargs = ensure_mock.call_args
+    assert isinstance(args[0], sqlite3.Connection)
+    assert args[1] == CURRENT_SCHEMA_VERSION
+    assert kwargs["migrate"] is True
     ensure_tables_mock.assert_called_once()
     args, _ = ensure_tables_mock.call_args
     assert isinstance(args[0], sqlite3.Connection)

@@ -690,6 +690,14 @@ class SQLitePortfolioStore(PortfolioStore):
                 self._conn, CURRENT_SCHEMA_VERSION, migrate=False
             )
             if status.version < CURRENT_SCHEMA_VERSION:
+                logger.error(
+                    "Portfolio schema out of date and auto-migration disabled. Run 'krakked migrate' to update.",
+                    extra=structured_log_extra(
+                        event="portfolio_schema_error",
+                        found=status.version,
+                        expected=CURRENT_SCHEMA_VERSION
+                    )
+                )
                 raise PortfolioSchemaError(
                     found=status.version, expected=CURRENT_SCHEMA_VERSION
                 )
@@ -1783,7 +1791,6 @@ class SQLitePortfolioStore(PortfolioStore):
             "submitted",
             "open",
             "partially_filled",
-            "validated",
             "pending_cancel",
             "pending_cancellation",
             "canceling",

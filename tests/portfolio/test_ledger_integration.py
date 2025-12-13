@@ -37,6 +37,13 @@ def service(mock_store, mock_rest_client):
 
     market_data = MagicMock()
 
+    def _norm(asset):
+        asset = str(asset)
+        return {"XXBT": "XBT", "XBT": "XBT", "ZUSD": "USD", "USD": "USD"}.get(asset, asset)
+
+    market_data.normalize_asset.side_effect = _norm
+    market_data.get_valuation_pair.side_effect = lambda asset: "XBTUSD" if _norm(asset) == "XBT" else None
+
     svc = PortfolioService(
         config=config, market_data=market_data, rest_client=mock_rest_client
     )
