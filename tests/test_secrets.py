@@ -125,8 +125,11 @@ def test_load_api_keys_requires_password_env_when_non_interactive(mock_config_di
     assert result.api_key is None
     assert result.api_secret is None
     assert result.source == "secrets_file"
-    assert "password" in result.validation_error.lower()
-    assert "set" in result.validation_error.lower()
+
+    msg = result.validation_error.lower()
+    assert "master password" in msg
+    assert "keychain" in msg
+    assert "non-interactive" in msg
 
 
 def test_load_api_keys_bad_password_returns_auth_error(mock_config_dir):

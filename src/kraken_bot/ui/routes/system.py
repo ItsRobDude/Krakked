@@ -249,8 +249,24 @@ async def setup_unlock(
         # Set session password for re-bootstrap
         set_session_master_password(payload.password)
 
+        remember_saved = False
+        remember_error: str | None = None
+
         if payload.remember:
-            save_master_password(payload.password)
+            try:
+                save_master_password(payload.password)
+                remember_saved = True
+            except Exception as exc:
+                remember_error = str(exc)
+                logger.warning(
+                    "Remember-me save failed (ignoring): %s",
+                    exc,
+                    extra=build_request_log_extra(
+                        request,
+                        event="setup_unlock_remember_failed",
+                        error=remember_error,
+                    ),
+                )
 
         if ctx.is_setup_mode:
             logger.info(
@@ -259,7 +275,14 @@ async def setup_unlock(
             )
             ctx.reinitialize_event.set()
 
-        return ApiEnvelope(data={"success": True}, error=None)
+        return ApiEnvelope(
+            data={
+                "success": True,
+                "remember_saved": remember_saved,
+                "remember_error": remember_error,
+            },
+            error=None,
+        )
 
     except SecretsDecryptionError:
         logger.warning(
