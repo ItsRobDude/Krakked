@@ -1786,15 +1786,9 @@ class SQLitePortfolioStore(PortfolioStore):
         plan_id: Optional[str] = None,
         strategy_id: Optional[str] = None,
     ) -> List["LocalOrder"]:
-        open_statuses = {
-            "pending",
-            "submitted",
-            "open",
-            "partially_filled",
-            "pending_cancel",
-            "pending_cancellation",
-            "canceling",
-        }
+        from kraken_bot.execution.models import OPEN_STATUSES
+
+        open_statuses = OPEN_STATUSES
 
         with self._lock:
             conn = self._get_conn()

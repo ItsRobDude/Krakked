@@ -16,7 +16,7 @@ from kraken_bot.strategy.models import ExecutionPlan
 
 from .adapter import ExecutionAdapter, get_execution_adapter
 from .exceptions import ExecutionError
-from .models import ExecutionResult, LocalOrder
+from .models import TERMINAL_STATUSES, ExecutionResult, LocalOrder
 from .router import build_order_from_plan_action
 
 logger = logging.getLogger(__name__)
@@ -647,7 +647,7 @@ class ExecutionService:
             order.kraken_order_id = kraken_order_id
             self.kraken_to_local[kraken_order_id] = local_id
 
-        if status in {"filled", "canceled", "rejected", "error", "validated"}:
+        if status in TERMINAL_STATUSES:
             self.open_orders.pop(local_id, None)
 
         if self.store:
@@ -707,32 +707,15 @@ class ExecutionService:
         order.updated_at = datetime.now(UTC)
         order.raw_response = payload
 
-        vol_exec = payload.get("vol_exec")
-        try:
-            order.cumulative_base_filled = (
-                float(vol_exec)
-                if vol_exec is not None
-                else order.cumulative_base_filled
-            )
-        except (TypeError, ValueError):
-            pass
+        vol_exec = _safe_float(payload.get("vol_exec"))
+        if vol_exec is not None:
+            order.cumulative_base_filled = vol_exec
 
-        price = payload.get("price") or payload.get("price_avg")
-        try:
-            order.avg_fill_price = (
-                float(price) if price is not None else order.avg_fill_price
-            )
-        except (TypeError, ValueError):
-            pass
+        price = _safe_float(payload.get("price") or payload.get("price_avg"))
+        if price is not None:
+            order.avg_fill_price = price
 
-        if is_closed or order.status in {
-            "canceled",
-            "closed",
-            "expired",
-            "rejected",
-            "filled",
-            "validated",
-        }:
+        if is_closed or order.status in TERMINAL_STATUSES:
             self.open_orders.pop(order.local_id, None)
 
         logger.info(
@@ -945,4 +928,14 @@ class ExecutionService:
                 f"max_total_notional_usd ${total_limit:,.2f}{pct_context}"
             )
 
+        return None
+
+
+def _safe_float(value: Any) -> Optional[float]:
+    """Safely convert a value to float, returning None on failure."""
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
         return None

@@ -4,6 +4,26 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Dict, List, Optional
 
+TERMINAL_STATUSES = {
+    "canceled",
+    "closed",
+    "expired",
+    "rejected",
+    "filled",
+    "error",
+    "validated",
+}
+
+OPEN_STATUSES = {
+    "pending",
+    "submitted",
+    "open",
+    "partially_filled",
+    "pending_cancel",
+    "pending_cancellation",
+    "canceling",
+}
+
 
 @dataclass
 class LocalOrder:
