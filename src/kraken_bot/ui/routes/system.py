@@ -307,7 +307,14 @@ async def system_reset(request: Request) -> ApiEnvelope[dict]:
         delete_secrets()
         # Also forget the password since the file it unlocks is gone
         set_session_master_password(None)
-        delete_master_password()
+
+        try:
+            delete_master_password()
+        except Exception as exc:
+            logger.warning(
+                "Failed to delete master password from keyring during reset (ignoring)",
+                extra=build_request_log_extra(request, event="reset_keyring_error", error=str(exc))
+            )
 
         ctx.is_setup_mode = True
 
