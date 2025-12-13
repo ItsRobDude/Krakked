@@ -395,7 +395,20 @@ class MarketDataAPI:
     ) -> int:
         """
         Backfills historical OHLC data for the given pair and timeframe.
-        Returns the number of bars fetched.
+
+        Normalizes the pair name before querying the exchange and storage.
+        Delegates the actual fetch logic to ``ohlc_fetcher.backfill_ohlc``.
+
+        Args:
+            pair: The trading pair symbol.
+            timeframe: The candle timeframe (e.g., '1m', '1h').
+            since: Optional timestamp (inclusive) to fetch data from.
+
+        Returns:
+            The number of new bars fetched and stored.
+
+        Raises:
+            PairNotFoundError: If the pair is not in the current universe.
         """
         canonical = self.normalize_pair(pair)
         if canonical not in self._universe_map:
@@ -497,6 +510,23 @@ class MarketDataAPI:
         return None
 
     def get_latest_price(self, pair: str) -> Optional[float]:
+        """
+        Get the latest mid-price for a pair.
+
+        Prioritizes real-time WebSocket ticker data if fresh. Falls back to a
+        REST Ticker snapshot if WebSocket data is stale or unavailable.
+        Returns None if price cannot be determined.
+
+        Args:
+            pair: The trading pair symbol (e.g., 'XBT/USD', 'XBTUSD').
+
+        Returns:
+            The mid-price (average of best bid and ask) or last trade price,
+            or None if unavailable.
+
+        Raises:
+            DataStaleError: If neither fresh WebSocket nor REST data is available.
+        """
         canonical = self.normalize_pair(pair)
 
         # Special case: identity valuation
@@ -519,6 +549,23 @@ class MarketDataAPI:
         raise DataStaleError(canonical, stale_time, self._ws_stale_tolerance)
 
     def get_best_bid_ask(self, pair: str) -> Optional[Dict[str, float]]:
+        """
+        Get the current best bid and ask prices from the WebSocket cache.
+
+        This method strictly relies on real-time WebSocket data to ensure
+        execution logic uses the freshest possible book state.
+
+        Args:
+            pair: The trading pair symbol.
+
+        Returns:
+            A dictionary with 'bid' and 'ask' keys, or None if the WebSocket
+            client is not running or hasn't received data yet.
+
+        Raises:
+            DataStaleError: If the cached ticker data is older than the
+            configured tolerance.
+        """
         canonical = self.normalize_pair(pair)
         self._check_ticker_staleness(canonical)
         if not self._ws_client:
@@ -529,6 +576,19 @@ class MarketDataAPI:
         return None
 
     def get_live_ohlc(self, pair: str, timeframe: str) -> Optional[OHLCBar]:
+        """
+        Get the latest incomplete (running) candle for a pair.
+
+        Args:
+            pair: The trading pair symbol.
+            timeframe: The candle timeframe (e.g., '1m', '1h').
+
+        Returns:
+            The latest OHLCBar from the WebSocket stream, or None if unavailable.
+
+        Raises:
+            DataStaleError: If the cached OHLC data is stale.
+        """
         canonical = self.normalize_pair(pair)
         self._check_ohlc_staleness(canonical, timeframe)
         assert self._ws_client is not None
@@ -545,6 +605,15 @@ class MarketDataAPI:
         return None
 
     def get_data_status(self) -> ConnectionStatus:
+        """
+        Check the connectivity and health of market data sources.
+
+        Verifies REST API reachability (via SystemStatus) and WebSocket
+        connection state. Also computes statistics on streaming vs. stale pairs.
+
+        Returns:
+            A snapshot of the current connection health.
+        """
         from kraken_bot.config import ConnectionStatus
 
         # 1. Check REST API reachability
