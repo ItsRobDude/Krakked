@@ -20,11 +20,16 @@ from kraken_bot.connection.exceptions import (
 )
 from kraken_bot.credentials import CredentialStatus
 from kraken_bot.market_data.api import MarketDataStatus
+from kraken_bot.password_store import (
+    delete_master_password,
+    save_master_password,
+)
 from kraken_bot.secrets import (
     SECRETS_FILE_NAME,
     SecretsDecryptionError,
     delete_secrets,
     persist_api_keys,
+    set_session_master_password,
     unlock_secrets,
 )
 from kraken_bot.ui.logging import build_request_log_extra
@@ -56,6 +61,7 @@ class SetupUnlockPayload(BaseModel):
     """Payload for unlocking secrets."""
 
     password: str
+    remember: bool = False
 
 
 class SetupConfigPayload(BaseModel):
@@ -240,13 +246,11 @@ async def setup_unlock(
         # Verify password by attempting decryption
         _ = unlock_secrets(payload.password)
 
-        # Signal main loop to re-bootstrap
-        # We store the password in the process env temporarily so bootstrap can find it
-        # This is a trade-off: The bootstrap function looks at env var KRAKEN_BOT_SECRET_PW
-        # or prompts user. Since we are headless, we must set the env var.
-        import os
+        # Set session password for re-bootstrap
+        set_session_master_password(payload.password)
 
-        os.environ["KRAKEN_BOT_SECRET_PW"] = payload.password
+        if payload.remember:
+            save_master_password(payload.password)
 
         if ctx.is_setup_mode:
             logger.info(
@@ -271,12 +275,47 @@ async def setup_unlock(
         return ApiEnvelope(data=None, error=str(exc))
 
 
+@router.post("/setup/forget", response_model=ApiEnvelope[dict])
+async def system_forget(request: Request) -> ApiEnvelope[dict]:
+    """Forgets the master password from this device."""
+    try:
+        set_session_master_password(None)
+        delete_master_password()
+
+        # Clean up env var if it exists from legacy flow
+        import os
+        os.environ.pop("KRAKEN_BOT_SECRET_PW", None)
+
+        logger.info(
+            "Master password forgotten from device",
+            extra=build_request_log_extra(request, event="system_forget"),
+        )
+        return ApiEnvelope(data={"success": True}, error=None)
+    except Exception as exc:
+        logger.exception(
+            "Failed to forget master password",
+            extra=build_request_log_extra(request, event="system_forget_failed"),
+        )
+        return ApiEnvelope(data=None, error=str(exc))
+
+
 @router.post("/reset", response_model=ApiEnvelope[dict])
 async def system_reset(request: Request) -> ApiEnvelope[dict]:
     """Resets the system by deleting credentials and entering setup mode."""
     ctx = _context(request)
     try:
         delete_secrets()
+        # Also forget the password since the file it unlocks is gone
+        set_session_master_password(None)
+
+        try:
+            delete_master_password()
+        except Exception as exc:
+            logger.warning(
+                "Failed to delete master password from keyring during reset (ignoring)",
+                extra=build_request_log_extra(request, event="reset_keyring_error", error=str(exc))
+            )
+
         ctx.is_setup_mode = True
 
         logger.info(
