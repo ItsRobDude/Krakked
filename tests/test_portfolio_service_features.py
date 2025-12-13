@@ -37,7 +37,15 @@ def mock_market_data():
     md.get_pair_metadata.return_value = pair_meta
 
     # Prices
-    md.get_latest_price.side_effect = lambda pair: 50000.0 if "XBT" in pair else 1.0
+    md.get_latest_price.side_effect = lambda pair: 50000.0 if "XBT" in str(pair) else 1.0
+
+    def _norm(asset):
+        asset = str(asset)
+        return {"XXBT": "XBT", "XBT": "XBT", "ZUSD": "USD", "USD": "USD"}.get(asset, asset)
+
+    md.normalize_asset.side_effect = _norm
+    md.get_valuation_pair.side_effect = lambda asset: "XBTUSD" if _norm(asset) == "XBT" else None
+
     return md
 
 

@@ -624,22 +624,15 @@ class Portfolio:
         if not self._is_asset_included(asset):
             return ConversionResult(0.0, None, "excluded")
 
+        # IMPORTANT: base currency is always 1:1
+        if asset == self.config.base_currency:
+            return ConversionResult(amount, None, "valued")
+
         # Use MarketDataAPI to get valuation pair
         pair = self.config.valuation_pairs.get(asset) or self.market_data.get_valuation_pair(asset)
 
-        # If no valuation pair found, and asset is the base currency (e.g. USD), value is amount
-        if not pair and asset == self.config.base_currency:
-             return ConversionResult(amount, None, "valued")
-
-        # If still no pair, try constructing one only if string guessing is acceptable
-        # (BUT we are moving away from that, so we fail if universe doesn't have it)
-        # However, for backward compat or if config.base_currency is used as suffix:
+        # If still no pair, return unvalued.
         if not pair:
-             # This path is the legacy "guess" which we are trying to avoid.
-             # But if MarketData didn't find a valuation pair, we are stuck.
-             # We return unvalued unless it IS the base currency.
-             if asset == self.config.base_currency:
-                 return ConversionResult(amount, None, "valued")
              return ConversionResult(0.0, None, "unvalued")
 
         price = None
