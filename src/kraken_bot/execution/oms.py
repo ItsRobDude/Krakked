@@ -290,6 +290,73 @@ class ExecutionService:
 
         total_target_notional = sum(pair_target_notional.values())
 
+        # --- Portfolio-Aware Exposure Calculation ---
+        # Issue #6: "Logic Gap". We must account for passive assets (not in this plan)
+        # to ensure the total portfolio exposure doesn't exceed the limit.
+        projected_total_exposure = total_target_notional
+
+        if self.store:
+            try:
+                snapshots = self.store.get_snapshots(limit=1)
+                if snapshots:
+                    latest = snapshots[0]
+                    # Risk Assets = Equity - Cash
+                    # We use max(0, ...) to avoid negative exposure issues
+                    current_total_risk_exposure = max(
+                        0.0, latest.equity_base - latest.cash_base
+                    )
+
+                    current_active_exposure = 0.0
+                    for action in actions_to_process:
+                        if action.current_base_size <= 0:
+                            continue
+
+                        # Determine price to value the current size
+                        price = 0.0
+                        if (
+                            action.target_base_size > 0
+                            and action.target_notional_usd > 0
+                        ):
+                            # Implied price from the target
+                            price = action.target_notional_usd / action.target_base_size
+                        else:
+                            # Fetch live price
+                            try:
+                                price = self.market_data.get_latest_price(action.pair)
+                            except Exception as e:
+                                # Option A: Safe Conservative.
+                                # If we can't price it, we assume value is 0.
+                                # This maximizes 'passive_exposure' (Total - 0)
+                                # and thus maximizes 'projected_total_exposure'.
+                                logger.warning(
+                                    "Failed to fetch price for active exposure calculation; assuming 0 value",
+                                    extra=structured_log_extra(
+                                        event="guardrail_price_fetch_failed",
+                                        pair=action.pair,
+                                        error=str(e),
+                                    ),
+                                )
+                                price = 0.0
+
+                        current_active_exposure += action.current_base_size * price
+
+                    # Passive = Total (Snapshot) - Active (Current in Plan)
+                    # We clamp at 0 because active *valuation* might differ slightly from
+                    # snapshot *valuation* due to price moves.
+                    passive_exposure = max(
+                        0.0, current_total_risk_exposure - current_active_exposure
+                    )
+
+                    projected_total_exposure = passive_exposure + total_target_notional
+
+            except Exception as e:
+                logger.warning(
+                    "Failed to calculate portfolio-aware exposure; falling back to plan notional",
+                    extra=structured_log_extra(
+                        event="guardrail_exposure_calc_failed", error=str(e)
+                    ),
+                )
+
         for action in actions_to_process:
             try:
                 pair_metadata = self.market_data.get_pair_metadata_or_raise(action.pair)
@@ -365,7 +432,7 @@ class ExecutionService:
                 action=action,
                 order_notional=max(action.target_notional_usd, 0.0),
                 pair_target_notional=pair_target_notional,
-                total_target_notional=total_target_notional,
+                projected_total_exposure=projected_total_exposure,
                 metadata=plan.metadata,
             )
 
@@ -861,7 +928,7 @@ class ExecutionService:
         action: "RiskAdjustedAction",
         order_notional: float,
         pair_target_notional: Dict[str, float],
-        total_target_notional: float,
+        projected_total_exposure: float,
         metadata: Dict[str, Any],
     ) -> Optional[str]:
         """Apply lightweight notional guardrails before attempting submission."""
@@ -880,7 +947,7 @@ class ExecutionService:
                 )
 
         total_limit = getattr(config, "max_total_notional_usd", None)
-        if total_limit is not None and total_target_notional > total_limit:
+        if total_limit is not None and projected_total_exposure > total_limit:
             risk_status = (
                 metadata.get("risk_status") if isinstance(metadata, dict) else None
             )
@@ -893,7 +960,7 @@ class ExecutionService:
                 else ""
             )
             return (
-                f"Projected aggregate notional ${total_target_notional:,.2f} exceeds "
+                f"Projected total portfolio exposure ${projected_total_exposure:,.2f} exceeds "
                 f"max_total_notional_usd ${total_limit:,.2f}{pct_context}"
             )
 
