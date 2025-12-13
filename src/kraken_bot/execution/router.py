@@ -9,6 +9,7 @@ from kraken_bot.config import ExecutionConfig
 from kraken_bot.market_data.models import PairMetadata
 
 from .models import LocalOrder
+from .userref import resolve_userref
 
 if TYPE_CHECKING:
     from kraken_bot.market_data.api import MarketDataAPI
@@ -205,7 +206,7 @@ def build_order_from_plan_action(
         pair=action.pair,
         side=side,
         order_type=order_type,
-        userref=int(action.userref) if action.userref is not None else None,
+        userref=resolve_userref(action.userref),
         requested_base_size=rounded_size,
         requested_price=rounded_price,
     )

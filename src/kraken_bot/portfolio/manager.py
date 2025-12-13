@@ -153,14 +153,36 @@ class PortfolioService:
             if not trades_dict:
                 break
 
-            batch = []
+            batch: List[Dict[str, Any]] = []
             for txid, trade_data in trades_dict.items():
                 # Deduplicate against boundary
                 if txid in known_txids_at_boundary:
                     continue
 
-                trade_data["id"] = txid
-                batch.append(trade_data)
+                trade_record: Dict[str, Any] = dict(trade_data)
+                trade_record["id"] = txid
+
+                # --- Strategy attribution ---
+                # TradesHistory does not reliably include order-level metadata like `userref`.
+                # If this trade belongs to an order we submitted/tracked locally, enrich the
+                # stored trade record with a strategy tag (and userref when available) so that
+                # PnL attribution works even when Kraken does not return `userref` on trades.
+                try:
+                    ordertxid = trade_record.get("ordertxid")
+                    local_order = (
+                        self.store.get_order_by_reference(kraken_order_id=ordertxid)
+                        if ordertxid
+                        else None
+                    )
+                except Exception:
+                    local_order = None
+
+                if local_order is not None:
+                    trade_record.setdefault("strategy_tag", local_order.strategy_id)
+                    if getattr(local_order, "userref", None) is not None:
+                        trade_record.setdefault("userref", local_order.userref)
+
+                batch.append(trade_record)
 
             batch.sort(key=lambda x: x["time"])
 

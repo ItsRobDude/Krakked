@@ -18,6 +18,7 @@ from .adapter import ExecutionAdapter, get_execution_adapter
 from .exceptions import ExecutionError
 from .models import ExecutionResult, LocalOrder
 from .router import build_order_from_plan_action
+from .userref import resolve_userref
 
 logger = logging.getLogger(__name__)
 
@@ -240,7 +241,7 @@ class ExecutionService:
                     pair=action.pair,
                     side=side,
                     order_type=plan.metadata.get("order_type", ""),
-                    userref=int(action.userref) if action.userref is not None else None,
+                    userref=resolve_userref(action.userref),
                     requested_base_size=volume,
                     requested_price=plan.metadata.get("requested_price"),
                     status="rejected",
@@ -556,7 +557,7 @@ class ExecutionService:
                 pair=action.pair,
                 side=side,
                 order_type=plan.metadata.get("order_type", ""),
-                userref=int(action.userref) if action.userref is not None else None,
+                userref=resolve_userref(action.userref),
                 requested_base_size=volume,
                 requested_price=plan.metadata.get("requested_price"),
                 status="rejected",
