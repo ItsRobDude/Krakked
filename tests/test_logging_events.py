@@ -14,7 +14,7 @@ from kraken_bot.connection.rest_client import KrakenRESTClient
 from kraken_bot.execution.adapter import ExecutionAdapter
 from kraken_bot.execution.models import LocalOrder
 from kraken_bot.execution.oms import ExecutionService
-from kraken_bot.main import _run_loop_iteration, _shutdown, run
+from kraken_bot.main import BotController, _run_loop_iteration, run
 from kraken_bot.market_data.api import MarketDataAPI
 from kraken_bot.market_data.models import PairMetadata
 from kraken_bot.metrics import SystemMetrics
@@ -205,7 +205,8 @@ def test_schema_mismatch_logs_critical_event(monkeypatch, caplog):
 def test_shutdown_logs_include_event(caplog):
     caplog.set_level(logging.INFO, logger="kraken_bot.main")
 
-    context = AppContext(
+    controller = BotController(allow_interactive_setup=False)
+    controller.context = AppContext(
         config=MagicMock(),
         client=MagicMock(),
         market_data=MagicMock(),
@@ -216,10 +217,7 @@ def test_shutdown_logs_include_event(caplog):
         metrics=MagicMock(),
     )
 
-    stop_event = MagicMock()
-    stop_event.is_set.return_value = False
-
-    _shutdown(context, stop_event, ui_server=None, ui_thread=None, reason="test")
+    controller.shutdown(reason="test")
 
     records = [
         record

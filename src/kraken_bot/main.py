@@ -41,118 +41,10 @@ logger = logging.getLogger(__name__)
 
 def _coerce_interval(value: Optional[int], default: int, name: str) -> int:
     """Return a positive interval value with a safe default."""
-
     if isinstance(value, (int, float)) and value > 0:
         return int(value)
-
     logger.warning("Invalid %s; using default %ss", name, default)
     return default
-
-
-def _start_ui_server(
-    context: AppContext,
-) -> Tuple[Optional[uvicorn.Server], Optional[threading.Thread]]:
-    """Launch the FastAPI UI server in a background thread when enabled."""
-
-    if not context.config.ui.enabled:
-        logger.info(
-            "UI disabled by configuration; skipping API startup",
-            extra=structured_log_extra(event="ui_disabled"),
-        )
-        return None, None
-
-    app = create_api(context)
-    config = uvicorn.Config(
-        app,
-        host=context.config.ui.host,
-        port=context.config.ui.port,
-        log_level="info",
-        log_config=None,
-        install_signal_handlers=False,  # type: ignore[call-arg]
-    )
-    server = uvicorn.Server(config)
-
-    thread = threading.Thread(target=server.run, daemon=True)
-    thread.start()
-    logger.info(
-        "UI server started",
-        extra=structured_log_extra(
-            event="ui_started",
-            host=context.config.ui.host,
-            port=context.config.ui.port,
-        ),
-    )
-    return server, thread
-
-
-def _shutdown(
-    context: Optional[AppContext],
-    stop_event: threading.Event,
-    ui_server: Optional[uvicorn.Server],
-    ui_thread: Optional[threading.Thread],
-    *,
-    reason: str = "exit",
-    signal_number: Optional[int] = None,
-) -> None:
-    """Signal all loops to stop, halt the UI server, and cancel open orders."""
-
-    first_shutdown = not stop_event.is_set()
-    stop_event.set()
-
-    metrics_snapshot = None
-    if context and isinstance(context.metrics, SystemMetrics):
-        metrics_snapshot = context.metrics.snapshot()
-
-    shutdown_extra = structured_log_extra(
-        event="shutdown",
-        reason=reason,
-        signal_number=signal_number,
-        components={
-            "ui_server": bool(ui_server),
-            "market_data": True,
-            "execution_service": True,
-            "strategy_engine": True,
-        },
-        portfolio_db_path=getattr(
-            getattr(context.portfolio if context else None, "store", None),
-            "db_path",
-            None,
-        ),
-    )
-
-    if metrics_snapshot:
-        shutdown_extra.update(
-            last_equity_usd=metrics_snapshot.get("last_equity_usd"),
-            open_positions_count=metrics_snapshot.get("open_positions_count"),
-            open_orders_count=metrics_snapshot.get("open_orders_count"),
-        )
-
-    log_message = (
-        "Initiating shutdown" if first_shutdown else "Shutdown already in progress"
-    )
-    logger.info(log_message, extra=shutdown_extra)
-
-    if ui_server:
-        ui_server.should_exit = True
-    if ui_thread and ui_thread.is_alive():
-        ui_thread.join(timeout=5)
-
-    if context and context.execution_service:
-        try:
-            context.execution_service.cancel_all()
-        except Exception as exc:  # pragma: no cover - defensive logging
-            logger.error("Error canceling open orders during shutdown: %s", exc)
-
-    if context and context.market_data:
-        try:
-            context.market_data.shutdown()
-        except Exception as exc:  # pragma: no cover - defensive logging
-            logger.error("Error shutting down market data: %s", exc)
-
-    logger.info(
-        "Shutdown complete",
-        extra=structured_log_extra(event="shutdown_complete", reason=reason),
-    )
 
 
 def _refresh_metrics_state(
@@ -178,7 +70,6 @@ def _refresh_metrics_state(
 
 def _get_portfolio_drift(portfolio: PortfolioService) -> Optional[DriftStatus]:
     """Safely retrieve the current drift status from the portfolio service."""
-
     try:
         drift_status = portfolio.get_drift_status()
     except Exception as exc:  # pragma: no cover - defensive logging
@@ -356,38 +247,37 @@ def _run_loop_iteration(
     return updated_portfolio_sync, updated_strategy_cycle
 
 
-def run(allow_interactive_setup: bool = True) -> int:
-    """Bootstrap services, run scheduler loops, and host the UI API."""
+class BotController:
+    """
+    Encapsulates the application lifecycle, state management, and hot-reloading.
+    Replaces the procedural closure-based state management with a robust class.
+    """
 
-    configure_logging(level=logging.INFO)
-    stop_event = threading.Event()
-    db_path = "portfolio.db"
-    schema_status = None
+    def __init__(self, allow_interactive_setup: bool = True):
+        self.allow_interactive_setup = allow_interactive_setup
+        self.stop_event = threading.Event()
+        self.context: Optional[AppContext] = None
 
-    # Context components (mutable references for reloading)
-    context_ref: list[Optional[AppContext]] = [None]
-    ui_server_ref: list[Optional[uvicorn.Server]] = [None]
-    ui_thread_ref: list[Optional[threading.Thread]] = [None]
+        # Service handles
+        self.ui_server: Optional[uvicorn.Server] = None
+        self.ui_thread: Optional[threading.Thread] = None
 
-    # Flags to control the main loop state
-    is_setup_mode = False
+        # State flags
+        self.is_setup_mode = False
 
-    def _bootstrap_and_create_context() -> AppContext:
+    def bootstrap_context(self) -> AppContext:
         """
-        Attempts to bootstrap the application.
-        If it fails due to credentials/config, returns a setup-mode context.
+        Loads config/creds and initializes all services.
+        Returns a fresh AppContext or a setup-mode context if credentials fail.
         """
-        nonlocal is_setup_mode
         try:
             # We disable interactive setup in headless/daemon mode to force
             # CredentialBootstrapError if keys are missing.
             client, config, rate_limiter = bootstrap(
-                allow_interactive_setup=allow_interactive_setup
+                allow_interactive_setup=self.allow_interactive_setup
             )
 
-            db_path = getattr(
-                getattr(config, "portfolio", None), "db_path", "portfolio.db"
-            )
+            db_path = getattr(config.portfolio, "db_path", "portfolio.db")
             auto_migrate = config.portfolio.auto_migrate_schema
             execution_mode = getattr(config.execution, "mode", "unknown")
 
@@ -398,17 +288,12 @@ def run(allow_interactive_setup: bool = True) -> int:
                 )
 
             if auto_migrate:
-                schema_status_local = ensure_portfolio_schema(
-                    db_path, CURRENT_SCHEMA_VERSION, migrate=True
-                )
+                ensure_portfolio_schema(db_path, CURRENT_SCHEMA_VERSION, migrate=True)
                 with sqlite3.connect(db_path) as conn:
                     ensure_portfolio_tables(conn)
                     conn.commit()
             else:
-                schema_status_local = assert_portfolio_schema(db_path)
-                # Assign to outer scope if needed, though mostly for logging
-                nonlocal schema_status
-                schema_status = schema_status_local
+                assert_portfolio_schema(db_path)
 
             market_data = MarketDataAPI(
                 config, rest_client=client, rate_limiter=rate_limiter
@@ -424,15 +309,6 @@ def run(allow_interactive_setup: bool = True) -> int:
             )
             portfolio.initialize()
 
-            logger.info(
-                "Portfolio schema ready",
-                extra=structured_log_extra(
-                    event="schema_status",
-                    env=get_log_environment(),
-                    schema_version=portfolio.store.get_schema_version(),
-                ),
-            )
-
             strategy_engine = StrategyEngine(config, market_data, portfolio)
             strategy_engine.initialize()
 
@@ -446,7 +322,6 @@ def run(allow_interactive_setup: bool = True) -> int:
             )
 
             metrics = SystemMetrics()
-
             session_state = SessionState(
                 active=config.session.active,
                 mode=config.session.mode,
@@ -455,13 +330,14 @@ def run(allow_interactive_setup: bool = True) -> int:
                 ml_enabled=config.session.ml_enabled,
             )
 
-            is_setup_mode = False
+            self.is_setup_mode = False
+
             return AppContext(
                 config=config,
                 client=client,
                 market_data=market_data,
                 portfolio_service=portfolio,
-                portfolio=portfolio,
+                portfolio=portfolio,  # Alias
                 strategy_engine=strategy_engine,
                 execution_service=execution_service,
                 metrics=metrics,
@@ -475,9 +351,10 @@ def run(allow_interactive_setup: bool = True) -> int:
                 exc,
                 extra=structured_log_extra(event="enter_setup_mode"),
             )
-            # Load basic config just for UI settings if available, else default
             config = load_config()
-            is_setup_mode = True
+            self.is_setup_mode = True
+
+            # Return a minimal context for UI
             return AppContext(
                 config=config,
                 client=None,
@@ -487,13 +364,180 @@ def run(allow_interactive_setup: bool = True) -> int:
                 strategy_engine=None,
                 execution_service=None,
                 metrics=None,
+                session=None,
                 is_setup_mode=True,
             )
 
-    try:
-        # Initial Bootstrap
-        context = _bootstrap_and_create_context()
-        context_ref[0] = context
+    def _hot_swap_context(self, new_context: AppContext) -> None:
+        """
+        Updates the existing context object in-place so references held by
+        other threads (UI) see the new services immediately.
+        """
+        if not self.context:
+            self.context = new_context
+            return
+
+        logger.info("Hot-swapping application context...")
+
+        # Shutdown old services to release resources/threads
+        if self.context.market_data:
+            try:
+                self.context.market_data.shutdown()
+            except Exception as e:
+                logger.error(f"Error shutting down old market data: {e}")
+
+        # Patch attributes
+        self.context.config = new_context.config
+        self.context.client = new_context.client
+        self.context.market_data = new_context.market_data
+        self.context.portfolio = new_context.portfolio
+        self.context.portfolio_service = new_context.portfolio_service
+        self.context.strategy_engine = new_context.strategy_engine
+        self.context.execution_service = new_context.execution_service
+        self.context.metrics = new_context.metrics
+        self.context.session = new_context.session
+
+        # Crucial: Update the setup flag so UI knows we are ready
+        self.context.is_setup_mode = new_context.is_setup_mode
+        self.is_setup_mode = new_context.is_setup_mode
+
+        # Clear the event so we don't loop
+        self.context.reinitialize_event.clear()
+
+    def start_ui(self) -> None:
+        """Launch the FastAPI UI server in a background thread."""
+        if not self.context or not self.context.config.ui.enabled:
+            logger.info(
+                "UI disabled by configuration; skipping API startup",
+                extra=structured_log_extra(event="ui_disabled"),
+            )
+            return
+
+        app = create_api(self.context)
+        config = uvicorn.Config(
+            app,
+            host=self.context.config.ui.host,
+            port=self.context.config.ui.port,
+            log_level="info",
+            log_config=None,
+            install_signal_handlers=False,
+        )
+        self.ui_server = uvicorn.Server(config)
+        self.ui_thread = threading.Thread(target=self.ui_server.run, daemon=True)
+        self.ui_thread.start()
+
+        logger.info(
+            "UI server started",
+            extra=structured_log_extra(
+                event="ui_started",
+                host=self.context.config.ui.host,
+                port=self.context.config.ui.port,
+            ),
+        )
+
+    def shutdown(
+        self, reason: str = "exit", signal_number: Optional[int] = None
+    ) -> None:
+        """Gracefully shut down all subsystems with rich structured logging."""
+        first_shutdown = not self.stop_event.is_set()
+        self.stop_event.set()
+
+        metrics_snapshot = None
+        if (
+            self.context
+            and self.context.metrics
+            and isinstance(self.context.metrics, SystemMetrics)
+        ):
+            metrics_snapshot = self.context.metrics.snapshot()
+
+        # Construct components status for observability
+        components = {
+            "ui_server": bool(self.ui_server),
+            "market_data": bool(self.context and self.context.market_data),
+            "execution_service": bool(self.context and self.context.execution_service),
+            "strategy_engine": bool(self.context and self.context.strategy_engine),
+        }
+
+        # Safely extract DB path if available
+        db_path = None
+        if (
+            self.context
+            and self.context.portfolio
+            and hasattr(self.context.portfolio, "store")
+        ):
+            db_path = getattr(self.context.portfolio.store, "db_path", None)
+
+        shutdown_extra = structured_log_extra(
+            event="shutdown",
+            reason=reason,
+            signal_number=signal_number,
+            components=components,
+            portfolio_db_path=db_path,
+        )
+
+        if metrics_snapshot:
+            shutdown_extra.update(
+                last_equity_usd=metrics_snapshot.get("last_equity_usd"),
+                open_positions_count=metrics_snapshot.get("open_positions_count"),
+                open_orders_count=metrics_snapshot.get("open_orders_count"),
+            )
+
+        log_message = (
+            "Initiating shutdown" if first_shutdown else "Shutdown already in progress"
+        )
+        logger.info(log_message, extra=shutdown_extra)
+
+        if self.ui_server:
+            self.ui_server.should_exit = True
+
+        # Attempt to join UI thread briefly, but don't block forever
+        if self.ui_thread and self.ui_thread.is_alive():
+            self.ui_thread.join(timeout=2.0)
+
+        if self.context:
+            if self.context.execution_service:
+                try:
+                    self.context.execution_service.cancel_all()
+                except Exception as e:
+                    logger.error(f"Error canceling orders during shutdown: {e}")
+
+            if self.context.market_data:
+                try:
+                    self.context.market_data.shutdown()
+                except Exception as e:
+                    logger.error(f"Error shutting down market data: {e}")
+
+        logger.info(
+            "Shutdown complete",
+            extra=structured_log_extra(event="shutdown_complete", reason=reason),
+        )
+
+    def run(self) -> int:
+        """Main entry point."""
+        configure_logging(level=logging.INFO)
+
+        # 1. Initial Bootstrap
+        try:
+            initial_context = self.bootstrap_context()
+            self.context = initial_context  # Initialize the main reference
+        except PortfolioSchemaError as e:
+            logger.critical(
+                "Portfolio schema mismatch: %s",
+                e,
+                extra=structured_log_extra(
+                    event="schema_mismatch",
+                    found_schema=e.found,
+                    expected_schema=e.expected,
+                ),
+            )
+            return 1
+        except Exception as e:
+            logger.critical(
+                "Fatal startup error: %s",
+                e,
+                extra=structured_log_extra(event="startup_failed"),
+            )
+            return 1
 
         logger.info(
             "Starting Kraken bot",
@@ -501,68 +545,62 @@ def run(allow_interactive_setup: bool = True) -> int:
                 event="startup",
                 env=get_log_environment(),
                 app_version=APP_VERSION,
-                setup_mode=is_setup_mode,
+                setup_mode=self.is_setup_mode,
             ),
         )
 
-        ui_server, ui_thread = _start_ui_server(context)
-        ui_server_ref[0] = ui_server
-        ui_thread_ref[0] = ui_thread
+        # 2. Register Signal Handlers (Now they just call self.shutdown)
+        signal.signal(
+            signal.SIGINT,
+            lambda s, f: self.shutdown(reason="signal", signal_number=s),
+        )
+        signal.signal(
+            signal.SIGTERM,
+            lambda s, f: self.shutdown(reason="signal", signal_number=s),
+        )
 
-        def _signal_handler(signum, _frame) -> None:
-            _shutdown(
-                context_ref[0],
-                stop_event,
-                ui_server_ref[0],
-                ui_thread_ref[0],
-                reason="signal",
-                signal_number=signum,
-            )
+        # 3. Start UI
+        self.start_ui()
 
-        signal.signal(signal.SIGINT, _signal_handler)
-        signal.signal(signal.SIGTERM, _signal_handler)
+        # 4. Main Loop
+        # We define a helper for metrics updates to keep the loop clean
+        def refresh_metrics() -> None:
+            if (
+                self.context
+                and self.context.portfolio
+                and self.context.execution_service
+                and self.context.metrics
+            ):
+                _refresh_metrics_state(
+                    self.context.portfolio,
+                    self.context.execution_service,
+                    self.context.metrics,
+                )
 
-        while not stop_event.is_set():
-            if is_setup_mode:
-                # Wait for UI to signal re-initialization
-                logger.info("Waiting for setup completion...")
-                context.reinitialize_event.wait(timeout=1.0)
+        # Initialize timing vars
+        strategy_interval = 60
+        portfolio_interval = 300
+        last_strategy_cycle = datetime.now(timezone.utc) - timedelta(
+            seconds=strategy_interval
+        )
+        last_portfolio_sync = datetime.now(timezone.utc) - timedelta(
+            seconds=portfolio_interval
+        )
 
-                if context.reinitialize_event.is_set():
+        while not self.stop_event.is_set():
+            if not self.context:
+                # Should not happen given init, but safety first
+                self.is_setup_mode = True
+
+            # --- SETUP MODE HANDLING ---
+            if self.is_setup_mode:
+                # Check if UI requested a reset/reload via the event
+                if self.context and self.context.reinitialize_event.wait(timeout=1.0):
                     logger.info("Re-initialization signal received. reloading...")
-                    # Stop old services if any (unlikely in setup mode, but safe)
-                    if context.market_data:
-                        context.market_data.shutdown()
-
-                    # Re-run bootstrap
                     try:
-                        new_context = _bootstrap_and_create_context()
-                        # Update the global context reference in place if possible,
-                        # or update the app.state.context reference if we can reach it.
-                        # The UI holds a reference to 'context'. We should update its internals.
-                        # But AppContext is immutable dataclass mostly.
-                        # Actually, we can just replace the object in app.state
-                        # BUT the UI server is running in a thread with the old app instance.
-                        # We must update the attributes of the existing context object?
-                        # Dataclasses are mutable by default unless frozen=True.
-                        # AppContext is not frozen.
-
-                        context.config = new_context.config
-                        context.client = new_context.client
-                        context.market_data = new_context.market_data
-                        context.portfolio = new_context.portfolio
-                        context.portfolio_service = new_context.portfolio_service
-                        context.strategy_engine = new_context.strategy_engine
-                        context.execution_service = new_context.execution_service
-                        context.metrics = new_context.metrics
-                        context.session = new_context.session
-                        context.is_setup_mode = new_context.is_setup_mode
-                        context.reinitialize_event.clear()
-
-                        # Re-evaluate setup mode flag
-                        is_setup_mode = new_context.is_setup_mode
-
-                        if not is_setup_mode:
+                        new_ctx = self.bootstrap_context()
+                        self._hot_swap_context(new_ctx)
+                        if not self.is_setup_mode:
                             logger.info(
                                 "System successfully initialized from setup mode",
                                 extra=structured_log_extra(event="setup_complete"),
@@ -572,73 +610,52 @@ def run(allow_interactive_setup: bool = True) -> int:
                                 "Re-initialization failed to clear setup mode",
                                 extra=structured_log_extra(event="setup_failed_retry"),
                             )
-
                     except Exception:
                         logger.exception(
                             "Critical error during re-initialization",
                             extra=structured_log_extra(event="reinit_error"),
                         )
-                        # Keep waiting in setup mode
-                        context.reinitialize_event.clear()
-
+                        if self.context:
+                            self.context.reinitialize_event.clear()
                 continue
 
-            # --- Normal Operation Loop ---
-
-            # Check if reset was requested via UI (which sets context.is_setup_mode=True)
-            if context.is_setup_mode and not is_setup_mode:
+            # --- RUNTIME RELOAD CHECK ---
+            # Even in run mode, the UI might request a reset (e.g. "Lock" button clicked)
+            if self.context and self.context.is_setup_mode and not self.is_setup_mode:
                 logger.info(
                     "Reset detected (context.is_setup_mode=True). Entering setup mode...",
                     extra=structured_log_extra(event="enter_setup_mode_runtime"),
                 )
-                if context.market_data:
-                    context.market_data.shutdown()
-
-                # Update local flag to enter the setup loop on next iteration
-                is_setup_mode = True
-
-                # Clear services to prevent usage (optional, but cleaner)
-                context.market_data = None
-                context.execution_service = None
-
+                self.is_setup_mode = True
+                if self.context.market_data:
+                    self.context.market_data.shutdown()
+                # Clear services to prevent usage
+                self.context.market_data = None
+                self.context.execution_service = None
                 continue
 
+            # --- MAIN TRADING LOOP ---
+            now = datetime.now(timezone.utc)
+
+            # Safely extract config intervals
             strategy_interval = _coerce_interval(
-                getattr(context.config.strategies, "loop_interval_seconds", None),
+                getattr(self.context.config.strategies, "loop_interval_seconds", 60),
                 60,
                 "strategy interval",
             )
             portfolio_interval = _coerce_interval(
-                getattr(context.config.portfolio, "sync_interval_seconds", None),
+                getattr(self.context.config.portfolio, "sync_interval_seconds", 300),
                 300,
                 "portfolio sync interval",
             )
 
-            # Initialize timers if fresh from setup
-            if "last_strategy_cycle" not in locals():
-                last_strategy_cycle = datetime.now(timezone.utc) - timedelta(
-                    seconds=strategy_interval
-                )
-            if "last_portfolio_sync" not in locals():
-                last_portfolio_sync = datetime.now(timezone.utc) - timedelta(
-                    seconds=portfolio_interval
-                )
-
-            # Define refresh closure locally to capture current context
-            def refresh_metrics_state() -> None:
-                if context.portfolio and context.execution_service and context.metrics:
-                    _refresh_metrics_state(
-                        context.portfolio, context.execution_service, context.metrics
-                    )
-
-            now = datetime.now(timezone.utc)
-
             if (
-                context.portfolio
-                and context.market_data
-                and context.strategy_engine
-                and context.execution_service
-                and context.metrics
+                self.context.portfolio
+                and self.context.market_data
+                and self.context.strategy_engine
+                and self.context.execution_service
+                and self.context.metrics
+                and self.context.session
             ):
                 last_portfolio_sync, last_strategy_cycle = _run_loop_iteration(
                     now=now,
@@ -646,57 +663,40 @@ def run(allow_interactive_setup: bool = True) -> int:
                     portfolio_interval=portfolio_interval,
                     last_strategy_cycle=last_strategy_cycle,
                     last_portfolio_sync=last_portfolio_sync,
-                    portfolio=context.portfolio,
-                    market_data=context.market_data,
-                    strategy_engine=context.strategy_engine,
-                    execution_service=context.execution_service,
-                    metrics=context.metrics,
-                    refresh_metrics_state=refresh_metrics_state,
-                    session_active=context.session.active,
+                    portfolio=self.context.portfolio,
+                    market_data=self.context.market_data,
+                    strategy_engine=self.context.strategy_engine,
+                    execution_service=self.context.execution_service,
+                    metrics=self.context.metrics,
+                    refresh_metrics_state=refresh_metrics,
+                    session_active=self.context.session.active,
                 )
             else:
                 logger.error(
                     "Invalid state: not in setup mode but services are missing; forcing setup mode"
                 )
-                is_setup_mode = True
+                self.is_setup_mode = True
                 continue
 
-            session_interval = getattr(context.session, "loop_interval_sec", None)
+            # Dynamic sleep based on config
+            session_interval = getattr(self.context.session, "loop_interval_sec", None)
             loop_interval = _coerce_interval(
                 int(session_interval) if session_interval is not None else None,
                 min(strategy_interval, portfolio_interval, 5),
                 "session loop interval",
             )
+            self.stop_event.wait(loop_interval)
 
-            stop_event.wait(loop_interval)
+        # Final cleanup pass on exit
+        self.shutdown(reason="loop_exit")
+        return 0
 
-    except PortfolioSchemaError as exc:
-        logger.critical(
-            "Portfolio schema mismatch: %s",
-            exc,
-            extra=structured_log_extra(
-                event="schema_mismatch",
-                found_schema=exc.found,
-                expected_schema=exc.expected,
-            ),
-        )
-        return 1
-    except RuntimeError as exc:
-        logger.critical(
-            "%s", exc, extra=structured_log_extra(event="schema_guard_failed")
-        )
-        return 1
-    finally:
-        _shutdown(
-            context_ref[0],
-            stop_event,
-            ui_server_ref[0],
-            ui_thread_ref[0],
-            reason="loop_exit",
-        )
 
-    return 0
+def run(allow_interactive_setup: bool = True) -> int:
+    """Wrapper to maintain CLI compatibility."""
+    controller = BotController(allow_interactive_setup=allow_interactive_setup)
+    return controller.run()
 
 
 if __name__ == "__main__":  # pragma: no cover - CLI entry
-    run()
+    exit(run())
