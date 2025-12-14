@@ -149,15 +149,54 @@ def load_config(
     def _validated_int(
         value: Any, default: int, field_name: str, min_value: int = 1
     ) -> int:
-        if isinstance(value, int) and value >= min_value:
-            return value
+        """Validate a config value intended to be an integer.
 
-        logger.warning(
-            "%s is invalid; using default",
-            field_name,
-            extra={"event": field_name, "config_path": str(config_path)},
-        )
-        return default
+        Accepts either an int or a numeric string (e.g. "30"). Missing
+        values (None) fall back to the provided default without warning.
+
+        Notes:
+          - bool is a subclass of int; treat it as invalid.
+        """
+
+        if value is None:
+            return default
+
+        def _warn_invalid(provided: object) -> int:
+            logger.warning(
+                "%s is invalid; using default",
+                field_name,
+                extra={
+                    "event": field_name,
+                    "config_path": str(config_path),
+                    "provided": repr(provided),
+                    "provided_type": type(provided).__name__,
+                },
+            )
+            return default
+
+        if isinstance(value, bool):
+            return _warn_invalid(value)
+
+        if isinstance(value, int):
+            if value >= min_value:
+                return value
+            return _warn_invalid(value)
+
+        if isinstance(value, str):
+            stripped = value.strip()
+            if stripped == "":
+                return _warn_invalid(value)
+
+            try:
+                parsed = int(stripped, 10)
+            except ValueError:
+                return _warn_invalid(value)
+
+            if parsed >= min_value:
+                return parsed
+            return _warn_invalid(parsed)
+
+        return _warn_invalid(value)
 
     allowed_envs = {"dev", "paper", "live"}
 

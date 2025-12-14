@@ -172,3 +172,26 @@ def test_manual_positions_excluded_from_limits():
     assert exclude_ctx.manual_exposure_pct == pytest.approx(10.0)
     assert "manual" not in exclude_ctx.per_strategy_exposure_usd
     assert exclude_ctx.per_strategy_exposure_usd["trend"] == pytest.approx(200.0)
+
+
+def test_clamped_flag_set_when_limits_reduce_target():
+    market_data = MagicMock()
+    market_data.get_latest_price.return_value = 100.0
+
+    portfolio = _build_portfolio_mock()
+
+    # Make the per-asset limit very small so we force a clamp, but not a full block.
+    config = RiskConfig(max_per_asset_pct=10.0, max_portfolio_risk_pct=100.0)
+    engine = RiskEngine(config, market_data, portfolio)
+
+    intents = [_intent("s1", "XBTUSD", "enter", desired_usd=200.0)]
+
+    actions = engine.process_intents(intents)
+
+    assert len(actions) == 1
+    action = actions[0]
+
+    assert action.blocked is False
+    assert action.clamped is True
+    assert action.target_notional_usd == pytest.approx(100.0)
+    assert "Clamped:" in action.reason

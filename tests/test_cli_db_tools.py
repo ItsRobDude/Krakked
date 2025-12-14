@@ -135,6 +135,42 @@ def test_db_backup_creates_file_and_prunes_old_backups(
     }
 
 
+def test_db_backup_captures_wal_changes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    db_path = tmp_path / "portfolio.db"
+    _create_sample_db(db_path)
+
+    # Put the DB in WAL mode and disable auto-checkpointing so recent commits live in -wal.
+    conn = sqlite3.connect(db_path)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA wal_autocheckpoint=0")
+    conn.execute("INSERT INTO trades (value) VALUES (3.0)")
+    conn.commit()
+
+    wal_path = Path(str(db_path) + "-wal")
+    assert wal_path.exists()
+
+    timestamps = _fixed_datetimes([datetime(2024, 1, 1, 12, 34)])
+
+    class _PatchedDateTime(datetime):
+        @classmethod
+        def now(cls) -> datetime:  # type: ignore[override]
+            return next(timestamps)
+
+    monkeypatch.setattr(cli, "datetime", _PatchedDateTime)
+
+    exit_code = cli.main(["db-backup", "--db-path", str(db_path)])
+    backup_path = db_path.with_name("portfolio.db.202401011234.bak")
+
+    assert exit_code == 0
+    assert backup_path.exists()
+
+    with sqlite3.connect(backup_path) as backup_conn:
+        row_count = backup_conn.execute("SELECT COUNT(*) FROM trades").fetchone()[0]
+        assert row_count == 3
+
+    conn.close()
+
+
 def test_db_backup_reports_missing_file(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

@@ -55,6 +55,20 @@ def test_partial_env_vars_fall_through(mock_config_dir):
     assert result.source == "none"
 
 
+def test_whitespace_env_vars_are_ignored(mock_config_dir):
+    with patch.dict(
+        os.environ,
+        {"KRAKEN_API_KEY": "   ", "KRAKEN_API_SECRET": "env_secret"},
+        clear=True,
+    ):
+        result = load_api_keys()
+
+    assert result.api_key is None
+    assert result.api_secret is None
+    assert result.status == CredentialStatus.NOT_FOUND
+    assert result.source == "none"
+
+
 def test_encrypt_and_decrypt_flow(mock_config_dir):
     api_key = "test_key"
     api_secret = "test_secret"

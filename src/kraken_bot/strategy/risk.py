@@ -560,6 +560,16 @@ class RiskEngine:
             action_type = "none"
 
         target_base = target_usd / price if price else 0.0
+
+        blocked = bool(blocked_reasons) and target_usd == 0
+        clamped = bool(blocked_reasons) and not blocked
+
+        if not blocked_reasons:
+            reason_text = "Aggregated Intent"
+        else:
+            prefix = "Blocked" if blocked else "Clamped"
+            reason_text = f"{prefix}: {'; '.join(blocked_reasons)}"
+
         return RiskAdjustedAction(
             pair=pair,
             strategy_id=",".join(strategies_involved),
@@ -569,13 +579,10 @@ class RiskEngine:
             target_base_size=target_base,
             target_notional_usd=target_usd,
             current_base_size=current_base,
-            reason=(
-                "Aggregated Intent"
-                if not blocked_reasons
-                else f"Clamped: {'; '.join(blocked_reasons)}"
-            ),
-            blocked=bool(blocked_reasons) and target_usd == 0,
+            reason=reason_text,
+            blocked=blocked,
             blocked_reasons=blocked_reasons,
+            clamped=clamped,
             risk_limits_snapshot=asdict(self.config),
         )
 
@@ -788,10 +795,7 @@ class RiskEngine:
             target_base_size=current_base,
             target_notional_usd=0.0,
             current_base_size=current_base,
-            reason=reason,
-            blocked=True,
-            blocked_reasons=[reason],
-            risk_limits_snapshot=asdict(self.config),
+            reason=reason_text,
         )
 
     def get_status(self) -> RiskStatus:

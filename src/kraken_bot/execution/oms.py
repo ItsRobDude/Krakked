@@ -302,9 +302,17 @@ class ExecutionService:
 
         if self.store:
             try:
-                snapshots = self.store.get_snapshots(limit=1)
+                snapshots = self.store.get_snapshots(limit=5)
                 if snapshots:
                     latest = snapshots[0]
+
+                    # Align the snapshot we use with the plan generation time when possible.
+                    generated_at = getattr(plan, "generated_at", None)
+                    if isinstance(generated_at, datetime):
+                        if generated_at.tzinfo is None:
+                            generated_at = generated_at.replace(tzinfo=UTC)
+                        plan_ts = int(generated_at.timestamp())
+                        latest = min(snapshots, key=lambda s: abs(s.timestamp - plan_ts))
 
                     # 1. Identify active pairs directly from plan actions
                     # We use source_pair matching which is faster and aligns with snapshot creation.

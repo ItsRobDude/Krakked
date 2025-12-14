@@ -318,6 +318,12 @@ def load_api_keys(allow_interactive_setup: bool = False) -> CredentialResult:
     api_key = os.getenv("KRAKEN_API_KEY")
     api_secret = os.getenv("KRAKEN_API_SECRET")
 
+    # Treat whitespace-only env vars as missing.
+    if api_key is not None:
+        api_key = api_key.strip() or None
+    if api_secret is not None:
+        api_secret = api_secret.strip() or None
+
     # FIX #4: Deep Logic for Shadow Configuration
     if bool(api_key) ^ bool(api_secret):
         missing = "KRAKEN_API_SECRET" if api_key else "KRAKEN_API_KEY"
