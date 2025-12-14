@@ -112,7 +112,18 @@ class PortfolioService:
 
     def sync(self) -> Dict[str, int]:
         """
-        Fetches new trades/ledgers, updates state, reconciles.
+        Synchronizes local state with the Kraken API via a multi-stage update.
+
+        This process ensures the local database mirrors the exchange state by:
+        1. Fetching `TradesHistory` incrementally, handling pagination and inclusive
+           timestamp boundaries to filter duplicates.
+        2. Fetching `Ledgers` to capture non-trade transfers (deposits, withdrawals, fees),
+           replaying them through the `BalanceEngine` to rebuild accurate balances.
+        3. Reconciling the calculated local balance against the live `Balance` API
+           to detect and flag any drift.
+
+        Returns:
+            Dict[str, int]: Statistics on the sync operation (e.g., {"new_trades": 5, "new_cash_flows": 1}).
         """
 
         logger.info(
@@ -212,10 +223,10 @@ class PortfolioService:
                     # If batch is empty, it means we filtered everything out.
                     # We should probably trust resp_last if it exists.
                     if resp_last:
-                         params["start"] = resp_last
-                         last_cursor = resp_last
+                        params["start"] = resp_last
+                        last_cursor = resp_last
                     else:
-                         break
+                        break
 
             safety_counter += 1
             if safety_counter > 200:
@@ -461,11 +472,8 @@ class PortfolioService:
         raw_balance = info.get("balance")
         balance_decimal = Decimal(str(raw_balance)) if raw_balance is not None else None
 
-        # Use MarketDataAPI via portfolio to normalize asset if needed, or rely on portfolio.ingest_cashflows
-        # But here we are building LedgerEntry to store.
-        # Ideally, we store the normalized asset in the DB to make querying consistent.
-        # But LedgerEntry has 'asset'.
-        # portfolio._normalize_asset is now delegated to market_data.
+        # Normalize the asset name (e.g., 'XXBT' -> 'BTC') to ensure consistency
+        # with the rest of the system before storing in the database.
         normalized_asset = self.portfolio.market_data.normalize_asset(info.get("asset", ""))
 
         return LedgerEntry(
