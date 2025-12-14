@@ -452,6 +452,7 @@ class MarketDataAPI:
             raise DataStaleError(pair, stale_time, self._ws_stale_tolerance)
 
     def _get_rest_ticker_price(self, pair: str) -> Optional[float]:
+        """Fetch fallback price via REST Ticker (Mid-price or Last)."""
         # pair is expected to be canonical
         assert self._rest_client is not None
         try:
@@ -460,41 +461,25 @@ class MarketDataAPI:
             logger.warning("REST ticker fallback failed for %s: %s", pair, exc)
             return None
 
-        if not result:
-            return None
-
         # The key in result depends on what we passed. If we passed XBTUSD, we get XBTUSD or XXBTZUSD.
-        # Since we use normalized pairs, we should try to match flexibly or grab the first value.
-        ticker_values = next(iter(result.values()), None)
-        if not ticker_values:
+        # Grab the first value regardless of key to match flexibly.
+        ticker_data = next(iter(result.values())) if result else None
+        if not ticker_data:
             return None
 
-        bid = (
-            ticker_values.get("b", [None])[0]
-            if isinstance(ticker_values.get("b"), list)
-            else None
-        )
-        ask = (
-            ticker_values.get("a", [None])[0]
-            if isinstance(ticker_values.get("a"), list)
-            else None
-        )
-        last_trade = (
-            ticker_values.get("c", [None])[0]
-            if isinstance(ticker_values.get("c"), list)
-            else None
-        )
+        def _get_val(key: str) -> Optional[float]:
+            """Safely extract float from list fields like 'b': ['50000.0', '1', '1.0']"""
+            try:
+                val_list = ticker_data.get(key)
+                return float(val_list[0]) if val_list and len(val_list) > 0 else None
+            except (ValueError, TypeError, IndexError, AttributeError):
+                return None
 
-        try:
-            if bid is not None and ask is not None:
-                return (float(bid) + float(ask)) / 2
-            if last_trade is not None:
-                return float(last_trade)
-        except (TypeError, ValueError):
-            logger.warning("Unexpected ticker payload for %s: %s", pair, ticker_values)
-            return None
+        bid, ask = _get_val("b"), _get_val("a")
+        if bid is not None and ask is not None:
+            return (bid + ask) / 2
 
-        return None
+        return _get_val("c")
 
     def get_latest_price(self, pair: str) -> Optional[float]:
         canonical = self.normalize_pair(pair)
