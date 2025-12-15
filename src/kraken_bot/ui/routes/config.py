@@ -248,7 +248,13 @@ async def create_profile(payload: ProfileCreatePayload, request: Request) -> Api
         return ApiEnvelope(data=None, error="UI is in read-only mode")
 
     config_dir = get_config_dir()
-    profile_filename = f"{payload.name}.yaml"
+
+    # Sanitize name
+    safe_name = "".join(c for c in payload.name if c.isalnum() or c in ('-', '_')).strip()
+    if not safe_name or safe_name != payload.name:
+        return ApiEnvelope(data=None, error="Invalid profile name")
+
+    profile_filename = f"{safe_name}.yaml"
     profile_path = config_dir / "profiles" / profile_filename
 
     if profile_path.exists():

@@ -77,7 +77,12 @@ async def get_preset(kind: str, name: str, request: Request) -> ApiEnvelope[Pres
     if kind not in ALLOWED_KINDS:
         return ApiEnvelope(data=None, error="Invalid preset kind")
 
-    path = PRESETS_DIR / kind / f"{name}.yaml"
+    # Sanitize input
+    safe_name = "".join(c for c in name if c.isalnum() or c in ('-', '_')).strip()
+    if not safe_name or safe_name != name:
+        return ApiEnvelope(data=None, error="Invalid preset name")
+
+    path = PRESETS_DIR / kind / f"{safe_name}.yaml"
     if not path.exists():
         return ApiEnvelope(data=None, error="Preset not found")
 
@@ -111,7 +116,7 @@ async def save_preset(payload: PresetPayload, request: Request) -> ApiEnvelope[d
 
     # Sanitize name for filename
     safe_name = "".join(c for c in payload.name if c.isalnum() or c in ('-', '_')).strip()
-    if not safe_name:
+    if not safe_name or safe_name == "." or safe_name == "..":
         return ApiEnvelope(data=None, error="Invalid name")
 
     path = PRESETS_DIR / payload.kind / f"{safe_name}.yaml"
@@ -148,12 +153,12 @@ async def delete_preset(kind: str, name: str, request: Request) -> ApiEnvelope[d
     if kind not in ALLOWED_KINDS:
         return ApiEnvelope(data=None, error="Invalid kind")
 
-    # We need to find the file that corresponds to this name.
-    # The API 'name' might be the display name or the filename stem.
-    # Let's assume filename stem for deletion stability, or look it up.
-    # For simplicity, assuming 'name' passed here is the filename stem (safe_name).
+    # Sanitize inputs
+    safe_name = "".join(c for c in name if c.isalnum() or c in ('-', '_')).strip()
+    if not safe_name or safe_name != name:
+        return ApiEnvelope(data=None, error="Invalid preset name")
 
-    path = PRESETS_DIR / kind / f"{name}.yaml"
+    path = PRESETS_DIR / kind / f"{safe_name}.yaml"
     if not path.exists():
         return ApiEnvelope(data=None, error="Preset not found")
 
