@@ -508,26 +508,39 @@ async def start_session(
     if ctx.config.ui.read_only:
         return ApiEnvelope(data=None, error="UI is in read-only mode")
 
-    if ctx.session.active:
-        return ApiEnvelope(data=None, error="Session already active")
-
     execution_config = ctx.config.execution
     new_mode = payload.mode
 
-    # Implicit guard: If starting in LIVE mode, verify allow_live_trading is already set.
+    is_update = bool(getattr(ctx.session, "active", False))
+
+    # When the session is already active, we treat this endpoint as a session update.
+    # We intentionally disallow changing profile or mode while active to avoid hot-swapping
+    # services mid-cycle without a full reinitialization.
+    if is_update:
+        if payload.profile_name != getattr(ctx.session, "profile_name", None):
+            return ApiEnvelope(
+                data=None,
+                error="Cannot change profile while session is active. Stop the session first.",
+            )
+        if new_mode != getattr(ctx.session, "mode", None):
+            return ApiEnvelope(
+                data=None,
+                error="Cannot change mode while session is active. Stop the session first.",
+            )
+
+    # Implicit guard: If starting/updating in LIVE mode, verify allow_live_trading is already set.
     # We DO NOT allow switching to live via session start if not already configured.
     # The user must use /mode to switch to live first (which has the guard).
     if new_mode == "live":
         if not getattr(execution_config, "allow_live_trading", False):
             return ApiEnvelope(
                 data=None,
-                error="Live trading not enabled. Use system mode switch with authentication first."
+                error="Live trading not enabled. Use system mode switch with authentication first.",
             )
-        # Re-verify we are actually in live mode?
         if execution_config.mode != "live":
-             return ApiEnvelope(
+            return ApiEnvelope(
                 data=None,
-                error="System execution mode is not 'live'. Update mode first."
+                error="System execution mode is not 'live'. Update mode first.",
             )
 
     old_ml_enabled = ctx.config.session.ml_enabled
@@ -560,11 +573,10 @@ async def start_session(
                 if sid in ctx.strategy_engine.strategy_states:
                     ctx.strategy_engine.strategy_states[sid].enabled = ml_enabled
 
-    # Persistence: Write active profile to main config so loaders can find it on restart
+    # Persistence: Write session state to main config so loaders can restore it on restart.
     config_dir = get_config_dir()
     main_config_path = config_dir / "config.yaml"
 
-    # We update the session section of main config
     try:
         if main_config_path.exists():
             with open(main_config_path, "r") as f:
@@ -574,34 +586,28 @@ async def start_session(
 
         session_data = main_data.get("session", {})
         session_data["profile_name"] = payload.profile_name
-        # Also persist mode? Usually mode is part of session state or execution config.
-        # Ideally mode is derived from execution config, but session.mode acts as intent.
         session_data["mode"] = new_mode
+        session_data["loop_interval_sec"] = payload.loop_interval_sec
+        session_data["ml_enabled"] = payload.ml_enabled
         session_data["active"] = True
-
         main_data["session"] = session_data
 
         backup_file(main_config_path)
         atomic_write(main_config_path, main_data, dump_func=yaml.safe_dump)
     except Exception as e:
         logger.error(f"Failed to persist session state to main config: {e}")
-        # Proceeding despite error because runtime state is valid, but restart might loose it.
+        # Proceeding despite error because runtime state is valid, but restart might lose it.
 
-    # Note: Execution mode should already be set by /mode endpoint if changing.
-    # But session params can reiterate it.
-
-    if new_mode == "live" and hasattr(
-        ctx.execution_service, "_emit_live_readiness_checklist"
-    ):
+    if new_mode == "live" and hasattr(ctx.execution_service, "_emit_live_readiness_checklist"):
         ctx.execution_service._emit_live_readiness_checklist()
 
     dump_runtime_overrides(ctx.config, session=ctx.session)
 
     logger.info(
-        "Session started",
+        "Session updated" if is_update else "Session started",
         extra=build_request_log_extra(
             request,
-            event="session_started",
+            event="session_updated" if is_update else "session_started",
             profile=payload.profile_name,
             mode=new_mode,
             loop_interval=payload.loop_interval_sec,
@@ -624,6 +630,30 @@ async def stop_session(request: Request) -> ApiEnvelope[SessionStatePayload]:
 
     if hasattr(ctx.config, "session"):
         ctx.config.session.active = False
+
+    # Persist stop so we don't auto-resume on restart.
+    config_dir = get_config_dir()
+    main_config_path = config_dir / "config.yaml"
+
+    try:
+        if main_config_path.exists():
+            with open(main_config_path, "r") as f:
+                main_data = yaml.safe_load(f) or {}
+        else:
+            main_data = {}
+
+        session_data = main_data.get("session", {})
+        session_data["profile_name"] = getattr(ctx.session, "profile_name", None)
+        session_data["mode"] = getattr(ctx.session, "mode", "paper")
+        session_data["loop_interval_sec"] = getattr(ctx.session, "loop_interval_sec", 15.0)
+        session_data["ml_enabled"] = getattr(ctx.session, "ml_enabled", True)
+        session_data["active"] = False
+        main_data["session"] = session_data
+
+        backup_file(main_config_path)
+        atomic_write(main_config_path, main_data, dump_func=yaml.safe_dump)
+    except Exception as e:
+        logger.error(f"Failed to persist stopped session state to main config: {e}")
 
     dump_runtime_overrides(ctx.config, session=ctx.session)
 

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import asdict
+
 import logging
 import os
 from pathlib import Path
@@ -72,25 +74,18 @@ def dump_runtime_overrides(
         path = config_dir / RUNTIME_OVERRIDES_FILENAME
 
     tmp_path = path.with_suffix(path.suffix + ".tmp")
-
     data = {
-        "risk": {
-            "max_risk_per_trade_pct": config.risk.max_risk_per_trade_pct,
-            "max_portfolio_risk_pct": config.risk.max_portfolio_risk_pct,
-            "max_per_strategy_pct": config.risk.max_per_strategy_pct,
-        },
+        "risk": asdict(config.risk),
         "strategies": {
-            "enabled": config.strategies.enabled,
-            "configs": {
-                sid: {"params": cfg.params, "enabled": cfg.enabled}
-                for sid, cfg in config.strategies.configs.items()
-            },
+            "enabled": list(config.strategies.enabled),
+            "configs": {sid: asdict(cfg) for sid, cfg in config.strategies.configs.items()},
         },
-        "ui": {"refresh_intervals": config.ui.refresh_intervals.__dict__},
+        "ui": {"refresh_intervals": asdict(config.ui.refresh_intervals)},
     }
 
     if session_config:
         data["session"] = {
+            "active": bool(session_config.active),
             "profile_name": session_config.profile_name,
             "mode": session_config.mode,
             "loop_interval_sec": session_config.loop_interval_sec,

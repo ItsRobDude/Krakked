@@ -14,7 +14,7 @@ import uvicorn
 
 from kraken_bot import APP_VERSION
 from kraken_bot.bootstrap import CredentialBootstrapError, bootstrap
-from kraken_bot.config_loader import load_config
+from kraken_bot.config_loader import get_config_dir, load_config, write_initial_config
 from kraken_bot.execution.oms import ExecutionService
 from kraken_bot.logging_config import (
     configure_logging,
@@ -351,10 +351,28 @@ class BotController:
                 exc,
                 extra=structured_log_extra(event="enter_setup_mode"),
             )
-            config = load_config()
+
+            # Ensure a config file exists so the UI can come up on first run.
+            config_dir = get_config_dir()
+            config_path = config_dir / "config.yaml"
+            if not config_path.exists():
+                # Minimal safe defaults to boot the API/UI.
+                write_initial_config(
+                    {
+                        "region": {"code": "US_CA", "default_quote": "USD"},
+                        "universe": {"include_pairs": [], "exclude_pairs": [], "min_24h_volume_usd": 0.0},
+                        "execution": {"mode": "paper", "validate_only": True, "allow_live_trading": False},
+                        "ui": {"enabled": True, "host": "0.0.0.0", "port": 8000},
+                        "session": {"active": False, "mode": "paper", "loop_interval_sec": 15.0, "profile_name": None, "ml_enabled": True},
+                    },
+                    config_dir=config_dir,
+                )
+
+            # If credentials are missing/locked we still want to load config and expose setup endpoints.
+            config = load_config(config_path=config_path)
             self.is_setup_mode = True
 
-            # Return a minimal context for UI
+            # Return a minimal context for UI/setup flows.
             return AppContext(
                 config=config,
                 client=None,
@@ -364,7 +382,6 @@ class BotController:
                 strategy_engine=None,
                 execution_service=None,
                 metrics=None,
-                session=None,
                 is_setup_mode=True,
             )
 
