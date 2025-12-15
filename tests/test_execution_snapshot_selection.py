@@ -99,7 +99,15 @@ def test_portfolio_snapshot_selected_near_plan_time() -> None:
     market_data.get_best_bid_ask.return_value = {"bid": 10.0, "ask": 11.0}
     market_data.get_pair_metadata_or_raise.side_effect = lambda pair: _pair_metadata(pair)
 
-    service = ExecutionService(adapter=adapter, store=store, market_data=market_data)
+    risk_provider = MagicMock()
+    risk_provider.return_value.kill_switch_active = False
+
+    service = ExecutionService(
+        adapter=adapter,
+        store=store,
+        market_data=market_data,
+        risk_status_provider=risk_provider,
+    )
     result = service.execute_plan(plan)
 
     assert len(result.orders) == 1

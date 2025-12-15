@@ -291,61 +291,11 @@ class ExecutionService:
 
         total_target_notional = sum(pair_target_notional.values())
 
-        # --- Portfolio-Aware Exposure Calculation ---
-        # Issue #6: "Logic Gap". We must account for passive assets (not in this plan)
-        # to ensure the total portfolio exposure doesn't exceed the limit.
-        #
-        # Refined Logic (Drift-Proof):
-        # Instead of subtracting live active value from snapshot total (which causes artifacts
-        # if prices drift), we explicitly sum the snapshot value of assets *not* in the plan.
-        projected_total_exposure = total_target_notional
-
-        if self.store:
-            try:
-                snapshots = self.store.get_snapshots(limit=5)
-                if snapshots:
-                    latest = snapshots[0]
-
-                    # Align the snapshot we use with the plan generation time when possible.
-                    generated_at = getattr(plan, "generated_at", None)
-                    if isinstance(generated_at, datetime):
-                        if generated_at.tzinfo is None:
-                            generated_at = generated_at.replace(tzinfo=UTC)
-                        plan_ts = int(generated_at.timestamp())
-                        latest = min(snapshots, key=lambda s: abs(s.timestamp - plan_ts))
-
-                    # 1. Identify active pairs directly from plan actions
-                    # We use source_pair matching which is faster and aligns with snapshot creation.
-                    active_pairs = {a.pair for a in actions_to_process}
-
-                    # 2. Sum value of assets NOT in the plan (Passive)
-                    # We use the snapshot's valuation to ensure consistency and avoid
-                    # phantom exposure from price drift between snapshot time and now.
-                    passive_exposure = 0.0
-                    if latest.asset_valuations:
-                        for av in latest.asset_valuations:
-                            # If the asset came from a pair we are currently trading, exclude it (it's active).
-                            if av.source_pair and av.source_pair in active_pairs:
-                                continue
-
-                            # Otherwise, it is a passive holding.
-                            passive_exposure += av.value_base
-                    else:
-                        # Fallback for legacy snapshots without granular valuations:
-                        # Use the old "Total - Active" approximation or just Total Risk if safer?
-                        # Using Total Risk (Equity - Cash) is safest but strict.
-                        # Let's try the approximation but with 0 active deduction (Conservative).
-                        passive_exposure = max(0.0, latest.equity_base - latest.cash_base)
-
-                    projected_total_exposure = passive_exposure + total_target_notional
-
-            except Exception as e:
-                logger.warning(
-                    "Failed to calculate portfolio-aware exposure; falling back to plan notional",
-                    extra=structured_log_extra(
-                        event="guardrail_exposure_calc_failed", error=str(e)
-                    ),
-                )
+        projected_total_exposure = self._calculate_projected_exposure(
+            plan=plan,
+            actions_to_process=actions_to_process,
+            total_target_notional=total_target_notional,
+        )
 
         for action in actions_to_process:
             try:
@@ -918,6 +868,72 @@ class ExecutionService:
                 reconciliation_available=reconciliation_available,
             ),
         )
+
+    def _calculate_projected_exposure(
+        self,
+        plan: ExecutionPlan,
+        actions_to_process: List["RiskAdjustedAction"],
+        total_target_notional: float,
+    ) -> float:
+        """Calculate total portfolio exposure accounting for passive assets.
+
+        Logic (Drift-Proof):
+        Instead of subtracting live active value from snapshot total (which causes artifacts
+        if prices drift), explicitly sum the snapshot value of assets *not* in the plan.
+        """
+        # Default to just the plan's notional if store is missing or calc fails
+        projected_total_exposure = total_target_notional
+
+        if not self.store:
+            return projected_total_exposure
+
+        try:
+            snapshots = self.store.get_snapshots(limit=5)
+            if not snapshots:
+                return projected_total_exposure
+
+            latest = snapshots[0]
+
+            # Align the snapshot we use with the plan generation time when possible.
+            generated_at = getattr(plan, "generated_at", None)
+            if isinstance(generated_at, datetime):
+                if generated_at.tzinfo is None:
+                    generated_at = generated_at.replace(tzinfo=UTC)
+                plan_ts = int(generated_at.timestamp())
+                latest = min(snapshots, key=lambda s: abs(s.timestamp - plan_ts))
+
+            # 1. Identify active pairs directly from plan actions
+            # We use source_pair matching which is faster and aligns with snapshot creation.
+            active_pairs = {a.pair for a in actions_to_process}
+
+            # 2. Sum value of assets NOT in the plan (Passive)
+            # We use the snapshot's valuation to ensure consistency and avoid
+            # phantom exposure from price drift between snapshot time and now.
+            passive_exposure = 0.0
+            if latest.asset_valuations:
+                for av in latest.asset_valuations:
+                    # If the asset came from a pair we are currently trading, exclude it (it's active).
+                    if av.source_pair and av.source_pair in active_pairs:
+                        continue
+
+                    # Otherwise, it is a passive holding.
+                    passive_exposure += av.value_base
+            else:
+                # Fallback for legacy snapshots without granular valuations:
+                # Use Total Risk (Equity - Cash) is safest but strict.
+                # Let's try the approximation but with 0 active deduction (Conservative).
+                passive_exposure = max(0.0, latest.equity_base - latest.cash_base)
+
+            return passive_exposure + total_target_notional
+
+        except Exception as e:
+            logger.warning(
+                "Failed to calculate portfolio-aware exposure; falling back to plan notional",
+                extra=structured_log_extra(
+                    event="guardrail_exposure_calc_failed", error=str(e)
+                ),
+            )
+            return projected_total_exposure
 
     def _evaluate_guardrails(
         self,
