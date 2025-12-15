@@ -560,6 +560,33 @@ async def start_session(
                 if sid in ctx.strategy_engine.strategy_states:
                     ctx.strategy_engine.strategy_states[sid].enabled = ml_enabled
 
+    # Persistence: Write active profile to main config so loaders can find it on restart
+    config_dir = get_config_dir()
+    main_config_path = config_dir / "config.yaml"
+
+    # We update the session section of main config
+    try:
+        if main_config_path.exists():
+            with open(main_config_path, "r") as f:
+                main_data = yaml.safe_load(f) or {}
+        else:
+            main_data = {}
+
+        session_data = main_data.get("session", {})
+        session_data["profile_name"] = payload.profile_name
+        # Also persist mode? Usually mode is part of session state or execution config.
+        # Ideally mode is derived from execution config, but session.mode acts as intent.
+        session_data["mode"] = new_mode
+        session_data["active"] = True
+
+        main_data["session"] = session_data
+
+        backup_file(main_config_path)
+        atomic_write(main_config_path, main_data, dump_func=yaml.safe_dump)
+    except Exception as e:
+        logger.error(f"Failed to persist session state to main config: {e}")
+        # Proceeding despite error because runtime state is valid, but restart might loose it.
+
     # Note: Execution mode should already be set by /mode endpoint if changing.
     # But session params can reiterate it.
 
@@ -653,8 +680,33 @@ async def create_profile(payload: ProfileCreatePayload, request: Request) -> Api
     try:
         # 1. Create Profile File
         base_config = payload.base_config or {}
+
+        # Security: Prevent setting restricted execution keys in new profiles
+        execution_payload = base_config.get("execution", {})
+        restricted_keys = {"mode", "allow_live_trading", "validate_only", "paper_tests_completed"}
+        for key in restricted_keys:
+            if key in execution_payload:
+                 # Special case: 'mode' might be allowed if it matches default_mode AND isn't live?
+                 # But generally, we should enforce that `default_mode` argument controls the initial mode.
+                 # If user tries to sneak in `allow_live_trading: true` via base_config, block it.
+                 return ApiEnvelope(
+                    data=None,
+                    error=f"Execution '{key}' cannot be set via base_config. It is controlled by system state."
+                )
+
+        # Ensure minimal structure using the declared default mode
+        # If execution dict exists (but passed checks), update it. If not, create it.
         if "execution" not in base_config:
-            base_config["execution"] = {"mode": payload.default_mode}
+            base_config["execution"] = {}
+
+        base_config["execution"]["mode"] = payload.default_mode
+        # Force safe defaults
+        base_config["execution"]["allow_live_trading"] = False
+        base_config["execution"]["validate_only"] = (payload.default_mode != "live")
+        # Actually, even if default_mode is live (which we might block?), we can't allow live trading without the guard.
+
+        if payload.default_mode == "live":
+             return ApiEnvelope(data=None, error="Cannot create profile with default mode 'live'. Use 'paper' or 'dry_run' and upgrade later.")
 
         atomic_write(profile_path, base_config, dump_func=yaml.safe_dump)
 

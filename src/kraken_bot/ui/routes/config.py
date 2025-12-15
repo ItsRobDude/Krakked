@@ -113,11 +113,36 @@ async def apply_config(payload: ConfigApplyPayload, request: Request) -> ApiEnve
 
     config_data = payload.config
 
-    # 1. Validation
+    # 1. Security Check: Execution Mode Guards
+    # Block any attempt to set restricted execution keys via generic config apply.
+    # Users must use the dedicated /api/system/mode endpoint for mode changes.
+    execution_payload = config_data.get("execution", {})
+    restricted_keys = {"mode", "allow_live_trading", "validate_only", "paper_tests_completed"}
+
+    # Check if any restricted key is present in the payload (even if value is same)
+    # Ideally we only block CHANGES, but blocking presence enforces the "use system endpoint" rule strictly.
+    # However, a "save all" UI might send the whole config back.
+    # If the UI sends back existing values, we might allow it?
+    # BUT, to be safe and force usage of the guard, we should block attempts to change them TO dangerous values
+    # OR block them entirely if they differ from current config.
+    # The safest "fail closed" approach is to forbid setting them here at all.
+    # The UI should strip these keys or use the mode endpoint.
+
+    # Let's inspect what is being set.
+    for key in restricted_keys:
+        if key in execution_payload:
+             return ApiEnvelope(
+                data=None,
+                error=f"Execution '{key}' cannot be modified via config apply. Use /api/system/mode."
+            )
+
+    # 2. Validation
     new_universe = config_data.get("universe", {})
     include_pairs = new_universe.get("include_pairs", [])
     if include_pairs:
         try:
+            # Must catch any exception from validation (ServiceUnavailable etc)
+            # and translate to API error.
             invalid_pairs = _validate_universe_pairs(include_pairs, ctx)
             if invalid_pairs:
                 return ApiEnvelope(
@@ -126,6 +151,12 @@ async def apply_config(payload: ConfigApplyPayload, request: Request) -> ApiEnve
                 )
         except HTTPException as e:
             return ApiEnvelope(data=None, error=e.detail)
+        except Exception as e:
+            logger.error(f"Universe validation failed: {e}")
+            return ApiEnvelope(
+                data=None,
+                error=f"Universe validation unavailable: {str(e)}"
+            )
 
     if payload.dry_run:
         return ApiEnvelope(data={"status": "valid"}, error=None)
@@ -167,13 +198,18 @@ async def apply_config(payload: ConfigApplyPayload, request: Request) -> ApiEnve
                 backup_file(p_path)
                 atomic_write(p_path, merged_profile_config, dump_func=yaml.safe_dump)
 
-            # Non-trading sections go to main config?
-            # Usually UI config, etc.
-            # We can skip updating main config for now if not explicitly requested, or try to update.
-            # But the requirement is specifically "load existing profile YAML, deep-merge... write atomically".
-            # If payload contains non-trading keys (like 'ui'), strictly speaking they belong in main config.
-            # But changing UI config might be out of scope for "Config Apply" on a trading profile.
-            # Let's assume we primarily update the profile.
+            # Fix Split-Brain: If we just wrote to the profile config, we must ensure
+            # stale runtime overrides don't clobber it on next load.
+            # Best way is to delete the runtime override file for this profile.
+            # The next 'dump_runtime_overrides' (if any) will recreate it with fresh state.
+            from kraken_bot.config_loader import RUNTIME_OVERRIDES_FILENAME
+            runtime_overrides_path = config_dir / "profiles" / profile_name / RUNTIME_OVERRIDES_FILENAME
+            if runtime_overrides_path.exists():
+                try:
+                    runtime_overrides_path.unlink()
+                    logger.info(f"Cleared stale runtime overrides for profile {profile_name}")
+                except Exception as e:
+                    logger.warning(f"Failed to clear runtime overrides: {e}")
 
         else:
             # No profile - everything to main config

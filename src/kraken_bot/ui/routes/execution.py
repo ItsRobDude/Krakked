@@ -5,13 +5,9 @@ from __future__ import annotations
 import logging
 from typing import List
 
-import yaml
 from fastapi import APIRouter, Request
-from pydantic import BaseModel
 
-from kraken_bot.config import dump_runtime_overrides, get_config_dir
 from kraken_bot.execution.models import ExecutionResult, LocalOrder
-from kraken_bot.secrets import unlock_secrets
 from kraken_bot.ui.logging import build_request_log_extra
 from kraken_bot.ui.models import ApiEnvelope, ExecutionResultPayload, OpenOrderPayload
 
@@ -58,18 +54,6 @@ def _serialize_execution_result(result: ExecutionResult) -> ExecutionResultPaylo
         warnings=result.warnings,
     )
 
-
-def _backup_file(path):
-    import time
-    if not path.exists():
-        return
-    timestamp = int(time.time())
-    backup_path = path.with_name(f"{path.name}.{timestamp}.bak")
-    try:
-        with open(path, "rb") as src, open(backup_path, "wb") as dst:
-            dst.write(src.read())
-    except Exception as e:
-        logger.error(f"Failed to backup {path}: {e}")
 
 @router.get("/open_orders", response_model=ApiEnvelope[List[OpenOrderPayload]])
 async def get_open_orders(request: Request) -> ApiEnvelope[List[OpenOrderPayload]]:
