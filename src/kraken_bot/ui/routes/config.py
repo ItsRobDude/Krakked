@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import time
 from copy import deepcopy
 from dataclasses import asdict
 from pathlib import Path
@@ -12,12 +11,12 @@ from typing import Any, Dict, List, Optional
 import yaml
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from kraken_bot.config import get_config_dir
-from kraken_bot.config_loader import write_initial_config
 from kraken_bot.ui.logging import build_request_log_extra
 from kraken_bot.ui.models import ApiEnvelope
+from kraken_bot.utils.io import atomic_write, backup_file, deep_merge_dicts
 
 logger = logging.getLogger(__name__)
 
@@ -28,14 +27,6 @@ class ConfigApplyPayload(BaseModel):
     """Payload for applying full or partial configuration."""
     config: Dict[str, Any]
     dry_run: bool = False  # If True, only validates
-
-
-class ProfileCreatePayload(BaseModel):
-    name: str
-    description: str = ""
-    # Optional defaults for the new profile
-    default_mode: str = "paper"
-    base_config: Optional[Dict[str, Any]] = None
 
 
 def _context(request: Request):
@@ -62,10 +53,7 @@ def _validate_universe_pairs(pairs: List[str], ctx) -> List[str]:
     # Fallback to manual check if market_data not ready but client is
     if ctx.client:
          try:
-            from kraken_bot.market_data.api import MarketDataAPI
-            # Hacky: Create temp API to use its validation logic?
-            # Or just duplicate the simple check.
-            # Let's duplicate simple check for safety if market_data service is down.
+            # Duplicate the simple check for safety if market_data service is down.
             resp = ctx.client.get_public("AssetPairs")
             known_pairs = resp.get("result", resp) if resp else {}
             known_keys = set(known_pairs.keys())
@@ -80,23 +68,11 @@ def _validate_universe_pairs(pairs: List[str], ctx) -> List[str]:
             return invalid
          except Exception as e:
             logger.error(f"Error manually validating pairs: {e}")
-            return []
+            raise HTTPException(status_code=503, detail=f"Universe validation unavailable (cannot reach Kraken): {str(e)}")
 
-    return []
+    # If no client and no market data, validation impossible. Fail closed.
+    raise HTTPException(status_code=503, detail="Universe validation unavailable (no connection)")
 
-def _backup_file(path: Path) -> Optional[Path]:
-    """Creates a backup of the given file with a timestamp."""
-    if not path.exists():
-        return None
-    timestamp = int(time.time())
-    backup_path = path.with_name(f"{path.name}.{timestamp}.bak")
-    try:
-        with open(path, "rb") as src, open(backup_path, "wb") as dst:
-            dst.write(src.read())
-        return backup_path
-    except Exception as e:
-        logger.error(f"Failed to backup {path}: {e}")
-        raise
 
 @router.get("/runtime")
 async def get_runtime_config(request: Request) -> JSONResponse:
@@ -132,89 +108,85 @@ async def apply_config(payload: ConfigApplyPayload, request: Request) -> ApiEnve
     if ctx.config.ui.read_only:
         return ApiEnvelope(data=None, error="UI is in read-only mode")
 
+    if ctx.session.active:
+        return ApiEnvelope(data=None, error="Cannot apply configuration while session is active")
+
     config_data = payload.config
 
     # 1. Validation
-    # Universe Pairs
     new_universe = config_data.get("universe", {})
     include_pairs = new_universe.get("include_pairs", [])
     if include_pairs:
-        invalid_pairs = _validate_universe_pairs(include_pairs, ctx)
-        if invalid_pairs:
-            return ApiEnvelope(
-                data=None,
-                error=f"Invalid universe pairs: {', '.join(invalid_pairs)}"
-            )
+        try:
+            invalid_pairs = _validate_universe_pairs(include_pairs, ctx)
+            if invalid_pairs:
+                return ApiEnvelope(
+                    data=None,
+                    error=f"Invalid universe pairs: {', '.join(invalid_pairs)}"
+                )
+        except HTTPException as e:
+            return ApiEnvelope(data=None, error=e.detail)
 
     if payload.dry_run:
         return ApiEnvelope(data={"status": "valid"}, error=None)
-
-    # 2. Determine target file(s)
-    # If a profile is active, we write to the profile config.
-    # AND we might need to update the main config if non-trading settings changed (like UI).
-    # For simplicity, we assume the payload represents the *effective* config structure.
-    # However, separating them cleanly is tricky if the UI sends a merged blob.
-    # Strategy:
-    # - If profile active:
-    #    - Extract trading sections (region, universe, market_data, portfolio, execution, risk, strategies).
-    #    - Write those to profiles/<profile>.yaml.
-    #    - Extract 'session' and 'ui' and 'profiles' registry.
-    #    - Update main config.yaml with those.
-    # - If NO profile active:
-    #    - Write everything to config.yaml.
 
     config_dir = get_config_dir()
     profile_name = ctx.session.profile_name
 
     try:
-        # Paths
+        # 2. Determine target file(s) and Load existing content for Deep Merge
         main_config_path = config_dir / "config.yaml"
 
+        trading_sections = ["region", "universe", "market_data", "portfolio", "execution", "risk", "strategies"]
+
+        # If profile active: merge trading sections into profile config, rest into main config (if applicable)
+        # But wait, applying config usually sends the WHOLE merged view or a partial view.
+        # Deep merge handles partial updates.
+
         if profile_name:
-            # We need to resolve the profile path from the CURRENT config registry
-            # to be safe, though usually it's profiles/<name>.yaml
             profiles_entry = ctx.config.profiles.get(profile_name)
             if not profiles_entry:
                  return ApiEnvelope(data=None, error=f"Active profile '{profile_name}' not found in registry")
 
-            # Resolve path
             p_path_str = profiles_entry.config_path
             p_path = Path(p_path_str)
             if not p_path.is_absolute():
                 p_path = config_dir / p_path
 
-            # Split payload
-            trading_sections = ["region", "universe", "market_data", "portfolio", "execution", "risk", "strategies"]
+            # Read existing profile config
+            existing_profile_config = {}
+            if p_path.exists():
+                with open(p_path, "r") as f:
+                    existing_profile_config = yaml.safe_load(f) or {}
+
+            # Split payload: trading sections for profile
             profile_payload = {k: v for k, v in config_data.items() if k in trading_sections}
 
-            # Remaining goes to main config?
-            # Actually, usually users editing via UI are editing the *active trading config*.
-            # They rarely change UI host/port via the React app (it would kill the connection).
-            # So updating the profile config is the primary action.
+            if profile_payload:
+                merged_profile_config = deep_merge_dicts(existing_profile_config, profile_payload)
+                backup_file(p_path)
+                atomic_write(p_path, merged_profile_config, dump_func=yaml.safe_dump)
 
-            # Backup
-            _backup_file(p_path)
-
-            # Write Profile Config
-            # We read the existing one to preserve comments? No, YAML persistence usually wipes comments.
-            # We assume overwrite.
-            # Ideally we merge with existing file content to keep fields not in payload?
-            # The payload usually comes from 'get_config' which returns the Full Merged Config.
-            # This is dangerous: if we write the Merged Config to the Profile File,
-            # we might bake in things that were inherited from Main Config.
-            # BUT, explicitly explicit is fine.
-
-            with open(p_path, "w") as f:
-                yaml.safe_dump(profile_payload, f)
+            # Non-trading sections go to main config?
+            # Usually UI config, etc.
+            # We can skip updating main config for now if not explicitly requested, or try to update.
+            # But the requirement is specifically "load existing profile YAML, deep-merge... write atomically".
+            # If payload contains non-trading keys (like 'ui'), strictly speaking they belong in main config.
+            # But changing UI config might be out of scope for "Config Apply" on a trading profile.
+            # Let's assume we primarily update the profile.
 
         else:
-            # No profile - write to main config
-            _backup_file(main_config_path)
-            with open(main_config_path, "w") as f:
-                yaml.safe_dump(config_data, f)
+            # No profile - everything to main config
+            existing_main_config = {}
+            if main_config_path.exists():
+                with open(main_config_path, "r") as f:
+                    existing_main_config = yaml.safe_load(f) or {}
+
+            merged_main_config = deep_merge_dicts(existing_main_config, config_data)
+            backup_file(main_config_path)
+            atomic_write(main_config_path, merged_main_config, dump_func=yaml.safe_dump)
 
         # 3. Trigger Reload
-        # Signal the main loop to re-bootstrap
         ctx.reinitialize_event.set()
 
         logger.info(
@@ -232,83 +204,5 @@ async def apply_config(payload: ConfigApplyPayload, request: Request) -> ApiEnve
         logger.exception(
             "Failed to apply config",
             extra=build_request_log_extra(request, event="config_apply_failed"),
-        )
-        return ApiEnvelope(data=None, error=str(exc))
-
-
-@router.post("/profiles", response_model=ApiEnvelope[dict])
-async def create_profile(payload: ProfileCreatePayload, request: Request) -> ApiEnvelope[dict]:
-    """
-    Creates a new profile:
-    1. Creates profiles/<name>.yaml
-    2. Adds entry to main config.yaml
-    """
-    ctx = _context(request)
-    if ctx.config.ui.read_only:
-        return ApiEnvelope(data=None, error="UI is in read-only mode")
-
-    config_dir = get_config_dir()
-
-    # Sanitize name
-    safe_name = "".join(c for c in payload.name if c.isalnum() or c in ('-', '_')).strip()
-    if not safe_name or safe_name != payload.name:
-        return ApiEnvelope(data=None, error="Invalid profile name")
-
-    profile_filename = f"{safe_name}.yaml"
-    profile_path = config_dir / "profiles" / profile_filename
-
-    if profile_path.exists():
-        return ApiEnvelope(data=None, error=f"Profile file '{profile_filename}' already exists")
-
-    try:
-        # 1. Create Profile File
-        profile_path.parent.mkdir(parents=True, exist_ok=True)
-
-        base_config = payload.base_config or {}
-        # Ensure minimal structure
-        if "execution" not in base_config:
-            base_config["execution"] = {"mode": payload.default_mode}
-
-        with open(profile_path, "w") as f:
-            yaml.safe_dump(base_config, f)
-
-        # 2. Update Main Config Registry
-        main_config_path = config_dir / "config.yaml"
-        _backup_file(main_config_path)
-
-        with open(main_config_path, "r") as f:
-            main_data = yaml.safe_load(f) or {}
-
-        profiles = main_data.get("profiles", {})
-        profiles[payload.name] = {
-            "name": payload.name,
-            "description": payload.description,
-            "config_path": str(Path("profiles") / profile_filename),
-            "credentials_path": "", # Optional
-            "default_mode": payload.default_mode
-        }
-        main_data["profiles"] = profiles
-
-        with open(main_config_path, "w") as f:
-            yaml.safe_dump(main_data, f)
-
-        # 3. Trigger Reload to pick up new profile in registry
-        ctx.reinitialize_event.set()
-
-        logger.info(
-            "Profile created",
-            extra=build_request_log_extra(
-                request,
-                event="profile_created",
-                profile_name=payload.name
-            )
-        )
-
-        return ApiEnvelope(data={"name": payload.name, "path": str(profile_path)}, error=None)
-
-    except Exception as exc:
-        logger.exception(
-            "Failed to create profile",
-            extra=build_request_log_extra(request, event="profile_create_failed"),
         )
         return ApiEnvelope(data=None, error=str(exc))

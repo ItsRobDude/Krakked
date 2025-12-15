@@ -241,20 +241,9 @@ def load_config(
         )
         raw_config = {}
 
-    def _deep_merge_dicts(
-        base: Dict[str, Any], overlay: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        merged = base.copy()
-        for key, value in overlay.items():
-            if (
-                key in merged
-                and isinstance(merged[key], dict)
-                and isinstance(value, dict)
-            ):
-                merged[key] = _deep_merge_dicts(merged[key], value)
-            else:
-                merged[key] = value
-        return merged
+    # _deep_merge_dicts is now imported from utils.io if needed,
+    # or we can keep a local reference to avoid circular imports if utils imports config (it doesn't).
+    from kraken_bot.utils.io import deep_merge_dicts as _deep_merge_dicts
 
     env_config_path = config_path.parent / f"config.{effective_env}.yaml"
     if env_config_path.exists():

@@ -11,6 +11,7 @@ from pydantic import BaseModel
 from kraken_bot.config import get_config_dir
 from kraken_bot.ui.logging import build_request_log_extra
 from kraken_bot.ui.models import ApiEnvelope
+from kraken_bot.utils.io import sanitize_filename, atomic_write
 import yaml
 from pathlib import Path
 import time
@@ -78,9 +79,10 @@ async def get_preset(kind: str, name: str, request: Request) -> ApiEnvelope[Pres
         return ApiEnvelope(data=None, error="Invalid preset kind")
 
     # Sanitize input
-    safe_name = "".join(c for c in name if c.isalnum() or c in ('-', '_')).strip()
-    if not safe_name or safe_name != name:
-        return ApiEnvelope(data=None, error="Invalid preset name")
+    try:
+        safe_name = sanitize_filename(name)
+    except ValueError as e:
+        return ApiEnvelope(data=None, error=str(e))
 
     path = PRESETS_DIR / kind / f"{safe_name}.yaml"
     if not path.exists():
@@ -109,15 +111,19 @@ async def save_preset(payload: PresetPayload, request: Request) -> ApiEnvelope[d
     if ctx.config.ui.read_only:
         return ApiEnvelope(data=None, error="UI is in read-only mode")
 
+    if ctx.session.active:
+        return ApiEnvelope(data=None, error="Cannot save preset while session is active")
+
     if payload.kind not in ALLOWED_KINDS:
         return ApiEnvelope(data=None, error=f"Invalid kind. Allowed: {ALLOWED_KINDS}")
 
     _ensure_presets_dir()
 
-    # Sanitize name for filename
-    safe_name = "".join(c for c in payload.name if c.isalnum() or c in ('-', '_')).strip()
-    if not safe_name or safe_name == "." or safe_name == "..":
-        return ApiEnvelope(data=None, error="Invalid name")
+    # Sanitize name
+    try:
+        safe_name = sanitize_filename(payload.name)
+    except ValueError as e:
+        return ApiEnvelope(data=None, error=str(e))
 
     path = PRESETS_DIR / payload.kind / f"{safe_name}.yaml"
 
@@ -131,8 +137,7 @@ async def save_preset(payload: PresetPayload, request: Request) -> ApiEnvelope[d
     }
 
     try:
-        with open(path, "w") as f:
-            yaml.safe_dump(data, f)
+        atomic_write(path, data, dump_func=yaml.safe_dump)
 
         logger.info(
             "Preset saved",
@@ -150,13 +155,17 @@ async def delete_preset(kind: str, name: str, request: Request) -> ApiEnvelope[d
     if ctx.config.ui.read_only:
         return ApiEnvelope(data=None, error="UI is in read-only mode")
 
+    if ctx.session.active:
+        return ApiEnvelope(data=None, error="Cannot delete preset while session is active")
+
     if kind not in ALLOWED_KINDS:
         return ApiEnvelope(data=None, error="Invalid kind")
 
     # Sanitize inputs
-    safe_name = "".join(c for c in name if c.isalnum() or c in ('-', '_')).strip()
-    if not safe_name or safe_name != name:
-        return ApiEnvelope(data=None, error="Invalid preset name")
+    try:
+        safe_name = sanitize_filename(name)
+    except ValueError as e:
+        return ApiEnvelope(data=None, error=str(e))
 
     path = PRESETS_DIR / kind / f"{safe_name}.yaml"
     if not path.exists():

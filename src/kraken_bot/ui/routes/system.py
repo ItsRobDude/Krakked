@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import logging
+import yaml
 from dataclasses import asdict
 from typing import Literal, Optional
+from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -34,6 +36,7 @@ from kraken_bot.secrets import (
 )
 from kraken_bot.ui.logging import build_request_log_extra
 from kraken_bot.ui.models import ApiEnvelope, SystemHealthPayload, SystemMetricsPayload
+from kraken_bot.utils.io import sanitize_filename, atomic_write, backup_file
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +86,9 @@ class ModeChangePayload(BaseModel):
     """Payload for toggling the execution mode."""
 
     mode: Literal["paper", "live"]
+    # Optional guard fields for live mode transition
+    password: Optional[str] = None
+    confirmation: Optional[str] = None
 
 
 class SessionConfigPayload(BaseModel):
@@ -109,6 +115,13 @@ class ProfileSummaryPayload(BaseModel):
 
     name: str
     description: str
+
+class ProfileCreatePayload(BaseModel):
+    """Payload for creating a new profile."""
+    name: str
+    description: str = ""
+    default_mode: str = "paper"
+    base_config: Optional[dict] = None
 
 
 def _context(request: Request):
@@ -493,29 +506,29 @@ async def start_session(
     _check_setup_mode(ctx)
 
     if ctx.config.ui.read_only:
-        logger.warning(
-            "Session start blocked: UI read-only",
-            extra=build_request_log_extra(request, event="session_start_blocked"),
-        )
         return ApiEnvelope(data=None, error="UI is in read-only mode")
+
+    if ctx.session.active:
+        return ApiEnvelope(data=None, error="Session already active")
 
     execution_config = ctx.config.execution
     new_mode = payload.mode
 
-    if new_mode == "live" and not getattr(
-        execution_config, "allow_live_trading", False
-    ):
-        logger.warning(
-            "Session start blocked: live trading not permitted by configuration",
-            extra=build_request_log_extra(
-                request,
-                event="session_start_blocked_live",
-                requested_mode=new_mode,
-            ),
-        )
-        return ApiEnvelope(
-            data=None, error="Live trading not permitted by configuration"
-        )
+    # Implicit guard: If starting in LIVE mode, verify allow_live_trading is already set.
+    # We DO NOT allow switching to live via session start if not already configured.
+    # The user must use /mode to switch to live first (which has the guard).
+    if new_mode == "live":
+        if not getattr(execution_config, "allow_live_trading", False):
+            return ApiEnvelope(
+                data=None,
+                error="Live trading not enabled. Use system mode switch with authentication first."
+            )
+        # Re-verify we are actually in live mode?
+        if execution_config.mode != "live":
+             return ApiEnvelope(
+                data=None,
+                error="System execution mode is not 'live'. Update mode first."
+            )
 
     old_ml_enabled = ctx.config.session.ml_enabled
 
@@ -532,32 +545,23 @@ async def start_session(
     ctx.config.session.profile_name = payload.profile_name
     ctx.config.session.ml_enabled = payload.ml_enabled
 
-    # Sync ML strategies with session-level ml_enabled flag when it changes.
-    # Any strategy whose type starts with "machine_learning" is treated as part of the
-    # ML group, including alternate model variants.
+    # Sync ML strategies...
     if payload.ml_enabled != old_ml_enabled:
         ml_enabled = bool(payload.ml_enabled)
-
         for sid, strat_cfg in ctx.config.strategies.configs.items():
-            if not getattr(strat_cfg, "type", "").startswith("machine_learning"):
-                continue
+            if getattr(strat_cfg, "type", "").startswith("machine_learning"):
+                strat_cfg.enabled = ml_enabled
+                if ml_enabled:
+                    if sid not in ctx.config.strategies.enabled:
+                        ctx.config.strategies.enabled.append(sid)
+                else:
+                    if sid in ctx.config.strategies.enabled:
+                        ctx.config.strategies.enabled.remove(sid)
+                if sid in ctx.strategy_engine.strategy_states:
+                    ctx.strategy_engine.strategy_states[sid].enabled = ml_enabled
 
-            strat_cfg.enabled = ml_enabled
-
-            if ml_enabled:
-                if sid not in ctx.config.strategies.enabled:
-                    ctx.config.strategies.enabled.append(sid)
-            else:
-                if sid in ctx.config.strategies.enabled:
-                    ctx.config.strategies.enabled.remove(sid)
-
-            if sid in ctx.strategy_engine.strategy_states:
-                ctx.strategy_engine.strategy_states[sid].enabled = ml_enabled
-
-    execution_config.mode = new_mode
-    execution_config.validate_only = new_mode != "live"
-    ctx.execution_service.adapter.config.mode = new_mode
-    ctx.execution_service.adapter.config.validate_only = execution_config.validate_only
+    # Note: Execution mode should already be set by /mode endpoint if changing.
+    # But session params can reiterate it.
 
     if new_mode == "live" and hasattr(
         ctx.execution_service, "_emit_live_readiness_checklist"
@@ -587,10 +591,6 @@ async def stop_session(request: Request) -> ApiEnvelope[SessionStatePayload]:
     _check_setup_mode(ctx)
 
     if ctx.config.ui.read_only:
-        logger.warning(
-            "Session stop blocked: UI read-only",
-            extra=build_request_log_extra(request, event="session_stop_blocked"),
-        )
         return ApiEnvelope(data=None, error="UI is in read-only mode")
 
     ctx.session.active = False
@@ -622,6 +622,79 @@ async def list_profiles(request: Request) -> ApiEnvelope[list[ProfileSummaryPayl
         logger.exception(
             "Failed to list profiles",
             extra=build_request_log_extra(request, event="profiles_fetch_failed"),
+        )
+        return ApiEnvelope(data=None, error=str(exc))
+
+@router.post("/profiles", response_model=ApiEnvelope[dict])
+async def create_profile(payload: ProfileCreatePayload, request: Request) -> ApiEnvelope[dict]:
+    """
+    Creates a new profile.
+    """
+    ctx = _context(request)
+    if ctx.config.ui.read_only:
+        return ApiEnvelope(data=None, error="UI is in read-only mode")
+
+    if ctx.session.active:
+        return ApiEnvelope(data=None, error="Cannot create profile while session is active")
+
+    config_dir = get_config_dir()
+
+    try:
+        safe_name = sanitize_filename(payload.name)
+    except ValueError as e:
+        return ApiEnvelope(data=None, error=str(e))
+
+    profile_filename = f"{safe_name}.yaml"
+    profile_path = config_dir / "profiles" / profile_filename
+
+    if profile_path.exists():
+        return ApiEnvelope(data=None, error=f"Profile file '{profile_filename}' already exists")
+
+    try:
+        # 1. Create Profile File
+        base_config = payload.base_config or {}
+        if "execution" not in base_config:
+            base_config["execution"] = {"mode": payload.default_mode}
+
+        atomic_write(profile_path, base_config, dump_func=yaml.safe_dump)
+
+        # 2. Update Main Config Registry
+        main_config_path = config_dir / "config.yaml"
+        backup_file(main_config_path)
+
+        with open(main_config_path, "r") as f:
+            main_data = yaml.safe_load(f) or {}
+
+        profiles = main_data.get("profiles", {})
+        profiles[safe_name] = {
+            "name": safe_name,
+            "description": payload.description,
+            "config_path": str(Path("profiles") / profile_filename),
+            "credentials_path": "",
+            "default_mode": payload.default_mode
+        }
+        main_data["profiles"] = profiles
+
+        atomic_write(main_config_path, main_data, dump_func=yaml.safe_dump)
+
+        # 3. Trigger Reload
+        ctx.reinitialize_event.set()
+
+        logger.info(
+            "Profile created",
+            extra=build_request_log_extra(
+                request,
+                event="profile_created",
+                profile_name=safe_name
+            )
+        )
+
+        return ApiEnvelope(data={"name": safe_name, "path": str(profile_path)}, error=None)
+
+    except Exception as exc:
+        logger.exception(
+            "Failed to create profile",
+            extra=build_request_log_extra(request, event="profile_create_failed"),
         )
         return ApiEnvelope(data=None, error=str(exc))
 
@@ -666,13 +739,10 @@ async def set_execution_mode(
     _check_setup_mode(ctx)
 
     if ctx.config.ui.read_only:
-        logger.warning(
-            "Mode change blocked: UI read-only",
-            extra=build_request_log_extra(
-                request, event="mode_change_blocked", requested_mode=payload.mode
-            ),
-        )
         return ApiEnvelope(data=None, error="UI is in read-only mode")
+
+    if ctx.session.active:
+        return ApiEnvelope(data=None, error="Cannot change mode while session is active")
 
     new_mode = payload.mode
     execution_config = ctx.config.execution
@@ -687,32 +757,108 @@ async def set_execution_mode(
             error=None,
         )
 
-    if new_mode == "live" and not getattr(
-        execution_config, "allow_live_trading", False
-    ):
-        logger.warning(
-            "Live mode change blocked: allow_live_trading is False",
-            extra=build_request_log_extra(
-                request, event="mode_change_blocked", requested_mode=new_mode
-            ),
-        )
-        return ApiEnvelope(
-            data=None, error="Live trading not permitted by configuration"
-        )
+    # GUARD: Switching TO live mode
+    if new_mode == "live":
+        # Check credentials and phrase
+        if not payload.password or not payload.confirmation:
+             return ApiEnvelope(data=None, error="Live mode requires password and confirmation phrase")
 
-    execution_config.mode = new_mode
-    execution_config.validate_only = new_mode != "live"
-    ctx.execution_service.adapter.config.mode = new_mode
-    ctx.execution_service.adapter.config.validate_only = execution_config.validate_only
+        if payload.confirmation != "ENABLE LIVE TRADING":
+             return ApiEnvelope(data=None, error="Invalid confirmation phrase")
 
-    ctx.session.mode = new_mode
-    if hasattr(ctx.config, "session"):
-        ctx.config.session.mode = new_mode
+        try:
+            unlock_secrets(payload.password)
+            # Ensure we persist this for reload
+            set_session_master_password(payload.password)
+        except Exception:
+            logger.warning("Live mode auth failed", extra=build_request_log_extra(request, event="live_auth_failed"))
+            return ApiEnvelope(data=None, error="Invalid password")
 
-    if new_mode == "live" and hasattr(
-        ctx.execution_service, "_emit_live_readiness_checklist"
-    ):
-        ctx.execution_service._emit_live_readiness_checklist()
+        # If we pass guard, we allow live trading
+        execution_config.allow_live_trading = True
+
+        # Persist this permission so reload picks it up?
+        # Yes, we need to update the config.
+        # But wait, config updates should happen via /config/apply or profile?
+        # Here we do a localized update to execution config.
+        # Ideally we use atomic write here too.
+        # Let's piggyback on config logic or duplicate simple update.
+        # We need to update 'execution.allow_live_trading' in the config file.
+
+        config_dir = get_config_dir()
+        profile_name = ctx.session.profile_name
+        target_path = None
+
+        if profile_name:
+             profiles_entry = ctx.config.profiles.get(profile_name)
+             if profiles_entry:
+                 p_path = Path(profiles_entry.config_path)
+                 if not p_path.is_absolute():
+                     p_path = config_dir / p_path
+                 if p_path.exists():
+                     target_path = p_path
+
+        if not target_path:
+            target_path = config_dir / "config.yaml"
+
+        # Load, update, save
+        try:
+            with open(target_path, "r") as f:
+                data = yaml.safe_load(f) or {}
+
+            exec_sec = data.get("execution", {})
+            exec_sec["mode"] = "live"
+            exec_sec["validate_only"] = False
+            exec_sec["allow_live_trading"] = True
+            # NOTE: We DO NOT set paper_tests_completed=True automatically anymore.
+
+            data["execution"] = exec_sec
+
+            backup_file(target_path)
+            atomic_write(target_path, data, dump_func=yaml.safe_dump)
+
+        except Exception as e:
+            return ApiEnvelope(data=None, error=f"Failed to persist live mode settings: {e}")
+
+    # For other modes, we might just update runtime state or config too?
+    # Usually mode change persists.
+    if new_mode != "live":
+        # If switching away from live, we should probably disable allow_live_trading?
+        # Or just change mode. Safe to just change mode.
+        # But we need to persist "mode" = "paper".
+        pass # The logic above only handled "live". We need generic persistence.
+
+        # NOTE: Re-implementing generic persistence for mode change:
+        config_dir = get_config_dir()
+        profile_name = ctx.session.profile_name
+        target_path = None
+        if profile_name:
+             profiles_entry = ctx.config.profiles.get(profile_name)
+             if profiles_entry:
+                 p_path = Path(profiles_entry.config_path)
+                 if not p_path.is_absolute():
+                     p_path = config_dir / p_path
+                 if p_path.exists():
+                     target_path = p_path
+        if not target_path:
+            target_path = config_dir / "config.yaml"
+
+        try:
+            with open(target_path, "r") as f:
+                data = yaml.safe_load(f) or {}
+            exec_sec = data.get("execution", {})
+            exec_sec["mode"] = new_mode
+            exec_sec["validate_only"] = (new_mode != "live")
+            if new_mode == "live":
+                exec_sec["allow_live_trading"] = True
+            data["execution"] = exec_sec
+            backup_file(target_path)
+            atomic_write(target_path, data, dump_func=yaml.safe_dump)
+        except Exception as e:
+             return ApiEnvelope(data=None, error=f"Failed to persist mode: {e}")
+
+    # Trigger reload
+    ctx.reinitialize_event.set()
 
     logger.info(
         "Execution mode updated",
@@ -721,12 +867,11 @@ async def set_execution_mode(
             event="mode_changed",
             old_mode=current_mode,
             new_mode=new_mode,
-            validate_only=execution_config.validate_only,
         ),
     )
 
     return ApiEnvelope(
-        data={"mode": new_mode, "validate_only": execution_config.validate_only},
+        data={"mode": new_mode, "reloading": True},
         error=None,
     )
 
