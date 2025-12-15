@@ -86,9 +86,12 @@ async def set_strategy_enabled(strategy_id: str, request: Request) -> ApiEnvelop
     if enabled is None:
         return ApiEnvelope(data=None, error="'enabled' field is required")
 
+    if not isinstance(enabled, bool):
+        return ApiEnvelope(data=None, error="'enabled' must be a boolean")
+
     try:
         if strategy_id in ctx.strategy_engine.strategy_states:
-            ctx.strategy_engine.strategy_states[strategy_id].enabled = bool(enabled)
+            ctx.strategy_engine.strategy_states[strategy_id].enabled = enabled
         if strategy_id in ctx.config.strategies.enabled and not enabled:
             ctx.config.strategies.enabled.remove(strategy_id)
         elif enabled and strategy_id not in ctx.config.strategies.enabled:
@@ -101,11 +104,11 @@ async def set_strategy_enabled(strategy_id: str, request: Request) -> ApiEnvelop
                 request,
                 event="strategy_enabled_updated",
                 strategy_id=strategy_id,
-                enabled=bool(enabled),
+                enabled=enabled,
             ),
         )
         return ApiEnvelope(
-            data={"strategy_id": strategy_id, "enabled": bool(enabled)}, error=None
+            data={"strategy_id": strategy_id, "enabled": enabled}, error=None
         )
     except Exception as exc:  # pragma: no cover - defensive
         logger.exception(

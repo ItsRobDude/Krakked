@@ -795,7 +795,7 @@ class RiskEngine:
             target_base_size=current_base,
             target_notional_usd=0.0,
             current_base_size=current_base,
-            reason=reason_text,
+            reason=reason,
         )
 
     def get_status(self) -> RiskStatus:

@@ -5,15 +5,24 @@ from __future__ import annotations
 import logging
 from typing import List
 
+import yaml
 from fastapi import APIRouter, Request
+from pydantic import BaseModel
 
+from kraken_bot.config import dump_runtime_overrides, get_config_dir
 from kraken_bot.execution.models import ExecutionResult, LocalOrder
+from kraken_bot.secrets import unlock_secrets
 from kraken_bot.ui.logging import build_request_log_extra
 from kraken_bot.ui.models import ApiEnvelope, ExecutionResultPayload, OpenOrderPayload
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+class LiveModePayload(BaseModel):
+    password: str
+    confirmation: str
 
 
 def _context(request: Request):
@@ -54,6 +63,18 @@ def _serialize_execution_result(result: ExecutionResult) -> ExecutionResultPaylo
         warnings=result.warnings,
     )
 
+
+def _backup_file(path):
+    import time
+    if not path.exists():
+        return
+    timestamp = int(time.time())
+    backup_path = path.with_name(f"{path.name}.{timestamp}.bak")
+    try:
+        with open(path, "rb") as src, open(backup_path, "wb") as dst:
+            dst.write(src.read())
+    except Exception as e:
+        logger.error(f"Failed to backup {path}: {e}")
 
 @router.get("/open_orders", response_model=ApiEnvelope[List[OpenOrderPayload]])
 async def get_open_orders(request: Request) -> ApiEnvelope[List[OpenOrderPayload]]:
@@ -195,4 +216,85 @@ async def flatten_all_positions(
                 plan_id=plan.plan_id if "plan" in locals() and plan else None,
             ),
         )
+        return ApiEnvelope(data=None, error=str(exc))
+
+
+@router.post("/mode/live", response_model=ApiEnvelope[dict])
+async def enable_live_trading(
+    payload: LiveModePayload, request: Request
+) -> ApiEnvelope[dict]:
+    """
+    Guarded endpoint to enable live trading.
+    Requires master password and explicit confirmation string.
+    """
+    ctx = _context(request)
+    if ctx.config.ui.read_only:
+        return ApiEnvelope(data=None, error="UI is in read-only mode")
+
+    if payload.confirmation != "ENABLE LIVE TRADING":
+        return ApiEnvelope(data=None, error="Invalid confirmation phrase")
+
+    if ctx.session.active:
+        return ApiEnvelope(data=None, error="Session must be stopped before enabling live trading")
+
+    # 1. Verify Password
+    try:
+        unlock_secrets(payload.password)
+    except Exception:
+        logger.warning(
+            "Live trading enable failed: invalid password",
+            extra=build_request_log_extra(request, event="live_enable_auth_failed")
+        )
+        return ApiEnvelope(data=None, error="Invalid password")
+
+    # 2. Update Configuration
+    config_dir = get_config_dir()
+    profile_name = ctx.session.profile_name
+
+    # We update the active profile (or main config) to set execution mode
+    target_path = None
+
+    if profile_name:
+         profiles_entry = ctx.config.profiles.get(profile_name)
+         if profiles_entry:
+             # Resolve path
+             from pathlib import Path
+             p_path_str = profiles_entry.config_path
+             p_path = Path(p_path_str)
+             if not p_path.is_absolute():
+                 p_path = config_dir / p_path
+             if p_path.exists():
+                 target_path = p_path
+
+    if not target_path:
+        target_path = config_dir / "config.yaml"
+
+    try:
+        _backup_file(target_path)
+
+        with open(target_path, "r") as f:
+            data = yaml.safe_load(f) or {}
+
+        execution = data.get("execution", {})
+        execution["mode"] = "live"
+        execution["validate_only"] = False
+        execution["allow_live_trading"] = True
+        execution["paper_tests_completed"] = True
+        data["execution"] = execution
+
+        with open(target_path, "w") as f:
+            yaml.safe_dump(data, f)
+
+        # 3. Trigger Reload
+        ctx.reinitialize_event.set()
+
+        logger.info(
+            "Live trading ENABLED via guarded UI flow",
+            extra=build_request_log_extra(request, event="live_trading_enabled", profile=profile_name)
+        )
+
+        return ApiEnvelope(data={"status": "live_enabled", "reloading": True}, error=None)
+
+    except Exception as exc:
+        logger.exception("Failed to enable live trading")
         return ApiEnvelope(data=None, error=str(exc))

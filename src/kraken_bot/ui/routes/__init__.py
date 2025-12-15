@@ -3,6 +3,7 @@
 from .config import router as config_router
 from .execution import router as execution_router
 from .portfolio import router as portfolio_router
+from .presets import router as presets_router
 from .risk import router as risk_router
 from .strategies import router as strategies_router
 from .system import router as system_router
@@ -14,4 +15,5 @@ __all__ = [
     "execution_router",
     "system_router",
     "config_router",
+    "presets_router",
 ]

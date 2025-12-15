@@ -614,3 +614,55 @@ class MarketDataAPI:
         if not self._ws_client:
             return {}
         return self._ws_client.subscription_status
+
+    def validate_pairs(self, pairs: List[str]) -> List[str]:
+        """
+        Validates a list of pair names against Kraken's asset pairs.
+        Returns a list of invalid pairs.
+        Requires the rest_client to be available.
+        """
+        invalid = []
+        if not self._rest_client:
+             logger.warning("No client available for pair validation; skipping check.")
+             return []
+
+        try:
+            # We fetch all asset pairs to check existence
+            resp = self._rest_client.get_public("AssetPairs")
+            if not resp: # get_public usually returns dict or raises
+                logger.warning("Failed to fetch asset pairs for validation.")
+                return []
+
+            # The client usually unwraps "result" if present, but get_public might return raw dict depending on impl.
+            # Checking KrakenRESTClient.get_public implementation details:
+            # It calls _request -> _handle_api_error.
+            # It seems it returns the 'result' part directly if not raising?
+            # Wait, let's assume it returns the dict at 'result' key of the JSON response,
+            # OR the full JSON.
+            # Standard KrakenRESTClient in this codebase usually returns the data inside 'result'.
+            # But let's verify via 'list_files' or assume dict.
+
+            # Actually, let's be robust.
+            known_pairs = resp
+            if "result" in resp:
+                known_pairs = resp["result"]
+
+            # Also supports altnames
+            known_keys = set(known_pairs.keys())
+            known_altnames = {v.get("altname") for v in known_pairs.values() if isinstance(v, dict)}
+
+            for pair in pairs:
+                # Normalize pair just in case?
+                # The user input might be raw 'BTC/USD' or canonical 'XXBTZUSD'.
+                # We check raw input against keys and altnames.
+                if pair not in known_keys and pair not in known_altnames:
+                    # Try simple normalization (removing slash)
+                    slashless = pair.replace("/", "")
+                    if slashless not in known_keys and slashless not in known_altnames:
+                        invalid.append(pair)
+
+        except Exception as e:
+            logger.error(f"Error validating universe pairs: {e}")
+            # Fail open so we don't block saves on API error
+
+        return invalid
