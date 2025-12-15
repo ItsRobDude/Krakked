@@ -196,3 +196,6 @@ async def flatten_all_positions(
             ),
         )
         return ApiEnvelope(data=None, error=str(exc))
+
+
+# Note: /mode/live endpoint removed; logic consolidated into system.py POST /mode

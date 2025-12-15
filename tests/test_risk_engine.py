@@ -149,6 +149,10 @@ def test_manual_positions_excluded_from_limits():
 
     portfolio.get_positions.return_value = [manual_position, strategy_position]
 
+    # Pre-calculate current value since RiskEngine expects it populated (usually by Portfolio.get_equity)
+    manual_position.current_value_base = 2.0 * 50.0 # 100
+    strategy_position.current_value_base = 1.0 * 200.0 # 200
+
     include_config = RiskConfig(include_manual_positions=True)
     include_engine = RiskEngine(include_config, market_data, portfolio)
     include_ctx = include_engine.build_risk_context()
@@ -183,6 +187,11 @@ def test_clamped_flag_set_when_limits_reduce_target():
     # Make the per-asset limit very small so we force a clamp, but not a full block.
     config = RiskConfig(max_per_asset_pct=10.0, max_portfolio_risk_pct=100.0)
     engine = RiskEngine(config, market_data, portfolio)
+
+    # Ensure get_pair_metadata returns something with liquidity
+    meta_mock = MagicMock()
+    meta_mock.liquidity_24h_usd = 1_000_000.0
+    market_data.get_pair_metadata.return_value = meta_mock
 
     intents = [_intent("s1", "XBTUSD", "enter", desired_usd=200.0)]
 
