@@ -614,3 +614,41 @@ class MarketDataAPI:
         if not self._ws_client:
             return {}
         return self._ws_client.subscription_status
+
+    def validate_pairs(self, pairs: List[str]) -> List[str]:
+        """
+        Validates a list of pair names against Kraken's asset pairs.
+        Returns a list of invalid pairs.
+        Raises exception if validation cannot be performed (e.g. API unavailable).
+        """
+        if not self._rest_client:
+             # Import locally to avoid circular dep if any
+             from kraken_bot.connection.exceptions import ServiceUnavailableError
+             raise ServiceUnavailableError("No REST client available for validation")
+
+        try:
+            # We fetch all asset pairs to check existence
+            resp = self._rest_client.get_public("AssetPairs")
+            if not resp:
+                from kraken_bot.connection.exceptions import ServiceUnavailableError
+                raise ServiceUnavailableError("Empty response from AssetPairs")
+
+            known_pairs = resp
+            if "result" in resp:
+                known_pairs = resp["result"]
+
+            known_keys = set(known_pairs.keys())
+            known_altnames = {v.get("altname") for v in known_pairs.values() if isinstance(v, dict)}
+
+            invalid = []
+            for pair in pairs:
+                if pair not in known_keys and pair not in known_altnames:
+                    slashless = pair.replace("/", "")
+                    if slashless not in known_keys and slashless not in known_altnames:
+                        invalid.append(pair)
+            return invalid
+
+        except Exception as e:
+            logger.error(f"Error validating universe pairs: {e}")
+            # Fail closed - re-raise so caller knows we couldn't validate
+            raise e

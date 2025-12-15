@@ -305,6 +305,7 @@ def test_manual_vs_strategy_grouping_and_exposure():
         realized_pnl_base=0.0,
         fees_paid_base=0.0,
         strategy_tag=None,
+        current_value_base=300.0,  # 3.0 * 100.0
     )
     strategy_position = SpotPosition(
         pair="ETHUSD",
@@ -315,6 +316,7 @@ def test_manual_vs_strategy_grouping_and_exposure():
         realized_pnl_base=0.0,
         fees_paid_base=0.0,
         strategy_tag="trend_core",
+        current_value_base=100.0,  # 2.0 * 50.0
     )
 
     equity = EquityView(

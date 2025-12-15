@@ -786,7 +786,6 @@ class RiskEngine:
     ) -> RiskAdjustedAction:
         current_pos = next((p for p in ctx.open_positions if p.pair == pair), None)
         current_base = current_pos.base_size if current_pos else 0.0
-        reason_text = f"Blocked: {reason}"
         return RiskAdjustedAction(
             pair=pair,
             strategy_id=strategy_id,
@@ -796,10 +795,7 @@ class RiskEngine:
             target_base_size=current_base,
             target_notional_usd=0.0,
             current_base_size=current_base,
-            blocked=True,
-            blocked_reasons=[reason],
-            clamped=False,
-            reason=reason_text,
+            reason=reason,
         )
 
     def get_status(self) -> RiskStatus:

@@ -62,10 +62,16 @@ def dump_runtime_overrides(
     session: SessionConfig | None = None,
 ) -> None:
     config_dir = config_dir or get_config_dir()
-    path = config_dir / RUNTIME_OVERRIDES_FILENAME
-    tmp_path = path.with_suffix(path.suffix + ".tmp")
 
     session_config = session or getattr(config, "session", None)
+    profile_name = session_config.profile_name if session_config else None
+
+    if profile_name:
+        path = config_dir / "profiles" / profile_name / RUNTIME_OVERRIDES_FILENAME
+    else:
+        path = config_dir / RUNTIME_OVERRIDES_FILENAME
+
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
 
     data = {
         "risk": {
@@ -235,20 +241,9 @@ def load_config(
         )
         raw_config = {}
 
-    def _deep_merge_dicts(
-        base: Dict[str, Any], overlay: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        merged = base.copy()
-        for key, value in overlay.items():
-            if (
-                key in merged
-                and isinstance(merged[key], dict)
-                and isinstance(value, dict)
-            ):
-                merged[key] = _deep_merge_dicts(merged[key], value)
-            else:
-                merged[key] = value
-        return merged
+    # _deep_merge_dicts is now imported from utils.io if needed,
+    # or we can keep a local reference to avoid circular imports if utils imports config (it doesn't).
+    from kraken_bot.utils.io import deep_merge_dicts as _deep_merge_dicts
 
     env_config_path = config_path.parent / f"config.{effective_env}.yaml"
     if env_config_path.exists():
@@ -268,8 +263,51 @@ def load_config(
         raw_config = _deep_merge_dicts(raw_config, env_config)
 
     config_dir = get_config_dir()
-    runtime_overrides = _load_runtime_overrides(config_dir)
-    raw_config = _deep_merge_dicts(raw_config, runtime_overrides)
+
+    # --- Profile Loading Logic ---
+    # Check if a profile is active in the current config state
+    session_data = raw_config.get("session") or {}
+    active_profile = session_data.get("profile_name")
+    profiles_registry = raw_config.get("profiles") or {}
+
+    if active_profile and active_profile in profiles_registry:
+        profile_entry = profiles_registry[active_profile]
+        # Allow path to be absolute or relative to config_dir
+        profile_path_str = profile_entry.get("config_path")
+        if profile_path_str:
+            profile_path = Path(profile_path_str)
+            if not profile_path.is_absolute():
+                profile_path = config_dir / profile_path
+
+            if profile_path.exists():
+                 with open(profile_path, "r") as f:
+                    profile_config = yaml.safe_load(f) or {}
+                 if isinstance(profile_config, dict):
+                    # We merge the profile config ON TOP of the main config
+                    # Typically profile config contains trading logic (strategies, risk, etc.)
+                    raw_config = _deep_merge_dicts(raw_config, profile_config)
+            else:
+                logger.warning(
+                    "Profile config path %s does not exist; skipping profile load",
+                    profile_path,
+                    extra={"event": "config_profile_missing", "profile": active_profile}
+                )
+
+    # --- Runtime Overrides ---
+    # If a profile is active, we look for overrides in the profile's directory or name-derived path
+    # Pattern: profiles/<profile>/runtime.yaml
+    if active_profile:
+        overrides_path = config_dir / "profiles" / active_profile / RUNTIME_OVERRIDES_FILENAME
+        # Fallback to old behavior if nested folder structure not used yet?
+        # For now strict adherence to new plan: profiles/<profile>/runtime.yaml
+    else:
+        overrides_path = config_dir / RUNTIME_OVERRIDES_FILENAME
+
+    if overrides_path.exists():
+        with open(overrides_path, "r") as f:
+            runtime_overrides = yaml.safe_load(f) or {}
+        if isinstance(runtime_overrides, dict):
+             raw_config = _deep_merge_dicts(raw_config, runtime_overrides)
 
     default_region = RegionProfile(
         code="US_CA",

@@ -634,6 +634,27 @@ class BotController:
                 self.context.execution_service = None
                 continue
 
+            # Check for hot-reload requests during normal runtime (e.g. Config Apply)
+            if self.context and self.context.reinitialize_event.is_set():
+                 logger.info("Runtime re-initialization signal received. Hot-swapping context...")
+                 try:
+                    new_ctx = self.bootstrap_context()
+                    self._hot_swap_context(new_ctx)
+                    logger.info(
+                        "Context hot-swap complete",
+                        extra=structured_log_extra(event="hot_swap_complete"),
+                    )
+                 except Exception:
+                    logger.exception(
+                        "Critical error during runtime re-initialization",
+                        extra=structured_log_extra(event="reinit_runtime_error"),
+                    )
+                    # Clear event to prevent tight loop
+                    if self.context:
+                        self.context.reinitialize_event.clear()
+                 # Skip the rest of the loop to ensure clean state
+                 continue
+
             # --- MAIN TRADING LOOP ---
             now = datetime.now(timezone.utc)
 

@@ -18,40 +18,6 @@ from kraken_bot.ui.models import (
 
 logger = logging.getLogger(__name__)
 
-
-def _coerce_bool(value: Any, *, field: str = "value") -> bool:
-    """Coerce common JSON-ish representations into a real bool."""
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, (int, float)) and not isinstance(value, bool):
-        return bool(value)
-    if isinstance(value, str):
-        normalized = value.strip().lower()
-        if normalized in {"1", "true", "t", "yes", "y", "on"}:
-            return True
-        if normalized in {"0", "false", "f", "no", "n", "off"}:
-            return False
-    raise ValueError(f"{field} must be a boolean")
-
-
-def _set_strategy_enabled(ctx: AppContext, strategy_id: str, enabled: bool) -> None:
-    state = ctx.strategy_engine.strategy_states.get(strategy_id)
-    if state is None:
-        raise KeyError(strategy_id)
-    state.enabled = enabled
-
-    strat_cfg = ctx.config.strategies.configs.get(strategy_id)
-    if strat_cfg is not None:
-        strat_cfg.enabled = enabled
-
-    enabled_list = ctx.config.strategies.enabled
-    if enabled:
-        if strategy_id not in enabled_list:
-            enabled_list.append(strategy_id)
-    else:
-        if strategy_id in enabled_list:
-            enabled_list.remove(strategy_id)
-
 router = APIRouter()
 
 
@@ -111,26 +77,29 @@ async def set_strategy_enabled(strategy_id: str, request: Request) -> ApiEnvelop
         )
         return ApiEnvelope(data=None, error="UI is in read-only mode")
 
-
     try:
         payload = await request.json()
     except Exception:  # pragma: no cover - malformed body
         return ApiEnvelope(data=None, error="Invalid JSON payload")
 
-    enabled_raw = payload.get("enabled")
-    if enabled_raw is None:
+    enabled = payload.get("enabled")
+    if enabled is None:
         return ApiEnvelope(data=None, error="'enabled' field is required")
 
-    try:
-        enabled = _coerce_bool(enabled_raw)
-    except ValueError:
+    if not isinstance(enabled, bool):
         return ApiEnvelope(data=None, error="'enabled' must be a boolean")
 
     try:
-        _set_strategy_enabled(ctx, strategy_id, enabled)
+        if strategy_id in ctx.strategy_engine.strategy_states:
+            ctx.strategy_engine.strategy_states[strategy_id].enabled = enabled
+        if strategy_id in ctx.config.strategies.enabled and not enabled:
+            ctx.config.strategies.enabled.remove(strategy_id)
+        elif enabled and strategy_id not in ctx.config.strategies.enabled:
+            ctx.config.strategies.enabled.append(strategy_id)
+
         dump_runtime_overrides(ctx.config)
         logger.info(
-            "Strategy enabled state updated",
+            "Strategy enable state updated",
             extra=build_request_log_extra(
                 request,
                 event="strategy_enabled_updated",
@@ -138,17 +107,18 @@ async def set_strategy_enabled(strategy_id: str, request: Request) -> ApiEnvelop
                 enabled=enabled,
             ),
         )
-        return ApiEnvelope(data={"strategy_id": strategy_id, "enabled": enabled}, error=None)
-    except KeyError:
-        return ApiEnvelope(data=None, error="Strategy not found")
-    except Exception as exc:
+        return ApiEnvelope(
+            data={"strategy_id": strategy_id, "enabled": enabled}, error=None
+        )
+    except Exception as exc:  # pragma: no cover - defensive
         logger.exception(
             "Failed to update strategy enabled state",
             extra=build_request_log_extra(
-                request, event="strategy_enabled_update_failed", strategy_id=strategy_id
+                request, event="strategy_toggle_failed", strategy_id=strategy_id
             ),
         )
         return ApiEnvelope(data=None, error=str(exc))
+
 
 @router.patch("/{strategy_id}/config", response_model=ApiEnvelope[dict])
 async def update_strategy_config(
@@ -183,14 +153,6 @@ async def update_strategy_config(
                     ctx.strategy_engine.strategy_states[strategy_id].params.update(
                         value
                     )
-            elif field == "enabled":
-                try:
-                    enabled = _coerce_bool(value)
-                except ValueError:
-                    return ApiEnvelope(data=None, error="'enabled' must be a boolean")
-
-                _set_strategy_enabled(ctx, strategy_id, enabled)
-                updated_fields[field] = enabled
             elif hasattr(strat_cfg, field) and field not in {"name", "type"}:
                 setattr(strat_cfg, field, value)
                 updated_fields[field] = value
