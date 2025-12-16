@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { FooterHotkeys } from './components/FooterHotkeys';
 import { KpiGrid, Kpi } from './components/KpiGrid';
 import { Layout } from './components/Layout';
@@ -9,6 +9,9 @@ import { Sidebar } from './components/Sidebar';
 import { StrategiesPanel } from './components/StrategiesPanel';
 import { WalletRow, WalletTable } from './components/WalletTable';
 import { StartupScreen } from './components/StartupScreen';
+import { SetupWizard } from './components/SetupWizard';
+import { PasswordScreen } from './components/PasswordScreen';
+import { LiveModeModal } from './components/LiveModeModal';
 import {
   fetchExposure,
   fetchPortfolioSummary,
@@ -23,6 +26,7 @@ import {
   fetchRiskConfig,
   applyRiskPreset,
   getRiskStatus,
+  fetchSetupStatus,
   ExposureBreakdown,
   ProfileSummary,
   PortfolioSummary,
@@ -39,6 +43,7 @@ import {
   SessionStateResponse,
   SessionConfigRequest,
   SessionMode,
+  SetupStatus,
   updateRiskConfig,
   setKillSwitch,
   patchStrategyConfig,
@@ -50,18 +55,7 @@ import {
   flattenAllPositions,
   downloadRuntimeConfig,
 } from './services/api';
-import { validateCredentials } from './services/credentials';
 import { RISK_PRESET_META, formatPresetSummary } from './constants/riskPresets';
-
-const DEFAULT_REGION = (import.meta.env.VITE_REGION as string | undefined) ?? 'US_CA';
-
-const initialState = {
-  apiKey: '',
-  apiSecret: '',
-  region: DEFAULT_REGION,
-};
-
-const AUTH_STORAGE_KEY = 'krakked.authenticated';
 
 const DASHBOARD_REFRESH_MS = Number(import.meta.env.VITE_REFRESH_DASHBOARD_MS ?? 5000) || 5000;
 const ORDERS_REFRESH_MS = Number(import.meta.env.VITE_REFRESH_ORDERS_MS ?? 5000) || 5000;
@@ -164,12 +158,6 @@ const transformRiskDecisions = (decisions: RiskDecision[]) =>
       };
     });
 
-type ValidationErrors = Partial<typeof initialState>;
-
-type SubmissionState = {
-  status: 'idle' | 'loading' | 'success' | 'error';
-  message?: string;
-};
 
 function DashboardShell({ onLogout }: { onLogout: () => void }) {
   const [kpis, setKpis] = useState<Kpi[]>([]);
@@ -200,6 +188,9 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
   const [sessionLoading, setSessionLoading] = useState(true);
   const [profiles, setProfiles] = useState<ProfileSummary[]>([]);
   const [loopIntervalDraft, setLoopIntervalDraft] = useState<number>(15);
+
+  // NEW: State for Live Mode Modal
+  const [showLiveModal, setShowLiveModal] = useState(false);
 
   const mlStrategies = useMemo(
     () => strategies.filter((strategy) => ML_STRATEGY_IDS.includes(strategy.strategy_id as MlStrategyId)),
@@ -435,6 +426,36 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
     }
   }, [health?.ui_read_only]);
 
+  useEffect(() => {
+    if (!session?.active) return;
+
+    let cancelled = false;
+
+    const loadExecutions = async () => {
+      const [executions, decisions] = await Promise.all([
+        fetchRecentExecutions(),
+        fetchRiskDecisions(50),
+      ]);
+      if (cancelled) return;
+
+      const executionLogs = executions ? transformLogs(executions) : [];
+      const decisionLogs = decisions ? transformRiskDecisions(decisions) : [];
+      const merged = [...executionLogs, ...decisionLogs].sort(
+        (a, b) => (b.sortKey ?? 0) - (a.sortKey ?? 0),
+      );
+
+      setLogs(merged);
+    };
+
+    loadExecutions();
+    const interval = setInterval(loadExecutions, ORDERS_REFRESH_MS);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [session?.active]);
+
   const handleStartSession = async (config: SessionConfigRequest) => {
     const next = await startSession(config);
     if (!next) {
@@ -537,15 +558,31 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
       return;
     }
 
+    if (mode === 'live') {
+      setShowLiveModal(true);
+      return;
+    }
+
+    performModeSwitch(mode);
+  };
+
+  const performModeSwitch = async (mode: ExecutionMode, password?: string) => {
     setModeBusy(true);
     try {
-      await setExecutionMode(mode);
+      const confirmation = mode === 'live' ? "ENABLE LIVE TRADING" : undefined;
+      await setExecutionMode(mode, password, confirmation);
       const latestHealth = await fetchSystemHealth();
       if (latestHealth) setHealth(latestHealth);
       setSystemMessage({ tone: 'success', message: `Execution mode set to ${mode}.` });
+      setShowLiveModal(false);
     } catch (error) {
       console.error(error);
-      setSystemMessage({ tone: 'error', message: 'Unable to update execution mode. Please try again.' });
+      if (mode !== 'live') {
+          setSystemMessage({ tone: 'error', message: 'Unable to update execution mode.' });
+      } else {
+          // Re-throw so modal catches it
+          throw error;
+      }
     } finally {
       setModeBusy(false);
     }
@@ -849,36 +886,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
     }
   };
 
-  useEffect(() => {
-    if (!session?.active) return;
-
-    let cancelled = false;
-
-    const loadExecutions = async () => {
-      const [executions, decisions] = await Promise.all([
-        fetchRecentExecutions(),
-        fetchRiskDecisions(50),
-      ]);
-      if (cancelled) return;
-
-      const executionLogs = executions ? transformLogs(executions) : [];
-      const decisionLogs = decisions ? transformRiskDecisions(decisions) : [];
-      const merged = [...executionLogs, ...decisionLogs].sort(
-        (a, b) => (b.sortKey ?? 0) - (a.sortKey ?? 0),
-      );
-
-      setLogs(merged);
-    };
-
-    loadExecutions();
-    const interval = setInterval(loadExecutions, ORDERS_REFRESH_MS);
-
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-    };
-  }, [session?.active]);
-
+  // 1. Loading State
   if (sessionLoading) {
     return (
       <div className="app-shell">
@@ -890,6 +898,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
     );
   }
 
+  // 2. Startup Screen (Select Profile)
   if (!session?.active) {
     return <StartupScreen profiles={profiles} onStart={handleStartSession} />;
   }
@@ -900,14 +909,8 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
       subtitle={
         <div className="layout__status-row">
           <span className="pill pill--muted">
-            Mode:{' '}
-            {session?.mode === 'live'
-              ? 'Live'
-              : session?.mode === 'paper'
-                ? 'Paper / Test'
-                : 'Test'}
+            Mode: {session?.mode === 'live' ? 'Live' : 'Paper / Test'}
           </span>
-
           <span
             className={
               risk?.kill_switch_active === true
@@ -923,20 +926,14 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
                 ? 'Bot running'
                 : 'Bot status pending'}
           </span>
-
           {currentPreset && (
-            <span
-              className="pill pill--muted"
-              title={formatPresetSummary(currentPreset)}
-            >
+            <span className="pill pill--muted" title={formatPresetSummary(currentPreset)}>
               Preset: {RISK_PRESET_META[currentPreset].label}
             </span>
           )}
-
           <span className={mlEnabled ? 'pill pill--info' : 'pill pill--muted'}>
             ML: {mlEnabled ? 'On' : 'Off'}
           </span>
-
           <span className="pill pill--muted">Loop: {session.loop_interval_sec.toFixed(1)}s</span>
         </div>
       }
@@ -1034,16 +1031,6 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
           </button>
         </div>
         {systemMessage ? <div className={`feedback feedback--${systemMessage.tone}`}>{systemMessage.message}</div> : null}
-        <ul className="placeholder-list">
-          <li>KPIs and balances poll the portfolio endpoints.</li>
-          <li>Recent executions stream into the log panel.</li>
-          <li>Sidebar session badge reflects the latest fetch outcome.</li>
-          {health ? (
-            <li>
-              Mode: <strong>{health.current_mode}</strong> · {health.ui_read_only ? 'Read-only' : 'Mutable'}
-            </li>
-          ) : null}
-        </ul>
       </section>
 
       <RiskPanel
@@ -1272,147 +1259,55 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
           <WalletTable balances={balances} />
         </div>
       </div>
+
+      <LiveModeModal
+        isOpen={showLiveModal}
+        onClose={() => setShowLiveModal(false)}
+        onConfirm={(password) => performModeSwitch('live', password)}
+      />
     </Layout>
   );
 }
 
 function App() {
-  const [form, setForm] = useState(initialState);
-  const [showSecret, setShowSecret] = useState(false);
-  const [errors, setErrors] = useState<ValidationErrors>({});
-  const [submission, setSubmission] = useState<SubmissionState>({ status: 'idle' });
-  const [isAuthenticated, setIsAuthenticated] = useState(() => {
-    if (typeof window === 'undefined') return false;
-    return localStorage.getItem(AUTH_STORAGE_KEY) === 'true';
-  });
+  const [status, setStatus] = useState<SetupStatus | null>(null);
+  const [loading, setLoading] = useState(true);
 
-  const isDisabled = useMemo(
-    () =>
-      submission.status === 'loading' ||
-      form.apiKey.trim().length === 0 ||
-      form.apiSecret.trim().length === 0,
-    [form.apiKey, form.apiSecret, submission.status],
-  );
-
-  const handleChange = (field: keyof typeof initialState) => (event: React.ChangeEvent<HTMLInputElement>) => {
-    setForm((previous) => ({ ...previous, [field]: event.target.value }));
-    setErrors((previous) => ({ ...previous, [field]: undefined }));
-  };
-
-  const handleLogout = () => {
-    localStorage.removeItem(AUTH_STORAGE_KEY);
-    setIsAuthenticated(false);
-    setForm(initialState);
-    setSubmission({ status: 'idle' });
-    setErrors({});
-    setShowSecret(false);
-  };
-
-  const handleSubmit = async (event: FormEvent) => {
-    event.preventDefault();
-    const newErrors: ValidationErrors = {};
-
-    if (!form.apiKey.trim()) newErrors.apiKey = 'API Key is required';
-    if (!form.apiSecret.trim()) newErrors.apiSecret = 'API Secret is required';
-
-    if (Object.keys(newErrors).length > 0) {
-      setErrors(newErrors);
-      return;
-    }
-
-    setSubmission({ status: 'loading', message: 'Validating credentials…' });
-
-    const response = await validateCredentials(form);
-    const valid = response.data?.valid ?? false;
-
-    if (valid) {
-      setSubmission({ status: 'success', message: 'Credentials validated successfully.' });
-      setIsAuthenticated(true);
-      localStorage.setItem(AUTH_STORAGE_KEY, 'true');
-    } else {
-      setSubmission({
-        status: 'error',
-        message: response.error || 'Unable to validate credentials. Please try again.',
-      });
+  const checkStatus = async () => {
+    try {
+      const result = await fetchSetupStatus();
+      setStatus(result);
+    } catch (e) {
+      console.error("Backend unreachable", e);
+    } finally {
+      setLoading(false);
     }
   };
 
-  if (isAuthenticated) {
-    return <DashboardShell onLogout={handleLogout} />;
+  useEffect(() => {
+    checkStatus();
+  }, []);
+
+  if (loading) {
+    return (
+      <div className="app-shell">
+        <div className="layout__status-row"><span className="pill pill--muted">Connecting to bot...</span></div>
+      </div>
+    );
   }
 
-  return (
-    <div className="app-shell">
-      <div className="background" aria-hidden="true" />
-      <main className="auth" aria-labelledby="welcome-heading">
-        <div className="auth__inner">
-          <header className="auth__header">
-            <p className="eyebrow">Authentication</p>
-            <h1 id="welcome-heading">Welcome to Krakked</h1>
-            <p className="subtitle">Enter your Kraken API credentials to connect.</p>
-          </header>
+  // 1. SETUP FLOW: If config or secrets are missing
+  if (status && (!status.configured || !status.secrets_exist)) {
+    return <SetupWizard onComplete={checkStatus} />;
+  }
 
-          <form className="form" onSubmit={handleSubmit} noValidate>
-            <div className="field">
-              <label htmlFor="apiKey">API Key</label>
-              <input
-                id="apiKey"
-                name="apiKey"
-                type="text"
-                autoComplete="off"
-                value={form.apiKey}
-                onChange={handleChange('apiKey')}
-                aria-invalid={Boolean(errors.apiKey)}
-              />
-              {errors.apiKey ? <p className="field__error">{errors.apiKey}</p> : null}
-            </div>
+  // 2. LOCKED FLOW: Secrets exist, but bot is locked
+  if (status && !status.unlocked) {
+    return <PasswordScreen onUnlock={checkStatus} />;
+  }
 
-            <div className="field">
-              <div className="field__label-row">
-                <label htmlFor="apiSecret">API Secret</label>
-                <button
-                  type="button"
-                  className="ghost-button"
-                  onClick={() => setShowSecret((value) => !value)}
-                  aria-pressed={showSecret}
-                  aria-controls="apiSecret"
-                >
-                  {showSecret ? 'Hide' : 'Show'}
-                </button>
-              </div>
-              <input
-                id="apiSecret"
-                name="apiSecret"
-                type={showSecret ? 'text' : 'password'}
-                autoComplete="off"
-                value={form.apiSecret}
-                onChange={handleChange('apiSecret')}
-                aria-invalid={Boolean(errors.apiSecret)}
-              />
-              {errors.apiSecret ? <p className="field__error">{errors.apiSecret}</p> : null}
-            </div>
-
-            <button className="primary-button" type="submit" disabled={isDisabled} aria-busy={submission.status === 'loading'}>
-              {submission.status === 'loading' ? 'Connecting…' : 'Connect'}
-            </button>
-            <a className="secondary-link" href="https://www.kraken.com/u/security/api" target="_blank" rel="noreferrer">
-              Find your API Keys
-            </a>
-
-            {submission.status !== 'idle' ? (
-              <div
-                className={`feedback feedback--${submission.status}`}
-                role={submission.status === 'error' ? 'alert' : 'status'}
-                aria-live="polite"
-              >
-                {submission.message}
-              </div>
-            ) : null}
-          </form>
-        </div>
-      </main>
-    </div>
-  );
+  // 3. AUTHENTICATED FLOW: Configured and Unlocked
+  return <DashboardShell onLogout={() => window.location.reload()} />;
 }
 
 export default App;

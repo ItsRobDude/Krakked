@@ -331,12 +331,59 @@ export async function setKillSwitch(active: boolean): Promise<RiskStatus | null>
   });
 }
 
+// --- NEW SETUP & AUTH TYPES ---
+
+export type SetupStatus = {
+  configured: boolean;
+  secrets_exist: boolean;
+  unlocked: boolean;
+};
+
+// --- NEW SETUP ENDPOINTS ---
+
+export async function fetchSetupStatus(): Promise<SetupStatus | null> {
+  return fetchJson<SetupStatus>('/system/setup/status');
+}
+
+export async function performSetupConfig(region_code: string): Promise<void> {
+  const result = await fetchJson<unknown>('/system/setup/config', {
+    method: 'POST',
+    body: JSON.stringify({ region_code, universe_pairs: [] }),
+  });
+  if (result === null) throw new Error('Failed to write configuration');
+}
+
+export async function performSetupCredentials(
+  apiKey: string,
+  apiSecret: string,
+  password: string,
+  region: string
+): Promise<void> {
+  const result = await fetchJson<unknown>('/system/setup/credentials', {
+    method: 'POST',
+    body: JSON.stringify({ apiKey, apiSecret, password, region }),
+  });
+  if (result === null) throw new Error('Failed to save credentials');
+}
+
+export async function performUnlock(password: string): Promise<void> {
+  const result = await fetchJson<unknown>('/system/setup/unlock', {
+    method: 'POST',
+    body: JSON.stringify({ password, remember: true }),
+  });
+  if (result === null) throw new Error('Failed to unlock system');
+}
+
+// --- UPDATED EXECUTION MODE ---
+
 export async function setExecutionMode(
   mode: ExecutionMode,
+  password?: string,
+  confirmation?: string
 ): Promise<{ mode: ExecutionMode; validate_only: boolean }> {
   const result = await fetchJson<{ mode: ExecutionMode; validate_only: boolean }>('/system/mode', {
     method: 'POST',
-    body: JSON.stringify({ mode }),
+    body: JSON.stringify({ mode, password, confirmation }),
   });
 
   if (result === null) {
