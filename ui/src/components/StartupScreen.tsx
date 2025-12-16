@@ -1,18 +1,37 @@
-import { useMemo, useState } from 'react';
-import type { ProfileSummary, SessionConfigRequest } from '../services/api';
+import { useEffect, useMemo, useState } from 'react';
+import type { ExecutionMode, ProfileSummary, SessionConfigRequest } from '../services/api';
 
 export type StartupScreenProps = {
   profiles: ProfileSummary[];
+  activeProfileName?: string | null;
+  readOnly?: boolean;
+  systemMode?: ExecutionMode | null;
+  modeBusy?: boolean;
+  systemMessage?: { tone: 'info' | 'success' | 'error'; message: string } | null;
+  onCreateProfile: (name: string) => Promise<string>;
+  onSaveConfig: () => Promise<void>;
   onStart: (params: SessionConfigRequest) => Promise<void> | void;
 };
 
 const DEFAULT_LOOP_INTERVAL = 15;
 
-export function StartupScreen({ profiles, onStart }: StartupScreenProps) {
+export function StartupScreen({
+  profiles,
+  activeProfileName,
+  readOnly,
+  systemMode,
+  modeBusy,
+  systemMessage,
+  onCreateProfile,
+  onSaveConfig,
+  onStart,
+}: StartupScreenProps) {
   const [mode, setMode] = useState<SessionConfigRequest['mode']>('paper');
   const [loopInterval, setLoopInterval] = useState<number>(DEFAULT_LOOP_INTERVAL);
   const [mlEnabled, setMlEnabled] = useState(true);
-  const [selectedProfile, setSelectedProfile] = useState<string>(() => profiles[0]?.name ?? '');
+  const [selectedProfile, setSelectedProfile] = useState<string>(
+    () => activeProfileName ?? profiles[0]?.name ?? '',
+  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -21,7 +40,87 @@ export function StartupScreen({ profiles, onStart }: StartupScreenProps) {
     [profiles, selectedProfile],
   );
 
+  useEffect(() => {
+    if (!profiles.length) {
+      if (selectedProfile) setSelectedProfile('');
+      return;
+    }
+
+    if (
+      activeProfileName &&
+      profiles.some((profile) => profile.name === activeProfileName) &&
+      !selectedProfile
+    ) {
+      setSelectedProfile(activeProfileName);
+      return;
+    }
+
+    if (selectedProfile && profiles.some((profile) => profile.name === selectedProfile)) {
+      return;
+    }
+
+    setSelectedProfile(profiles[0].name);
+  }, [activeProfileName, profiles, selectedProfile]);
+
+  const handleCreateProfile = async () => {
+    if (readOnly) {
+      setError('Backend is in read-only mode.');
+      return;
+    }
+
+    const name = window.prompt('New profile name');
+    if (!name) return;
+
+    const trimmed = name.trim();
+    if (!trimmed) return;
+
+    setBusy(true);
+    setError(null);
+
+    try {
+      const createdName = await onCreateProfile(trimmed);
+      setSelectedProfile(createdName);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to create profile');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleSaveConfig = async () => {
+    if (readOnly) {
+      setError('Backend is in read-only mode.');
+      return;
+    }
+
+    if (!activeProfileName || selectedProfile !== activeProfileName) {
+      setError('Select the active profile before saving configuration.');
+      return;
+    }
+
+    setBusy(true);
+    setError(null);
+
+    try {
+      await onSaveConfig();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to save configuration');
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const handleStart = async () => {
+    if (readOnly) {
+      setError('Backend is in read-only mode.');
+      return;
+    }
+
+    if (modeBusy) {
+      setError('Backend is reloading. Please try again in a moment.');
+      return;
+    }
+
     if (!selectedProfile) {
       setError('Select a profile to start.');
       return;
@@ -56,10 +155,25 @@ export function StartupScreen({ profiles, onStart }: StartupScreenProps) {
           </div>
         </div>
 
+        {systemMessage ? (
+          <div className={`feedback feedback--${systemMessage.tone}`}>{systemMessage.message}</div>
+        ) : null}
+
         <div className="startup__grid">
           <div className="field">
-            <label>Profile</label>
+            <div className="field__label-row">
+              <label htmlFor="startup-profile">Profile</label>
+              <button
+                type="button"
+                className="ghost-button"
+                onClick={handleCreateProfile}
+                disabled={busy || modeBusy || readOnly}
+              >
+                New profile
+              </button>
+            </div>
             <select
+              id="startup-profile"
               value={selectedProfile}
               onChange={(event) => setSelectedProfile(event.target.value)}
             >
@@ -75,14 +189,23 @@ export function StartupScreen({ profiles, onStart }: StartupScreenProps) {
           </div>
 
           <div className="field">
-            <label>Mode</label>
+            <div className="field__label-row">
+              <label htmlFor="startup-mode">Mode</label>
+              {systemMode ? (
+                <span className={systemMode === 'live' ? 'pill pill--danger' : 'pill pill--muted'}>
+                  System: {systemMode === 'live' ? 'Live' : 'Paper'}
+                </span>
+              ) : null}
+              {modeBusy ? <span className="pill pill--info">Reloading…</span> : null}
+            </div>
             <select
+              id="startup-mode"
               value={mode}
               onChange={(event) => setMode(event.target.value as SessionConfigRequest['mode'])}
+              disabled={busy || Boolean(modeBusy) || Boolean(readOnly)}
             >
-              <option value="paper">Paper / Test</option>
+              <option value="paper">Paper</option>
               <option value="live">Live</option>
-              <option value="test">Sandbox</option>
             </select>
             <p className="field__hint">Trading remains paused until you hit Start.</p>
           </div>
@@ -112,13 +235,34 @@ export function StartupScreen({ profiles, onStart }: StartupScreenProps) {
           </div>
         </div>
 
-        {error ? <div className="alert alert--error">{error}</div> : null}
-
         <div className="startup__actions">
-          <button type="button" className="primary-button" onClick={handleStart} disabled={busy}>
+          <button
+            type="button"
+            className="primary-button"
+            onClick={handleStart}
+            disabled={busy || modeBusy || readOnly || !selectedProfile}
+            aria-busy={busy}
+          >
             {busy ? 'Starting…' : 'Start bot'}
           </button>
+
+          <button
+            type="button"
+            className="ghost-button"
+            onClick={handleSaveConfig}
+            disabled={
+              busy ||
+              modeBusy ||
+              readOnly ||
+              !activeProfileName ||
+              selectedProfile !== activeProfileName
+            }
+          >
+            Save configuration
+          </button>
         </div>
+
+        {error ? <div className="feedback feedback--error">{error}</div> : null}
       </div>
     </div>
   );

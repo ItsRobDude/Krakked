@@ -127,7 +127,7 @@ export type SystemMetrics = {
 export type ExecutionMode = 'paper' | 'live';
 export type StrategyRiskProfile = 'conservative' | 'balanced' | 'aggressive';
 export type RiskPresetName = 'conservative' | 'balanced' | 'aggressive' | 'degen';
-export type SessionMode = 'paper' | 'live' | 'test';
+export type SessionMode = 'paper' | 'live';
 
 export type StrategyIntentPreview = {
   pair: string;
@@ -184,6 +184,23 @@ export type ProfileSummary = {
   description: string;
 };
 
+export type SetupStatus = {
+  configured: boolean;
+  secrets_exist: boolean;
+  unlocked: boolean;
+};
+
+export type ExecutionModeUpdate = {
+  mode: ExecutionMode;
+  reloading?: boolean;
+  validate_only?: boolean;
+};
+
+export type ProfileCreateResponse = {
+  name: string;
+  path: string;
+};
+
 const API_BASE = import.meta.env.VITE_API_BASE || '/api';
 const API_TOKEN = import.meta.env.VITE_API_TOKEN;
 
@@ -208,6 +225,29 @@ async function fetchJson<T>(path: string, options: RequestInit = {}): Promise<T 
     console.warn(`Falling back to placeholders for ${path}`, error);
     return null;
   }
+}
+
+async function fetchJsonStrict<T>(path: string, options: RequestInit = {}): Promise<T> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (API_TOKEN) headers.Authorization = `Bearer ${API_TOKEN}`;
+  if (options.headers) Object.assign(headers, options.headers as Record<string, string>);
+
+  const response = await fetch(`${API_BASE}${path}`, { ...options, headers });
+  const payload = (await response.json()) as ApiEnvelope<T>;
+
+  if (!response.ok) {
+    throw new Error(payload.error || `Request failed: ${response.status}`);
+  }
+
+  if (payload.error) {
+    throw new Error(payload.error);
+  }
+
+  if (payload.data === null) {
+    throw new Error('Empty response');
+  }
+
+  return payload.data;
 }
 
 export async function fetchPortfolioSummary(): Promise<PortfolioSummary | null> {
@@ -333,17 +373,13 @@ export async function setKillSwitch(active: boolean): Promise<RiskStatus | null>
 
 export async function setExecutionMode(
   mode: ExecutionMode,
-): Promise<{ mode: ExecutionMode; validate_only: boolean }> {
-  const result = await fetchJson<{ mode: ExecutionMode; validate_only: boolean }>('/system/mode', {
+  password?: string,
+  confirmation?: string,
+): Promise<ExecutionModeUpdate> {
+  return fetchJsonStrict<ExecutionModeUpdate>('/system/mode', {
     method: 'POST',
-    body: JSON.stringify({ mode }),
+    body: JSON.stringify({ mode, password, confirmation }),
   });
-
-  if (result === null) {
-    throw new Error('Unable to update execution mode');
-  }
-
-  return result;
 }
 
 export async function flattenAllPositions(): Promise<void> {
@@ -370,4 +406,58 @@ export async function downloadRuntimeConfig(): Promise<Blob | null> {
   }
 
   return response.blob();
+}
+
+// --- Setup & unlock endpoints ---
+
+export async function fetchSetupStatus(): Promise<SetupStatus> {
+  return fetchJsonStrict<SetupStatus>('/system/setup/status');
+}
+
+export async function performSetupConfig(region_code: string): Promise<void> {
+  await fetchJsonStrict<unknown>('/system/setup/config', {
+    method: 'POST',
+    body: JSON.stringify({ region_code, universe_pairs: [] }),
+  });
+}
+
+export async function performSetupCredentials(
+  apiKey: string,
+  apiSecret: string,
+  password: string,
+  region: string,
+): Promise<void> {
+  await fetchJsonStrict<unknown>('/system/setup/credentials', {
+    method: 'POST',
+    body: JSON.stringify({ apiKey, apiSecret, password, region }),
+  });
+}
+
+export async function performUnlock(password: string): Promise<void> {
+  await fetchJsonStrict<unknown>('/system/setup/unlock', {
+    method: 'POST',
+    body: JSON.stringify({ password, remember: true }),
+  });
+}
+
+// --- Profile management ---
+
+export async function createProfile(name: string, description = ''): Promise<ProfileCreateResponse> {
+  return fetchJsonStrict<ProfileCreateResponse>('/system/profiles', {
+    method: 'POST',
+    body: JSON.stringify({ name, description, default_mode: 'paper', base_config: {} }),
+  });
+}
+
+// --- Config persistence ---
+
+export async function fetchSystemConfig(): Promise<Record<string, unknown>> {
+  return fetchJsonStrict<Record<string, unknown>>('/system/config');
+}
+
+export async function applyConfig(config: Record<string, unknown>, dry_run = false): Promise<void> {
+  await fetchJsonStrict<unknown>('/config/apply', {
+    method: 'POST',
+    body: JSON.stringify({ config, dry_run }),
+  });
 }
