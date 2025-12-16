@@ -39,6 +39,7 @@ class RiskAdjustedAction:
     risk_limits_snapshot: Dict[str, Any] = field(
         default_factory=dict
     )  # config values, equity, etc.
+    metadata: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass

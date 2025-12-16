@@ -568,6 +568,7 @@ class StrategyEngine:
                     strategy_tag=strategy_tag,
                     userref=None,
                     risk_limits_snapshot={},
+                    metadata={"order_type": "market"},
                 )
             )
 
@@ -575,7 +576,7 @@ class StrategyEngine:
             plan_id=f"flatten_{int(now.timestamp())}",
             generated_at=now,
             actions=actions,
-            metadata={},
+            metadata={"order_type": "market"},
         )
 
         return plan

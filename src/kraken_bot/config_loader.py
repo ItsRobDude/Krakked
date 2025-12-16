@@ -62,7 +62,29 @@ def dump_runtime_overrides(
     config: AppConfig,
     config_dir: Path | None = None,
     session: SessionConfig | None = None,
+    sections: set[str] | None = None,
 ) -> None:
+    """Persist runtime overrides to disk.
+
+    This file is intentionally a *partial* config overlay (layered on top of
+    config.yaml and (optionally) a profile yaml). Some call-sites only want to
+    update a subset of the overlay (e.g., session state) without clobbering
+    other persisted runtime overrides (e.g., strategy toggles).
+
+    Args:
+        config: Current in-memory AppConfig.
+        config_dir: Optional override for the config directory.
+        session: Optional SessionConfig source (defaults to config.session).
+        sections: Optional set of top-level sections to update. If omitted,
+            updates all supported sections: {"risk","strategies","ui","session"}.
+
+    Notes:
+        - This function merges updates into the existing runtime overrides file
+          instead of overwriting it with only the requested sections.
+        - Section updates replace the entire section (not a deep merge) to avoid
+          leaving stale keys behind.
+    """
+
     config_dir = config_dir or get_config_dir()
 
     session_config = session or getattr(config, "session", None)
@@ -73,29 +95,52 @@ def dump_runtime_overrides(
     else:
         path = config_dir / RUNTIME_OVERRIDES_FILENAME
 
-    tmp_path = path.with_suffix(path.suffix + ".tmp")
-    data = {
-        "risk": asdict(config.risk),
-        "strategies": {
-            "enabled": list(config.strategies.enabled),
-            "configs": {sid: asdict(cfg) for sid, cfg in config.strategies.configs.items()},
-        },
-        "ui": {"refresh_intervals": asdict(config.ui.refresh_intervals)},
-    }
+    # Load existing runtime overrides so we can update only requested sections.
+    existing: dict = {}
+    if path.exists():
+        try:
+            with open(path, "r") as f:
+                loaded = yaml.safe_load(f) or {}
+            if isinstance(loaded, dict):
+                existing = loaded
+        except Exception:
+            # If the file is unreadable/corrupt, fall back to a clean slate.
+            existing = {}
 
-    if session_config:
-        data["session"] = {
-            "active": bool(session_config.active),
-            "profile_name": session_config.profile_name,
-            "mode": session_config.mode,
-            "loop_interval_sec": session_config.loop_interval_sec,
-            "ml_enabled": session_config.ml_enabled,
+    update_sections = sections or {"risk", "strategies", "ui", "session"}
+
+    if "risk" in update_sections:
+        existing["risk"] = asdict(config.risk)
+
+    if "strategies" in update_sections:
+        existing["strategies"] = {
+            "enabled": list(config.strategies.enabled),
+            "configs": {
+                sid: asdict(cfg) for sid, cfg in config.strategies.configs.items()
+            },
         }
 
+    if "ui" in update_sections:
+        existing["ui"] = {"refresh_intervals": asdict(config.ui.refresh_intervals)}
+
+    if "session" in update_sections:
+        if session_config:
+            existing["session"] = {
+                "active": bool(session_config.active),
+                "profile_name": session_config.profile_name,
+                "mode": session_config.mode,
+                "loop_interval_sec": session_config.loop_interval_sec,
+                "ml_enabled": session_config.ml_enabled,
+            }
+        else:
+            # If explicitly requested but we have no session source, remove it.
+            existing.pop("session", None)
+
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
     path.parent.mkdir(parents=True, exist_ok=True)
     try:
         with open(tmp_path, "w") as f:
-            yaml.safe_dump(data, f)
+            yaml.safe_dump(existing, f)
         tmp_path.replace(path)
     finally:
         if tmp_path.exists() and tmp_path != path:
@@ -103,7 +148,6 @@ def dump_runtime_overrides(
                 tmp_path.unlink()
             except Exception:
                 pass
-
 
 def write_initial_config(config_data: dict, config_dir: Path | None = None) -> None:
     """

@@ -691,8 +691,26 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
     if (!confirmed) return;
 
     try {
-      await flattenAllPositions();
-      setSystemMessage({ tone: 'success', message: 'Flatten-all request submitted.' });
+      const result = await flattenAllPositions();
+
+      if (result.success) {
+        if (result.warnings?.length) {
+          setSystemMessage({
+            tone: 'info',
+            message: `Flatten-all submitted with warnings: ${result.warnings[0]}`,
+          });
+        } else {
+          setSystemMessage({ tone: 'success', message: 'Flatten-all orders submitted.' });
+        }
+
+        return;
+      }
+
+      const errorMessage = result.errors?.length ? result.errors[0] : 'Unknown error.';
+      setSystemMessage({
+        tone: 'error',
+        message: `Flatten-all could not close all positions: ${errorMessage}`,
+      });
     } catch (error) {
       console.error(error);
       setSystemMessage({ tone: 'error', message: 'Unable to flatten positions. Please retry.' });

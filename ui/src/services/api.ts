@@ -382,14 +382,23 @@ export async function setExecutionMode(
   });
 }
 
-export async function flattenAllPositions(): Promise<void> {
-  const result = await fetchJson<unknown>('/execution/flatten_all', {
+export type ExecutionResultPayload = {
+  success: boolean;
+  errors: string[];
+  warnings: string[];
+  orders: unknown[];
+};
+
+export async function flattenAllPositions(): Promise<ExecutionResultPayload> {
+  const result = await fetchJson<ExecutionResultPayload>('/execution/flatten_all', {
     method: 'POST',
   });
 
   if (result === null) {
     throw new Error('Unable to flatten positions');
   }
+
+  return result;
 }
 
 export async function downloadRuntimeConfig(): Promise<Blob | null> {

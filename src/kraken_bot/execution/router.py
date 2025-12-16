@@ -153,34 +153,38 @@ def build_order_from_plan_action(
 
     order_type = plan.metadata.get("order_type") or config.default_order_type
 
-    requested_price: Optional[float] = plan.metadata.get("requested_price")
-    bid_ask = None
-    if market_data:
-        try:
-            bid_ask = market_data.get_best_bid_ask(action.pair)
-        except Exception as exc:  # pragma: no cover - passthrough for data errors
-            warning = f"Failed to fetch market data for {action.pair}: {exc}"
-            return None, warning
+    requested_price: Optional[float] = None
 
-    if bid_ask:
-        try:
-            bid_value = bid_ask.get("bid")
-            ask_value = bid_ask.get("ask")
+    # Only limit orders require a price. Market orders should not be blocked by
+    # missing/stale websocket bid/ask data.
+    if order_type == "limit":
+        requested_price = plan.metadata.get("requested_price")
 
-            if bid_value is None or ask_value is None:
-                warning = f"Invalid bid/ask data for {action.pair}: {bid_ask}"
+        if requested_price is None:
+            if not market_data:
+                warning = f"Missing market data for limit order on {action.pair}"
                 return None, warning
 
-            bid = float(bid_value)
-            ask = float(ask_value)
-            requested_price = (bid + ask) / 2
-        except (TypeError, ValueError):
-            warning = f"Invalid bid/ask data for {action.pair}: {bid_ask}"
-            return None, warning
+            try:
+                bid_ask = market_data.get_best_bid_ask(action.pair)
+            except Exception as exc:  # pragma: no cover - passthrough for data errors
+                warning = f"Failed to fetch market data for {action.pair}: {exc}"
+                return None, warning
 
-    if order_type == "limit" and requested_price is None:
-        warning = f"Missing market data for limit order on {action.pair}"
-        return None, warning
+            try:
+                bid_value = bid_ask.get("bid") if bid_ask else None
+                ask_value = bid_ask.get("ask") if bid_ask else None
+
+                if bid_value is None or ask_value is None:
+                    warning = f"Invalid bid/ask data for {action.pair}: {bid_ask}"
+                    return None, warning
+
+                bid = float(bid_value)
+                ask = float(ask_value)
+                requested_price = (bid + ask) / 2
+            except (AttributeError, TypeError, ValueError):
+                warning = f"Invalid bid/ask data for {action.pair}: {bid_ask}"
+                return None, warning
 
     rounded_size = round_order_size(pair_metadata, volume)
     if rounded_size <= 0 or rounded_size < pair_metadata.min_order_size:

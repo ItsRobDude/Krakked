@@ -601,7 +601,7 @@ async def start_session(
     if new_mode == "live" and hasattr(ctx.execution_service, "_emit_live_readiness_checklist"):
         ctx.execution_service._emit_live_readiness_checklist()
 
-    dump_runtime_overrides(ctx.config, session=ctx.session)
+    dump_runtime_overrides(ctx.config, session=ctx.session, sections={"session"})
 
     logger.info(
         "Session updated" if is_update else "Session started",
@@ -655,7 +655,7 @@ async def stop_session(request: Request) -> ApiEnvelope[SessionStatePayload]:
     except Exception as e:
         logger.error(f"Failed to persist stopped session state to main config: {e}")
 
-    dump_runtime_overrides(ctx.config, session=ctx.session)
+    dump_runtime_overrides(ctx.config, session=ctx.session, sections={"session"})
 
     logger.info(
         "Session stopped",

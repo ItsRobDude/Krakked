@@ -106,6 +106,22 @@ def _run_loop_iteration(
         try:
             portfolio.sync()
             if portfolio.last_sync_ok:
+                # Keep local order state in sync with Kraken after each successful portfolio sync.
+                # This prevents stale "zombie" orders after crashes/restarts from skewing risk calculations.
+                try:
+                    execution_service.refresh_open_orders()
+                    execution_service.reconcile_orders()
+                except Exception as exc:  # pragma: no cover - defensive logging
+                    logger.warning(
+                        "Order reconciliation failed: %s",
+                        exc,
+                        extra=structured_log_extra(
+                            event="order_reconcile_failed",
+                            error=str(exc),
+                        ),
+                    )
+                    metrics.record_error(f"Order reconciliation failed: {exc}")
+
                 updated_portfolio_sync = now
                 refresh_metrics_state()
         except Exception as exc:  # pragma: no cover - defensive logging
@@ -320,6 +336,21 @@ class BotController:
                 rate_limiter=rate_limiter,
                 risk_status_provider=strategy_engine.get_risk_status,
             )
+
+            # Bootstrap: recover and reconcile any persisted open orders before the first strategy cycle.
+            try:
+                execution_service.load_open_orders_from_store()
+                execution_service.refresh_open_orders()
+                execution_service.reconcile_orders()
+            except Exception as exc:
+                logger.warning(
+                    "Order reconciliation during bootstrap failed: %s",
+                    str(exc),
+                    extra=structured_log_extra(
+                        event="bootstrap_order_reconcile_failed",
+                        error=str(exc),
+                    ),
+                )
 
             metrics = SystemMetrics()
             session_state = SessionState(
