@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { performUnlock } from '../services/api';
 
-export function PasswordScreen({ onUnlock }: { onUnlock: () => void }) {
+export function PasswordScreen({ onUnlock }: { onUnlock: () => void | Promise<void> }) {
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -12,9 +12,17 @@ export function PasswordScreen({ onUnlock }: { onUnlock: () => void }) {
     setError(null);
     try {
       await performUnlock(password);
-      onUnlock();
+      await onUnlock();
     } catch (err) {
-      setError("Invalid password");
+      // If performUnlock fails, it throws.
+      // If onUnlock fails (unlikely, usually just returns void/null), we catch it here too.
+      console.error(err);
+      setError("Invalid password or unlock failed");
+    } finally {
+      // Always clear busy state.
+      // If onUnlock succeeded and parent unmounts us, this setBusy call is safe/ignored.
+      // If onUnlock succeeded but parent didn't unmount us (e.g. status still locked),
+      // we need this to re-enable the button so user can try again.
       setBusy(false);
     }
   };

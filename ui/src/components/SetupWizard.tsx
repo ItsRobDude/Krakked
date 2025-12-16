@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { performSetupConfig, performSetupCredentials, performUnlock } from '../services/api';
 
 type SetupWizardProps = {
-  onComplete: () => void;
+  onComplete: () => void | Promise<void>;
 };
 
 export function SetupWizard({ onComplete }: SetupWizardProps) {
@@ -35,9 +35,13 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
 
       // Wait for backend to reload config
       await new Promise(resolve => setTimeout(resolve, 2000));
-      onComplete();
+      await onComplete();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Setup failed");
+    } finally {
+      // Always reset busy state.
+      // If setup succeeded and status check is good, we unmount.
+      // If setup succeeded but status check fails, we re-enable so user can try again (or they are just stuck but at least UI is responsive).
       setBusy(false);
     }
   };
