@@ -117,16 +117,51 @@ class PortfolioConfig:
 
 @dataclass
 class RiskConfig:
+    """Configuration for portfolio risk limits and safety guardrails.
+
+    These limits are enforced by the RiskEngine before any orders are generated.
+    Violations result in blocked or clamped (reduced) orders.
+    """
+
+    # Maximum percentage of current equity to risk on a single trade.
+    # Used to size positions based on volatility (stop distance).
     max_risk_per_trade_pct: float = 1.0
+
+    # Hard cap on total exposure as a percentage of equity (e.g., 100.0 = no leverage).
+    # If exceeded, all new opening orders are blocked.
     max_portfolio_risk_pct: float = 10.0
+
+    # Maximum number of concurrent open positions allowed across the portfolio.
     max_open_positions: int = 10
+
+    # Maximum exposure allowed for a single asset (as % of total equity).
+    # Prevents over-concentration in one coin.
     max_per_asset_pct: float = 5.0
+
+    # Per-strategy exposure limits (strategy_id -> max % of equity).
+    # Useful for capping experimental strategies.
     max_per_strategy_pct: Dict[str, float] = field(default_factory=dict)
+
+    # If the daily drawdown (peak-to-trough) exceeds this %, the kill switch activates.
+    # All opening orders are blocked until the drawdown resets.
     max_daily_drawdown_pct: float = 10.0
+
+    # If True, activates the kill switch when portfolio state drifts from Kraken's
+    # reported balances or if price data for pending orders is stale/missing.
     kill_switch_on_drift: bool = True
+
+    # If True, manually opened positions count towards risk limits (exposure caps).
+    # If False, they are ignored by the risk engine but tracked in the portfolio.
     include_manual_positions: bool = True
+
+    # Number of bars to look back when calculating ATR for volatility sizing.
     volatility_lookback_bars: int = 20
+
+    # Minimum 24h volume (in USD) required for a pair to be tradable.
+    # Pairs below this threshold are blocked to avoid slippage/liquidity traps.
     min_liquidity_24h_usd: float = 100000.0
+
+    # --- Allocation Features (Future/Experimental) ---
     dynamic_allocation_enabled: bool = False
     dynamic_allocation_lookback_hours: int = 72
     min_strategy_weight_pct: float = 0.0
@@ -135,12 +170,22 @@ class RiskConfig:
 
 @dataclass
 class StrategyConfig:
+    """Configuration for a specific trading strategy instance.
+
+    Strategies are identified by their `name` (the instance ID) and `type`
+    (the implementation logic class).
+    """
+
     name: str
     type: str
     enabled: bool
     # Generic parameter dict that specific strategies will parse into typed configs
     params: Dict[str, Any] = field(default_factory=dict)
-    # Explicit userref to ensure consistent PnL tracking
+
+    # Explicit userref to ensure consistent PnL tracking.
+    # If set, this integer is attached to all orders for this strategy.
+    # If None, a stable integer is deterministically derived from the strategy name.
+    # Setting this manually prevents ID shifts if strategy names change.
     userref: Optional[int] = None
 
 
