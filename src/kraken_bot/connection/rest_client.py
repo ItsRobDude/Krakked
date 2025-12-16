@@ -71,18 +71,21 @@ class KrakenRESTClient:
         """Categorizes and raises exceptions based on Kraken API error messages."""
         error_msg = "; ".join(error_messages)
 
-        if "EAPI:Rate limit exceeded" in error_msg:
-            raise RateLimitError(error_msg)
-        elif (
-            "EAPI:Invalid key" in error_msg
-            or "EAPI:Invalid signature" in error_msg
-            or "EAPI:Invalid nonce" in error_msg
-        ):
-            raise AuthError(error_msg)
-        elif "EService:Unavailable" in error_msg or "EService:Busy" in error_msg:
-            raise ServiceUnavailableError(error_msg)
-        else:
-            raise KrakenAPIError(error_msg)
+        # Map error substrings to Exception types
+        error_mapping = {
+            "EAPI:Rate limit exceeded": RateLimitError,
+            "EAPI:Invalid key": AuthError,
+            "EAPI:Invalid signature": AuthError,
+            "EAPI:Invalid nonce": AuthError,
+            "EService:Unavailable": ServiceUnavailableError,
+            "EService:Busy": ServiceUnavailableError,
+        }
+
+        for substring, exception_cls in error_mapping.items():
+            if substring in error_msg:
+                raise exception_cls(error_msg)
+
+        raise KrakenAPIError(error_msg)
 
     def _request(
         self,
