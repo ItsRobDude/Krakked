@@ -170,6 +170,7 @@ export type SessionStateResponse = {
   loop_interval_sec: number;
   profile_name: string | null;
   ml_enabled: boolean;
+  emergency_flatten: boolean;
 };
 
 export type SessionConfigRequest = {

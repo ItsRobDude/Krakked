@@ -131,6 +131,7 @@ def dump_runtime_overrides(
                 "mode": session_config.mode,
                 "loop_interval_sec": session_config.loop_interval_sec,
                 "ml_enabled": session_config.ml_enabled,
+                "emergency_flatten": getattr(session_config, "emergency_flatten", False),
             }
         else:
             # If explicitly requested but we have no session source, remove it.
@@ -635,6 +636,7 @@ def load_config(
         mode=session_data.get("mode", "paper"),
         loop_interval_sec=float(session_loop_seconds),
         ml_enabled=bool(session_data.get("ml_enabled", True)),
+        emergency_flatten=bool(session_data.get("emergency_flatten", False)),
     )
 
     universe_data = raw_config.get("universe") or {}

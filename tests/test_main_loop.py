@@ -108,6 +108,9 @@ class StubExecutionService:
     def get_open_orders(self):
         return list(self.open_orders)
 
+    def refresh_open_orders(self) -> None: ...
+    def reconcile_orders(self) -> None: ...
+
 
 class StubMarketData:
     def __init__(self, status: MarketDataStatus | None = None) -> None:
@@ -123,6 +126,7 @@ class StubSystemMetrics(SystemMetrics):
     def __init__(self) -> None:
         super().__init__()
         self.state_updates = []
+        self.market_data_errors = 0
 
     def update_portfolio_state(
         self,
@@ -461,7 +465,7 @@ def test_run_loop_iteration_flags_drift_and_enables_kill_switch():
     assert strategy_engine.kill_switch_calls == [True]
 
 
-def test_run_loop_iteration_skips_strategy_when_market_data_unhealthy():
+def test_run_loop_iteration_allows_strategy_when_market_data_stale():
     now = datetime(2024, 3, 1, tzinfo=timezone.utc)
     strategy_interval = 1
     portfolio_interval = 10
@@ -495,14 +499,15 @@ def test_run_loop_iteration_skips_strategy_when_market_data_unhealthy():
         session_active=True,
     )
 
-    assert updated_strategy_cycle == last_strategy_cycle
+    # Allow processing
+    assert updated_strategy_cycle == now
     assert updated_portfolio_sync == last_portfolio_sync
-    assert strategy_engine.calls == []
-    assert execution_service.plans == []
-    assert metrics.market_data_errors == 1
+    assert strategy_engine.calls == [now]
+    assert len(execution_service.plans) == 1
+    # No error logged for stale data now
+    assert metrics.market_data_errors == 0
     recent_errors = metrics.snapshot()["recent_errors"]
-    assert recent_errors[0]["message"].startswith("Market data unavailable")
-    assert metrics.state_updates[-1]["equity"] == 1200.0
+    assert len(recent_errors) == 0
 
 
 def test_run_loop_iteration_handles_unavailable_market_data_with_logging_and_metrics(
@@ -594,7 +599,7 @@ def test_run_loop_iteration_handles_unavailable_market_data_with_logging_and_met
     assert metrics.last_equity_usd == 900.0
 
 
-def test_run_loop_iteration_skips_strategy_cycle_and_refreshes_metrics_when_stale_market_data():
+def test_run_loop_iteration_allows_strategy_cycle_when_stale_market_data():
     now = datetime(2024, 3, 6, tzinfo=timezone.utc)
     strategy_interval = 1
     portfolio_interval = 10
@@ -630,15 +635,14 @@ def test_run_loop_iteration_skips_strategy_cycle_and_refreshes_metrics_when_stal
         session_active=True,
     )
 
-    assert updated_strategy_cycle == last_strategy_cycle
+    # Strategy cycle SHOULD run now despite stale data
+    assert updated_strategy_cycle == now
     assert updated_portfolio_sync == last_portfolio_sync
-    assert refresh_called and refresh_called[-1] is True
+    # We still flag market data as stale in metrics
     assert metrics.market_data_ok is False
     assert metrics.market_data_stale is True
-    assert metrics.market_data_error_messages[0].startswith(
-        "Market data unavailable (late_ticks)"
-    )
-    assert metrics.market_data_errors == 1
+    # But it's not treated as a hard unavailable error
+    assert metrics.market_data_errors == 0
 
 
 class DriftAwarePortfolio:

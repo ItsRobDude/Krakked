@@ -79,6 +79,10 @@ class ExecutionService:
     def _kill_switch_active(self, plan_id: Optional[str] = None) -> bool:
         """Return True when execution should be blocked by the kill switch."""
 
+        if isinstance(plan_id, str) and plan_id.startswith("flatten_"):
+            # Flatten is risk-reducing; allow even when kill switch is active.
+            return False
+
         # Missing provider is always a hard block — tests rely on this and it's
         # safer than blindly executing with an unknown risk state.
         if not self._risk_status_provider:
