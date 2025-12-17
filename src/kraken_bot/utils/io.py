@@ -6,8 +6,6 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
-import yaml  # type: ignore[import-untyped]
-
 logger = logging.getLogger(__name__)
 
 
