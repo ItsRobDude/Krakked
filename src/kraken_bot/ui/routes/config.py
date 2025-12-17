@@ -8,7 +8,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-import yaml
+import yaml  # type: ignore[import-untyped]
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -185,7 +185,7 @@ async def apply_config(payload: ConfigApplyPayload, request: Request) -> ApiEnve
                 p_path = config_dir / p_path
 
             # Read existing profile config
-            existing_profile_config = {}
+            existing_profile_config: Dict[str, Any] = {}
             if p_path.exists():
                 with open(p_path, "r") as f:
                     existing_profile_config = yaml.safe_load(f) or {}
@@ -213,7 +213,7 @@ async def apply_config(payload: ConfigApplyPayload, request: Request) -> ApiEnve
 
         else:
             # No profile - everything to main config
-            existing_main_config = {}
+            existing_main_config: Dict[str, Any] = {}
             if main_config_path.exists():
                 with open(main_config_path, "r") as f:
                     existing_main_config = yaml.safe_load(f) or {}

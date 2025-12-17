@@ -8,7 +8,7 @@ import sqlite3
 import threading
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
-from typing import Callable, Optional, Tuple
+from typing import Any, Callable, Optional, Tuple
 
 import uvicorn
 
@@ -341,7 +341,10 @@ def _run_loop_iteration(
                 )
                 metrics.record_plan(blocked_actions)
                 updated_strategy_cycle = now
-                result = None
+                # Explicitly type result for mypy
+                from kraken_bot.execution.models import ExecutionResult
+
+                result: Optional[ExecutionResult] = None
                 if plan.actions:
                     result = execution_service.execute_plan(plan)
                     kill_switch_rejections = [
@@ -577,7 +580,7 @@ class BotController:
             port=self.context.config.ui.port,
             log_level="info",
             log_config=None,
-            install_signal_handlers=False,
+            install_signal_handlers=False,  # type: ignore[call-arg]
         )
         self.ui_server = uvicorn.Server(config)
         self.ui_thread = threading.Thread(target=self.ui_server.run, daemon=True)

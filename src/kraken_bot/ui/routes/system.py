@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-import yaml
+import yaml  # type: ignore[import-untyped]
 from dataclasses import asdict
 from typing import Literal, Optional
 from pathlib import Path

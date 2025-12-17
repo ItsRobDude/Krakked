@@ -12,7 +12,7 @@ from kraken_bot.config import get_config_dir
 from kraken_bot.ui.logging import build_request_log_extra
 from kraken_bot.ui.models import ApiEnvelope
 from kraken_bot.utils.io import sanitize_filename, atomic_write
-import yaml
+import yaml  # type: ignore[import-untyped]
 from pathlib import Path
 import time
 

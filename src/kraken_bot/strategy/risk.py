@@ -796,6 +796,9 @@ class RiskEngine:
             target_notional_usd=0.0,
             current_base_size=current_base,
             reason=reason,
+            blocked=True,
+            blocked_reasons=[reason],
+            risk_limits_snapshot=asdict(self.config),
         )
 
     def get_status(self) -> RiskStatus:
