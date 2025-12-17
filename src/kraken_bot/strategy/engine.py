@@ -568,7 +568,6 @@ class StrategyEngine:
                     strategy_tag=strategy_tag,
                     userref=None,
                     risk_limits_snapshot={},
-                    metadata={"order_type": "market"},
                 )
             )
 
