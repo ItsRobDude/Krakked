@@ -467,6 +467,7 @@ class BotController:
                 loop_interval_sec=config.session.loop_interval_sec,
                 profile_name=config.session.profile_name,
                 ml_enabled=config.session.ml_enabled,
+                emergency_flatten=getattr(config.session, "emergency_flatten", False),
             )
 
             self.is_setup_mode = False
