@@ -99,6 +99,7 @@ class SessionConfig:
     mode: str = "paper"
     loop_interval_sec: float = 15.0
     ml_enabled: bool = True
+    emergency_flatten: bool = False
 
 
 @dataclass

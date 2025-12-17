@@ -1095,6 +1095,10 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
           </span>
 
           <span className="pill pill--muted">Loop: {session.loop_interval_sec.toFixed(1)}s</span>
+
+          {session.emergency_flatten && (
+            <span className="pill pill--danger">Emergency Flattening</span>
+          )}
         </div>
       }
       sidebar={
