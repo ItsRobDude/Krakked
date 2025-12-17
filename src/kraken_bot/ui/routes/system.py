@@ -969,7 +969,7 @@ async def set_execution_mode(
     # Update in-memory state so subsequent calls reflect the change immediately
     # We do this AFTER successful persistence to avoid split-brain if write fails.
     execution_config.mode = new_mode
-    execution_config.validate_only = (new_mode != "live")
+    execution_config.validate_only = new_mode != "live"
     if new_mode == "live":
         execution_config.allow_live_trading = True
 
@@ -982,7 +982,7 @@ async def set_execution_mode(
         adapter_conf = getattr(ctx.execution_service.adapter, "config", None)
         if adapter_conf:
             adapter_conf.mode = new_mode
-            adapter_conf.validate_only = (new_mode != "live")
+            adapter_conf.validate_only = new_mode != "live"
             if new_mode == "live":
                 adapter_conf.allow_live_trading = True
 
