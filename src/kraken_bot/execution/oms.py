@@ -407,6 +407,7 @@ class ExecutionService:
                 try:
                     latest_price = self.market_data.get_latest_price(order.pair)
                 except Exception as exc:  # pragma: no cover
+                    latest_price = None  # Ensure explicit None on failure
                     # If live, we must fail closed.
                     if adapter_config.mode == "live":
                         reason = f"Latest price unavailable in live mode: {exc}"

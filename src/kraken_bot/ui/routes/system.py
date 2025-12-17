@@ -940,25 +940,6 @@ async def set_execution_mode(
 
     # For other modes, we might just update runtime state or config too?
     # Usually mode change persists.
-    # Update in-memory state so subsequent calls reflect the change immediately
-    execution_config.mode = new_mode
-    execution_config.validate_only = new_mode != "live"
-    if new_mode == "live":
-        execution_config.allow_live_trading = True
-
-    ctx.session.mode = new_mode
-    if hasattr(ctx.config, "session"):
-        ctx.config.session.mode = new_mode
-
-    # If the adapter is already initialized, update its config reference too
-    if ctx.execution_service and hasattr(ctx.execution_service, "adapter"):
-        adapter_conf = getattr(ctx.execution_service.adapter, "config", None)
-        if adapter_conf:
-            adapter_conf.mode = new_mode
-            adapter_conf.validate_only = new_mode != "live"
-            if new_mode == "live":
-                adapter_conf.allow_live_trading = True
-
     # NOTE: Re-implementing generic persistence for mode change:
     config_dir = get_config_dir()
     profile_name = ctx.session.profile_name
@@ -987,6 +968,26 @@ async def set_execution_mode(
         atomic_write(target_path, data, dump_func=yaml.safe_dump)
     except Exception as e:
         return ApiEnvelope(data=None, error=f"Failed to persist mode: {e}")
+
+    # Update in-memory state so subsequent calls reflect the change immediately
+    # We do this AFTER successful persistence to avoid split-brain if write fails.
+    execution_config.mode = new_mode
+    execution_config.validate_only = (new_mode != "live")
+    if new_mode == "live":
+        execution_config.allow_live_trading = True
+
+    ctx.session.mode = new_mode
+    if hasattr(ctx.config, "session"):
+        ctx.config.session.mode = new_mode
+
+    # If the adapter is already initialized, update its config reference too
+    if ctx.execution_service and hasattr(ctx.execution_service, "adapter"):
+        adapter_conf = getattr(ctx.execution_service.adapter, "config", None)
+        if adapter_conf:
+            adapter_conf.mode = new_mode
+            adapter_conf.validate_only = (new_mode != "live")
+            if new_mode == "live":
+                adapter_conf.allow_live_trading = True
 
     # Trigger reload
     ctx.reinitialize_event.set()
