@@ -183,14 +183,20 @@ def market_data_mock():
     md.get_pair_metadata.return_value = SimpleNamespace(
         canonical="XBTUSD", base="XBT", quote="USD"
     )
-    md.get_latest_price.side_effect = lambda pair: 110.0 if str(pair) == "XBTUSD" else None
+    md.get_latest_price.side_effect = lambda pair: (
+        110.0 if str(pair) == "XBTUSD" else None
+    )
 
     def _norm(asset):
         asset = str(asset)
-        return {"XXBT": "XBT", "XBT": "XBT", "ZUSD": "USD", "USD": "USD"}.get(asset, asset)
+        return {"XXBT": "XBT", "XBT": "XBT", "ZUSD": "USD", "USD": "USD"}.get(
+            asset, asset
+        )
 
     md.normalize_asset.side_effect = _norm
-    md.get_valuation_pair.side_effect = lambda asset: "XBTUSD" if _norm(asset) == "XBT" else None
+    md.get_valuation_pair.side_effect = lambda asset: (
+        "XBTUSD" if _norm(asset) == "XBT" else None
+    )
 
     return md
 

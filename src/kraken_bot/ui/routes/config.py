@@ -6,7 +6,7 @@ import logging
 from copy import deepcopy
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 import yaml  # type: ignore[import-untyped]
 from fastapi import APIRouter, HTTPException, Request
@@ -25,6 +25,7 @@ router = APIRouter()
 
 class ConfigApplyPayload(BaseModel):
     """Payload for applying full or partial configuration."""
+
     config: Dict[str, Any]
     dry_run: bool = False  # If True, only validates
 
@@ -52,12 +53,14 @@ def _validate_universe_pairs(pairs: List[str], ctx) -> List[str]:
 
     # Fallback to manual check if market_data not ready but client is
     if ctx.client:
-         try:
+        try:
             # Duplicate the simple check for safety if market_data service is down.
             resp = ctx.client.get_public("AssetPairs")
             known_pairs = resp.get("result", resp) if resp else {}
             known_keys = set(known_pairs.keys())
-            known_altnames = {v.get("altname") for v in known_pairs.values() if isinstance(v, dict)}
+            known_altnames = {
+                v.get("altname") for v in known_pairs.values() if isinstance(v, dict)
+            }
 
             invalid = []
             for pair in pairs:
@@ -66,12 +69,17 @@ def _validate_universe_pairs(pairs: List[str], ctx) -> List[str]:
                     if slashless not in known_keys and slashless not in known_altnames:
                         invalid.append(pair)
             return invalid
-         except Exception as e:
+        except Exception as e:
             logger.error(f"Error manually validating pairs: {e}")
-            raise HTTPException(status_code=503, detail=f"Universe validation unavailable (cannot reach Kraken): {str(e)}")
+            raise HTTPException(
+                status_code=503,
+                detail=f"Universe validation unavailable (cannot reach Kraken): {str(e)}",
+            )
 
     # If no client and no market data, validation impossible. Fail closed.
-    raise HTTPException(status_code=503, detail="Universe validation unavailable (no connection)")
+    raise HTTPException(
+        status_code=503, detail="Universe validation unavailable (no connection)"
+    )
 
 
 @router.get("/runtime")
@@ -99,7 +107,9 @@ async def get_runtime_config(request: Request) -> JSONResponse:
 
 
 @router.post("/apply", response_model=ApiEnvelope[dict])
-async def apply_config(payload: ConfigApplyPayload, request: Request) -> ApiEnvelope[dict]:
+async def apply_config(
+    payload: ConfigApplyPayload, request: Request
+) -> ApiEnvelope[dict]:
     """
     Validates, persists, and applies configuration changes.
     Supports hot-reload by triggering re-initialization.
@@ -109,7 +119,9 @@ async def apply_config(payload: ConfigApplyPayload, request: Request) -> ApiEnve
         return ApiEnvelope(data=None, error="UI is in read-only mode")
 
     if ctx.session.active:
-        return ApiEnvelope(data=None, error="Cannot apply configuration while session is active")
+        return ApiEnvelope(
+            data=None, error="Cannot apply configuration while session is active"
+        )
 
     config_data = payload.config
 
@@ -117,7 +129,12 @@ async def apply_config(payload: ConfigApplyPayload, request: Request) -> ApiEnve
     # Block any attempt to set restricted execution keys via generic config apply.
     # Users must use the dedicated /api/system/mode endpoint for mode changes.
     execution_payload = config_data.get("execution", {})
-    restricted_keys = {"mode", "allow_live_trading", "validate_only", "paper_tests_completed"}
+    restricted_keys = {
+        "mode",
+        "allow_live_trading",
+        "validate_only",
+        "paper_tests_completed",
+    }
 
     # Check if any restricted key is present in the payload (even if value is same)
     # Ideally we only block CHANGES, but blocking presence enforces the "use system endpoint" rule strictly.
@@ -131,9 +148,9 @@ async def apply_config(payload: ConfigApplyPayload, request: Request) -> ApiEnve
     # Let's inspect what is being set.
     for key in restricted_keys:
         if key in execution_payload:
-             return ApiEnvelope(
+            return ApiEnvelope(
                 data=None,
-                error=f"Execution '{key}' cannot be modified via config apply. Use /api/system/mode."
+                error=f"Execution '{key}' cannot be modified via config apply. Use /api/system/mode.",
             )
 
     # 2. Validation
@@ -147,15 +164,14 @@ async def apply_config(payload: ConfigApplyPayload, request: Request) -> ApiEnve
             if invalid_pairs:
                 return ApiEnvelope(
                     data=None,
-                    error=f"Invalid universe pairs: {', '.join(invalid_pairs)}"
+                    error=f"Invalid universe pairs: {', '.join(invalid_pairs)}",
                 )
         except HTTPException as e:
             return ApiEnvelope(data=None, error=e.detail)
         except Exception as e:
             logger.error(f"Universe validation failed: {e}")
             return ApiEnvelope(
-                data=None,
-                error=f"Universe validation unavailable: {str(e)}"
+                data=None, error=f"Universe validation unavailable: {str(e)}"
             )
 
     if payload.dry_run:
@@ -168,7 +184,15 @@ async def apply_config(payload: ConfigApplyPayload, request: Request) -> ApiEnve
         # 2. Determine target file(s) and Load existing content for Deep Merge
         main_config_path = config_dir / "config.yaml"
 
-        trading_sections = ["region", "universe", "market_data", "portfolio", "execution", "risk", "strategies"]
+        trading_sections = [
+            "region",
+            "universe",
+            "market_data",
+            "portfolio",
+            "execution",
+            "risk",
+            "strategies",
+        ]
 
         # If profile active: merge trading sections into profile config, rest into main config (if applicable)
         # But wait, applying config usually sends the WHOLE merged view or a partial view.
@@ -177,7 +201,10 @@ async def apply_config(payload: ConfigApplyPayload, request: Request) -> ApiEnve
         if profile_name:
             profiles_entry = ctx.config.profiles.get(profile_name)
             if not profiles_entry:
-                 return ApiEnvelope(data=None, error=f"Active profile '{profile_name}' not found in registry")
+                return ApiEnvelope(
+                    data=None,
+                    error=f"Active profile '{profile_name}' not found in registry",
+                )
 
             p_path_str = profiles_entry.config_path
             p_path = Path(p_path_str)
@@ -191,10 +218,14 @@ async def apply_config(payload: ConfigApplyPayload, request: Request) -> ApiEnve
                     existing_profile_config = yaml.safe_load(f) or {}
 
             # Split payload: trading sections for profile
-            profile_payload = {k: v for k, v in config_data.items() if k in trading_sections}
+            profile_payload = {
+                k: v for k, v in config_data.items() if k in trading_sections
+            }
 
             if profile_payload:
-                merged_profile_config = deep_merge_dicts(existing_profile_config, profile_payload)
+                merged_profile_config = deep_merge_dicts(
+                    existing_profile_config, profile_payload
+                )
                 backup_file(p_path)
                 atomic_write(p_path, merged_profile_config, dump_func=yaml.safe_dump)
 
@@ -203,11 +234,16 @@ async def apply_config(payload: ConfigApplyPayload, request: Request) -> ApiEnve
             # Best way is to delete the runtime override file for this profile.
             # The next 'dump_runtime_overrides' (if any) will recreate it with fresh state.
             from kraken_bot.config_loader import RUNTIME_OVERRIDES_FILENAME
-            runtime_overrides_path = config_dir / "profiles" / profile_name / RUNTIME_OVERRIDES_FILENAME
+
+            runtime_overrides_path = (
+                config_dir / "profiles" / profile_name / RUNTIME_OVERRIDES_FILENAME
+            )
             if runtime_overrides_path.exists():
                 try:
                     runtime_overrides_path.unlink()
-                    logger.info(f"Cleared stale runtime overrides for profile {profile_name}")
+                    logger.info(
+                        f"Cleared stale runtime overrides for profile {profile_name}"
+                    )
                 except Exception as e:
                     logger.warning(f"Failed to clear runtime overrides: {e}")
 
@@ -228,10 +264,8 @@ async def apply_config(payload: ConfigApplyPayload, request: Request) -> ApiEnve
         logger.info(
             "Configuration applied and reload triggered",
             extra=build_request_log_extra(
-                request,
-                event="config_applied",
-                profile=profile_name
-            )
+                request, event="config_applied", profile=profile_name
+            ),
         )
 
         return ApiEnvelope(data={"status": "applied", "reloading": True}, error=None)

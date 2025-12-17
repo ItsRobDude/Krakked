@@ -57,7 +57,9 @@ def apply_slippage(order: LocalOrder, config: ExecutionConfig) -> Optional[float
     try:
         price_dec = Decimal(str(order.requested_price))
         # max_slippage_bps is an int (e.g. 50), so this math is safe
-        slippage_factor_dec = Decimal(max(config.max_slippage_bps, 0)) / Decimal("10000")
+        slippage_factor_dec = Decimal(max(config.max_slippage_bps, 0)) / Decimal(
+            "10000"
+        )
     except Exception:
         # Fallback if conversion fails (unlikely)
         return order.requested_price

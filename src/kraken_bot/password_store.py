@@ -11,6 +11,7 @@ logger = logging.getLogger(__name__)
 _SERVICE = "Krakked"
 _ACCOUNT = "master_password"
 
+
 def get_saved_master_password() -> Optional[str]:
     try:
         return keyring.get_password(_SERVICE, _ACCOUNT)
@@ -18,11 +19,13 @@ def get_saved_master_password() -> Optional[str]:
         logger.warning("Keyring read failed: %s", exc)
         return None
 
+
 def save_master_password(password: str) -> None:
     try:
         keyring.set_password(_SERVICE, _ACCOUNT, password)
     except Exception as exc:
         raise RuntimeError("Failed to save master password to OS keyring.") from exc
+
 
 def delete_master_password() -> None:
     try:

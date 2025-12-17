@@ -220,7 +220,9 @@ def _run_loop_iteration(
         )
         data_status = None
 
-    md_health = getattr(data_status, "health", None) if data_status is not None else None
+    md_health = (
+        getattr(data_status, "health", None) if data_status is not None else None
+    )
     market_data_ok = bool(md_health == "healthy")
     market_data_stale = bool(md_health == "stale")
     market_data_unavailable = bool(data_status is None or md_health == "unavailable")
@@ -503,10 +505,24 @@ class BotController:
                 write_initial_config(
                     {
                         "region": {"code": "US_CA", "default_quote": "USD"},
-                        "universe": {"include_pairs": [], "exclude_pairs": [], "min_24h_volume_usd": 0.0},
-                        "execution": {"mode": "paper", "validate_only": True, "allow_live_trading": False},
+                        "universe": {
+                            "include_pairs": [],
+                            "exclude_pairs": [],
+                            "min_24h_volume_usd": 0.0,
+                        },
+                        "execution": {
+                            "mode": "paper",
+                            "validate_only": True,
+                            "allow_live_trading": False,
+                        },
                         "ui": {"enabled": True, "host": "0.0.0.0", "port": 8000},
-                        "session": {"active": False, "mode": "paper", "loop_interval_sec": 15.0, "profile_name": None, "ml_enabled": True},
+                        "session": {
+                            "active": False,
+                            "mode": "paper",
+                            "loop_interval_sec": 15.0,
+                            "profile_name": None,
+                            "ml_enabled": True,
+                        },
                     },
                     config_dir=config_dir,
                 )
@@ -796,15 +812,17 @@ class BotController:
 
             # Check for hot-reload requests during normal runtime (e.g. Config Apply)
             if self.context and self.context.reinitialize_event.is_set():
-                 logger.info("Runtime re-initialization signal received. Hot-swapping context...")
-                 try:
+                logger.info(
+                    "Runtime re-initialization signal received. Hot-swapping context..."
+                )
+                try:
                     new_ctx = self.bootstrap_context()
                     self._hot_swap_context(new_ctx)
                     logger.info(
                         "Context hot-swap complete",
                         extra=structured_log_extra(event="hot_swap_complete"),
                     )
-                 except Exception:
+                except Exception:
                     logger.exception(
                         "Critical error during runtime re-initialization",
                         extra=structured_log_extra(event="reinit_runtime_error"),
@@ -812,8 +830,8 @@ class BotController:
                     # Clear event to prevent tight loop
                     if self.context:
                         self.context.reinitialize_event.clear()
-                 # Skip the rest of the loop to ensure clean state
-                 continue
+                # Skip the rest of the loop to ensure clean state
+                continue
 
             # --- MAIN TRADING LOOP ---
             now = datetime.now(timezone.utc)

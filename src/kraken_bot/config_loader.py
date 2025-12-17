@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import asdict
-
 import logging
 import os
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -131,7 +130,9 @@ def dump_runtime_overrides(
                 "mode": session_config.mode,
                 "loop_interval_sec": session_config.loop_interval_sec,
                 "ml_enabled": session_config.ml_enabled,
-                "emergency_flatten": getattr(session_config, "emergency_flatten", False),
+                "emergency_flatten": getattr(
+                    session_config, "emergency_flatten", False
+                ),
             }
         else:
             # If explicitly requested but we have no session source, remove it.
@@ -149,6 +150,7 @@ def dump_runtime_overrides(
                 tmp_path.unlink()
             except Exception:
                 pass
+
 
 def write_initial_config(config_data: dict, config_dir: Path | None = None) -> None:
     """
@@ -320,9 +322,9 @@ def load_config(
                 profile_path = config_dir / profile_path
 
             if profile_path.exists():
-                 with open(profile_path, "r") as f:
+                with open(profile_path, "r") as f:
                     profile_config = yaml.safe_load(f) or {}
-                 if isinstance(profile_config, dict):
+                if isinstance(profile_config, dict):
                     # We merge the profile config ON TOP of the main config
                     # Typically profile config contains trading logic (strategies, risk, etc.)
                     raw_config = _deep_merge_dicts(raw_config, profile_config)
@@ -330,14 +332,19 @@ def load_config(
                 logger.warning(
                     "Profile config path %s does not exist; skipping profile load",
                     profile_path,
-                    extra={"event": "config_profile_missing", "profile": active_profile}
+                    extra={
+                        "event": "config_profile_missing",
+                        "profile": active_profile,
+                    },
                 )
 
     # --- Runtime Overrides ---
     # If a profile is active, we look for overrides in the profile's directory or name-derived path
     # Pattern: profiles/<profile>/runtime.yaml
     if active_profile:
-        overrides_path = config_dir / "profiles" / active_profile / RUNTIME_OVERRIDES_FILENAME
+        overrides_path = (
+            config_dir / "profiles" / active_profile / RUNTIME_OVERRIDES_FILENAME
+        )
         # Fallback to old behavior if nested folder structure not used yet?
         # For now strict adherence to new plan: profiles/<profile>/runtime.yaml
     else:
@@ -347,7 +354,7 @@ def load_config(
         with open(overrides_path, "r") as f:
             runtime_overrides = yaml.safe_load(f) or {}
         if isinstance(runtime_overrides, dict):
-             raw_config = _deep_merge_dicts(raw_config, runtime_overrides)
+            raw_config = _deep_merge_dicts(raw_config, runtime_overrides)
 
     default_region = RegionProfile(
         code="US_CA",
@@ -731,7 +738,6 @@ def load_config(
             },
         )
 
-
     max_plan_age_seconds = _validated_int(
         execution_data.get("max_plan_age_seconds"),
         ExecutionConfig().max_plan_age_seconds,
@@ -820,7 +826,9 @@ def load_config(
         default_auto_migrate = False
 
     # We prioritize the user's config value if present, otherwise use our safe default
-    auto_migrate_schema = portfolio_data.get("auto_migrate_schema", default_auto_migrate)
+    auto_migrate_schema = portfolio_data.get(
+        "auto_migrate_schema", default_auto_migrate
+    )
 
     portfolio_config = PortfolioConfig(
         base_currency=portfolio_data.get("base_currency", "USD"),

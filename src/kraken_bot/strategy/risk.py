@@ -184,7 +184,9 @@ class RiskEngine:
                     fees_paid_base=0.0,
                     strategy_tag=order.strategy_id,
                     raw_userref=str(order.userref) if order.userref else None,
-                    current_value_base=(order.requested_base_size * price) if price else 0.0,
+                    current_value_base=(
+                        (order.requested_base_size * price) if price else 0.0
+                    ),
                     comment="pending_buy",
                 )
                 positions.append(syn_pos)
@@ -279,7 +281,9 @@ class RiskEngine:
             asset_exposures=asset_exposure_total,
             manual_positions=manual_positions,
             manual_positions_included=self.config.include_manual_positions,
-            drift_flag=equity_view.drift_flag or drift_status.drift_flag or pending_orders_drift,
+            drift_flag=equity_view.drift_flag
+            or drift_status.drift_flag
+            or pending_orders_drift,
             drift_status=drift_status,
             daily_drawdown_pct=drawdown_pct,
         )

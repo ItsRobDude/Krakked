@@ -21,6 +21,7 @@ class PairMetadata:
     @param status - Trading status (e.g., "online", "cancel_only").
     @param liquidity_24h_usd - Estimated 24h volume in USD (optional).
     """
+
     canonical: str
     base: str
     quote: str

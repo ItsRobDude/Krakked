@@ -11,7 +11,6 @@ from kraken_bot.connection.rate_limiter import RateLimiter
 from kraken_bot.connection.rest_client import KrakenRESTClient
 from kraken_bot.logging_config import structured_log_extra
 from kraken_bot.market_data.api import MarketDataAPI
-from kraken_bot.market_data.exceptions import DataStaleError
 from kraken_bot.strategy.models import ExecutionPlan
 
 from .adapter import ExecutionAdapter, get_execution_adapter

@@ -695,8 +695,8 @@ class SQLitePortfolioStore(PortfolioStore):
                     extra=structured_log_extra(
                         event="portfolio_schema_error",
                         found=status.version,
-                        expected=CURRENT_SCHEMA_VERSION
-                    )
+                        expected=CURRENT_SCHEMA_VERSION,
+                    ),
                 )
                 raise PortfolioSchemaError(
                     found=status.version, expected=CURRENT_SCHEMA_VERSION

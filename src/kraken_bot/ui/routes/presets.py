@@ -3,18 +3,17 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException, Request
+import yaml  # type: ignore[import-untyped]
+from fastapi import APIRouter, Request
 from pydantic import BaseModel
 
 from kraken_bot.config import get_config_dir
 from kraken_bot.ui.logging import build_request_log_extra
 from kraken_bot.ui.models import ApiEnvelope
-from kraken_bot.utils.io import sanitize_filename, atomic_write
-import yaml  # type: ignore[import-untyped]
-from pathlib import Path
-import time
+from kraken_bot.utils.io import atomic_write, sanitize_filename
 
 logger = logging.getLogger(__name__)
 
@@ -23,11 +22,13 @@ router = APIRouter()
 PRESETS_DIR = get_config_dir() / "presets"
 ALLOWED_KINDS = {"risk", "strategies", "universe"}
 
+
 class PresetPayload(BaseModel):
     name: str
     kind: str
     payload: Dict[str, Any]
     description: str = ""
+
 
 class PresetSummary(BaseModel):
     name: str
@@ -35,15 +36,20 @@ class PresetSummary(BaseModel):
     description: str
     updated_at: float
 
+
 def _ensure_presets_dir():
     for kind in ALLOWED_KINDS:
         (PRESETS_DIR / kind).mkdir(parents=True, exist_ok=True)
 
+
 def _context(request: Request):
     return request.app.state.context
 
+
 @router.get("/", response_model=ApiEnvelope[List[PresetSummary]])
-async def list_presets(request: Request, kind: Optional[str] = None) -> ApiEnvelope[List[PresetSummary]]:
+async def list_presets(
+    request: Request, kind: Optional[str] = None
+) -> ApiEnvelope[List[PresetSummary]]:
     """List all presets, optionally filtered by kind."""
     _ensure_presets_dir()
     summaries = []
@@ -61,19 +67,24 @@ async def list_presets(request: Request, kind: Optional[str] = None) -> ApiEnvel
             try:
                 with open(f, "r") as fh:
                     data = yaml.safe_load(fh) or {}
-                    summaries.append(PresetSummary(
-                        name=data.get("name", f.stem),
-                        kind=k,
-                        description=data.get("description", ""),
-                        updated_at=f.stat().st_mtime
-                    ))
+                    summaries.append(
+                        PresetSummary(
+                            name=data.get("name", f.stem),
+                            kind=k,
+                            description=data.get("description", ""),
+                            updated_at=f.stat().st_mtime,
+                        )
+                    )
             except Exception:
                 logger.warning(f"Failed to parse preset {f}")
 
     return ApiEnvelope(data=summaries, error=None)
 
+
 @router.get("/{kind}/{name}", response_model=ApiEnvelope[PresetPayload])
-async def get_preset(kind: str, name: str, request: Request) -> ApiEnvelope[PresetPayload]:
+async def get_preset(
+    kind: str, name: str, request: Request
+) -> ApiEnvelope[PresetPayload]:
     """Retrieve a specific preset."""
     if kind not in ALLOWED_KINDS:
         return ApiEnvelope(data=None, error="Invalid preset kind")
@@ -97,12 +108,13 @@ async def get_preset(kind: str, name: str, request: Request) -> ApiEnvelope[Pres
                 name=data.get("name", name),
                 kind=kind,
                 payload=data.get("payload", {}),
-                description=data.get("description", "")
+                description=data.get("description", ""),
             ),
-            error=None
+            error=None,
         )
     except Exception as exc:
         return ApiEnvelope(data=None, error=str(exc))
+
 
 @router.post("/", response_model=ApiEnvelope[dict])
 async def save_preset(payload: PresetPayload, request: Request) -> ApiEnvelope[dict]:
@@ -112,7 +124,9 @@ async def save_preset(payload: PresetPayload, request: Request) -> ApiEnvelope[d
         return ApiEnvelope(data=None, error="UI is in read-only mode")
 
     if ctx.session.active:
-        return ApiEnvelope(data=None, error="Cannot save preset while session is active")
+        return ApiEnvelope(
+            data=None, error="Cannot save preset while session is active"
+        )
 
     if payload.kind not in ALLOWED_KINDS:
         return ApiEnvelope(data=None, error=f"Invalid kind. Allowed: {ALLOWED_KINDS}")
@@ -133,7 +147,7 @@ async def save_preset(payload: PresetPayload, request: Request) -> ApiEnvelope[d
         "version": 1,
         "description": payload.description,
         "payload": payload.payload,
-        "updated_at": time.time()
+        "updated_at": time.time(),
     }
 
     try:
@@ -141,12 +155,15 @@ async def save_preset(payload: PresetPayload, request: Request) -> ApiEnvelope[d
 
         logger.info(
             "Preset saved",
-            extra=build_request_log_extra(request, event="preset_saved", kind=payload.kind, name=payload.name)
+            extra=build_request_log_extra(
+                request, event="preset_saved", kind=payload.kind, name=payload.name
+            ),
         )
         return ApiEnvelope(data={"success": True, "path": str(path)}, error=None)
     except Exception as exc:
         logger.exception("Failed to save preset")
         return ApiEnvelope(data=None, error=str(exc))
+
 
 @router.delete("/{kind}/{name}", response_model=ApiEnvelope[dict])
 async def delete_preset(kind: str, name: str, request: Request) -> ApiEnvelope[dict]:
@@ -156,7 +173,9 @@ async def delete_preset(kind: str, name: str, request: Request) -> ApiEnvelope[d
         return ApiEnvelope(data=None, error="UI is in read-only mode")
 
     if ctx.session.active:
-        return ApiEnvelope(data=None, error="Cannot delete preset while session is active")
+        return ApiEnvelope(
+            data=None, error="Cannot delete preset while session is active"
+        )
 
     if kind not in ALLOWED_KINDS:
         return ApiEnvelope(data=None, error="Invalid kind")
@@ -175,7 +194,9 @@ async def delete_preset(kind: str, name: str, request: Request) -> ApiEnvelope[d
         path.unlink()
         logger.info(
             "Preset deleted",
-            extra=build_request_log_extra(request, event="preset_deleted", kind=kind, name=name)
+            extra=build_request_log_extra(
+                request, event="preset_deleted", kind=kind, name=name
+            ),
         )
         return ApiEnvelope(data={"success": True}, error=None)
     except Exception as exc:

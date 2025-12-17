@@ -184,7 +184,9 @@ async def flatten_all_positions(
         try:
             ctx.portfolio.sync()
             if not getattr(ctx.portfolio, "last_sync_ok", True):
-                pre_warnings.append("Portfolio sync failed; flattening may use stale position data.")
+                pre_warnings.append(
+                    "Portfolio sync failed; flattening may use stale position data."
+                )
         except Exception as sync_exc:
             pre_warnings.append(f"Portfolio sync before flatten failed: {sync_exc}")
 

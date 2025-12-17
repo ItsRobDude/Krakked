@@ -80,7 +80,9 @@ class SetupModeMiddleware(BaseHTTPMiddleware):
         if path.startswith(self._api_prefix):
             ctx = getattr(request.app.state, "context", None)
             if ctx is not None and getattr(ctx, "is_setup_mode", False):
-                if not any(path.startswith(prefix) for prefix in self._allowed_prefixes):
+                if not any(
+                    path.startswith(prefix) for prefix in self._allowed_prefixes
+                ):
                     return JSONResponse(
                         {"data": None, "error": "Setup required"}, status_code=409
                     )

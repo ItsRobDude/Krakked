@@ -169,7 +169,9 @@ def _migrate_command(args: argparse.Namespace) -> int:
     """Run portfolio schema migrations for the SQLite store at --db-path."""
 
     # db_path might come from --db-path (default) or --db (legacy alias if present)
-    path_arg = getattr(args, "db_path", None) or getattr(args, "db", None) or DEFAULT_DB_PATH
+    path_arg = (
+        getattr(args, "db_path", None) or getattr(args, "db", None) or DEFAULT_DB_PATH
+    )
     db_path = Path(path_arg).expanduser().resolve().as_posix()
 
     print(f"Starting migration for {db_path}")
@@ -244,9 +246,10 @@ def _db_backup_command(args: argparse.Namespace) -> int:
         if temp_backup_path.exists():
             temp_backup_path.unlink()
 
-        with sqlite3.connect(db_path.as_posix()) as src, sqlite3.connect(
-            temp_backup_path.as_posix()
-        ) as dst:
+        with (
+            sqlite3.connect(db_path.as_posix()) as src,
+            sqlite3.connect(temp_backup_path.as_posix()) as dst,
+        ):
             src.backup(dst)
 
         temp_backup_path.replace(backup_path)

@@ -478,7 +478,9 @@ class PortfolioService:
 
         # Normalize the asset name (e.g., 'XXBT' -> 'BTC') to ensure consistency
         # with the rest of the system before storing in the database.
-        normalized_asset = self.portfolio.market_data.normalize_asset(info.get("asset", ""))
+        normalized_asset = self.portfolio.market_data.normalize_asset(
+            info.get("asset", "")
+        )
 
         return LedgerEntry(
             id=lid,
