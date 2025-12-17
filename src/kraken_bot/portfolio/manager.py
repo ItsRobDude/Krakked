@@ -138,15 +138,38 @@ class PortfolioService:
         latest_trades = self.store.get_trades(limit=1)  # ordered by time desc
         since_ts = latest_trades[0]["time"] if latest_trades else None
 
+        new_trade_count = self._sync_trades_history(since_ts)
+        if new_trade_count < 0:
+            # Sync failed (logged internally), return partial results (0, 0)
+            return {"new_trades": 0, "new_cash_flows": 0}
+
+        # 2. Fetch Ledgers
+        new_cash_flows = self._sync_ledgers()
+
+        # 3. Reconcile
+        self._reconcile()
+        self._last_sync_ok = True
+
+        return {
+            "new_trades": new_trade_count,
+            "new_cash_flows": new_cash_flows,
+        }
+
+    def _sync_trades_history(self, since_ts: Optional[float]) -> int:
+        """Fetch, deduplicate, enrich, and persist new trades."""
         params = {}
         known_txids_at_boundary = set()
 
         if since_ts:
             params["start"] = since_ts
             # Prefetch trades at the boundary to prevent duplicates
-            # because 'start' is inclusive in Kraken API.
-            # We add a small epsilon to ensure we catch trades exactly at since_ts
-            boundary_trades = self.store.get_trades(since=since_ts, until=since_ts + 1e-6)
+            # Store methods expect int timestamps but allow float as well in practice.
+            # We explicit cast if necessary, but here since_ts + 1e-6 is float.
+            # The store implementation _to_timestamp handles float fine.
+            # We just need to make sure the type checker is happy or ignore it if store.py types are strict.
+            boundary_trades = self.store.get_trades(
+                since=since_ts, until=since_ts + 1e-6  # type: ignore[arg-type]
+            )
             for t in boundary_trades:
                 known_txids_at_boundary.add(t.get("ordertxid"))
                 # Also add trade ID itself if available (usually 'id' in our store matches what we'd expect?)
@@ -218,10 +241,6 @@ class PortfolioService:
                     last_cursor = last_ts + 1e-6
                     params["start"] = last_cursor
                 else:
-                    # If batch empty but we got trades_dict (all dupes), we still need to advance
-                    # Use the last from response if available, else break?
-                    # If batch is empty, it means we filtered everything out.
-                    # We should probably trust resp_last if it exists.
                     if resp_last:
                         params["start"] = resp_last
                         last_cursor = resp_last
@@ -231,7 +250,7 @@ class PortfolioService:
             safety_counter += 1
             if safety_counter > 200:
                 logger.warning(
-                    "TradesHistory pagination aborted after 200 pages to avoid infinite loop.",
+                    "TradesHistory pagination aborted after 200 pages.",
                     extra=structured_log_extra(
                         event="portfolio_sync_pagination_aborted", pages=safety_counter
                     ),
@@ -246,15 +265,17 @@ class PortfolioService:
                     "portfolio.sync.ingest_trades_failed",
                     extra={"since": since_ts, "count": len(new_trades)},
                 )
-                return {"new_trades": 0, "new_cash_flows": 0}
+                return -1
 
             normalized_trades = [
                 self.portfolio._normalize_trade_payload(t) for t in new_trades
             ]
             self.store.save_trades(normalized_trades)
 
-        # 2. Fetch Ledgers (New Flow)
-        # Find the latest ledger entry to determine start time
+        return len(new_trades)
+
+    def _sync_ledgers(self) -> int:
+        """Fetch, process, and persist new ledger entries."""
         last_entry = self.store.get_latest_ledger_entry()
         last_ledger_time = last_entry.time if last_entry else 0
 
@@ -262,10 +283,8 @@ class PortfolioService:
         if last_ledger_time > 0:
             ledger_params["start"] = last_ledger_time
 
-        # Efficient duplicate detection for boundary
         known_ids_at_boundary = set()
         if last_ledger_time > 0:
-            # Fetch only entries at or after the last timestamp (small window usually)
             boundary_entries = self.store.get_ledger_entries(since=last_ledger_time)
             known_ids_at_boundary = {e.id for e in boundary_entries}
 
@@ -276,12 +295,9 @@ class PortfolioService:
         cash_flow_records = []
 
         if ledger_dict:
-            # Normalize and store
             for lid, info in ledger_dict.items():
-                # info has refid, time, type, aclass, asset, amount, fee, balance
                 entry_time = info.get("time", 0.0)
 
-                # Deduplication logic
                 if entry_time < last_ledger_time:
                     continue
                 if entry_time == last_ledger_time and lid in known_ids_at_boundary:
@@ -289,19 +305,14 @@ class PortfolioService:
 
                 new_ledger_entries.append(self._create_ledger_entry(lid, info))
 
-            # Sort by time
             new_ledger_entries.sort(key=lambda x: (x.time, x.id))
 
             engine = BalanceEngine(self.portfolio.balances)
 
             for entry in new_ledger_entries:
                 self.store.save_ledger_entry(entry)
-
-                # Update in-memory balances
-                # BalanceEngine modifies self.portfolio.balances in-place (reference copy)
                 engine.apply_entry(entry)
 
-                # Classify and record Cash Flow (but do NOT apply to portfolio balances again, as engine.apply_entry did it)
                 cf = classify_cashflow(entry)
                 if cf:
                     cash_flow_records.append(cf)
@@ -309,14 +320,7 @@ class PortfolioService:
         if cash_flow_records:
             self.store.save_cash_flows(cash_flow_records)
 
-        # 3. Reconcile
-        self._reconcile()
-        self._last_sync_ok = True
-
-        return {
-            "new_trades": len(new_trades),
-            "new_cash_flows": len(cash_flow_records),
-        }
+        return len(cash_flow_records)
 
     def _reconcile(self):
         """Fetch live balances and flag drift."""
