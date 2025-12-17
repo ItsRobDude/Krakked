@@ -608,7 +608,12 @@ def test_run_loop_iteration_allows_strategy_cycle_when_stale_market_data():
     strategy_engine = StubStrategyEngine()
     execution_service = StubExecutionService()
     market_data = StubMarketData(
-        MarketDataStatus(health="stale", max_staleness=30.0, reason="late_ticks")
+        MarketDataStatus(
+            health="stale",
+            max_staleness=30.0,
+            reason="late_ticks",
+            stale_pairs=["XBT/USD"],
+        )
     )
     metrics = FakeMetrics()
     refresh_called: list[bool] = []

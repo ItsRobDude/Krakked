@@ -34,6 +34,7 @@ class MarketDataStatus:
     health: str  # healthy | stale | unavailable
     max_staleness: Optional[float] = None
     reason: Optional[str] = None
+    stale_pairs: Optional[List[str]] = None
 
 
 class MarketDataAPI:
@@ -590,6 +591,7 @@ class MarketDataAPI:
 
         max_staleness: Optional[float] = None
         stale_detected = False
+        stale_pairs: List[str] = []
 
         for pair_meta in self._universe:
             is_fresh, stale_time = self._ticker_freshness(pair_meta.canonical)
@@ -601,10 +603,14 @@ class MarketDataAPI:
                 )
             if not is_fresh:
                 stale_detected = True
+                stale_pairs.append(pair_meta.canonical)
 
         if stale_detected:
             return MarketDataStatus(
-                health="stale", max_staleness=max_staleness, reason="data_stale"
+                health="stale",
+                max_staleness=max_staleness,
+                reason="data_stale",
+                stale_pairs=stale_pairs,
             )
 
         return MarketDataStatus(health="healthy", max_staleness=max_staleness or 0.0)
