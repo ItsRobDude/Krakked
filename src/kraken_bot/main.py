@@ -148,8 +148,8 @@ def _run_loop_iteration(
             try:
                 updated_strategy_cycle = now
                 metrics.record_plan(blocked_actions=0)
-                result = execution_service.execute_plan(plan)
-                metrics.record_plan_execution(getattr(result, "errors", []))
+                flatten_result = execution_service.execute_plan(plan)
+                metrics.record_plan_execution(getattr(flatten_result, "errors", []))
             except Exception as exc:  # pragma: no cover
                 metrics.record_error(f"Emergency flatten execution failed: {exc}")
             finally:
