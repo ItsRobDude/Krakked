@@ -890,9 +890,6 @@ async def set_execution_mode(
                 )
                 return ApiEnvelope(data=None, error="Invalid password")
 
-            # If we pass guard, we allow live trading
-            execution_config.allow_live_trading = True
-
         # Persist this permission so reload picks it up?
         # Yes, we need to update the config.
         # But wait, config updates should happen via /config/apply or profile?
