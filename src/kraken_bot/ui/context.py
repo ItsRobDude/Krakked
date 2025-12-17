@@ -23,6 +23,7 @@ class SessionState:
     loop_interval_sec: float = 15.0
     profile_name: Optional[str] = None
     ml_enabled: bool = True
+    emergency_flatten: bool = False
 
 
 @dataclass
@@ -94,6 +95,7 @@ def build_app_context(allow_interactive_setup: bool = True) -> AppContext:
         loop_interval_sec=config.session.loop_interval_sec,
         profile_name=config.session.profile_name,
         ml_enabled=config.session.ml_enabled,
+        emergency_flatten=getattr(config.session, "emergency_flatten", False),
     )
 
     return AppContext(
