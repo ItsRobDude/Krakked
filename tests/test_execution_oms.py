@@ -211,4 +211,4 @@ def test_execute_plan_treats_routing_failure_as_error(inactive_risk_status):
     assert not result.success
     assert result.warnings
     assert result.errors
-    assert "Missing market data for limit order" in result.errors[0]
+    assert "Invalid bid/ask data" in result.errors[0]

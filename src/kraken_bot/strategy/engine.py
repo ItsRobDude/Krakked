@@ -575,7 +575,7 @@ class StrategyEngine:
             plan_id=f"flatten_{int(now.timestamp())}",
             generated_at=now,
             actions=actions,
-            metadata={},
+            metadata={"order_type": "market"},
         )
 
         return plan
