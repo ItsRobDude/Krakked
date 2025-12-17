@@ -135,7 +135,9 @@ def test_db_backup_creates_file_and_prunes_old_backups(
     }
 
 
-def test_db_backup_captures_wal_changes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_db_backup_captures_wal_changes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     db_path = tmp_path / "portfolio.db"
     _create_sample_db(db_path)
 

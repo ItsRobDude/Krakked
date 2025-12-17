@@ -379,7 +379,10 @@ def test_mode_change_updates_configs(client, system_context):
     assert response.status_code == 200
     payload = response.json()
     assert payload["error"] is None
-    assert payload["data"] == {"mode": "live", "validate_only": False}
+    assert payload["data"]["mode"] == "live"
+    assert payload["data"]["validate_only"] is False
+    assert payload["data"]["reloading"] is True
+
     assert system_context.execution_service.adapter.config.mode == "live"
     assert system_context.session.mode == "live"
     assert system_context.config.session.mode == "live"
@@ -610,7 +613,10 @@ def test_ui_credential_validation_logs_do_not_include_secrets(
                 assert fake_key not in value
                 assert fake_secret not in value
 
-def test_setup_unlock_remember_failure_is_best_effort(monkeypatch, client, system_context):
+
+def test_setup_unlock_remember_failure_is_best_effort(
+    monkeypatch, client, system_context
+):
     import kraken_bot.ui.routes.system as system_routes
 
     system_context.is_setup_mode = True
@@ -625,7 +631,9 @@ def test_setup_unlock_remember_failure_is_best_effort(monkeypatch, client, syste
 
     monkeypatch.setattr(system_routes, "save_master_password", fail_save)
 
-    resp = client.post("/api/system/setup/unlock", json={"password": "pw", "remember": True})
+    resp = client.post(
+        "/api/system/setup/unlock", json={"password": "pw", "remember": True}
+    )
     assert resp.status_code == 200
     payload = resp.json()
     assert payload["error"] is None
@@ -645,12 +653,15 @@ def test_setup_unlock_remember_success_sets_flag(monkeypatch, client, system_con
     monkeypatch.setattr(system_routes, "set_session_master_password", lambda _pw: None)
 
     saved = {}
+
     def _save(pw: str) -> None:
         saved["pw"] = pw
 
     monkeypatch.setattr(system_routes, "save_master_password", _save)
 
-    resp = client.post("/api/system/setup/unlock", json={"password": "pw", "remember": True})
+    resp = client.post(
+        "/api/system/setup/unlock", json={"password": "pw", "remember": True}
+    )
     payload = resp.json()
     assert payload["error"] is None
     assert payload["data"]["success"] is True

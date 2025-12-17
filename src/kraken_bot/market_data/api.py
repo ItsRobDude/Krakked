@@ -234,7 +234,9 @@ class MarketDataAPI:
                 continue
 
             # Check for markers in the canonical name or ws_symbol
-            is_clean = "." not in p.canonical and (not p.ws_symbol or "." not in p.ws_symbol)
+            is_clean = "." not in p.canonical and (
+                not p.ws_symbol or "." not in p.ws_symbol
+            )
             if not is_clean:
                 continue
 
@@ -348,7 +350,7 @@ class MarketDataAPI:
 
         # Try lookup by raw asset just in case
         if asset in self._valuation_map:
-             return self._valuation_map[asset]
+            return self._valuation_map[asset]
 
         return None
 
@@ -628,15 +630,17 @@ class MarketDataAPI:
         Raises exception if validation cannot be performed (e.g. API unavailable).
         """
         if not self._rest_client:
-             # Import locally to avoid circular dep if any
-             from kraken_bot.connection.exceptions import ServiceUnavailableError
-             raise ServiceUnavailableError("No REST client available for validation")
+            # Import locally to avoid circular dep if any
+            from kraken_bot.connection.exceptions import ServiceUnavailableError
+
+            raise ServiceUnavailableError("No REST client available for validation")
 
         try:
             # We fetch all asset pairs to check existence
             resp = self._rest_client.get_public("AssetPairs")
             if not resp:
                 from kraken_bot.connection.exceptions import ServiceUnavailableError
+
                 raise ServiceUnavailableError("Empty response from AssetPairs")
 
             known_pairs = resp
@@ -644,7 +648,9 @@ class MarketDataAPI:
                 known_pairs = resp["result"]
 
             known_keys = set(known_pairs.keys())
-            known_altnames = {v.get("altname") for v in known_pairs.values() if isinstance(v, dict)}
+            known_altnames = {
+                v.get("altname") for v in known_pairs.values() if isinstance(v, dict)
+            }
 
             invalid = []
             for pair in pairs:

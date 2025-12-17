@@ -150,8 +150,8 @@ def test_manual_positions_excluded_from_limits():
     portfolio.get_positions.return_value = [manual_position, strategy_position]
 
     # Pre-calculate current value since RiskEngine expects it populated (usually by Portfolio.get_equity)
-    manual_position.current_value_base = 2.0 * 50.0 # 100
-    strategy_position.current_value_base = 1.0 * 200.0 # 200
+    manual_position.current_value_base = 2.0 * 50.0  # 100
+    strategy_position.current_value_base = 1.0 * 200.0  # 200
 
     include_config = RiskConfig(include_manual_positions=True)
     include_engine = RiskEngine(include_config, market_data, portfolio)

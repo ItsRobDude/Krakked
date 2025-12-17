@@ -401,13 +401,13 @@ class Portfolio:
                     )
                 )
             elif conversion.status == "unvalued" and diff_qty > 1e-9:
-                 drift_detected = True
-                 mismatched_assets.append(
+                drift_detected = True
+                mismatched_assets.append(
                     DriftMismatchedAsset(
                         asset=asset,
                         expected_quantity=pos_total,
                         actual_quantity=balance_total,
-                        difference_base=0.0, # Unvalued
+                        difference_base=0.0,  # Unvalued
                     )
                 )
 
@@ -645,11 +645,13 @@ class Portfolio:
             return ConversionResult(amount, None, "valued")
 
         # Use MarketDataAPI to get valuation pair
-        pair = self.config.valuation_pairs.get(asset) or self.market_data.get_valuation_pair(asset)
+        pair = self.config.valuation_pairs.get(
+            asset
+        ) or self.market_data.get_valuation_pair(asset)
 
         # If still no pair, return unvalued.
         if not pair:
-             return ConversionResult(0.0, None, "unvalued")
+            return ConversionResult(0.0, None, "unvalued")
 
         price = None
         try:

@@ -33,7 +33,7 @@ class _DummyConfig:
         self.market_data = MarketData()
 
 
-def test_run_exits_on_portfolio_schema_error(monkeypatch, capsys):
+def test_run_exits_on_portfolio_schema_error(monkeypatch, caplog):
     def fake_bootstrap(*_, **__):
         return "client", _DummyConfig(), "rate"
 
@@ -53,9 +53,10 @@ def test_run_exits_on_portfolio_schema_error(monkeypatch, capsys):
     monkeypatch.setattr(main, "bootstrap", fake_bootstrap)
     monkeypatch.setattr(main, "MarketDataAPI", FakeMarketData)
     monkeypatch.setattr(main, "PortfolioService", raise_schema_error)
+    # Prevent main.run from nuking the caplog handler
+    monkeypatch.setattr(main, "configure_logging", lambda **kwargs: None)
 
     exit_code = main.run()
 
     assert exit_code == 1
-    captured = capsys.readouterr()
-    assert "schema mismatch" in captured.err
+    assert "schema mismatch" in caplog.text

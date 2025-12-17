@@ -32,10 +32,14 @@ def test_pnl_consistency_buy_fees():
 
     def _norm(asset):
         asset = str(asset)
-        return {"XXBT": "XBT", "XBT": "XBT", "ZUSD": "USD", "USD": "USD"}.get(asset, asset)
+        return {"XXBT": "XBT", "XBT": "XBT", "ZUSD": "USD", "USD": "USD"}.get(
+            asset, asset
+        )
 
     mock_market_data.normalize_asset.side_effect = _norm
-    mock_market_data.get_valuation_pair.side_effect = lambda asset: "XBTUSD" if _norm(asset) == "XBT" else None
+    mock_market_data.get_valuation_pair.side_effect = lambda asset: (
+        "XBTUSD" if _norm(asset) == "XBT" else None
+    )
 
     # Mock Store
     mock_store = MagicMock()

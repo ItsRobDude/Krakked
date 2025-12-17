@@ -5,7 +5,9 @@ import appdirs  # type: ignore[import-untyped]
 from kraken_bot.config import load_config
 
 
-def test_numeric_strings_are_accepted_for_int_fields(monkeypatch, tmp_path: Path) -> None:
+def test_numeric_strings_are_accepted_for_int_fields(
+    monkeypatch, tmp_path: Path
+) -> None:
     """Quoted numeric YAML values should still be accepted for int config fields."""
 
     config_dir = tmp_path / "config"

@@ -1,12 +1,10 @@
 """I/O and utility functions for file management."""
 
 import logging
-import time
 import shutil
+import time
 from pathlib import Path
-from typing import Any, Dict, Optional, Callable
-
-import yaml
+from typing import Any, Callable, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +25,7 @@ def sanitize_filename(name: str) -> str:
     Raises:
         ValueError: If the sanitized name is empty or consists only of '.' or '..'.
     """
-    safe_name = "".join(c for c in name if c.isalnum() or c in ('-', '_')).strip()
+    safe_name = "".join(c for c in name if c.isalnum() or c in ("-", "_")).strip()
     if not safe_name or safe_name == "." or safe_name == "..":
         raise ValueError(f"Invalid filename: {name}")
     return safe_name
@@ -65,8 +63,8 @@ def backup_file(path: Path) -> Optional[Path]:
 def atomic_write(
     path: Path,
     content: Any,
-    mode: str = 'w',
-    dump_func: Optional[Callable[[Any, Any], None]] = None
+    mode: str = "w",
+    dump_func: Optional[Callable[[Any, Any], None]] = None,
 ) -> None:
     """
     Writes content to a file atomically using a temporary file and rename.
@@ -125,11 +123,7 @@ def deep_merge_dicts(base: Dict[str, Any], overlay: Dict[str, Any]) -> Dict[str,
     """
     merged = base.copy()
     for key, value in overlay.items():
-        if (
-            key in merged
-            and isinstance(merged[key], dict)
-            and isinstance(value, dict)
-        ):
+        if key in merged and isinstance(merged[key], dict) and isinstance(value, dict):
             merged[key] = deep_merge_dicts(merged[key], value)
         else:
             merged[key] = value
