@@ -407,45 +407,54 @@ class ExecutionService:
             ):
                 try:
                     latest_price = self.market_data.get_latest_price(order.pair)
-                except DataStaleError as exc:
-                    reason = f"Latest price unavailable for notional guardrail: {exc}"
-                    logger.warning(
-                        "Order rejected: latest price unavailable",
-                        extra=structured_log_extra(
-                            event="order_rejected_price_unavailable",
-                            plan_id=plan.plan_id,
-                            strategy_id=action.strategy_id,
-                            pair=action.pair,
-                            error=str(exc),
-                        ),
-                    )
-                    order.status = "rejected"
-                    order.last_error = reason
-                    result.errors.append(reason)
-                    if self.store:
-                        self.store.save_order(order)
-                    result.orders.append(order)
-                    continue
+                except Exception as exc:  # pragma: no cover
+                    # If live, we must fail closed.
+                    if adapter_config.mode == "live":
+                        reason = f"Latest price unavailable in live mode: {exc}"
+                        logger.error(
+                            "Order rejected: latest price error (live)",
+                            extra=structured_log_extra(
+                                event="order_rejected_price_error",
+                                plan_id=plan.plan_id,
+                                strategy_id=action.strategy_id,
+                                pair=action.pair,
+                                error=str(exc),
+                            ),
+                        )
+                        order.status = "rejected"
+                        order.last_error = reason
+                        result.errors.append(reason)
+                        if self.store:
+                            self.store.save_order(order)
+                        result.orders.append(order)
+                        continue
 
-                except Exception as exc:  # pragma: no cover - defensive logging
-                    reason = f"Unexpected error fetching latest price: {exc}"
-                    logger.exception(
-                        "Order rejected: latest price error",
+                    # In paper/sim, attempt fallback or proceed
+                    logger.warning(
+                        "Latest price missing in non-live mode; attempting fallback",
                         extra=structured_log_extra(
-                            event="order_rejected_price_error",
-                            plan_id=plan.plan_id,
-                            strategy_id=action.strategy_id,
-                            pair=action.pair,
+                            event="price_fallback_attempt",
+                            pair=order.pair,
                             error=str(exc),
                         ),
                     )
-                    order.status = "rejected"
-                    order.last_error = reason
-                    result.errors.append(reason)
-                    if self.store:
-                        self.store.save_order(order)
-                    result.orders.append(order)
-                    continue
+                    fallback_price: Optional[float] = None
+                    try:
+                        ticker = self.market_data.get_best_bid_ask(order.pair)
+                        if ticker and ticker.get("bid") and ticker.get("ask"):
+                            fallback_price = (ticker["bid"] + ticker["ask"]) / 2.0
+                    except Exception:
+                        pass
+
+                    if fallback_price is not None:
+                        latest_price = fallback_price
+                    else:
+                        logger.warning(
+                            "Proceeding with missing price (paper/sim)",
+                            extra=structured_log_extra(
+                                event="price_missing_allowed", pair=order.pair
+                            ),
+                        )
 
             try:
                 logger.info(

@@ -379,7 +379,10 @@ def test_mode_change_updates_configs(client, system_context):
     assert response.status_code == 200
     payload = response.json()
     assert payload["error"] is None
-    assert payload["data"] == {"mode": "live", "validate_only": False}
+    assert payload["data"]["mode"] == "live"
+    assert payload["data"]["validate_only"] is False
+    assert payload["data"]["reloading"] is True
+
     assert system_context.execution_service.adapter.config.mode == "live"
     assert system_context.session.mode == "live"
     assert system_context.config.session.mode == "live"

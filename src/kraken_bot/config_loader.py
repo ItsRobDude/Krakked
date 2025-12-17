@@ -537,7 +537,12 @@ def load_config(
 
     missing_limits = [sid for sid in normalized_enabled if sid not in normalized_limits]
     if missing_limits:
-        default_strategy_limit = float(risk_data.get("max_portfolio_risk_pct", 10.0))
+        default_strategy_limit = float(
+            risk_data.get(
+                "max_risk_per_trade_pct",
+                risk_data.get("max_portfolio_risk_pct", 10.0),
+            )
+        )
 
         for strategy_id in missing_limits:
             logger.warning(

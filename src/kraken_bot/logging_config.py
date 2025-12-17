@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import sys
 from datetime import datetime, timezone
 from typing import Any, Dict
 
@@ -77,7 +78,7 @@ def configure_logging(level: int = logging.INFO, env: str | None = None) -> None
     for handler in list(root_logger.handlers):
         root_logger.removeHandler(handler)
 
-    handler = logging.StreamHandler()
+    handler = logging.StreamHandler(stream=sys.__stderr__)
     handler.setFormatter(JsonFormatter(env=env))
     root_logger.addHandler(handler)
 

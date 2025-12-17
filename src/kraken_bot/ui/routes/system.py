@@ -843,23 +843,31 @@ async def set_execution_mode(
 
     # GUARD: Switching TO live mode
     if new_mode == "live":
-        # Check credentials and phrase
-        if not payload.password or not payload.confirmation:
-             return ApiEnvelope(data=None, error="Live mode requires password and confirmation phrase")
+        # Only require password + confirmation if we aren't already allowed to trade live.
+        # This allows switching back and forth if already authenticated/unlocked.
+        if not execution_config.allow_live_trading:
+            # Check credentials and phrase
+            if not payload.password or not payload.confirmation:
+                return ApiEnvelope(
+                    data=None, error="Live mode requires password and confirmation phrase"
+                )
 
-        if payload.confirmation != "ENABLE LIVE TRADING":
-             return ApiEnvelope(data=None, error="Invalid confirmation phrase")
+            if payload.confirmation != "ENABLE LIVE TRADING":
+                return ApiEnvelope(data=None, error="Invalid confirmation phrase")
 
-        try:
-            unlock_secrets(payload.password)
-            # Ensure we persist this for reload
-            set_session_master_password(payload.password)
-        except Exception:
-            logger.warning("Live mode auth failed", extra=build_request_log_extra(request, event="live_auth_failed"))
-            return ApiEnvelope(data=None, error="Invalid password")
+            try:
+                unlock_secrets(payload.password)
+                # Ensure we persist this for reload
+                set_session_master_password(payload.password)
+            except Exception:
+                logger.warning(
+                    "Live mode auth failed",
+                    extra=build_request_log_extra(request, event="live_auth_failed"),
+                )
+                return ApiEnvelope(data=None, error="Invalid password")
 
-        # If we pass guard, we allow live trading
-        execution_config.allow_live_trading = True
+            # If we pass guard, we allow live trading
+            execution_config.allow_live_trading = True
 
         # Persist this permission so reload picks it up?
         # Yes, we need to update the config.
@@ -906,40 +914,53 @@ async def set_execution_mode(
 
     # For other modes, we might just update runtime state or config too?
     # Usually mode change persists.
-    if new_mode != "live":
-        # If switching away from live, we should probably disable allow_live_trading?
-        # Or just change mode. Safe to just change mode.
-        # But we need to persist "mode" = "paper".
-        pass # The logic above only handled "live". We need generic persistence.
+    # Update in-memory state so subsequent calls reflect the change immediately
+    execution_config.mode = new_mode
+    execution_config.validate_only = (new_mode != "live")
+    if new_mode == "live":
+        execution_config.allow_live_trading = True
 
-        # NOTE: Re-implementing generic persistence for mode change:
-        config_dir = get_config_dir()
-        profile_name = ctx.session.profile_name
-        target_path = None
-        if profile_name:
-             profiles_entry = ctx.config.profiles.get(profile_name)
-             if profiles_entry:
-                 p_path = Path(profiles_entry.config_path)
-                 if not p_path.is_absolute():
-                     p_path = config_dir / p_path
-                 if p_path.exists():
-                     target_path = p_path
-        if not target_path:
-            target_path = config_dir / "config.yaml"
+    ctx.session.mode = new_mode
+    if hasattr(ctx.config, "session"):
+        ctx.config.session.mode = new_mode
 
-        try:
-            with open(target_path, "r") as f:
-                data = yaml.safe_load(f) or {}
-            exec_sec = data.get("execution", {})
-            exec_sec["mode"] = new_mode
-            exec_sec["validate_only"] = (new_mode != "live")
+    # If the adapter is already initialized, update its config reference too
+    if ctx.execution_service and hasattr(ctx.execution_service, "adapter"):
+        adapter_conf = getattr(ctx.execution_service.adapter, "config", None)
+        if adapter_conf:
+            adapter_conf.mode = new_mode
+            adapter_conf.validate_only = (new_mode != "live")
             if new_mode == "live":
-                exec_sec["allow_live_trading"] = True
-            data["execution"] = exec_sec
-            backup_file(target_path)
-            atomic_write(target_path, data, dump_func=yaml.safe_dump)
-        except Exception as e:
-             return ApiEnvelope(data=None, error=f"Failed to persist mode: {e}")
+                adapter_conf.allow_live_trading = True
+
+    # NOTE: Re-implementing generic persistence for mode change:
+    config_dir = get_config_dir()
+    profile_name = ctx.session.profile_name
+    target_path = None
+    if profile_name:
+        profiles_entry = ctx.config.profiles.get(profile_name)
+        if profiles_entry:
+            p_path = Path(profiles_entry.config_path)
+            if not p_path.is_absolute():
+                p_path = config_dir / p_path
+            if p_path.exists():
+                target_path = p_path
+    if not target_path:
+        target_path = config_dir / "config.yaml"
+
+    try:
+        with open(target_path, "r") as f:
+            data = yaml.safe_load(f) or {}
+        exec_sec = data.get("execution", {})
+        exec_sec["mode"] = new_mode
+        exec_sec["validate_only"] = new_mode != "live"
+        if new_mode == "live":
+            exec_sec["allow_live_trading"] = True
+        data["execution"] = exec_sec
+        backup_file(target_path)
+        atomic_write(target_path, data, dump_func=yaml.safe_dump)
+    except Exception as e:
+        return ApiEnvelope(data=None, error=f"Failed to persist mode: {e}")
 
     # Trigger reload
     ctx.reinitialize_event.set()
@@ -955,7 +976,11 @@ async def set_execution_mode(
     )
 
     return ApiEnvelope(
-        data={"mode": new_mode, "reloading": True},
+        data={
+            "mode": new_mode,
+            "validate_only": execution_config.validate_only,
+            "reloading": True,
+        },
         error=None,
     )
 
