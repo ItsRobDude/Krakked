@@ -8,6 +8,7 @@ from typing import Dict, List, Optional
 
 from kraken_bot.config import StrategyConfig
 from kraken_bot.market_data.api import MarketDataAPI
+from kraken_bot.market_data.exceptions import DataStaleError
 from kraken_bot.portfolio.manager import PortfolioService
 from kraken_bot.strategy.base import Strategy, StrategyContext
 from kraken_bot.strategy.models import StrategyIntent
@@ -99,7 +100,11 @@ class DcaRebalanceStrategy(Strategy):
             if target_weight is None:
                 continue
 
-            price = ctx.market_data.get_latest_price(pair)
+            try:
+                price = ctx.market_data.get_latest_price(pair)
+            except DataStaleError:
+                price = None
+
             if price is None:
                 continue
 

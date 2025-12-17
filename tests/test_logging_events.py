@@ -134,6 +134,11 @@ def test_market_data_warning_emits_structured_event(caplog: pytest.LogCaptureFix
 
         def record_drift(self, *_args, **_kwargs): ...
 
+        def record_plan(self, *args, **kwargs): ...
+        def record_plan_execution(self, *args, **kwargs): ...
+        def record_blocked_actions(self, *args, **kwargs): ...
+        def record_error(self, *args, **kwargs): ...
+
     class _Portfolio:
         last_sync_ok = True
 
@@ -168,10 +173,10 @@ def test_market_data_warning_emits_structured_event(caplog: pytest.LogCaptureFix
     records = [
         record
         for record in caplog.records
-        if getattr(record, "event", None) == "market_data_unavailable"
+        if getattr(record, "event", None) == "market_data_degraded"
     ]
 
-    assert records, "Expected a market_data_unavailable log entry"
+    assert records, "Expected a market_data_degraded log entry"
     assert all(record.levelno == logging.WARNING for record in records)
     assert any(getattr(record, "reason", None) == "feed_stale" for record in records)
 

@@ -108,6 +108,7 @@ class SessionStatePayload(BaseModel):
     loop_interval_sec: float
     profile_name: Optional[str]
     ml_enabled: bool
+    emergency_flatten: bool = False
 
 
 class ProfileSummaryPayload(BaseModel):
@@ -145,6 +146,7 @@ def _session_payload(ctx) -> SessionStatePayload:
         loop_interval_sec=session.loop_interval_sec,
         profile_name=session.profile_name,
         ml_enabled=session.ml_enabled,
+        emergency_flatten=getattr(session, "emergency_flatten", False),
     )
 
 

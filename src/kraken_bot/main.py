@@ -14,7 +14,12 @@ import uvicorn
 
 from kraken_bot import APP_VERSION
 from kraken_bot.bootstrap import CredentialBootstrapError, bootstrap
-from kraken_bot.config_loader import get_config_dir, load_config, write_initial_config
+from kraken_bot.config_loader import (
+    dump_runtime_overrides,
+    get_config_dir,
+    load_config,
+    write_initial_config,
+)
 from kraken_bot.execution.oms import ExecutionService
 from kraken_bot.logging_config import (
     configure_logging,
@@ -96,11 +101,80 @@ def _run_loop_iteration(
     metrics: SystemMetrics,
     refresh_metrics_state: Callable[[], None],
     session_active: bool,
+    session: Optional[Any] = None,
 ) -> Tuple[datetime, datetime]:
     """Execute a single scheduling iteration and return updated timestamps."""
 
     updated_portfolio_sync = last_portfolio_sync
     updated_strategy_cycle = last_strategy_cycle
+
+    # 1. Emergency Flatten Priority Loop
+    emergency_flatten = bool(getattr(session, "emergency_flatten", False))
+    if emergency_flatten:
+        logger.warning(
+            "Emergency flatten active; attempting to close all positions",
+            extra=structured_log_extra(event="emergency_flatten_active"),
+        )
+        try:
+            portfolio.sync()
+        except Exception as exc:  # pragma: no cover
+            metrics.record_error(f"Emergency flatten portfolio sync failed: {exc}")
+
+        try:
+            execution_service.cancel_all()
+        except Exception as exc:  # pragma: no cover
+            metrics.record_error(f"Emergency flatten cancel_all failed: {exc}")
+
+        try:
+            execution_service.refresh_open_orders()
+            execution_service.reconcile_orders()
+        except Exception as exc:  # pragma: no cover
+            metrics.record_error(f"Emergency flatten reconcile failed: {exc}")
+
+        positions = []
+        try:
+            positions = portfolio.get_positions()
+        except Exception:  # pragma: no cover
+            positions = []
+
+        open_orders = []
+        try:
+            open_orders = execution_service.get_open_orders()
+        except Exception:  # pragma: no cover
+            open_orders = []
+
+        if positions:
+            plan = strategy_engine.build_emergency_flatten_plan(positions)
+            try:
+                updated_strategy_cycle = now
+                metrics.record_plan(blocked_actions=0)
+                result = execution_service.execute_plan(plan)
+                metrics.record_plan_execution(getattr(result, "errors", []))
+            except Exception as exc:  # pragma: no cover
+                metrics.record_error(f"Emergency flatten execution failed: {exc}")
+            finally:
+                refresh_metrics_state()
+            return updated_portfolio_sync, updated_strategy_cycle
+
+        if not open_orders and session is not None:
+            try:
+                setattr(session, "emergency_flatten", False)
+                if hasattr(strategy_engine, "config") and hasattr(
+                    strategy_engine.config, "session"
+                ):
+                    setattr(strategy_engine.config.session, "emergency_flatten", False)
+                dump_runtime_overrides(
+                    strategy_engine.config, session=session, sections={"session"}
+                )
+                logger.info(
+                    "Emergency flatten cleared (portfolio flat)",
+                    extra=structured_log_extra(event="emergency_flatten_cleared"),
+                )
+            except Exception as exc:  # pragma: no cover
+                metrics.record_error(f"Failed to clear emergency flatten: {exc}")
+            finally:
+                refresh_metrics_state()
+        return updated_portfolio_sync, updated_strategy_cycle
 
     if (now - last_portfolio_sync).total_seconds() >= portfolio_interval:
         try:
@@ -146,12 +220,22 @@ def _run_loop_iteration(
         )
         data_status = None
 
-    market_data_ok = bool(
-        data_status and getattr(data_status, "health", "") == "healthy"
-    )
-    market_data_stale = bool(
-        data_status and getattr(data_status, "health", "") == "stale"
-    )
+    md_health = getattr(data_status, "health", None) if data_status is not None else None
+    market_data_ok = bool(md_health == "healthy")
+    market_data_stale = bool(md_health == "stale")
+    market_data_unavailable = bool(data_status is None or md_health == "unavailable")
+
+    if market_data_stale:
+        logger.warning(
+            "Market data degraded (stale); continuing with healthy pairs only",
+            extra=structured_log_extra(
+                event="market_data_degraded",
+                reason=getattr(data_status, "reason", None),
+                max_staleness=getattr(data_status, "max_staleness", None),
+                stale_pairs=getattr(data_status, "stale_pairs", None),
+            ),
+        )
+
     metrics.update_market_data_status(
         ok=market_data_ok,
         stale=market_data_stale,
@@ -165,11 +249,17 @@ def _run_loop_iteration(
     if drift_status:
         drift_message = None
         if drift_status.drift_flag:
+            diff = (
+                drift_status.expected_position_value_base
+                - drift_status.actual_balance_value_base
+            )
             drift_message = (
-                "Portfolio drift detected: expected position value %.2f vs balances %.2f"
+                "Portfolio drift detected: expected=%.6f balances=%.6f diff=%.6f tolerance=%.6f"
                 % (
                     drift_status.expected_position_value_base,
                     drift_status.actual_balance_value_base,
+                    diff,
+                    drift_status.tolerance_base,
                 )
             )
             logger.warning(
@@ -205,7 +295,7 @@ def _run_loop_iteration(
         if not session_active:
             logger.debug("Skipping strategy cycle: session not active")
             updated_strategy_cycle = now
-        elif not market_data_ok:
+        elif market_data_unavailable:
             reason = (
                 getattr(data_status, "reason", "unknown") if data_status else "unknown"
             )
@@ -228,6 +318,24 @@ def _run_loop_iteration(
         else:
             try:
                 plan = strategy_engine.run_cycle(now)
+                stale_pairs = set(getattr(data_status, "stale_pairs", []) or [])
+                if stale_pairs and getattr(plan, "actions", None):
+                    filtered = [
+                        a
+                        for a in plan.actions
+                        if getattr(a, "pair", None) not in stale_pairs
+                    ]
+                    if len(filtered) != len(plan.actions):
+                        logger.warning(
+                            "Skipping actions for stale pairs",
+                            extra=structured_log_extra(
+                                event="market_data_action_skip",
+                                stale_pairs=sorted(stale_pairs),
+                                skipped_actions=len(plan.actions) - len(filtered),
+                            ),
+                        )
+                        plan.actions = filtered
+
                 blocked_actions = len(
                     [a for a in plan.actions if getattr(a, "blocked", False)]
                 )
@@ -740,6 +848,7 @@ class BotController:
                     metrics=self.context.metrics,
                     refresh_metrics_state=refresh_metrics,
                     session_active=self.context.session.active,
+                    session=self.context.session,
                 )
             else:
                 logger.error(

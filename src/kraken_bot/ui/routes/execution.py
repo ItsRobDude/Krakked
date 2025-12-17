@@ -7,6 +7,7 @@ from typing import List
 
 from fastapi import APIRouter, Request
 
+from kraken_bot.config_loader import dump_runtime_overrides
 from kraken_bot.execution.models import ExecutionResult, LocalOrder
 from kraken_bot.ui.logging import build_request_log_extra
 from kraken_bot.ui.models import ApiEnvelope, ExecutionResultPayload, OpenOrderPayload
@@ -189,6 +190,12 @@ async def flatten_all_positions(
 
         positions = ctx.portfolio.get_positions()
         plan = ctx.strategy_engine.build_emergency_flatten_plan(positions)
+
+        # Set and persist emergency flag so the main loop picks it up and retries if we crash/restart
+        ctx.session.emergency_flatten = True
+        if hasattr(ctx.config, "session"):
+            ctx.config.session.emergency_flatten = True
+        dump_runtime_overrides(ctx.config, session=ctx.session, sections={"session"})
 
         result = ctx.execution_service.execute_plan(plan)
         if pre_warnings:
