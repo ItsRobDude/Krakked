@@ -1,22 +1,116 @@
+from datetime import datetime, timezone
+from unittest.mock import MagicMock
 
 import pytest
-from unittest.mock import MagicMock
-from decimal import Decimal
 
-from kraken_bot.execution.router import build_order_from_plan_action, round_order_size, round_order_price
-from kraken_bot.execution.models import LocalOrder
-from kraken_bot.strategy.models import RiskAdjustedAction, ExecutionPlan
-from kraken_bot.market_data.models import PairMetadata
 from kraken_bot.config import ExecutionConfig
+from kraken_bot.execution.router import build_order_from_plan_action
+from kraken_bot.market_data.models import PairMetadata
+from kraken_bot.strategy.models import ExecutionPlan, RiskAdjustedAction
 
-@pytest.fixture
-def pair_metadata():
-    return PairMetadata(
+
+def test_local_order_preserves_strategy_id_and_userref():
+    pair_metadata = PairMetadata(
         canonical="XBTUSD",
-        rest_symbol="XXBTZUSD",
-        ws_symbol="XBT/USD",
         base="XBT",
         quote="USD",
+        rest_symbol="XBT/USD",
+        ws_symbol="XBT/USD",
+        raw_name="XBTUSD",
+        price_decimals=1,
+        volume_decimals=4,
+        lot_size=0.0001,
+        min_order_size=0.0001,
+        status="online",
+    )
+    action = RiskAdjustedAction(
+        pair="XBTUSD",
+        strategy_id="trend_core",
+        action_type="open",
+        target_base_size=1.0,
+        target_notional_usd=100.0,
+        current_base_size=0.0,
+        reason="test",
+        blocked=False,
+        blocked_reasons=[],
+        risk_limits_snapshot={},
+        strategy_tag="trend_core",
+        userref="42",
+    )
+
+    plan = ExecutionPlan(
+        plan_id="plan_1",
+        generated_at=datetime.now(timezone.utc),
+        actions=[action],
+        metadata={"order_type": "market"},
+    )
+
+    order, warning = build_order_from_plan_action(
+        action, plan, pair_metadata, config=ExecutionConfig()
+    )
+
+    assert warning is None
+    assert order.strategy_id == "trend_core"
+    assert order.userref == 42
+
+
+def test_rounding_and_min_size_enforced():
+    pair_metadata = PairMetadata(
+        canonical="ETHUSD",
+        base="ETH",
+        quote="USD",
+        rest_symbol="ETH/USD",
+        ws_symbol="ETH/USD",
+        raw_name="ETHUSD",
+        price_decimals=2,
+        volume_decimals=5,
+        lot_size=0.00001,
+        min_order_size=0.001,
+        status="online",
+    )
+
+    action = RiskAdjustedAction(
+        pair="ETHUSD",
+        strategy_id="alpha",
+        action_type="close",
+        target_base_size=0.0,
+        target_notional_usd=0.0,
+        current_base_size=0.00095,
+        reason="flatten",
+        blocked=False,
+        blocked_reasons=[],
+        risk_limits_snapshot={},
+        strategy_tag="alpha",
+        userref=None,
+    )
+    plan = ExecutionPlan(
+        plan_id="plan_rounding",
+        generated_at=datetime.now(timezone.utc),
+        actions=[action],
+        metadata={"order_type": "limit", "requested_price": 123.456},
+    )
+
+    with pytest.raises(ValueError):
+        build_order_from_plan_action(action, plan, pair_metadata, ExecutionConfig())
+
+    action.current_base_size = 0.00123456
+    order, warning = build_order_from_plan_action(
+        action, plan, pair_metadata, ExecutionConfig()
+    )
+
+    assert warning is None
+    assert order.requested_base_size == pytest.approx(0.00123)
+    assert order.requested_price == pytest.approx(123.46)
+
+
+def test_risk_reducing_detection():
+    """Test that risk_reducing flag is correctly set on LocalOrder."""
+    pair_metadata = PairMetadata(
+        canonical="XBTUSD",
+        base="XBT",
+        quote="USD",
+        rest_symbol="XXBTZUSD",
+        ws_symbol="XBT/USD",
         raw_name="XXBTZUSD",
         min_order_size=0.0001,
         volume_decimals=8,
@@ -25,16 +119,7 @@ def pair_metadata():
         status="online",
         liquidity_24h_usd=1000000.0
     )
-
-@pytest.fixture
-def exec_config():
-    return ExecutionConfig(
-        mode="paper",
-        default_order_type="limit"
-    )
-
-def test_risk_reducing_detection(pair_metadata, exec_config):
-    """Test that risk_reducing flag is correctly set on LocalOrder."""
+    exec_config = ExecutionConfig(mode="paper", default_order_type="limit")
 
     # Case 1: Reduce (Long -> Less Long)
     action_reduce = RiskAdjustedAction(
@@ -110,8 +195,25 @@ def test_risk_reducing_detection(pair_metadata, exec_config):
     assert order_close is not None
     assert order_close.risk_reducing is True
 
-def test_risk_reducing_open(pair_metadata, exec_config):
+
+def test_risk_reducing_open():
     """Test that opening a new position is NOT risk reducing."""
+    pair_metadata = PairMetadata(
+        canonical="XBTUSD",
+        base="XBT",
+        quote="USD",
+        rest_symbol="XXBTZUSD",
+        ws_symbol="XBT/USD",
+        raw_name="XXBTZUSD",
+        min_order_size=0.0001,
+        volume_decimals=8,
+        price_decimals=1,
+        lot_size=1,
+        status="online",
+        liquidity_24h_usd=1000000.0
+    )
+    exec_config = ExecutionConfig(mode="paper", default_order_type="limit")
+
     action_open = RiskAdjustedAction(
         pair="XBTUSD",
         strategy_id="test",

@@ -191,10 +191,8 @@ async def flatten_all_positions(
     open_orders = ctx.execution_service.get_open_orders()
 
     # Try to sync portfolio immediately so emergency flatten uses the latest on-exchange state
-    sync_ok = False
     try:
         ctx.portfolio.sync()
-        sync_ok = getattr(ctx.portfolio, "last_sync_ok", True)
     except Exception as sync_exc:
         logger.warning(f"Portfolio sync before flatten failed: {sync_exc}")
 

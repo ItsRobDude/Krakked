@@ -143,7 +143,8 @@ def _run_loop_iteration(
         try:
             open_orders = execution_service.get_open_orders()
         except Exception:  # pragma: no cover
-            open_orders = []
+            # Treat as non-empty to block execution by assigning a truthy list
+            open_orders = ["unknown"]  # type: ignore
 
         # Only execute flatten plan if it is safe to do so:
         # 1. cancel_all succeeded

@@ -101,7 +101,7 @@ def _prune_runtime_overrides(
             logger.info(f"Pruned runtime overrides at {overrides_path}: {keys_to_remove}")
 
     except Exception as e:
-        logger.warning(f"Failed to prune runtime overrides at {overrides_path}: {e}")
+        logger.error(f"Failed to prune runtime overrides at {overrides_path}: {e}")
 
 
 @router.get("/runtime")
@@ -259,6 +259,11 @@ async def apply_config(
                 k: v for k, v in config_data.items() if k not in trading_sections
             }
 
+            # Calculate ALL keys being applied (profile OR main) to prune from profile runtime overrides
+            # This ensures that if a user applies a main-config key (like 'ui') while a profile is active,
+            # we still prune 'ui' from the profile's runtime override file if it exists there.
+            all_applied_keys = set(config_data.keys())
+
             if profile_payload:
                 merged_profile_config = deep_merge_dicts(
                     existing_profile_config, profile_payload
@@ -266,15 +271,16 @@ async def apply_config(
                 backup_file(p_path)
                 atomic_write(p_path, merged_profile_config, dump_func=yaml.safe_dump)
 
-                # Prune profile runtime overrides
-                # Remove any keys that we just persisted to the static profile config
+            # Always attempt to prune profile runtime overrides if ANY key was applied
+            # (even if only main payload was present)
+            if profile_payload or main_payload:
                 profile_overrides_path = (
                     config_dir / "profiles" / profile_name / RUNTIME_OVERRIDES_FILENAME
                 )
                 _prune_runtime_overrides(
                     profile_overrides_path,
-                    set(profile_payload.keys()),
-                    preserve_override_keys
+                    all_applied_keys,
+                    preserve_override_keys,
                 )
 
             if main_payload:
