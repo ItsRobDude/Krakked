@@ -205,6 +205,8 @@ def build_order_from_plan_action(
     # Generate deterministic UUID
     local_id = str(uuid5(NAMESPACE_DNS, seed_str))
 
+    risk_reducing = action.action_type in {"reduce", "close"}
+
     order = LocalOrder(
         local_id=local_id,
         plan_id=plan.plan_id,
@@ -215,6 +217,7 @@ def build_order_from_plan_action(
         userref=resolve_userref(action.userref),
         requested_base_size=rounded_size,
         requested_price=rounded_price,
+        risk_reducing=risk_reducing,
     )
 
     return order, None

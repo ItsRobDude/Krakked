@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from unittest.mock import MagicMock, patch
 
 import pytest
 from starlette.testclient import TestClient
@@ -133,17 +134,23 @@ def test_flatten_all_executes_plan(client, exec_context):
     exec_context.execution_service.execute_plan.return_value = ExecutionResult(
         plan_id="flatten_1", started_at=datetime.now(UTC), success=True
     )
+    # Satisfy safety gates
+    exec_context.execution_service.cancel_all.return_value = None
+    exec_context.execution_service.get_open_orders.return_value = []
+    exec_context.portfolio.last_sync_ok = True
 
-    response = client.post("/api/execution/flatten_all")
+    with patch("kraken_bot.ui.routes.execution.dump_runtime_overrides") as mock_dump:
+        response = client.post("/api/execution/flatten_all")
 
-    assert response.status_code == 200
-    payload = response.json()
-    exec_context.strategy_engine.build_emergency_flatten_plan.assert_called_once_with(
-        exec_context.portfolio.get_positions.return_value
-    )
-    exec_context.execution_service.execute_plan.assert_called_once_with(plan)
-    assert payload["error"] is None
-    assert payload["data"]["plan_id"].startswith("flatten_")
+        assert response.status_code == 200
+        payload = response.json()
+        exec_context.strategy_engine.build_emergency_flatten_plan.assert_called_once_with(
+            exec_context.portfolio.get_positions.return_value
+        )
+        exec_context.execution_service.execute_plan.assert_called_once_with(plan)
+        assert payload["error"] is None
+        assert payload["data"]["plan_id"].startswith("flatten_")
+        mock_dump.assert_called_once()
 
 
 @pytest.mark.parametrize("ui_read_only", [True])
@@ -153,3 +160,47 @@ def test_flatten_all_blocked(client, exec_context):
     assert response.status_code == 200
     assert response.json() == {"data": None, "error": "UI is in read-only mode"}
     exec_context.execution_service.execute_plan.assert_not_called()
+
+
+def test_flatten_all_fails_if_cancel_fails(client, exec_context):
+    """Test that flatten execution is blocked if cancel_all raises exception."""
+    exec_context.execution_service.cancel_all.side_effect = Exception("Cancel Failed")
+    exec_context.execution_service.get_open_orders.return_value = []  # Even if empty list returned later
+
+    # Mock dump_runtime_overrides to prevent file I/O
+    with patch("kraken_bot.ui.routes.execution.dump_runtime_overrides") as mock_dump:
+        response = client.post("/api/execution/flatten_all")
+        assert response.status_code == 200
+        data = response.json()
+
+        assert data["error"] is not None
+        assert "Flatten armed but waiting" in data["error"]
+        assert "cancel_all failed" in data["error"]
+
+        # Verify execute_plan was NOT called
+        exec_context.execution_service.execute_plan.assert_not_called()
+        # Verify emergency flag was set
+        assert exec_context.session.emergency_flatten is True
+        mock_dump.assert_called_once()
+
+
+def test_flatten_all_fails_if_open_orders_remain(client, exec_context):
+    """Test that flatten execution is blocked if open orders remain."""
+    exec_context.execution_service.cancel_all.return_value = None  # Success
+    # Mock open orders remaining
+    exec_context.execution_service.get_open_orders.return_value = [
+        _sample_order("1")
+    ]
+
+    with patch("kraken_bot.ui.routes.execution.dump_runtime_overrides") as mock_dump:
+        response = client.post("/api/execution/flatten_all")
+        assert response.status_code == 200
+        data = response.json()
+
+        assert data["error"] is not None
+        assert "waiting for open orders" in data["error"]
+
+        # Verify execute_plan was NOT called
+        exec_context.execution_service.execute_plan.assert_not_called()
+        assert exec_context.session.emergency_flatten is True
+        mock_dump.assert_called_once()

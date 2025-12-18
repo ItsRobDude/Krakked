@@ -8,7 +8,7 @@ import sqlite3
 import threading
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable, Optional, Tuple
+from typing import Any, Callable, List, Optional, Tuple
 
 import uvicorn
 
@@ -120,9 +120,11 @@ def _run_loop_iteration(
         except Exception as exc:  # pragma: no cover
             metrics.record_error(f"Emergency flatten portfolio sync failed: {exc}")
 
+        cancel_ok = True
         try:
             execution_service.cancel_all()
         except Exception as exc:  # pragma: no cover
+            cancel_ok = False
             metrics.record_error(f"Emergency flatten cancel_all failed: {exc}")
 
         try:
@@ -137,13 +139,19 @@ def _run_loop_iteration(
         except Exception:  # pragma: no cover
             positions = []
 
-        open_orders = []
+        open_orders: Optional[List[LocalOrder]] = None
         try:
             open_orders = execution_service.get_open_orders()
         except Exception:  # pragma: no cover
-            open_orders = []
+            open_orders = None
 
-        if positions:
+        open_orders_count = None if open_orders is None else len(open_orders)
+
+        # Only execute flatten plan if it is safe to do so:
+        # 1. cancel_all succeeded
+        # 2. Open orders were successfully fetched AND are empty
+        # 3. Portfolio sync was successful (last_sync_ok)
+        if cancel_ok and open_orders is not None and not open_orders and portfolio.last_sync_ok and positions:
             plan = strategy_engine.build_emergency_flatten_plan(positions)
             try:
                 updated_strategy_cycle = now
@@ -155,8 +163,21 @@ def _run_loop_iteration(
             finally:
                 refresh_metrics_state()
             return updated_portfolio_sync, updated_strategy_cycle
+        elif positions:
+            # We have positions but unsafe to flatten (open orders or cancel failed)
+            logger.warning(
+                "Emergency flatten deferred: waiting for clear state",
+                extra=structured_log_extra(
+                    event="emergency_flatten_deferred",
+                    cancel_ok=cancel_ok,
+                    open_orders=open_orders_count,
+                    last_sync_ok=portfolio.last_sync_ok,
+                ),
+            )
+            refresh_metrics_state()
+            return updated_portfolio_sync, updated_strategy_cycle
 
-        if not open_orders and session is not None:
+        if open_orders is not None and not open_orders and session is not None:
             try:
                 setattr(session, "emergency_flatten", False)
                 if hasattr(strategy_engine, "config") and hasattr(
@@ -344,7 +365,7 @@ def _run_loop_iteration(
                 metrics.record_plan(blocked_actions)
                 updated_strategy_cycle = now
                 # Explicitly type result for mypy
-                from kraken_bot.execution.models import ExecutionResult
+                from kraken_bot.execution.models import ExecutionResult, LocalOrder
 
                 result: Optional[ExecutionResult] = None
                 if plan.actions:
