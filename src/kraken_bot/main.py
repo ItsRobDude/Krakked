@@ -145,7 +145,7 @@ def _run_loop_iteration(
         except Exception:  # pragma: no cover
             open_orders = None
 
-        open_orders_count = len(open_orders) if open_orders is not None else None
+        open_orders_count = None if open_orders is None else len(open_orders)
 
         # Only execute flatten plan if it is safe to do so:
         # 1. cancel_all succeeded
