@@ -145,6 +145,8 @@ def _run_loop_iteration(
         except Exception:  # pragma: no cover
             open_orders = None
 
+        open_orders_count = len(open_orders) if open_orders is not None else None
+
         # Only execute flatten plan if it is safe to do so:
         # 1. cancel_all succeeded
         # 2. Open orders were successfully fetched AND are empty
@@ -168,14 +170,14 @@ def _run_loop_iteration(
                 extra=structured_log_extra(
                     event="emergency_flatten_deferred",
                     cancel_ok=cancel_ok,
-                    open_orders=len(open_orders),
+                    open_orders=open_orders_count,
                     last_sync_ok=portfolio.last_sync_ok,
                 ),
             )
             refresh_metrics_state()
             return updated_portfolio_sync, updated_strategy_cycle
 
-        if not open_orders and session is not None:
+        if open_orders is not None and not open_orders and session is not None:
             try:
                 setattr(session, "emergency_flatten", False)
                 if hasattr(strategy_engine, "config") and hasattr(

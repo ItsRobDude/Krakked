@@ -188,12 +188,12 @@ async def flatten_all_positions(
     except Exception as e:
         logger.warning(f"Flatten-all preflight refresh/reconcile failed: {e}")
 
+    open_orders: List[LocalOrder] | None = None
     try:
         open_orders = ctx.execution_service.get_open_orders()
     except Exception as e:
         logger.warning(f"Failed to get open orders: {e}")
-        # Treat as non-empty list to block execution
-        open_orders = ["unknown"]  # type: ignore
+        open_orders = None
 
     # Try to sync portfolio immediately so emergency flatten uses the latest on-exchange state
     sync_ok = False
@@ -220,6 +220,8 @@ async def flatten_all_positions(
             msg += " (cancel_all failed)"
         if open_orders:
             msg += f" ({len(open_orders)} open orders remaining)"
+        if not sync_ok:
+            msg += " (portfolio sync failed)"
 
         logger.warning(
             msg,
