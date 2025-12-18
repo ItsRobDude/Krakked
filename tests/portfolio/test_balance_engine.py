@@ -192,32 +192,36 @@ def test_balance_engine_quantization():
     # Float representation should be clean
     assert str(balance.total) == "0.3"
 
+
 def test_balance_engine_negative_zero_clamp():
     """Test that tiny negative residuals are clamped to zero."""
     engine = BalanceEngine()
 
     # Initialize with 1.0
-    engine.apply_entry(LedgerEntry(
+    entry1 = LedgerEntry(
         id="1", refid="r1", time=100, type="deposit",
         asset="XBT", amount=Decimal("1.0"), fee=Decimal("0.0"), balance=None,
         subtype="", aclass="currency", misc="", raw={}
-    ))
+    )
+    engine.apply_entry(entry1)
 
     # Remove 1.0 + tiny bit due to potential drift source (simulated)
     # Actually, Decimal handles this well, but let's simulate a case where a very small negative remains
     # e.g. selling 1.000000001 when you have 1.0
 
     # Apply a withdrawal that leaves -1e-9
-    engine.apply_entry(LedgerEntry(
+    entry2 = LedgerEntry(
         id="2", refid="r2", time=101, type="withdrawal",
         asset="XBT", amount=Decimal("-1.000000001"), fee=Decimal("0.0"), balance=None,
         subtype="", aclass="currency", misc="", raw={}
-    ))
+    )
+    engine.apply_entry(entry2)
 
     balance = engine.balances["XBT"]
     # Should be clamped to 0.0 because -1e-9 is smaller than 1e-8 quantum
     assert balance.total == 0.0
     assert balance.free == 0.0
+
 
 def test_balance_engine_quantization_accumulated_drift():
     """Test repeated small operations don't drift."""

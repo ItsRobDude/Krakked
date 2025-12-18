@@ -8,7 +8,7 @@ import sqlite3
 import threading
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable, Optional, Tuple
+from typing import Any, Callable, List, Optional, Tuple
 
 import uvicorn
 
@@ -139,18 +139,17 @@ def _run_loop_iteration(
         except Exception:  # pragma: no cover
             positions = []
 
-        open_orders = []
+        open_orders: Optional[List[LocalOrder]] = None
         try:
             open_orders = execution_service.get_open_orders()
         except Exception:  # pragma: no cover
-            # Treat as non-empty to block execution by assigning a truthy list
-            open_orders = ["unknown"]  # type: ignore
+            open_orders = None
 
         # Only execute flatten plan if it is safe to do so:
         # 1. cancel_all succeeded
-        # 2. No open orders remaining
+        # 2. Open orders were successfully fetched AND are empty
         # 3. Portfolio sync was successful (last_sync_ok)
-        if cancel_ok and not open_orders and portfolio.last_sync_ok and positions:
+        if cancel_ok and open_orders is not None and not open_orders and portfolio.last_sync_ok and positions:
             plan = strategy_engine.build_emergency_flatten_plan(positions)
             try:
                 updated_strategy_cycle = now
@@ -364,7 +363,7 @@ def _run_loop_iteration(
                 metrics.record_plan(blocked_actions)
                 updated_strategy_cycle = now
                 # Explicitly type result for mypy
-                from kraken_bot.execution.models import ExecutionResult
+                from kraken_bot.execution.models import ExecutionResult, LocalOrder
 
                 result: Optional[ExecutionResult] = None
                 if plan.actions:

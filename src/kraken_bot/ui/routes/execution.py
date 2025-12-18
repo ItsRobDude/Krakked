@@ -188,24 +188,27 @@ async def flatten_all_positions(
     except Exception as e:
         logger.warning(f"Flatten-all preflight refresh/reconcile failed: {e}")
 
-    open_orders = ctx.execution_service.get_open_orders()
+    try:
+        open_orders = ctx.execution_service.get_open_orders()
+    except Exception as e:
+        logger.warning(f"Failed to get open orders: {e}")
+        # Treat as non-empty list to block execution
+        open_orders = ["unknown"]  # type: ignore
 
     # Try to sync portfolio immediately so emergency flatten uses the latest on-exchange state
+    sync_ok = False
     try:
         ctx.portfolio.sync()
+        sync_ok = getattr(ctx.portfolio, "last_sync_ok", True)
     except Exception as sync_exc:
         logger.warning(f"Portfolio sync before flatten failed: {sync_exc}")
 
     # Check safe conditions:
     # 1. cancel_all must have succeeded
-    # 2. open_orders must be empty (confirmed by refresh)
+    # 2. open_orders must be successfully fetched AND empty
     # 3. portfolio sync must have succeeded (to avoid stale position data)
 
-    # We allow sync failure to potentially be bypassed if needed in extreme cases?
-    # But prompt says "Flatten armed but waiting for open orders to clear"
-    # The requirement is: "Flatten armed but waiting for open orders to clear; retry shortly" if cancel failed OR open orders remain.
-
-    if not cancel_ok or open_orders:
+    if not cancel_ok or open_orders is None or open_orders or not sync_ok:
         # Arm emergency mode
         ctx.session.emergency_flatten = True
         if hasattr(ctx.config, "session"):
