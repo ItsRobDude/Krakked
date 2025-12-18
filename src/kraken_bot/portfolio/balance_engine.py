@@ -33,6 +33,9 @@ class BalanceEngine:
         return self.balances[asset]
 
     def apply_entry(self, e: LedgerEntry):
+        # Using 1e-8 as the standard quantization quantum (Kraken standard)
+        QUANTIZATION = Decimal("1e-8")
+
         bal = self._get_or_create_balance(e.asset)
 
         # Convert current float balance to Decimal for calculation
@@ -42,10 +45,15 @@ class BalanceEngine:
         # Kraken invariant: new_balance = old_balance + amount - fee
         computed_new = current_total + e.amount - e.fee
 
+        # Quantize computed_new to prevent float drift artifacts
+        computed_new = computed_new.quantize(QUANTIZATION)
+        if abs(computed_new) < QUANTIZATION:
+            computed_new = Decimal("0.0")
+
         # Basic sanity check if Kraken provides the resulting balance
         if e.balance is not None:
             # Tolerance check (e.g. 1e-8)
-            if abs(computed_new - e.balance) > Decimal("0.00000001"):
+            if abs(computed_new - e.balance) > QUANTIZATION:
                 logger.warning(
                     "Balance mismatch during replay",
                     extra=structured_log_extra(
@@ -63,6 +71,11 @@ class BalanceEngine:
         # Calculate new free balance respecting reserved amount
         # free = max(total - reserved, 0)
         computed_free = max(computed_new - current_reserved, Decimal("0.0"))
+
+        # Quantize free balance too
+        computed_free = computed_free.quantize(QUANTIZATION)
+        if abs(computed_free) < QUANTIZATION:
+            computed_free = Decimal("0.0")
 
         bal.total = float(computed_new)
         bal.free = float(computed_free)

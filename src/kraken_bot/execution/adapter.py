@@ -147,22 +147,23 @@ class KrakenExecutionAdapter:
             payload.get("price") or latest_price or order.requested_price
         )
 
-        if price_for_notional is None and self.config.min_order_notional_usd > 0:
-            order.status = "rejected"
-            order.last_error = "Unable to verify minimum notional: price unavailable"
-            logger.error(
-                order.last_error,
-                extra=structured_log_extra(
-                    event="order_rejected_missing_price",
-                    plan_id=order.plan_id,
-                    strategy_id=order.strategy_id,
-                    pair=order.pair,
-                    local_order_id=order.local_id,
-                ),
-            )
-            return order
+        # Notional checks: Only enforce if NOT risk reducing
+        if self.config.min_order_notional_usd > 0 and not order.risk_reducing:
+            if price_for_notional is None:
+                order.status = "rejected"
+                order.last_error = "Unable to verify minimum notional: price unavailable"
+                logger.error(
+                    order.last_error,
+                    extra=structured_log_extra(
+                        event="order_rejected_missing_price",
+                        plan_id=order.plan_id,
+                        strategy_id=order.strategy_id,
+                        pair=order.pair,
+                        local_order_id=order.local_id,
+                    ),
+                )
+                return order
 
-        if price_for_notional is not None:
             notional = float(payload["volume"]) * float(price_for_notional)
             if notional < self.config.min_order_notional_usd:
                 order.status = "rejected"
@@ -473,22 +474,23 @@ class DryRunExecutionAdapter:
             payload.get("price") or latest_price or order.requested_price
         )
 
-        if price_for_notional is None and self.config.min_order_notional_usd > 0:
-            order.status = "rejected"
-            order.last_error = "Unable to verify minimum notional: price unavailable"
-            logger.error(
-                order.last_error,
-                extra=structured_log_extra(
-                    event="order_rejected_missing_price",
-                    plan_id=order.plan_id,
-                    strategy_id=order.strategy_id,
-                    pair=order.pair,
-                    local_order_id=order.local_id,
-                ),
-            )
-            return order
+        # Notional checks: Only enforce if NOT risk reducing
+        if self.config.min_order_notional_usd > 0 and not order.risk_reducing:
+            if price_for_notional is None:
+                order.status = "rejected"
+                order.last_error = "Unable to verify minimum notional: price unavailable"
+                logger.error(
+                    order.last_error,
+                    extra=structured_log_extra(
+                        event="order_rejected_missing_price",
+                        plan_id=order.plan_id,
+                        strategy_id=order.strategy_id,
+                        pair=order.pair,
+                        local_order_id=order.local_id,
+                    ),
+                )
+                return order
 
-        if price_for_notional is not None:
             notional = float(payload["volume"]) * float(price_for_notional)
             if notional < self.config.min_order_notional_usd:
                 order.status = "rejected"

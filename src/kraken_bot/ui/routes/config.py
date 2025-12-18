@@ -14,6 +14,8 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from kraken_bot.config import get_config_dir
+from kraken_bot.config_loader import RUNTIME_OVERRIDES_FILENAME
+from kraken_bot.market_data.api import validate_pairs_with_client
 from kraken_bot.ui.logging import build_request_log_extra
 from kraken_bot.ui.models import ApiEnvelope
 from kraken_bot.utils.io import atomic_write, backup_file, deep_merge_dicts
@@ -54,21 +56,7 @@ def _validate_universe_pairs(pairs: List[str], ctx) -> List[str]:
     # Fallback to manual check if market_data not ready but client is
     if ctx.client:
         try:
-            # Duplicate the simple check for safety if market_data service is down.
-            resp = ctx.client.get_public("AssetPairs")
-            known_pairs = resp.get("result", resp) if resp else {}
-            known_keys = set(known_pairs.keys())
-            known_altnames = {
-                v.get("altname") for v in known_pairs.values() if isinstance(v, dict)
-            }
-
-            invalid = []
-            for pair in pairs:
-                if pair not in known_keys and pair not in known_altnames:
-                    slashless = pair.replace("/", "")
-                    if slashless not in known_keys and slashless not in known_altnames:
-                        invalid.append(pair)
-            return invalid
+            return validate_pairs_with_client(ctx.client, pairs)
         except Exception as e:
             logger.error(f"Error manually validating pairs: {e}")
             raise HTTPException(
@@ -80,6 +68,40 @@ def _validate_universe_pairs(pairs: List[str], ctx) -> List[str]:
     raise HTTPException(
         status_code=503, detail="Universe validation unavailable (no connection)"
     )
+
+
+def _prune_runtime_overrides(
+    overrides_path: Path, payload_keys: set[str], preserve_keys: set[str]
+) -> None:
+    """
+    Load runtime overrides from disk, remove keys present in payload_keys
+    (except those in preserve_keys), and save back. Delete file if empty.
+    """
+    if not overrides_path.exists():
+        return
+
+    try:
+        with open(overrides_path, "r") as f:
+            overrides = yaml.safe_load(f) or {}
+
+        original_keys = set(overrides.keys())
+        keys_to_remove = (original_keys & payload_keys) - preserve_keys
+
+        if not keys_to_remove:
+            return
+
+        for k in keys_to_remove:
+            overrides.pop(k, None)
+
+        if not overrides:
+            overrides_path.unlink()
+            logger.info(f"Cleared runtime overrides at {overrides_path}")
+        else:
+            atomic_write(overrides_path, overrides, dump_func=yaml.safe_dump)
+            logger.info(f"Pruned runtime overrides at {overrides_path}: {keys_to_remove}")
+
+    except Exception as e:
+        logger.warning(f"Failed to prune runtime overrides at {overrides_path}: {e}")
 
 
 @router.get("/runtime")
@@ -125,10 +147,16 @@ async def apply_config(
 
     config_data = payload.config
 
+    # Strip restricted sections that should never be modified via apply
+    # session: stateful, managed by system endpoints
+    # profiles: registry, managed by profiles endpoints
+    config_data.pop("session", None)
+    config_data.pop("profiles", None)
+
     # 1. Security Check: Execution Mode Guards
-    # Block any attempt to set restricted execution keys via generic config apply.
+    # Block any attempt to CHANGE restricted execution keys via generic config apply.
     # Users must use the dedicated /api/system/mode endpoint for mode changes.
-    execution_payload = config_data.get("execution", {})
+    execution_payload = config_data.get("execution")
     restricted_keys = {
         "mode",
         "allow_live_trading",
@@ -136,22 +164,26 @@ async def apply_config(
         "paper_tests_completed",
     }
 
-    # Check if any restricted key is present in the payload (even if value is same)
-    # Ideally we only block CHANGES, but blocking presence enforces the "use system endpoint" rule strictly.
-    # However, a "save all" UI might send the whole config back.
-    # If the UI sends back existing values, we might allow it?
-    # BUT, to be safe and force usage of the guard, we should block attempts to change them TO dangerous values
-    # OR block them entirely if they differ from current config.
-    # The safest "fail closed" approach is to forbid setting them here at all.
-    # The UI should strip these keys or use the mode endpoint.
+    if execution_payload:
+        current_execution = asdict(ctx.config.execution)
+        keys_to_remove = []
+        for key in restricted_keys:
+            if key in execution_payload:
+                new_val = execution_payload[key]
+                cur_val = current_execution.get(key)
+                if new_val != cur_val:
+                    return ApiEnvelope(
+                        data=None,
+                        error=f"Execution '{key}' cannot be modified via config apply. Use /api/system/mode.",
+                    )
+                # If same value, safe to ignore/strip
+                keys_to_remove.append(key)
 
-    # Let's inspect what is being set.
-    for key in restricted_keys:
-        if key in execution_payload:
-            return ApiEnvelope(
-                data=None,
-                error=f"Execution '{key}' cannot be modified via config apply. Use /api/system/mode.",
-            )
+        for k in keys_to_remove:
+            execution_payload.pop(k)
+
+        if not execution_payload:
+            config_data.pop("execution")
 
     # 2. Validation
     new_universe = config_data.get("universe", {})
@@ -181,10 +213,10 @@ async def apply_config(
     profile_name = ctx.session.profile_name
 
     try:
-        # 2. Determine target file(s) and Load existing content for Deep Merge
+        # 3. Determine target file(s) and Load existing content for Deep Merge
         main_config_path = config_dir / "config.yaml"
 
-        trading_sections = [
+        trading_sections = {
             "region",
             "universe",
             "market_data",
@@ -192,11 +224,13 @@ async def apply_config(
             "execution",
             "risk",
             "strategies",
-        ]
+        }
 
-        # If profile active: merge trading sections into profile config, rest into main config (if applicable)
-        # But wait, applying config usually sends the WHOLE merged view or a partial view.
-        # Deep merge handles partial updates.
+        # Keys present in the cleaned payload (used for pruning overrides)
+        payload_keys = set(config_data.keys())
+
+        # Sections always preserved in runtime overrides (never pruned by config apply)
+        preserve_override_keys = {"session"}
 
         if profile_name:
             profiles_entry = ctx.config.profiles.get(profile_name)
@@ -217,9 +251,12 @@ async def apply_config(
                 with open(p_path, "r") as f:
                     existing_profile_config = yaml.safe_load(f) or {}
 
-            # Split payload: trading sections for profile
+            # Split payload: trading sections for profile, others for main
             profile_payload = {
                 k: v for k, v in config_data.items() if k in trading_sections
+            }
+            main_payload = {
+                k: v for k, v in config_data.items() if k not in trading_sections
             }
 
             if profile_payload:
@@ -229,23 +266,35 @@ async def apply_config(
                 backup_file(p_path)
                 atomic_write(p_path, merged_profile_config, dump_func=yaml.safe_dump)
 
-            # Fix Split-Brain: If we just wrote to the profile config, we must ensure
-            # stale runtime overrides don't clobber it on next load.
-            # Best way is to delete the runtime override file for this profile.
-            # The next 'dump_runtime_overrides' (if any) will recreate it with fresh state.
-            from kraken_bot.config_loader import RUNTIME_OVERRIDES_FILENAME
+                # Prune profile runtime overrides
+                # Remove any keys that we just persisted to the static profile config
+                profile_overrides_path = (
+                    config_dir / "profiles" / profile_name / RUNTIME_OVERRIDES_FILENAME
+                )
+                _prune_runtime_overrides(
+                    profile_overrides_path,
+                    set(profile_payload.keys()),
+                    preserve_override_keys
+                )
 
-            runtime_overrides_path = (
-                config_dir / "profiles" / profile_name / RUNTIME_OVERRIDES_FILENAME
-            )
-            if runtime_overrides_path.exists():
-                try:
-                    runtime_overrides_path.unlink()
-                    logger.info(
-                        f"Cleared stale runtime overrides for profile {profile_name}"
-                    )
-                except Exception as e:
-                    logger.warning(f"Failed to clear runtime overrides: {e}")
+            if main_payload:
+                existing_main_config_for_split: Dict[str, Any] = {}
+                if main_config_path.exists():
+                    with open(main_config_path, "r") as f:
+                        existing_main_config_for_split = yaml.safe_load(f) or {}
+
+                merged_main_config = deep_merge_dicts(existing_main_config_for_split, main_payload)
+                backup_file(main_config_path)
+                atomic_write(main_config_path, merged_main_config, dump_func=yaml.safe_dump)
+
+                # Prune main runtime overrides
+                # Remove any keys that we just persisted to the static main config
+                main_overrides_path = config_dir / RUNTIME_OVERRIDES_FILENAME
+                _prune_runtime_overrides(
+                    main_overrides_path,
+                    set(main_payload.keys()),
+                    preserve_override_keys
+                )
 
         else:
             # No profile - everything to main config
@@ -258,7 +307,16 @@ async def apply_config(
             backup_file(main_config_path)
             atomic_write(main_config_path, merged_main_config, dump_func=yaml.safe_dump)
 
-        # 3. Trigger Reload
+            # Prune main runtime overrides
+            # Remove any keys that we just persisted to the static main config
+            main_overrides_path = config_dir / RUNTIME_OVERRIDES_FILENAME
+            _prune_runtime_overrides(
+                main_overrides_path,
+                payload_keys,
+                preserve_override_keys
+            )
+
+        # 4. Trigger Reload
         ctx.reinitialize_event.set()
 
         logger.info(

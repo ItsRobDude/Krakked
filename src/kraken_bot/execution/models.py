@@ -23,6 +23,7 @@ class LocalOrder:
     updated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     cumulative_base_filled: float = 0.0
     avg_fill_price: Optional[float] = None
+    risk_reducing: bool = False
     last_error: Optional[str] = None
     raw_request: Dict[str, Any] = field(default_factory=dict)
     raw_response: Optional[Dict[str, Any]] = None

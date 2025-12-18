@@ -400,9 +400,14 @@ class ExecutionService:
                 continue
 
             latest_price: Optional[float] = None
+            min_notional = getattr(adapter_config, "min_order_notional_usd", 0)
+
+            # We only strictly require latest_price if min_order_notional > 0 AND the order is NOT risk reducing.
+            # If risk reducing, we let it through without a price (adapter will skip the notional check).
             if (
                 order.requested_price is None
-                and getattr(adapter_config, "min_order_notional_usd", 0) > 0
+                and min_notional > 0
+                and not order.risk_reducing
             ):
                 try:
                     latest_price = self.market_data.get_latest_price(order.pair)

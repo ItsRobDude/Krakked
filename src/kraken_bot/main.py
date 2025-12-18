@@ -120,9 +120,11 @@ def _run_loop_iteration(
         except Exception as exc:  # pragma: no cover
             metrics.record_error(f"Emergency flatten portfolio sync failed: {exc}")
 
+        cancel_ok = True
         try:
             execution_service.cancel_all()
         except Exception as exc:  # pragma: no cover
+            cancel_ok = False
             metrics.record_error(f"Emergency flatten cancel_all failed: {exc}")
 
         try:
@@ -143,7 +145,11 @@ def _run_loop_iteration(
         except Exception:  # pragma: no cover
             open_orders = []
 
-        if positions:
+        # Only execute flatten plan if it is safe to do so:
+        # 1. cancel_all succeeded
+        # 2. No open orders remaining
+        # 3. Portfolio sync was successful (last_sync_ok)
+        if cancel_ok and not open_orders and portfolio.last_sync_ok and positions:
             plan = strategy_engine.build_emergency_flatten_plan(positions)
             try:
                 updated_strategy_cycle = now
@@ -154,6 +160,19 @@ def _run_loop_iteration(
                 metrics.record_error(f"Emergency flatten execution failed: {exc}")
             finally:
                 refresh_metrics_state()
+            return updated_portfolio_sync, updated_strategy_cycle
+        elif positions:
+            # We have positions but unsafe to flatten (open orders or cancel failed)
+            logger.warning(
+                "Emergency flatten deferred: waiting for clear state",
+                extra=structured_log_extra(
+                    event="emergency_flatten_deferred",
+                    cancel_ok=cancel_ok,
+                    open_orders=len(open_orders),
+                    last_sync_ok=portfolio.last_sync_ok,
+                ),
+            )
+            refresh_metrics_state()
             return updated_portfolio_sync, updated_strategy_cycle
 
         if not open_orders and session is not None:
