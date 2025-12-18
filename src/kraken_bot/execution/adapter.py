@@ -123,15 +123,39 @@ class KrakenExecutionAdapter:
 
         assert self.client is not None
 
+        # 1. Validate submission constraints (min volume, notional, safety guards)
+        rejection_reason = self._validate_submission_constraints(
+            order, payload, pair_metadata, latest_price
+        )
+        if rejection_reason:
+            order.status = "rejected"
+            order.last_error = rejection_reason
+            return order
+
+        # 2. Refresh dead man switch if needed
+        self._refresh_dead_man_switch()
+
+        # 3. Submit with retries
+        return self._execute_submission_loop(order, payload)
+
+    def _validate_submission_constraints(
+        self,
+        order: LocalOrder,
+        payload: Dict[str, Any],
+        pair_metadata: PairMetadata,
+        latest_price: Optional[float],
+    ) -> Optional[str]:
+        """Check all order constraints. Returns error message if rejected, else None."""
+
+        # A. Min Volume Check
         rounded_volume = float(payload["volume"])
         if rounded_volume < pair_metadata.min_order_size:
-            order.status = "rejected"
-            order.last_error = (
+            reason = (
                 f"Order volume {rounded_volume} below minimum "
                 f"{pair_metadata.min_order_size} for {pair_metadata.canonical}"
             )
             logger.error(
-                order.last_error,
+                reason,
                 extra=structured_log_extra(
                     event="order_rejected_min_volume",
                     plan_id=order.plan_id,
@@ -141,17 +165,17 @@ class KrakenExecutionAdapter:
                     volume=rounded_volume,
                 ),
             )
-            return order
+            return reason
 
+        # B. Min Notional Check
         price_for_notional = (
             payload.get("price") or latest_price or order.requested_price
         )
 
         if price_for_notional is None and self.config.min_order_notional_usd > 0:
-            order.status = "rejected"
-            order.last_error = "Unable to verify minimum notional: price unavailable"
+            reason = "Unable to verify minimum notional: price unavailable"
             logger.error(
-                order.last_error,
+                reason,
                 extra=structured_log_extra(
                     event="order_rejected_missing_price",
                     plan_id=order.plan_id,
@@ -160,15 +184,14 @@ class KrakenExecutionAdapter:
                     local_order_id=order.local_id,
                 ),
             )
-            return order
+            return reason
 
         if price_for_notional is not None:
             notional = float(payload["volume"]) * float(price_for_notional)
             if notional < self.config.min_order_notional_usd:
-                order.status = "rejected"
-                order.last_error = f"Order notional ${notional:.2f} below minimum ${self.config.min_order_notional_usd:.2f}"
+                reason = f"Order notional ${notional:.2f} below minimum ${self.config.min_order_notional_usd:.2f}"
                 logger.error(
-                    order.last_error,
+                    reason,
                     extra=structured_log_extra(
                         event="order_rejected_min_notional",
                         plan_id=order.plan_id,
@@ -178,8 +201,9 @@ class KrakenExecutionAdapter:
                         notional=notional,
                     ),
                 )
-                return order
+                return reason
 
+        # C. Live Trading Guards
         should_validate = payload.get("validate") == 1
         live_trading_allowed = (
             self.config.mode == "live"
@@ -190,10 +214,9 @@ class KrakenExecutionAdapter:
         if live_trading_allowed and not getattr(
             self.config, "paper_tests_completed", False
         ):
-            order.status = "rejected"
-            order.last_error = "Live trading blocked: paper_tests_completed is False"
+            reason = "Live trading blocked: paper_tests_completed is False"
             logger.error(
-                order.last_error,
+                reason,
                 extra=structured_log_extra(
                     event="order_rejected_paper_tests_incomplete",
                     plan_id=order.plan_id,
@@ -202,59 +225,12 @@ class KrakenExecutionAdapter:
                     local_order_id=order.local_id,
                 ),
             )
-            return order
-
-        if self.config.dead_man_switch_seconds > 0:
-            if live_trading_allowed:
-                if hasattr(self.client, "cancel_all_orders_after"):
-                    try:
-                        self.client.cancel_all_orders_after(
-                            self.config.dead_man_switch_seconds
-                        )
-                        logger.info(
-                            "Dead man switch heartbeat set",
-                            extra=structured_log_extra(
-                                event="dead_man_switch_set",
-                                timeout_seconds=self.config.dead_man_switch_seconds,
-                            ),
-                        )
-                    except (
-                        Exception
-                    ) as exc:  # pragma: no cover - passthrough for client errors
-                        logger.warning(
-                            "Failed to refresh dead man switch heartbeat",
-                            extra=structured_log_extra(
-                                event="dead_man_switch_error",
-                                timeout_seconds=self.config.dead_man_switch_seconds,
-                                error=str(exc),
-                            ),
-                        )
-                else:
-                    logger.warning(
-                        "Dead man switch configured but client does not support cancel_all_orders_after",
-                        extra=structured_log_extra(
-                            event="dead_man_switch_unavailable",
-                            timeout_seconds=self.config.dead_man_switch_seconds,
-                        ),
-                    )
-            else:
-                logger.info(
-                    "Dead man switch configured but live trading is disabled; skipping",
-                    extra=structured_log_extra(
-                        event="dead_man_switch_skipped",
-                        mode=self.config.mode,
-                        validate_only=self.config.validate_only,
-                        allow_live_trading=getattr(
-                            self.config, "allow_live_trading", False
-                        ),
-                    ),
-                )
+            return reason
 
         if not should_validate and not live_trading_allowed:
-            order.status = "rejected"
-            order.last_error = "Live trading disabled by configuration"
+            reason = "Live trading disabled by configuration"
             logger.error(
-                order.last_error,
+                reason,
                 extra=structured_log_extra(
                     event="order_rejected_live_guard",
                     plan_id=order.plan_id,
@@ -264,10 +240,70 @@ class KrakenExecutionAdapter:
                     mode=self.config.mode,
                 ),
             )
-            return order
+            return reason
 
+        return None
+
+    def _refresh_dead_man_switch(self) -> None:
+        """Send a heartbeat to Kraken if dead man switch is active."""
+        if self.config.dead_man_switch_seconds <= 0:
+            return
+
+        live_trading_allowed = (
+            self.config.mode == "live"
+            and not self.config.validate_only
+            and getattr(self.config, "allow_live_trading", False)
+        )
+
+        if not live_trading_allowed:
+            logger.info(
+                "Dead man switch configured but live trading is disabled; skipping",
+                extra=structured_log_extra(
+                    event="dead_man_switch_skipped",
+                    mode=self.config.mode,
+                    validate_only=self.config.validate_only,
+                ),
+            )
+            return
+
+        assert self.client is not None
+        if not hasattr(self.client, "cancel_all_orders_after"):
+            logger.warning(
+                "Dead man switch configured but client does not support cancel_all_orders_after",
+                extra=structured_log_extra(
+                    event="dead_man_switch_unavailable",
+                    timeout_seconds=self.config.dead_man_switch_seconds,
+                ),
+            )
+            return
+
+        try:
+            self.client.cancel_all_orders_after(self.config.dead_man_switch_seconds)
+            logger.info(
+                "Dead man switch heartbeat set",
+                extra=structured_log_extra(
+                    event="dead_man_switch_set",
+                    timeout_seconds=self.config.dead_man_switch_seconds,
+                ),
+            )
+        except Exception as exc:  # pragma: no cover
+            logger.warning(
+                "Failed to refresh dead man switch heartbeat",
+                extra=structured_log_extra(
+                    event="dead_man_switch_error",
+                    timeout_seconds=self.config.dead_man_switch_seconds,
+                    error=str(exc),
+                ),
+            )
+
+    def _execute_submission_loop(
+        self, order: LocalOrder, payload: Dict[str, Any]
+    ) -> LocalOrder:
+        """Execute the order submission with retries and error handling."""
+        assert self.client is not None
         attempts = 0
         backoff_seconds = self.config.retry_backoff_seconds
+
         while True:
             try:
                 resp = self.client.add_order(payload)
@@ -309,7 +345,7 @@ class KrakenExecutionAdapter:
                     ),
                 )
                 time.sleep(sleep_seconds)
-            except Exception as exc:  # pragma: no cover - passthrough for client errors
+            except Exception as exc:  # pragma: no cover
                 order.status = "error"
                 order.last_error = str(exc)
                 logger.error(
