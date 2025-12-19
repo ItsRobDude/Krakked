@@ -198,9 +198,7 @@ class FileOHLCStore:
                 cached_bars = self._bar_cache[key]
                 if len(cached_bars) >= lookback:
                     # Return copies to prevent caller mutation affecting cache
-                    return [
-                        OHLCBar(**b.__dict__) for b in cached_bars[-lookback:]
-                    ]
+                    return [OHLCBar(**b.__dict__) for b in cached_bars[-lookback:]]
 
             file_path = self._get_file_path(pair, timeframe)
             if not file_path.exists():
@@ -217,8 +215,7 @@ class FileOHLCStore:
                 if success and lookback <= self._cache_size:
                     # Return copies to prevent caller mutation affecting cache
                     return [
-                        OHLCBar(**b.__dict__)
-                        for b in self._bar_cache[key][-lookback:]
+                        OHLCBar(**b.__dict__) for b in self._bar_cache[key][-lookback:]
                     ]
 
                 # Fallback for large lookbacks or cache update failures

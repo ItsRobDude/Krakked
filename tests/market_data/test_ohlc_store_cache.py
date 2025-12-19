@@ -205,7 +205,9 @@ class TestFileOHLCStoreCache:
         timeframe = "1m"
 
         bars = [
-            OHLCBar(timestamp=1000 + i, open=100, high=110, low=90, close=105, volume=10)
+            OHLCBar(
+                timestamp=1000 + i, open=100, high=110, low=90, close=105, volume=10
+            )
             for i in range(10)
         ]
         store._persist_bars(pair, timeframe, bars)
@@ -221,3 +223,27 @@ class TestFileOHLCStoreCache:
         # Request negative bars (should also be empty)
         fetched_neg = store.get_bars(pair, timeframe, -5)
         assert fetched_neg == []
+
+    def test_cache_immutability(self, store_and_dir):
+        """Verify that mutating returned bars does not affect the cache."""
+        store, _ = store_and_dir
+        pair = "XBTUSD"
+        timeframe = "1m"
+
+        bars = [
+            OHLCBar(timestamp=1000, open=100, high=110, low=90, close=105, volume=10)
+        ]
+        store._persist_bars(pair, timeframe, bars)
+
+        # Fetch from cache
+        fetched1 = store.get_bars(pair, timeframe, 1)
+        assert fetched1[0].open == 100
+
+        # Mutate the returned object
+        fetched1[0].open = 9999
+        assert fetched1[0].open == 9999
+
+        # Fetch again - should be original value
+        fetched2 = store.get_bars(pair, timeframe, 1)
+        assert fetched2[0].open == 100
+        assert fetched2[0] is not fetched1[0]  # Should be different objects
