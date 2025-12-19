@@ -137,6 +137,40 @@ class ExecutionService:
 
         return kill_switch_active
 
+    def _create_rejected_order(
+        self,
+        plan: ExecutionPlan,
+        action: "RiskAdjustedAction",
+        reason: str,
+        error_suffix: Optional[str] = None,
+    ) -> LocalOrder:
+        """Helper to create, persist, and return a rejected LocalOrder."""
+        delta = action.target_base_size - action.current_base_size
+        side = "buy" if delta > 0 else "sell"
+        volume = abs(delta)
+
+        last_error = f"{reason} {error_suffix}" if error_suffix else reason
+
+        order = LocalOrder(
+            local_id=str(uuid4()),
+            plan_id=plan.plan_id,
+            strategy_id=action.strategy_id,
+            pair=action.pair,
+            side=side,
+            order_type=plan.metadata.get("order_type", ""),
+            userref=resolve_userref(action.userref),
+            requested_base_size=volume,
+            requested_price=plan.metadata.get("requested_price"),
+            status="rejected",
+            last_error=last_error,
+        )
+        order.updated_at = datetime.now(UTC)
+
+        if self.store:
+            self.store.save_order(order)
+
+        return order
+
     def execute_plan(self, plan: ExecutionPlan) -> ExecutionResult:
         """
             Execute a plan by building orders, enforcing guardrails, and routing submissions.
@@ -233,28 +267,12 @@ class ExecutionService:
             result.errors.append(blocked_reason)
 
             for action in eligible_actions:
-                delta = action.target_base_size - action.current_base_size
-                side = "buy" if delta > 0 else "sell"
-                volume = abs(delta)
-
-                rejected_order = LocalOrder(
-                    local_id=str(uuid4()),
-                    plan_id=plan.plan_id,
-                    strategy_id=action.strategy_id,
-                    pair=action.pair,
-                    side=side,
-                    order_type=plan.metadata.get("order_type", ""),
-                    userref=resolve_userref(action.userref),
-                    requested_base_size=volume,
-                    requested_price=plan.metadata.get("requested_price"),
-                    status="rejected",
-                    last_error=f"{blocked_reason} (kill_switch_active)",
+                rejected_order = self._create_rejected_order(
+                    plan,
+                    action,
+                    blocked_reason,
+                    error_suffix="(kill_switch_active)",
                 )
-                rejected_order.updated_at = datetime.now(UTC)
-
-                if self.store:
-                    self.store.save_order(rejected_order)
-
                 result.orders.append(rejected_order)
 
             result.completed_at = datetime.now(UTC)
@@ -522,30 +540,11 @@ class ExecutionService:
             result.orders.append(order)
 
         for action in truncated_actions:
-            delta = action.target_base_size - action.current_base_size
-            side = "buy" if delta > 0 else "sell"
-            volume = abs(delta)
-
-            order = LocalOrder(
-                local_id=str(uuid4()),
-                plan_id=plan.plan_id,
-                strategy_id=action.strategy_id,
-                pair=action.pair,
-                side=side,
-                order_type=plan.metadata.get("order_type", ""),
-                userref=resolve_userref(action.userref),
-                requested_base_size=volume,
-                requested_price=plan.metadata.get("requested_price"),
-                status="rejected",
-                last_error=(
-                    f"Execution concurrency limit {max_concurrent} reached; "
-                    f"skipping additional action for {action.pair}"
-                ),
+            reason = (
+                f"Execution concurrency limit {max_concurrent} reached; "
+                f"skipping additional action for {action.pair}"
             )
-
-            if self.store:
-                self.store.save_order(order)
-
+            order = self._create_rejected_order(plan, action, reason)
             result.errors.append(
                 order.last_error or "execution concurrency limit reached"
             )
