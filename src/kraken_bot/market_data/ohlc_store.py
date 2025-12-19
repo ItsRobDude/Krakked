@@ -137,6 +137,9 @@ class FileOHLCStore:
                     combined_df = combined_df[
                         ~combined_df.index.duplicated(keep="last")
                     ]
+                    # Enforce strict sorting before write/cache
+                    combined_df = combined_df.sort_index()
+
                     combined_df.to_parquet(file_path)
 
                     # Update cache with the new tail
@@ -147,6 +150,8 @@ class FileOHLCStore:
                     logger.error(f"Error reading or writing to {file_path}: {e}")
             else:
                 try:
+                    # Enforce sorting for new files too (if input bars were unordered)
+                    new_df = new_df.sort_index()
                     new_df.to_parquet(file_path)
                     self._update_cache(pair, timeframe, new_df)
                     logger.info(
@@ -155,16 +160,22 @@ class FileOHLCStore:
                 except Exception as e:
                     logger.error(f"Error creating {file_path}: {e}")
 
-    def _update_cache(self, pair: str, timeframe: str, df: pd.DataFrame) -> None:
-        """Updates the internal cache with the tail of the dataframe."""
+    def _update_cache(self, pair: str, timeframe: str, df: pd.DataFrame) -> bool:
+        """Updates the internal cache with the tail of the dataframe. Returns success."""
         try:
-            tail_df = df.tail(self._cache_size)
+            # Sort again to be defensive, though callers should have done it
+            sorted_df = df.sort_index()
+            tail_df = sorted_df.tail(self._cache_size)
             records = tail_df.reset_index().to_dict("records")
             for row in records:
                 row["timestamp"] = int(row["timestamp"])
             self._bar_cache[(pair, timeframe)] = [OHLCBar(**row) for row in records]
+            return True
         except Exception as e:
             logger.error(f"Failed to update cache for {pair} {timeframe}: {e}")
+            # Invalidate potentially stale cache on error
+            self._bar_cache.pop((pair, timeframe), None)
+            return False
 
     def append_bars(self, pair: str, timeframe: str, bars: List[OHLCBar]) -> None:
         """
