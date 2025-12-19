@@ -106,6 +106,11 @@ def dump_runtime_overrides(
             # If the file is unreadable/corrupt, fall back to a clean slate.
             existing = {}
 
+    # Unconditionally scrub 'active' from existing session config if present
+    # to ensure it is never persisted even if 'session' section is not updated.
+    if isinstance(existing.get("session"), dict):
+        existing["session"].pop("active", None)
+
     update_sections = sections or {"risk", "strategies", "ui", "session"}
 
     if "risk" in update_sections:
@@ -125,7 +130,6 @@ def dump_runtime_overrides(
     if "session" in update_sections:
         if session_config:
             existing["session"] = {
-                "active": bool(session_config.active),
                 "profile_name": session_config.profile_name,
                 "mode": session_config.mode,
                 "loop_interval_sec": session_config.loop_interval_sec,
@@ -643,7 +647,7 @@ def load_config(
         session_loop_seconds = 15.0
 
     session_config = SessionConfig(
-        active=bool(session_data.get("active", False)),
+        active=False,
         profile_name=session_data.get("profile_name"),
         mode=session_data.get("mode", "paper"),
         loop_interval_sec=float(session_loop_seconds),

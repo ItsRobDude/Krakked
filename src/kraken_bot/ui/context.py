@@ -90,7 +90,7 @@ def build_app_context(allow_interactive_setup: bool = True) -> AppContext:
     metrics = SystemMetrics()
 
     session = SessionState(
-        active=config.session.active,
+        active=False,
         mode=config.session.mode,
         loop_interval_sec=config.session.loop_interval_sec,
         profile_name=config.session.profile_name,

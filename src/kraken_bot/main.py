@@ -488,7 +488,7 @@ class BotController:
 
             metrics = SystemMetrics()
             session_state = SessionState(
-                active=config.session.active,
+                active=False,
                 mode=config.session.mode,
                 loop_interval_sec=config.session.loop_interval_sec,
                 profile_name=config.session.profile_name,
@@ -538,7 +538,6 @@ class BotController:
                         },
                         "ui": {"enabled": True, "host": "0.0.0.0", "port": 8000},
                         "session": {
-                            "active": False,
                             "mode": "paper",
                             "loop_interval_sec": 15.0,
                             "profile_name": None,

@@ -593,7 +593,8 @@ async def start_session(
         session_data["mode"] = new_mode
         session_data["loop_interval_sec"] = payload.loop_interval_sec
         session_data["ml_enabled"] = payload.ml_enabled
-        session_data["active"] = True
+        # Never persist active state to disk
+        session_data.pop("active", None)
         main_data["session"] = session_data
 
         backup_file(main_config_path)
@@ -655,7 +656,8 @@ async def stop_session(request: Request) -> ApiEnvelope[SessionStatePayload]:
             ctx.session, "loop_interval_sec", 15.0
         )
         session_data["ml_enabled"] = getattr(ctx.session, "ml_enabled", True)
-        session_data["active"] = False
+        # Never persist active state to disk
+        session_data.pop("active", None)
         main_data["session"] = session_data
 
         backup_file(main_config_path)
