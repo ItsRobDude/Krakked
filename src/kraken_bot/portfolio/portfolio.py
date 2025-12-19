@@ -82,6 +82,9 @@ class Portfolio:
         )
         self._last_snapshot_ts: int = 0
 
+        # Cache for trade pair resolution: raw_pair -> (canonical, base, quote)
+        self._trade_pair_cache: Dict[str, Tuple[str, str, str]] = {}
+
     def _round_vol(self, pair: str, vol: float) -> float:
         """Round volume to the pair's configured lot decimals using ROUND_FLOOR."""
         try:
@@ -156,11 +159,17 @@ class Portfolio:
     # Core calculations
     # ------------------------------------------------------------------
     def _process_trade(self, trade: Dict):
-        pair_meta = self.market_data.get_pair_metadata(trade["pair"])
-        pair = pair_meta.canonical
-        # Normalize assets to ensure positions are keyed by the canonical symbol (e.g. DOGE not XDG)
-        base_asset = self.market_data.normalize_asset(pair_meta.base)
-        quote_asset = self.market_data.normalize_asset(pair_meta.quote)
+        pair_input = trade["pair"]
+        cached = self._trade_pair_cache.get(pair_input)
+        if cached:
+            pair, base_asset, quote_asset = cached
+        else:
+            pair_meta = self.market_data.get_pair_metadata(pair_input)
+            pair = pair_meta.canonical
+            # Normalize assets to ensure positions are keyed by the canonical symbol (e.g. DOGE not XDG)
+            base_asset = self.market_data.normalize_asset(pair_meta.base)
+            quote_asset = self.market_data.normalize_asset(pair_meta.quote)
+            self._trade_pair_cache[pair_input] = (pair, base_asset, quote_asset)
 
         side = trade["type"]
         price = float(trade["price"])
