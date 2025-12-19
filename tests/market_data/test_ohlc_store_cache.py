@@ -1,7 +1,5 @@
 import shutil
 import tempfile
-import time
-from pathlib import Path
 from unittest.mock import MagicMock
 
 import pandas as pd
@@ -34,7 +32,14 @@ class TestFileOHLCStoreCache:
 
         # Create some bars
         bars = [
-            OHLCBar(timestamp=1000 + i * 60, open=100, high=110, low=90, close=105, volume=10)
+            OHLCBar(
+                timestamp=1000 + i * 60,
+                open=100,
+                high=110,
+                low=90,
+                close=105,
+                volume=10,
+            )
             for i in range(10)
         ]
 
@@ -86,7 +91,9 @@ class TestFileOHLCStoreCache:
         store._cache_size = 5
 
         bars = [
-            OHLCBar(timestamp=1000 + i, open=100, high=110, low=90, close=105, volume=10)
+            OHLCBar(
+                timestamp=1000 + i, open=100, high=110, low=90, close=105, volume=10
+            )
             for i in range(10)
         ]
 
@@ -110,7 +117,14 @@ class TestFileOHLCStoreCache:
         timeframe = "1m"
 
         bars = [
-            OHLCBar(timestamp=1000 + i * 60, open=100, high=110, low=90, close=105, volume=10)
+            OHLCBar(
+                timestamp=1000 + i * 60,
+                open=100,
+                high=110,
+                low=90,
+                close=105,
+                volume=10,
+            )
             for i in range(20)
         ]
         store._persist_bars(pair, timeframe, bars)
@@ -129,7 +143,14 @@ class TestFileOHLCStoreCache:
         store._cache_size = 5
 
         bars = [
-            OHLCBar(timestamp=1000 + i * 60, open=100, high=110, low=90, close=105, volume=10)
+            OHLCBar(
+                timestamp=1000 + i * 60,
+                open=100,
+                high=110,
+                low=90,
+                close=105,
+                volume=10,
+            )
             for i in range(10)
         ]
         store._persist_bars(pair, timeframe, bars)
@@ -152,9 +173,18 @@ class TestFileOHLCStoreCache:
         # Write directly to file bypassing store methods
         p = store._get_file_path(pair, timeframe)
         p.parent.mkdir(parents=True, exist_ok=True)
-        df = pd.DataFrame([{
-            "timestamp": 1000, "open": 100, "high": 110, "low": 90, "close": 105, "volume": 10
-        }])
+        df = pd.DataFrame(
+            [
+                {
+                    "timestamp": 1000,
+                    "open": 100,
+                    "high": 110,
+                    "low": 90,
+                    "close": 105,
+                    "volume": 10,
+                }
+            ]
+        )
         df = df.set_index("timestamp")
         df.to_parquet(p)
 

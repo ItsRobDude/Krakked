@@ -206,12 +206,12 @@ class FileOHLCStore:
                 df = df.sort_index()
 
                 # Update cache
-                self._update_cache(pair, timeframe, df)
+                success = self._update_cache(pair, timeframe, df)
 
-                if lookback <= self._cache_size:
+                if success and lookback <= self._cache_size:
                     return self._bar_cache[key][-lookback:]
 
-                # Fallback for large lookbacks
+                # Fallback for large lookbacks or cache update failures
                 df = df.tail(lookback)
                 records = df.reset_index().to_dict("records")
                 for row in records:
