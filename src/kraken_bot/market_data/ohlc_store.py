@@ -188,6 +188,9 @@ class FileOHLCStore:
 
     def get_bars(self, pair: str, timeframe: str, lookback: int) -> List[OHLCBar]:
         """Retrieves the last N (lookback) bars from the store."""
+        if lookback <= 0:
+            return []
+
         key = (pair, timeframe)
         with self._file_lock:
             # Serve from cache if available and sufficient

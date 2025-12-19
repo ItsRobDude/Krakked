@@ -197,3 +197,27 @@ class TestFileOHLCStoreCache:
         assert len(fetched) == 1
         assert fetched[0].timestamp == 1000
         assert key in store._bar_cache  # Should be populated now
+
+    def test_get_bars_zero_lookback(self, store_and_dir):
+        """Verify that lookback=0 returns empty list, not the whole cache."""
+        store, _ = store_and_dir
+        pair = "XBTUSD"
+        timeframe = "1m"
+
+        bars = [
+            OHLCBar(timestamp=1000 + i, open=100, high=110, low=90, close=105, volume=10)
+            for i in range(10)
+        ]
+        store._persist_bars(pair, timeframe, bars)
+
+        # Cache is populated with 10 items
+        key = (pair, timeframe)
+        assert len(store._bar_cache[key]) == 10
+
+        # Request 0 bars
+        fetched = store.get_bars(pair, timeframe, 0)
+        assert fetched == [], f"Expected empty list, got {len(fetched)} items"
+
+        # Request negative bars (should also be empty)
+        fetched_neg = store.get_bars(pair, timeframe, -5)
+        assert fetched_neg == []
