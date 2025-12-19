@@ -1,16 +1,26 @@
+import threading
+from unittest.mock import MagicMock, patch
 
 import pytest
 import yaml
-import threading
-from unittest.mock import MagicMock, patch
 from fastapi.testclient import TestClient
 
-from kraken_bot.config import AppConfig, ExecutionConfig, RegionProfile, RegionCapabilities, UniverseConfig, MarketDataConfig, PortfolioConfig, SessionConfig, UIConfig
+from kraken_bot.config import (
+    AppConfig,
+    ExecutionConfig,
+    MarketDataConfig,
+    PortfolioConfig,
+    RegionCapabilities,
+    RegionProfile,
+    SessionConfig,
+    UIConfig,
+    UniverseConfig,
+)
+from kraken_bot.config_loader import RUNTIME_OVERRIDES_FILENAME
 from kraken_bot.connection.exceptions import ServiceUnavailableError
 from kraken_bot.market_data.api import MarketDataAPI
 from kraken_bot.ui.api import create_api
 from kraken_bot.ui.context import AppContext
-from kraken_bot.config_loader import RUNTIME_OVERRIDES_FILENAME
 
 
 @pytest.fixture
@@ -21,27 +31,20 @@ def safe_context():
             code="US",
             default_quote="USD",
             capabilities=RegionCapabilities(
-                supports_margin=True,
-                supports_futures=False,
-                supports_staking=True
-            )
+                supports_margin=True, supports_futures=False, supports_staking=True
+            ),
         ),
         universe=UniverseConfig(
-            include_pairs=["XBT/USD"],
-            exclude_pairs=[],
-            min_24h_volume_usd=0.0
+            include_pairs=["XBT/USD"], exclude_pairs=[], min_24h_volume_usd=0.0
         ),
         market_data=MarketDataConfig(
-            ws={},
-            ohlc_store={},
-            backfill_timeframes=[],
-            ws_timeframes=[]
+            ws={}, ohlc_store={}, backfill_timeframes=[], ws_timeframes=[]
         ),
         portfolio=PortfolioConfig(db_path="test.db"),
         execution=ExecutionConfig(mode="paper", allow_live_trading=False),
         ui=UIConfig(base_path="/", read_only=False, enabled=True),
         # Default profiles dict
-        profiles={}
+        profiles={},
     )
 
     session = SessionConfig(
@@ -50,7 +53,7 @@ def safe_context():
         mode="paper",
         loop_interval_sec=60,
         ml_enabled=True,
-        emergency_flatten=False
+        emergency_flatten=False,
     )
 
     # Create real AppContext with mocked services
@@ -65,7 +68,7 @@ def safe_context():
         execution_service=MagicMock(),
         strategy_engine=MagicMock(),
         metrics=MagicMock(),
-        portfolio=MagicMock()  # Alias
+        portfolio=MagicMock(),  # Alias
     )
 
     # Setup market data mock default behavior
@@ -79,6 +82,7 @@ def safe_context():
 def client(safe_context):
     app = create_api(safe_context)
     return TestClient(app)
+
 
 @pytest.fixture
 def temp_config_dir(tmp_path):
@@ -127,7 +131,9 @@ def test_create_profile_rejects_base_config_execution_mode(client, safe_context)
 
 def test_config_apply_blocks_on_universe_validation_failure(client, safe_context):
     # Setup mock side effect
-    safe_context.market_data.validate_pairs.side_effect = ServiceUnavailableError("Kraken down")
+    safe_context.market_data.validate_pairs.side_effect = ServiceUnavailableError(
+        "Kraken down"
+    )
 
     payload = {"config": {"universe": {"include_pairs": ["XBTUSD"]}}, "dry_run": True}
     response = client.post("/api/config/apply", json=payload)
@@ -148,17 +154,21 @@ def test_config_apply_succeeds_on_valid_universe(client, safe_context):
     assert data["data"]["status"] == "valid"
 
 
-def test_apply_config_restricted_keys_stripped_if_same(client, safe_context, temp_config_dir):
+def test_apply_config_restricted_keys_stripped_if_same(
+    client, safe_context, temp_config_dir
+):
     """Test that sending SAME restricted keys is allowed (stripped)."""
     # Mock get_config_dir to return our temp dir
-    with patch("kraken_bot.ui.routes.config.get_config_dir", return_value=temp_config_dir):
+    with patch(
+        "kraken_bot.ui.routes.config.get_config_dir", return_value=temp_config_dir
+    ):
         payload = {
             "config": {
                 "execution": {
                     "mode": "paper",  # Same as current default
-                    "validate_only": True  # Same as current default
+                    "validate_only": True,  # Same as current default
                 },
-                "ui": {"theme": "light"}
+                "ui": {"theme": "light"},
             }
         }
 
@@ -182,13 +192,19 @@ def test_apply_config_restricted_keys_stripped_if_same(client, safe_context, tem
             assert "validate_only" not in execution_section
 
 
-def test_profile_runtime_override_pruning_with_main_key(client, safe_context, temp_config_dir):
+def test_profile_runtime_override_pruning_with_main_key(
+    client, safe_context, temp_config_dir
+):
     """Test that applying a main-config key (ui) also prunes it from PROFILE overrides."""
-    with patch("kraken_bot.ui.routes.config.get_config_dir", return_value=temp_config_dir):
+    with patch(
+        "kraken_bot.ui.routes.config.get_config_dir", return_value=temp_config_dir
+    ):
         # Setup active profile
         safe_context.session.profile_name = "test_profile"
         # We need to add the profile to the config for it to be found
-        safe_context.config.profiles["test_profile"] = MagicMock(config_path="profiles/test.yaml")
+        safe_context.config.profiles["test_profile"] = MagicMock(
+            config_path="profiles/test.yaml"
+        )
 
         profile_dir = temp_config_dir / "profiles"
         profile_dir.mkdir(exist_ok=True)
@@ -205,11 +221,7 @@ def test_profile_runtime_override_pruning_with_main_key(client, safe_context, te
             yaml.safe_dump(initial_overrides, f)
 
         # Apply 'ui' config (should write to main config, but MUST prune from profile override)
-        payload = {
-            "config": {
-                "ui": {"theme": "new_main_theme"}
-            }
-        }
+        payload = {"config": {"ui": {"theme": "new_main_theme"}}}
 
         response = client.post("/api/config/apply", json=payload)
         assert response.status_code == 200

@@ -98,7 +98,9 @@ def _prune_runtime_overrides(
             logger.info(f"Cleared runtime overrides at {overrides_path}")
         else:
             atomic_write(overrides_path, overrides, dump_func=yaml.safe_dump)
-            logger.info(f"Pruned runtime overrides at {overrides_path}: {keys_to_remove}")
+            logger.info(
+                f"Pruned runtime overrides at {overrides_path}: {keys_to_remove}"
+            )
 
     except Exception as e:
         logger.error(f"Failed to prune runtime overrides at {overrides_path}: {e}")
@@ -289,9 +291,13 @@ async def apply_config(
                     with open(main_config_path, "r") as f:
                         existing_main_config_for_split = yaml.safe_load(f) or {}
 
-                merged_main_config = deep_merge_dicts(existing_main_config_for_split, main_payload)
+                merged_main_config = deep_merge_dicts(
+                    existing_main_config_for_split, main_payload
+                )
                 backup_file(main_config_path)
-                atomic_write(main_config_path, merged_main_config, dump_func=yaml.safe_dump)
+                atomic_write(
+                    main_config_path, merged_main_config, dump_func=yaml.safe_dump
+                )
 
                 # Prune main runtime overrides
                 # Remove any keys that we just persisted to the static main config
@@ -299,7 +305,7 @@ async def apply_config(
                 _prune_runtime_overrides(
                     main_overrides_path,
                     set(main_payload.keys()),
-                    preserve_override_keys
+                    preserve_override_keys,
                 )
 
         else:
@@ -317,9 +323,7 @@ async def apply_config(
             # Remove any keys that we just persisted to the static main config
             main_overrides_path = config_dir / RUNTIME_OVERRIDES_FILENAME
             _prune_runtime_overrides(
-                main_overrides_path,
-                payload_keys,
-                preserve_override_keys
+                main_overrides_path, payload_keys, preserve_override_keys
             )
 
         # 4. Trigger Reload

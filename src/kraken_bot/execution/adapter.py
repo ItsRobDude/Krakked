@@ -151,7 +151,9 @@ class KrakenExecutionAdapter:
         if self.config.min_order_notional_usd > 0 and not order.risk_reducing:
             if price_for_notional is None:
                 order.status = "rejected"
-                order.last_error = "Unable to verify minimum notional: price unavailable"
+                order.last_error = (
+                    "Unable to verify minimum notional: price unavailable"
+                )
                 logger.error(
                     order.last_error,
                     extra=structured_log_extra(
@@ -478,7 +480,9 @@ class DryRunExecutionAdapter:
         if self.config.min_order_notional_usd > 0 and not order.risk_reducing:
             if price_for_notional is None:
                 order.status = "rejected"
-                order.last_error = "Unable to verify minimum notional: price unavailable"
+                order.last_error = (
+                    "Unable to verify minimum notional: price unavailable"
+                )
                 logger.error(
                     order.last_error,
                     extra=structured_log_extra(

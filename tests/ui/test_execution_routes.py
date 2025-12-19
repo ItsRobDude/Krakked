@@ -1,5 +1,5 @@
 from datetime import UTC, datetime
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 from starlette.testclient import TestClient
@@ -165,7 +165,9 @@ def test_flatten_all_blocked(client, exec_context):
 def test_flatten_all_fails_if_cancel_fails(client, exec_context):
     """Test that flatten execution is blocked if cancel_all raises exception."""
     exec_context.execution_service.cancel_all.side_effect = Exception("Cancel Failed")
-    exec_context.execution_service.get_open_orders.return_value = []  # Even if empty list returned later
+    exec_context.execution_service.get_open_orders.return_value = (
+        []
+    )  # Even if empty list returned later
 
     # Mock dump_runtime_overrides to prevent file I/O
     with patch("kraken_bot.ui.routes.execution.dump_runtime_overrides") as mock_dump:
@@ -188,9 +190,7 @@ def test_flatten_all_fails_if_open_orders_remain(client, exec_context):
     """Test that flatten execution is blocked if open orders remain."""
     exec_context.execution_service.cancel_all.return_value = None  # Success
     # Mock open orders remaining
-    exec_context.execution_service.get_open_orders.return_value = [
-        _sample_order("1")
-    ]
+    exec_context.execution_service.get_open_orders.return_value = [_sample_order("1")]
 
     with patch("kraken_bot.ui.routes.execution.dump_runtime_overrides") as mock_dump:
         response = client.post("/api/execution/flatten_all")

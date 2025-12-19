@@ -151,7 +151,13 @@ def _run_loop_iteration(
         # 1. cancel_all succeeded
         # 2. Open orders were successfully fetched AND are empty
         # 3. Portfolio sync was successful (last_sync_ok)
-        if cancel_ok and open_orders is not None and not open_orders and portfolio.last_sync_ok and positions:
+        if (
+            cancel_ok
+            and open_orders is not None
+            and not open_orders
+            and portfolio.last_sync_ok
+            and positions
+        ):
             plan = strategy_engine.build_emergency_flatten_plan(positions)
             try:
                 updated_strategy_cycle = now

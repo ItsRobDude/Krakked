@@ -178,7 +178,9 @@ async def flatten_all_positions(
     except Exception as cancel_exc:
         logger.warning(
             "Flatten-all preflight cancel_all failed",
-            extra=build_request_log_extra(request, event="flatten_cancel_all_failed", error=str(cancel_exc))
+            extra=build_request_log_extra(
+                request, event="flatten_cancel_all_failed", error=str(cancel_exc)
+            ),
         )
         cancel_ok = False
 
@@ -225,7 +227,7 @@ async def flatten_all_positions(
 
         logger.warning(
             msg,
-            extra=build_request_log_extra(request, event="flatten_all_armed_waiting")
+            extra=build_request_log_extra(request, event="flatten_all_armed_waiting"),
         )
 
         return ApiEnvelope(data=None, error=msg)

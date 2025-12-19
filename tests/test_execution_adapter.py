@@ -226,7 +226,7 @@ def test_adapter_min_notional_risk_reducing_bypass(pair_metadata):
     config = ExecutionConfig(
         mode="paper",
         min_order_notional_usd=1000.0,  # High min notional
-        validate_only=True
+        validate_only=True,
     )
 
     adapter = KrakenExecutionAdapter(client=client, config=config)
@@ -239,7 +239,7 @@ def test_adapter_min_notional_risk_reducing_bypass(pair_metadata):
         side="sell",
         order_type="market",
         requested_base_size=0.0002,
-        risk_reducing=True  # Key flag
+        risk_reducing=True,  # Key flag
     )
 
     # We pass None for price, which would fail if notional check was enforced
@@ -256,9 +256,7 @@ def test_adapter_min_notional_risk_increasing_rejected(pair_metadata):
     client = MagicMock()
 
     config = ExecutionConfig(
-        mode="paper",
-        min_order_notional_usd=1000.0,
-        validate_only=True
+        mode="paper", min_order_notional_usd=1000.0, validate_only=True
     )
 
     adapter = KrakenExecutionAdapter(client=client, config=config)
@@ -272,7 +270,7 @@ def test_adapter_min_notional_risk_increasing_rejected(pair_metadata):
         order_type="limit",
         requested_base_size=0.0002,
         requested_price=50000.0,  # 0.0002 * 50000 = $10 (<< 1000)
-        risk_reducing=False
+        risk_reducing=False,
     )
 
     result_order = adapter.submit_order(order, pair_metadata, latest_price=50000.0)
@@ -287,9 +285,7 @@ def test_adapter_missing_price_risk_increasing_rejected(pair_metadata):
     client = MagicMock()
 
     config = ExecutionConfig(
-        mode="paper",
-        min_order_notional_usd=10.0,
-        validate_only=True
+        mode="paper", min_order_notional_usd=10.0, validate_only=True
     )
 
     adapter = KrakenExecutionAdapter(client=client, config=config)
@@ -302,7 +298,7 @@ def test_adapter_missing_price_risk_increasing_rejected(pair_metadata):
         side="buy",
         order_type="market",
         requested_base_size=0.1,
-        risk_reducing=False  # Increasing risk
+        risk_reducing=False,  # Increasing risk
     )
 
     # Missing price

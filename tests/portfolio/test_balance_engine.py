@@ -171,17 +171,35 @@ def test_balance_engine_quantization():
 
     # Initialize with 0.1
     entry1 = LedgerEntry(
-        id="1", refid="r1", time=100, type="deposit",
-        asset="XBT", amount=Decimal("0.1"), fee=Decimal("0.0"), balance=None,
-        subtype="", aclass="currency", misc="", raw={}
+        id="1",
+        refid="r1",
+        time=100,
+        type="deposit",
+        asset="XBT",
+        amount=Decimal("0.1"),
+        fee=Decimal("0.0"),
+        balance=None,
+        subtype="",
+        aclass="currency",
+        misc="",
+        raw={},
     )
     engine.apply_entry(entry1)
 
     # Add 0.2
     entry2 = LedgerEntry(
-        id="2", refid="r2", time=101, type="deposit",
-        asset="XBT", amount=Decimal("0.2"), fee=Decimal("0.0"), balance=None,
-        subtype="", aclass="currency", misc="", raw={}
+        id="2",
+        refid="r2",
+        time=101,
+        type="deposit",
+        asset="XBT",
+        amount=Decimal("0.2"),
+        fee=Decimal("0.0"),
+        balance=None,
+        subtype="",
+        aclass="currency",
+        misc="",
+        raw={},
     )
     engine.apply_entry(entry2)
 
@@ -199,9 +217,18 @@ def test_balance_engine_negative_zero_clamp():
 
     # Initialize with 1.0
     entry1 = LedgerEntry(
-        id="1", refid="r1", time=100, type="deposit",
-        asset="XBT", amount=Decimal("1.0"), fee=Decimal("0.0"), balance=None,
-        subtype="", aclass="currency", misc="", raw={}
+        id="1",
+        refid="r1",
+        time=100,
+        type="deposit",
+        asset="XBT",
+        amount=Decimal("1.0"),
+        fee=Decimal("0.0"),
+        balance=None,
+        subtype="",
+        aclass="currency",
+        misc="",
+        raw={},
     )
     engine.apply_entry(entry1)
 
@@ -211,9 +238,18 @@ def test_balance_engine_negative_zero_clamp():
 
     # Apply a withdrawal that leaves -1e-9
     entry2 = LedgerEntry(
-        id="2", refid="r2", time=101, type="withdrawal",
-        asset="XBT", amount=Decimal("-1.000000001"), fee=Decimal("0.0"), balance=None,
-        subtype="", aclass="currency", misc="", raw={}
+        id="2",
+        refid="r2",
+        time=101,
+        type="withdrawal",
+        asset="XBT",
+        amount=Decimal("-1.000000001"),
+        fee=Decimal("0.0"),
+        balance=None,
+        subtype="",
+        aclass="currency",
+        misc="",
+        raw={},
     )
     engine.apply_entry(entry2)
 
@@ -229,11 +265,22 @@ def test_balance_engine_quantization_accumulated_drift():
 
     # Add 0.00000001 (1 sat) 10 times
     for i in range(10):
-        engine.apply_entry(LedgerEntry(
-            id=str(i), refid="r", time=100+i, type="deposit",
-            asset="XBT", amount=Decimal("0.00000001"), fee=Decimal("0.0"), balance=None,
-            subtype="", aclass="currency", misc="", raw={}
-        ))
+        engine.apply_entry(
+            LedgerEntry(
+                id=str(i),
+                refid="r",
+                time=100 + i,
+                type="deposit",
+                asset="XBT",
+                amount=Decimal("0.00000001"),
+                fee=Decimal("0.0"),
+                balance=None,
+                subtype="",
+                aclass="currency",
+                misc="",
+                raw={},
+            )
+        )
 
     balance = engine.balances["XBT"]
     assert balance.total == 0.00000010
