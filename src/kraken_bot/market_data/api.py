@@ -37,9 +37,7 @@ class MarketDataStatus:
     stale_pairs: Optional[List[str]] = None
 
 
-def validate_pairs_with_client(
-    client: KrakenRESTClient, pairs: List[str]
-) -> List[str]:
+def validate_pairs_with_client(client: KrakenRESTClient, pairs: List[str]) -> List[str]:
     """
     Validates a list of pair names against Kraken's asset pairs.
     Returns a list of invalid pairs.

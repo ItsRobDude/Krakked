@@ -117,7 +117,7 @@ def test_risk_reducing_detection():
         price_decimals=1,
         lot_size=1,
         status="online",
-        liquidity_24h_usd=1000000.0
+        liquidity_24h_usd=1000000.0,
     )
     exec_config = ExecutionConfig(mode="paper", default_order_type="limit")
 
@@ -131,17 +131,19 @@ def test_risk_reducing_detection():
         current_base_size=1.0,
         reason="Test Reduce",
         blocked=False,
-        blocked_reasons=[]
+        blocked_reasons=[],
     )
 
-    plan = ExecutionPlan(plan_id="p1", generated_at=MagicMock(), actions=[action_reduce])
+    plan = ExecutionPlan(
+        plan_id="p1", generated_at=MagicMock(), actions=[action_reduce]
+    )
 
     order, warning = build_order_from_plan_action(
         action=action_reduce,
         plan=plan,
         pair_metadata=pair_metadata,
         config=exec_config,
-        market_data=MagicMock()
+        market_data=MagicMock(),
     )
 
     assert order is not None
@@ -157,7 +159,7 @@ def test_risk_reducing_detection():
         current_base_size=1.0,
         reason="Test Increase",
         blocked=False,
-        blocked_reasons=[]
+        blocked_reasons=[],
     )
 
     order_inc, _ = build_order_from_plan_action(
@@ -165,7 +167,7 @@ def test_risk_reducing_detection():
         plan=plan,
         pair_metadata=pair_metadata,
         config=exec_config,
-        market_data=MagicMock()
+        market_data=MagicMock(),
     )
 
     assert order_inc is not None
@@ -181,7 +183,7 @@ def test_risk_reducing_detection():
         current_base_size=1.0,
         reason="Test Close",
         blocked=False,
-        blocked_reasons=[]
+        blocked_reasons=[],
     )
 
     order_close, _ = build_order_from_plan_action(
@@ -189,7 +191,7 @@ def test_risk_reducing_detection():
         plan=plan,
         pair_metadata=pair_metadata,
         config=exec_config,
-        market_data=MagicMock()
+        market_data=MagicMock(),
     )
 
     assert order_close is not None
@@ -210,7 +212,7 @@ def test_risk_reducing_open():
         price_decimals=1,
         lot_size=1,
         status="online",
-        liquidity_24h_usd=1000000.0
+        liquidity_24h_usd=1000000.0,
     )
     exec_config = ExecutionConfig(mode="paper", default_order_type="limit")
 
@@ -223,7 +225,7 @@ def test_risk_reducing_open():
         current_base_size=0.0,
         reason="Test Open",
         blocked=False,
-        blocked_reasons=[]
+        blocked_reasons=[],
     )
 
     plan = ExecutionPlan(plan_id="p1", generated_at=MagicMock(), actions=[action_open])
@@ -233,7 +235,7 @@ def test_risk_reducing_open():
         plan=plan,
         pair_metadata=pair_metadata,
         config=exec_config,
-        market_data=MagicMock()
+        market_data=MagicMock(),
     )
 
     assert order.risk_reducing is False

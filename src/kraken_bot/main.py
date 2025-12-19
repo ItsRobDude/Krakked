@@ -151,7 +151,13 @@ def _run_loop_iteration(
         # 1. cancel_all succeeded
         # 2. Open orders were successfully fetched AND are empty
         # 3. Portfolio sync was successful (last_sync_ok)
-        if cancel_ok and open_orders is not None and not open_orders and portfolio.last_sync_ok and positions:
+        if (
+            cancel_ok
+            and open_orders is not None
+            and not open_orders
+            and portfolio.last_sync_ok
+            and positions
+        ):
             plan = strategy_engine.build_emergency_flatten_plan(positions)
             try:
                 updated_strategy_cycle = now
@@ -488,7 +494,7 @@ class BotController:
 
             metrics = SystemMetrics()
             session_state = SessionState(
-                active=config.session.active,
+                active=False,
                 mode=config.session.mode,
                 loop_interval_sec=config.session.loop_interval_sec,
                 profile_name=config.session.profile_name,
@@ -538,7 +544,6 @@ class BotController:
                         },
                         "ui": {"enabled": True, "host": "0.0.0.0", "port": 8000},
                         "session": {
-                            "active": False,
                             "mode": "paper",
                             "loop_interval_sec": 15.0,
                             "profile_name": None,
