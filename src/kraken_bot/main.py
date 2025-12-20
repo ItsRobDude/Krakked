@@ -447,7 +447,7 @@ class BotController:
                         "validate_only": True,
                         "allow_live_trading": False,
                     },
-                    "ui": {"enabled": True, "host": "0.0.0.0", "port": 8000},
+                    "ui": {"enabled": True, "host": "127.0.0.1", "port": 8000},
                     "session": {
                         "mode": "paper",
                         "loop_interval_sec": 15.0,

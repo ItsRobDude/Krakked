@@ -1,6 +1,5 @@
 """Tests for LifecycleMiddleware enforcing locked mode access."""
 
-import pytest
 from unittest.mock import MagicMock
 from fastapi.testclient import TestClient
 
@@ -127,6 +126,7 @@ def test_lifecycle_middleware_allowlist(monkeypatch, tmp_path):
     resp = client.post("/krakked/api/system/reset")
     assert resp.status_code == 200
     mock_delete_secrets.assert_called_once()
+    mock_delete_pw.assert_called_once()
 
     # 2. Allowed Prefix Matches
     # Setup unlock (POST) - Mocking unlock secrets logic to avoid errors

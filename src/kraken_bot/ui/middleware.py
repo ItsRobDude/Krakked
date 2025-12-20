@@ -56,8 +56,8 @@ class LifecycleMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         if ctx is None:
-             # Safety fallback
-             return await call_next(request)
+            # Safety fallback
+            return await call_next(request)
 
         # If unlocked, allow all
         if not ctx.is_setup_mode:
