@@ -424,6 +424,56 @@ class BotController:
         # State flags
         self.is_setup_mode = False
 
+    def bootstrap_locked_context(self) -> AppContext:
+        """
+        Initializes a minimal locked context for UI-first boot.
+        Does NOT load credentials or initialize services.
+        """
+        config_dir = get_config_dir()
+        config_path = config_dir / "config.yaml"
+
+        if not config_path.exists():
+            # Minimal safe defaults to boot the API/UI.
+            write_initial_config(
+                {
+                    "region": {"code": "US_CA", "default_quote": "USD"},
+                    "universe": {
+                        "include_pairs": [],
+                        "exclude_pairs": [],
+                        "min_24h_volume_usd": 0.0,
+                    },
+                    "execution": {
+                        "mode": "paper",
+                        "validate_only": True,
+                        "allow_live_trading": False,
+                    },
+                    "ui": {"enabled": True, "host": "0.0.0.0", "port": 8000},
+                    "session": {
+                        "mode": "paper",
+                        "loop_interval_sec": 15.0,
+                        "profile_name": None,
+                        "ml_enabled": True,
+                    },
+                },
+                config_dir=config_dir,
+            )
+
+        # Load config but DO NOT bootstrap credentials
+        config = load_config(config_path=config_path)
+        self.is_setup_mode = True
+
+        return AppContext(
+            config=config,
+            client=None,
+            market_data=None,
+            portfolio_service=None,
+            portfolio=None,
+            strategy_engine=None,
+            execution_service=None,
+            metrics=None,
+            is_setup_mode=True,
+        )
+
     def bootstrap_context(self) -> AppContext:
         """
         Loads config/creds and initializes all services.
@@ -625,9 +675,9 @@ class BotController:
             port=self.context.config.ui.port,
             log_level="info",
             log_config=None,
-            install_signal_handlers=False,  # type: ignore[call-arg]
         )
         self.ui_server = uvicorn.Server(config)
+        self.ui_server.install_signal_handlers = lambda: None  # Disable signal handlers
         self.ui_thread = threading.Thread(target=self.ui_server.run, daemon=True)
         self.ui_thread.start()
 
@@ -721,21 +771,9 @@ class BotController:
         """Main entry point."""
         configure_logging(level=logging.INFO)
 
-        # 1. Initial Bootstrap
+        # 1. Initial Locked Boot (UI-first)
         try:
-            initial_context = self.bootstrap_context()
-            self.context = initial_context  # Initialize the main reference
-        except PortfolioSchemaError as e:
-            logger.critical(
-                "Portfolio schema mismatch: %s",
-                e,
-                extra=structured_log_extra(
-                    event="schema_mismatch",
-                    found_schema=e.found,
-                    expected_schema=e.expected,
-                ),
-            )
-            return 1
+            self.context = self.bootstrap_locked_context()
         except Exception as e:
             logger.critical(
                 "Fatal startup error: %s",
