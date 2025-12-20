@@ -167,61 +167,17 @@ class StrategyEngine:
             ),
         )
 
-    def _score_intent(
+    def _collect_intents(
         self,
-        intent: StrategyIntent,
+        now: datetime,
+        regime: RegimeSnapshot,
+        plan_id: str,
         weights: Optional[StrategyWeights],
-    ) -> float:
-        """
-        Compute a decision score for an intent based on:
-        - Strategy-level weight (dynamic allocation)
-        - Per-intent confidence
-        """
-
-        base = intent.confidence
-
-        if not weights:
-            return base
-
-        weight_pct = weights.per_strategy_pct.get(intent.strategy_id)
-        if weight_pct is None:
-            weight_factor = 1.0
-        else:
-            weight_factor = weight_pct / 100.0
-
-        return base * weight_factor
-
-    def run_cycle(self, now: Optional[datetime] = None) -> ExecutionPlan:
-        """Run a full decision cycle and persist the resulting execution plan."""
-        now = now or datetime.now(timezone.utc)
-        plan_id = f"plan_{int(now.timestamp())}"
-        logger.info(
-            "Starting decision cycle %s",
-            plan_id,
-            extra=structured_log_extra(event="strategy_cycle", plan_id=plan_id),
-        )
-
-        if not self._data_ready():
-            return ExecutionPlan(
-                plan_id=plan_id,
-                generated_at=now,
-                actions=[],
-                metadata={"error": "Market data unavailable"},
-            )
-
-        # Use the dynamically discovered universe (all USD spot pairs that
-        # passed the US_CA + liquidity filters) for regime inference.
-        universe_pairs = self.market_data.get_universe()
-        if not universe_pairs:
-            # Fallback: if for some reason discovery failed, fall back to the
-            # static config list so we don't explode.
-            universe_pairs = list(self.config.universe.include_pairs)
-
-        regime = infer_regime(self.market_data, list(universe_pairs))
-
-        weights = self._compute_strategy_weights(regime)
+    ) -> tuple[List[StrategyIntent], Dict[str, List[Dict[str, Any]]]]:
+        """Collect intents from all active strategies across configured timeframes."""
         all_intents: List[StrategyIntent] = []
         intent_summaries: Dict[str, List[Dict[str, Any]]] = {}
+
         for name, strategy in self.strategies.items():
             strategy_pairs = self._get_strategy_pairs(name)
             if not strategy_pairs:
@@ -309,6 +265,65 @@ class StrategyEngine:
                             timeframe=timeframe,
                         ),
                     )
+
+        return all_intents, intent_summaries
+
+    def _score_intent(
+        self,
+        intent: StrategyIntent,
+        weights: Optional[StrategyWeights],
+    ) -> float:
+        """
+        Compute a decision score for an intent based on:
+        - Strategy-level weight (dynamic allocation)
+        - Per-intent confidence
+        """
+
+        base = intent.confidence
+
+        if not weights:
+            return base
+
+        weight_pct = weights.per_strategy_pct.get(intent.strategy_id)
+        if weight_pct is None:
+            weight_factor = 1.0
+        else:
+            weight_factor = weight_pct / 100.0
+
+        return base * weight_factor
+
+    def run_cycle(self, now: Optional[datetime] = None) -> ExecutionPlan:
+        """Run a full decision cycle and persist the resulting execution plan."""
+        now = now or datetime.now(timezone.utc)
+        plan_id = f"plan_{int(now.timestamp())}"
+        logger.info(
+            "Starting decision cycle %s",
+            plan_id,
+            extra=structured_log_extra(event="strategy_cycle", plan_id=plan_id),
+        )
+
+        if not self._data_ready():
+            return ExecutionPlan(
+                plan_id=plan_id,
+                generated_at=now,
+                actions=[],
+                metadata={"error": "Market data unavailable"},
+            )
+
+        # Use the dynamically discovered universe (all USD spot pairs that
+        # passed the US_CA + liquidity filters) for regime inference.
+        universe_pairs = self.market_data.get_universe()
+        if not universe_pairs:
+            # Fallback: if for some reason discovery failed, fall back to the
+            # static config list so we don't explode.
+            universe_pairs = list(self.config.universe.include_pairs)
+
+        regime = infer_regime(self.market_data, list(universe_pairs))
+
+        weights = self._compute_strategy_weights(regime)
+        all_intents, intent_summaries = self._collect_intents(
+            now, regime, plan_id, weights
+        )
 
         scored: List[tuple[StrategyIntent, float]] = []
         for intent in all_intents:
