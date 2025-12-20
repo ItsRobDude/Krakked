@@ -203,6 +203,9 @@ def _run_loop_iteration(
                 refresh_metrics_state()
         return updated_portfolio_sync, updated_strategy_cycle
 
+    if not session_active:
+        return updated_portfolio_sync, updated_strategy_cycle
+
     if (now - last_portfolio_sync).total_seconds() >= portfolio_interval:
         try:
             portfolio.sync()
