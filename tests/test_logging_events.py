@@ -183,13 +183,13 @@ def test_market_data_warning_emits_structured_event(caplog: pytest.LogCaptureFix
 
 def test_schema_mismatch_logs_critical_event(monkeypatch, caplog):
     """
-    Checks that bootstrap_context logs a CRITICAL event on schema mismatch.
-    Note: main.run() no longer calls bootstrap_context() directly at startup,
-    so we test the method on BotController directly.
+    Checks that the re-initialization loop logs a CRITICAL event on schema mismatch.
     """
     caplog.set_level(logging.CRITICAL, logger="kraken_bot.main")
 
     monkeypatch.setattr("kraken_bot.main.configure_logging", lambda *_, **__: None)
+
+    # Mock bootstrap to raise SchemaError
     monkeypatch.setattr(
         "kraken_bot.main.bootstrap",
         lambda allow_interactive_setup: (_ for _ in ()).throw(
@@ -199,40 +199,34 @@ def test_schema_mismatch_logs_critical_event(monkeypatch, caplog):
 
     controller = BotController(allow_interactive_setup=False)
 
-    # We must call bootstrap_context() directly, not run().
-    # However, bootstrap_context() raises the exception; it does NOT catch it.
-    # The catching logic was in run() previously.
-    # Now that run() doesn't call it, where is the logging?
-    # It seems the logging logic inside run() is gone for the initial boot.
-    # But when re-initializing (via reinitialize_event), we might want to catch it?
-    # BotController.run main loop logic:
-    # try: new_ctx = self.bootstrap_context() ... except Exception ...
+    # Setup context to simulate locked mode
+    controller.context = MagicMock()
+    controller.context.config.ui.enabled = False
+    controller.context.is_setup_mode = True
+    controller.context.reinitialize_event.wait.side_effect = [True, False] # Trigger once then stop wait loop
+    controller.context.reinitialize_event.is_set.return_value = True
 
-    # Wait, the main loop handles reinitialization errors:
-    # except Exception: logger.exception("Critical error during re-initialization"...)
+    # We mock bootstrap_locked_context to return our prepared mock context
+    # so run() enters the loop correctly.
+    controller.bootstrap_locked_context = MagicMock(return_value=controller.context)
 
-    # The dedicated "schema_mismatch" critical log was specifically in the
-    # initial startup block of run(), which has been replaced by bootstrap_locked_context.
+    # We need to break the main loop after one iteration or handling the event
+    # The loop runs while not stop_event.is_set().
+    # We can set stop_event in a side effect or just let it run one cycle.
+    # The 'wait' call above controls the "setup mode" blocking loop.
+    # If wait returns True, it tries to bootstrap_context (which fails).
+    # Then it loops again. We need to stop it.
 
-    # Therefore, this specific log event ("schema_mismatch") is no longer emitted
-    # during initial boot because initial boot doesn't check schema.
+    def stop_controller(*args, **kwargs):
+        controller.stop_event.set()
+        return True # Simulate wait success
 
-    # If we want to preserve this test, we should verify that `bootstrap_locked_context`
-    # DOES NOT log it (or raise it), OR we can test that if we simulate a re-init failure,
-    # we get a "reinit_error".
+    controller.context.reinitialize_event.wait.side_effect = stop_controller
 
-    # But the test specifically looks for "schema_mismatch".
-    # I'll update the test to verify that calling `bootstrap_context` propagates the error,
-    # and IF there's any place that logs it (like the CLI or manual invocation), we'd test that.
+    # Prevent UI start
+    monkeypatch.setattr(BotController, "start_ui", lambda self: None)
 
-    # Given the PR requirements, schema validation happens later.
-    # We can effectively disable this test or change it to ensure NO critical log
-    # happens on simple locked run.
-
-    # Prevent hanging in the main loop
-    monkeypatch.setattr(BotController, "start_ui", lambda self: self.stop_event.set())
-
-    exit_code = run(allow_interactive_setup=False)
+    exit_code = controller.run()
 
     records = [
         record
@@ -240,9 +234,13 @@ def test_schema_mismatch_logs_critical_event(monkeypatch, caplog):
         if getattr(record, "event", None) == "schema_mismatch"
     ]
 
+    # exit_code should be 0 because the loop exited gracefully via stop_event
     assert exit_code == 0
-    # We assert NO schema mismatch log because we didn't check schema yet
-    assert not records
+
+    assert records, "Expected a schema_mismatch log entry from re-init loop"
+    assert all(record.levelno == logging.CRITICAL for record in records)
+    assert any(getattr(record, "expected_schema", None) == 3 for record in records)
+    assert any(getattr(record, "found_schema", None) == 2 for record in records)
 
 
 def test_shutdown_logs_include_event(caplog):

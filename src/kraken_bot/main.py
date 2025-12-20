@@ -462,6 +462,15 @@ class BotController:
         config = load_config(config_path=config_path)
         self.is_setup_mode = True
 
+        session_state = SessionState(
+            active=False,
+            mode=config.session.mode,
+            loop_interval_sec=config.session.loop_interval_sec,
+            profile_name=config.session.profile_name,
+            ml_enabled=config.session.ml_enabled,
+            emergency_flatten=getattr(config.session, "emergency_flatten", False),
+        )
+
         return AppContext(
             config=config,
             client=None,
@@ -471,6 +480,7 @@ class BotController:
             strategy_engine=None,
             execution_service=None,
             metrics=None,
+            session=session_state,
             is_setup_mode=True,
         )
 
@@ -675,9 +685,9 @@ class BotController:
             port=self.context.config.ui.port,
             log_level="info",
             log_config=None,
+            install_signal_handlers=False,  # type: ignore[call-arg]
         )
         self.ui_server = uvicorn.Server(config)
-        self.ui_server.install_signal_handlers = lambda: None  # Disable signal handlers
         self.ui_thread = threading.Thread(target=self.ui_server.run, daemon=True)
         self.ui_thread.start()
 
@@ -853,6 +863,20 @@ class BotController:
                                 "Re-initialization failed to clear setup mode",
                                 extra=structured_log_extra(event="setup_failed_retry"),
                             )
+                    except PortfolioSchemaError as e:
+                        # Log specific schema errors as critical, preserving legacy behavior for re-init
+                        logger.critical(
+                            "Portfolio schema mismatch during re-init: %s",
+                            e,
+                            extra=structured_log_extra(
+                                event="schema_mismatch",
+                                found_schema=e.found,
+                                expected_schema=e.expected,
+                            ),
+                        )
+                        # We clear the event so we don't spin-loop on the error
+                        if self.context:
+                            self.context.reinitialize_event.clear()
                     except Exception:
                         logger.exception(
                             "Critical error during re-initialization",

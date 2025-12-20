@@ -6,7 +6,20 @@ from fastapi.testclient import TestClient
 
 from kraken_bot.ui.api import create_api
 from kraken_bot.ui.context import AppContext, SessionState
-from kraken_bot.config import AppConfig, UIConfig, UIAuthConfig
+from kraken_bot.config import (
+    AppConfig,
+    UIConfig,
+    UIAuthConfig,
+    RegionProfile,
+    RegionCapabilities,
+    UniverseConfig,
+    MarketDataConfig,
+    PortfolioConfig,
+    ExecutionConfig,
+    RiskConfig,
+    StrategiesConfig,
+    SessionConfig,
+)
 from kraken_bot.ui.routes import system
 
 def _mock_config_dirs(monkeypatch, tmp_path):
@@ -18,45 +31,49 @@ def _mock_config_dirs(monkeypatch, tmp_path):
     monkeypatch.setattr("kraken_bot.ui.routes.config.get_config_dir", lambda: tmp_path)
 
 def _create_locked_context(base_path="/krakked", auth_enabled=False, auth_token=None):
-    """Create a minimal context in setup mode."""
-    # Build actual Config objects to support asdict() usage in routes
-    ui_auth = UIAuthConfig(enabled=auth_enabled, token=auth_token)
-    ui_conf = UIConfig(enabled=True, host="127.0.0.1", port=8000, base_path=base_path, auth=ui_auth, read_only=False)
+    """Create a minimal context in setup mode using real config objects."""
 
-    # Minimal skeletons for other sections to satisfy AppConfig
-    # We use MagicMock for complex nested structures where asdict isn't called or isn't deep
-    # But AppConfig itself must be a dataclass
-
-    # We can rely on defaults for most things
-    config = AppConfig(
-        region=MagicMock(),
-        universe=MagicMock(),
-        market_data=MagicMock(),
-        portfolio=MagicMock(),
-        execution=MagicMock(),
-        risk=MagicMock(),
-        strategies=MagicMock(),
-        ui=ui_conf,
-        profiles={},
-        # session must be a plain dict or serializable if accessed directly,
-        # but here we can use MagicMock if we mock asdict() result or ensure deep serialization works?
-        # Actually, MagicMock is not JSON serializable.
-        # For config dump, we need basic python types.
-        session=MagicMock()
+    ui_auth = UIAuthConfig(enabled=auth_enabled, token=auth_token or "")
+    ui_conf = UIConfig(
+        enabled=True,
+        host="127.0.0.1",
+        port=8000,
+        base_path=base_path,
+        auth=ui_auth,
+        read_only=False
     )
 
-    # Patch asdict to handle MagicMocks gracefully during recursion? No, better to use real dicts/objects where possible.
-    # OR, we mock the route handler for runtime config?
-    # No, we want to test the middleware, not the route handler implementation details.
-    # But the middleware allows the request through, and if the handler fails, we get 500, not 200.
-    # So we need the handler to succeed.
+    # Construct real config objects to support serialization without mocks
+    region_cap = RegionCapabilities(supports_margin=False, supports_futures=False, supports_staking=False)
+    region = RegionProfile(code="US", capabilities=region_cap)
 
-    # Let's replace MagicMocks with real dataclasses or simple objects where possible, or just plain dicts for mocked fields if they are not typed strictly?
-    # AppConfig fields are typed.
+    universe = UniverseConfig(include_pairs=[], exclude_pairs=[], min_24h_volume_usd=0.0)
 
-    # Simplest fix: The test just needs to pass 200.
-    # We can mock `_redact_auth_token` or `asdict` in the route?
-    pass
+    market_data = MarketDataConfig(
+        ws={},
+        ohlc_store={},
+        backfill_timeframes=[],
+        ws_timeframes=[]
+    )
+
+    portfolio = PortfolioConfig()
+    execution = ExecutionConfig()
+    risk = RiskConfig()
+    strategies = StrategiesConfig()
+    session_config = SessionConfig()
+
+    config = AppConfig(
+        region=region,
+        universe=universe,
+        market_data=market_data,
+        portfolio=portfolio,
+        execution=execution,
+        risk=risk,
+        strategies=strategies,
+        ui=ui_conf,
+        profiles={},
+        session=session_config
+    )
 
     session_state = SessionState()
 
@@ -85,8 +102,9 @@ def test_lifecycle_middleware_allowlist(monkeypatch, tmp_path):
     monkeypatch.setattr(system, "set_session_master_password", MagicMock())
 
     ctx = _create_locked_context(base_path="/krakked")
-    # Mock metrics for system health
+    # Mock metrics for system health (SystemMetrics is not a Pydantic model so MagicMock is fine here)
     ctx.metrics = MagicMock()
+    # Market data API is complex, keep mocking it for health checks
     ctx.market_data = MagicMock()
 
     app = create_api(ctx)
@@ -98,16 +116,8 @@ def test_lifecycle_middleware_allowlist(monkeypatch, tmp_path):
         "/krakked/api/system/health",
         "/krakked/api/system/profiles",
         "/krakked/api/health",
-        # "/krakked/api/config/runtime",  <-- This fails due to MagicMock serialization issues in the handler.
-        # We can test it separately with a patched handler if needed, or skip it here since
-        # the middleware logic is shared with other allowed paths.
-        # But to be robust, let's just patch the handler for this specific route in the test.
+        "/krakked/api/config/runtime",
     ]
-
-    # Special handling for runtime config to avoid serialization errors
-    monkeypatch.setattr("kraken_bot.ui.routes.config.asdict", lambda x: {"mock": "config"})
-    resp = client.get("/krakked/api/config/runtime")
-    assert resp.status_code == 200
 
     for path in allowed_gets:
         resp = client.get(path)
