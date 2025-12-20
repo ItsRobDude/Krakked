@@ -967,12 +967,28 @@ class SQLitePortfolioStore(PortfolioStore):
                 query += " AND time >= ?"
                 params.append(since)
 
+            if after_id:
+                cursor.execute(
+                    "SELECT time FROM ledger_entries WHERE id = ?", (after_id,)
+                )
+                row = cursor.fetchone()
+                if not row:
+                    return []
+                ref_time = row[0]
+
+                # If the reference record is excluded by 'since', the original logic
+                # (skipping until match) would return empty. We preserve that here.
+                if since is not None and ref_time < since:
+                    return []
+
+                # Efficient pagination: (time, id) > (ref_time, after_id)
+                query += " AND (time > ? OR (time = ? AND id > ?))"
+                params.extend([ref_time, ref_time, after_id])
+
             # Always order by time, then id for deterministic replay
             query += " ORDER BY time ASC, id ASC"
 
-            if limit and not after_id:
-                # If we are filtering by ID in python, we can't limit in SQL efficiently without subquery
-                # But if no after_id, we can limit.
+            if limit:
                 query += " LIMIT ?"
                 params.append(limit)
 
@@ -980,18 +996,11 @@ class SQLitePortfolioStore(PortfolioStore):
             rows = cursor.fetchall()
 
         entries = []
-        skip = True if after_id else False
 
         for row in rows:
-            lid = row[0]
-            if skip:
-                if lid == after_id:
-                    skip = False
-                continue
-
             entries.append(
                 LedgerEntry(
-                    id=lid,
+                    id=row[0],
                     time=row[1],
                     type=row[2],
                     subtype=row[3],
@@ -1005,10 +1014,6 @@ class SQLitePortfolioStore(PortfolioStore):
                     raw=json.loads(row[11]),
                 )
             )
-
-        # Apply limit if we had after_id logic
-        if after_id and limit and len(entries) > limit:
-            entries = entries[:limit]
 
         return entries
 
