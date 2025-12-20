@@ -1,6 +1,7 @@
 from unittest.mock import MagicMock
+
 from kraken_bot.portfolio.portfolio import Portfolio
-from kraken_bot.portfolio.models import SpotPosition
+
 
 def test_process_trade_cache_optimization():
     """
@@ -49,7 +50,7 @@ def test_process_trade_cache_optimization():
         "time": 1700000000,
         "ordertxid": "tx1",
         "userref": None,
-        "comment": None
+        "comment": None,
     }
 
     # 1. First call: Should trigger MD lookups
@@ -98,7 +99,7 @@ def test_process_trade_cache_optimization():
         "time": 1700000001,
         "ordertxid": "tx2",
         "userref": None,
-        "comment": None
+        "comment": None,
     }
 
     # Update mock for new pair
