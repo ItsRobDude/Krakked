@@ -14,7 +14,7 @@ from kraken_bot.connection.rest_client import KrakenRESTClient
 from kraken_bot.execution.adapter import ExecutionAdapter
 from kraken_bot.execution.models import LocalOrder
 from kraken_bot.execution.oms import ExecutionService
-from kraken_bot.main import BotController, _run_loop_iteration, run
+from kraken_bot.main import BotController, _run_loop_iteration
 from kraken_bot.market_data.api import MarketDataAPI
 from kraken_bot.market_data.models import PairMetadata
 from kraken_bot.metrics import SystemMetrics
@@ -203,7 +203,10 @@ def test_schema_mismatch_logs_critical_event(monkeypatch, caplog):
     controller.context = MagicMock()
     controller.context.config.ui.enabled = False
     controller.context.is_setup_mode = True
-    controller.context.reinitialize_event.wait.side_effect = [True, False] # Trigger once then stop wait loop
+    controller.context.reinitialize_event.wait.side_effect = [
+        True,
+        False,
+    ]  # Trigger once then stop wait loop
     controller.context.reinitialize_event.is_set.return_value = True
 
     # We mock bootstrap_locked_context to return our prepared mock context
@@ -219,7 +222,7 @@ def test_schema_mismatch_logs_critical_event(monkeypatch, caplog):
 
     def stop_controller(*args, **kwargs):
         controller.stop_event.set()
-        return True # Simulate wait success
+        return True  # Simulate wait success
 
     controller.context.reinitialize_event.wait.side_effect = stop_controller
 

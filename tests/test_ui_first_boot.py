@@ -1,7 +1,9 @@
 """Tests for UI-first boot sequence."""
 
 import signal
+
 from kraken_bot.main import BotController
+
 
 def test_ui_first_boot_locked(monkeypatch, tmp_path):
     """

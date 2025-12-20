@@ -1,25 +1,27 @@
 """Tests for LifecycleMiddleware enforcing locked mode access."""
 
 from unittest.mock import MagicMock
+
 from fastapi.testclient import TestClient
 
-from kraken_bot.ui.api import create_api
-from kraken_bot.ui.context import AppContext, SessionState
 from kraken_bot.config import (
     AppConfig,
-    UIConfig,
-    UIAuthConfig,
-    RegionProfile,
-    RegionCapabilities,
-    UniverseConfig,
+    ExecutionConfig,
     MarketDataConfig,
     PortfolioConfig,
-    ExecutionConfig,
+    RegionCapabilities,
+    RegionProfile,
     RiskConfig,
-    StrategiesConfig,
     SessionConfig,
+    StrategiesConfig,
+    UIAuthConfig,
+    UIConfig,
+    UniverseConfig,
 )
+from kraken_bot.ui.api import create_api
+from kraken_bot.ui.context import AppContext, SessionState
 from kraken_bot.ui.routes import system
+
 
 def _mock_config_dirs(monkeypatch, tmp_path):
     """Apply config dir patches to all relevant modules."""
@@ -28,6 +30,7 @@ def _mock_config_dirs(monkeypatch, tmp_path):
     monkeypatch.setattr("kraken_bot.secrets.get_config_dir", lambda: tmp_path)
     monkeypatch.setattr("kraken_bot.config.get_config_dir", lambda: tmp_path)
     monkeypatch.setattr("kraken_bot.ui.routes.config.get_config_dir", lambda: tmp_path)
+
 
 def _create_locked_context(base_path="/krakked", auth_enabled=False, auth_token=None):
     """Create a minimal context in setup mode using real config objects."""
@@ -39,20 +42,21 @@ def _create_locked_context(base_path="/krakked", auth_enabled=False, auth_token=
         port=8000,
         base_path=base_path,
         auth=ui_auth,
-        read_only=False
+        read_only=False,
     )
 
     # Construct real config objects to support serialization without mocks
-    region_cap = RegionCapabilities(supports_margin=False, supports_futures=False, supports_staking=False)
+    region_cap = RegionCapabilities(
+        supports_margin=False, supports_futures=False, supports_staking=False
+    )
     region = RegionProfile(code="US", capabilities=region_cap)
 
-    universe = UniverseConfig(include_pairs=[], exclude_pairs=[], min_24h_volume_usd=0.0)
+    universe = UniverseConfig(
+        include_pairs=[], exclude_pairs=[], min_24h_volume_usd=0.0
+    )
 
     market_data = MarketDataConfig(
-        ws={},
-        ohlc_store={},
-        backfill_timeframes=[],
-        ws_timeframes=[]
+        ws={}, ohlc_store={}, backfill_timeframes=[], ws_timeframes=[]
     )
 
     portfolio = PortfolioConfig()
@@ -71,7 +75,7 @@ def _create_locked_context(base_path="/krakked", auth_enabled=False, auth_token=
         strategies=strategies,
         ui=ui_conf,
         profiles={},
-        session=session_config
+        session=session_config,
     )
 
     session_state = SessionState()
@@ -86,8 +90,9 @@ def _create_locked_context(base_path="/krakked", auth_enabled=False, auth_token=
         execution_service=None,
         metrics=None,
         session=session_state,
-        is_setup_mode=True
+        is_setup_mode=True,
     )
+
 
 def test_lifecycle_middleware_allowlist(monkeypatch, tmp_path):
     """Verify strictly allowed endpoints in locked mode."""
@@ -120,7 +125,9 @@ def test_lifecycle_middleware_allowlist(monkeypatch, tmp_path):
 
     for path in allowed_gets:
         resp = client.get(path)
-        assert resp.status_code == 200, f"Expected 200 for {path}, got {resp.status_code}"
+        assert (
+            resp.status_code == 200
+        ), f"Expected 200 for {path}, got {resp.status_code}"
 
     # Reset (POST)
     resp = client.post("/krakked/api/system/reset")
@@ -133,13 +140,16 @@ def test_lifecycle_middleware_allowlist(monkeypatch, tmp_path):
     monkeypatch.setattr(system, "unlock_secrets", MagicMock(return_value=True))
     resp = client.post(
         "/krakked/api/system/setup/unlock",
-        json={"password": "dummy", "remember": False}
+        json={"password": "dummy", "remember": False},
     )
     assert resp.status_code == 200
 
     # Accounts prefix (Future endpoint test - should be 404 not 503)
     resp = client.get("/krakked/api/system/accounts/list")
-    assert resp.status_code == 404, "Expected 404 for missing accounts endpoint, got 503 (blocked) or other"
+    assert (
+        resp.status_code == 404
+    ), "Expected 404 for missing accounts endpoint, got 503 (blocked) or other"
+
 
 def test_lifecycle_middleware_blocklist(monkeypatch, tmp_path):
     """Verify everything else is blocked with strict 503."""
@@ -165,8 +175,11 @@ def test_lifecycle_middleware_blocklist(monkeypatch, tmp_path):
         else:
             resp = client.get(path)
 
-        assert resp.status_code == 503, f"Expected 503 for {path}, got {resp.status_code}"
+        assert (
+            resp.status_code == 503
+        ), f"Expected 503 for {path}, got {resp.status_code}"
         assert resp.json() == expected_json, f"Invalid error envelope for {path}"
+
 
 def test_lifecycle_priority_over_auth(monkeypatch, tmp_path):
     """Verify LifecycleMiddleware runs BEFORE AuthMiddleware."""
@@ -174,9 +187,7 @@ def test_lifecycle_priority_over_auth(monkeypatch, tmp_path):
 
     # Create context with Auth Enabled AND Locked Mode
     ctx = _create_locked_context(
-        base_path="/krakked",
-        auth_enabled=True,
-        auth_token="supersecret"
+        base_path="/krakked", auth_enabled=True, auth_token="supersecret"
     )
 
     app = create_api(ctx)
@@ -187,7 +198,9 @@ def test_lifecycle_priority_over_auth(monkeypatch, tmp_path):
     # Even though we send NO auth header
     resp = client.post("/krakked/api/config/apply", json={"config": {}})
 
-    assert resp.status_code == 503, f"Expected 503 (Lifecycle), got {resp.status_code} (Likely 401 Auth)"
+    assert (
+        resp.status_code == 503
+    ), f"Expected 503 (Lifecycle), got {resp.status_code} (Likely 401 Auth)"
     assert resp.json() == {"data": None, "error": "Setup required"}
 
     # 2. Allowed Endpoint (Health)
