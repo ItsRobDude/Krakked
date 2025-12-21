@@ -3,6 +3,7 @@
 import logging
 import time
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -131,6 +132,10 @@ class MarketDataAPI:
             "stale_tolerance_seconds", 60
         )
 
+        # Instance-specific cache for normalize_pair to avoid global state
+        # and support proper cache clearing per instance.
+        self._normalize_pair_cached = lru_cache(maxsize=2048)(self._normalize_pair_logic)
+
     def initialize(self, backfill: bool = True):
         """
         Initializes the market data service: builds the universe, starts the WebSocket
@@ -200,6 +205,9 @@ class MarketDataAPI:
 
     def refresh_universe(self):
         """Re-fetches the asset pairs and rebuilds the universe."""
+        # Clear the cache to prevent stale mappings persist across universe updates
+        self._normalize_pair_cached.cache_clear()
+
         assert self._rest_client is not None
         self._universe = build_universe(
             self._rest_client, self._config.region, self._config.universe
@@ -329,6 +337,10 @@ class MarketDataAPI:
         Normalize a pair string (e.g., 'BTC/USD', 'XBTUSD') to its canonical form (e.g., 'XBTUSD').
         Uses a dynamic alias index and falls back to asset aliasing for robustness.
         """
+        return self._normalize_pair_cached(pair)
+
+    def _normalize_pair_logic(self, pair: str) -> str:
+        """Internal logic for normalize_pair, wrapped by LRU cache."""
         pair = pair.strip().upper()
 
         # 1. Direct lookup in alias map
