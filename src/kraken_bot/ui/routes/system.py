@@ -679,7 +679,7 @@ async def stop_session(request: Request) -> ApiEnvelope[SessionStatePayload]:
 async def list_profiles(request: Request) -> ApiEnvelope[list[ProfileSummaryPayload]]:
     try:
         ctx = _context(request)
-        _check_setup_mode(ctx)
+        # Removed _check_setup_mode(ctx) to allow access in setup mode
         profiles = [
             ProfileSummaryPayload(name=name, description=cfg.description)
             for name, cfg in ctx.config.profiles.items()

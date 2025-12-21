@@ -424,6 +424,66 @@ class BotController:
         # State flags
         self.is_setup_mode = False
 
+    def bootstrap_locked_context(self) -> AppContext:
+        """
+        Initializes a minimal locked context for UI-first boot.
+        Does NOT load credentials or initialize services.
+        """
+        config_dir = get_config_dir()
+        config_path = config_dir / "config.yaml"
+
+        if not config_path.exists():
+            # Minimal safe defaults to boot the API/UI.
+            write_initial_config(
+                {
+                    "region": {"code": "US_CA", "default_quote": "USD"},
+                    "universe": {
+                        "include_pairs": [],
+                        "exclude_pairs": [],
+                        "min_24h_volume_usd": 0.0,
+                    },
+                    "execution": {
+                        "mode": "paper",
+                        "validate_only": True,
+                        "allow_live_trading": False,
+                    },
+                    "ui": {"enabled": True, "host": "127.0.0.1", "port": 8000},
+                    "session": {
+                        "mode": "paper",
+                        "loop_interval_sec": 15.0,
+                        "profile_name": None,
+                        "ml_enabled": True,
+                    },
+                },
+                config_dir=config_dir,
+            )
+
+        # Load config but DO NOT bootstrap credentials
+        config = load_config(config_path=config_path)
+        self.is_setup_mode = True
+
+        session_state = SessionState(
+            active=False,
+            mode=config.session.mode,
+            loop_interval_sec=config.session.loop_interval_sec,
+            profile_name=config.session.profile_name,
+            ml_enabled=config.session.ml_enabled,
+            emergency_flatten=getattr(config.session, "emergency_flatten", False),
+        )
+
+        return AppContext(
+            config=config,
+            client=None,
+            market_data=None,
+            portfolio_service=None,
+            portfolio=None,
+            strategy_engine=None,
+            execution_service=None,
+            metrics=None,
+            session=session_state,
+            is_setup_mode=True,
+        )
+
     def bootstrap_context(self) -> AppContext:
         """
         Loads config/creds and initializes all services.
@@ -721,21 +781,9 @@ class BotController:
         """Main entry point."""
         configure_logging(level=logging.INFO)
 
-        # 1. Initial Bootstrap
+        # 1. Initial Locked Boot (UI-first)
         try:
-            initial_context = self.bootstrap_context()
-            self.context = initial_context  # Initialize the main reference
-        except PortfolioSchemaError as e:
-            logger.critical(
-                "Portfolio schema mismatch: %s",
-                e,
-                extra=structured_log_extra(
-                    event="schema_mismatch",
-                    found_schema=e.found,
-                    expected_schema=e.expected,
-                ),
-            )
-            return 1
+            self.context = self.bootstrap_locked_context()
         except Exception as e:
             logger.critical(
                 "Fatal startup error: %s",
@@ -815,6 +863,20 @@ class BotController:
                                 "Re-initialization failed to clear setup mode",
                                 extra=structured_log_extra(event="setup_failed_retry"),
                             )
+                    except PortfolioSchemaError as e:
+                        # Log specific schema errors as critical, preserving legacy behavior for re-init
+                        logger.critical(
+                            "Portfolio schema mismatch during re-init: %s",
+                            e,
+                            extra=structured_log_extra(
+                                event="schema_mismatch",
+                                found_schema=e.found,
+                                expected_schema=e.expected,
+                            ),
+                        )
+                        # We clear the event so we don't spin-loop on the error
+                        if self.context:
+                            self.context.reinitialize_event.clear()
                     except Exception:
                         logger.exception(
                             "Critical error during re-initialization",

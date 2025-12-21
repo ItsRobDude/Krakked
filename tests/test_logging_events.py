@@ -14,7 +14,7 @@ from kraken_bot.connection.rest_client import KrakenRESTClient
 from kraken_bot.execution.adapter import ExecutionAdapter
 from kraken_bot.execution.models import LocalOrder
 from kraken_bot.execution.oms import ExecutionService
-from kraken_bot.main import BotController, _run_loop_iteration, run
+from kraken_bot.main import BotController, _run_loop_iteration
 from kraken_bot.market_data.api import MarketDataAPI
 from kraken_bot.market_data.models import PairMetadata
 from kraken_bot.metrics import SystemMetrics
@@ -182,9 +182,14 @@ def test_market_data_warning_emits_structured_event(caplog: pytest.LogCaptureFix
 
 
 def test_schema_mismatch_logs_critical_event(monkeypatch, caplog):
+    """
+    Checks that the re-initialization loop logs a CRITICAL event on schema mismatch.
+    """
     caplog.set_level(logging.CRITICAL, logger="kraken_bot.main")
 
     monkeypatch.setattr("kraken_bot.main.configure_logging", lambda *_, **__: None)
+
+    # Mock bootstrap to raise SchemaError
     monkeypatch.setattr(
         "kraken_bot.main.bootstrap",
         lambda allow_interactive_setup: (_ for _ in ()).throw(
@@ -192,7 +197,39 @@ def test_schema_mismatch_logs_critical_event(monkeypatch, caplog):
         ),
     )
 
-    exit_code = run(allow_interactive_setup=False)
+    controller = BotController(allow_interactive_setup=False)
+
+    # Setup context to simulate locked mode
+    controller.context = MagicMock()
+    controller.context.config.ui.enabled = False
+    controller.context.is_setup_mode = True
+    controller.context.reinitialize_event.wait.side_effect = [
+        True,
+        False,
+    ]  # Trigger once then stop wait loop
+    controller.context.reinitialize_event.is_set.return_value = True
+
+    # We mock bootstrap_locked_context to return our prepared mock context
+    # so run() enters the loop correctly.
+    controller.bootstrap_locked_context = MagicMock(return_value=controller.context)
+
+    # We need to break the main loop after one iteration or handling the event
+    # The loop runs while not stop_event.is_set().
+    # We can set stop_event in a side effect or just let it run one cycle.
+    # The 'wait' call above controls the "setup mode" blocking loop.
+    # If wait returns True, it tries to bootstrap_context (which fails).
+    # Then it loops again. We need to stop it.
+
+    def stop_controller(*args, **kwargs):
+        controller.stop_event.set()
+        return True  # Simulate wait success
+
+    controller.context.reinitialize_event.wait.side_effect = stop_controller
+
+    # Prevent UI start
+    monkeypatch.setattr(BotController, "start_ui", lambda self: None)
+
+    exit_code = controller.run()
 
     records = [
         record
@@ -200,8 +237,10 @@ def test_schema_mismatch_logs_critical_event(monkeypatch, caplog):
         if getattr(record, "event", None) == "schema_mismatch"
     ]
 
-    assert exit_code == 1
-    assert records, "Expected a schema_mismatch log entry"
+    # exit_code should be 0 because the loop exited gracefully via stop_event
+    assert exit_code == 0
+
+    assert records, "Expected a schema_mismatch log entry from re-init loop"
     assert all(record.levelno == logging.CRITICAL for record in records)
     assert any(getattr(record, "expected_schema", None) == 3 for record in records)
     assert any(getattr(record, "found_schema", None) == 2 for record in records)

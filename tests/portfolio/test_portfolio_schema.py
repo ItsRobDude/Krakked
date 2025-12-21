@@ -7,6 +7,11 @@ from kraken_bot.portfolio.store import CURRENT_SCHEMA_VERSION
 
 
 def test_live_mode_disallows_auto_migrate_schema(monkeypatch):
+    """
+    Verifies that bootstrapping explicitly disallows auto-migration in live/paper mode.
+    Since main.run() now does UI-first boot and doesn't call bootstrap() immediately,
+    we test main.BotController.bootstrap_context() directly.
+    """
     config = SimpleNamespace(
         portfolio=SimpleNamespace(auto_migrate_schema=True, db_path=":memory:"),
         execution=SimpleNamespace(mode="live"),
@@ -17,9 +22,15 @@ def test_live_mode_disallows_auto_migrate_schema(monkeypatch):
 
     monkeypatch.setattr(main, "bootstrap", fake_bootstrap)
 
-    exit_code = main.run()
+    controller = main.BotController(allow_interactive_setup=False)
 
-    assert exit_code == 1
+    # We expect this to raise RuntimeError directly, effectively simulating
+    # what would happen if the reinit event was triggered.
+    try:
+        controller.bootstrap_context()
+        assert False, "Should have raised RuntimeError"
+    except RuntimeError as e:
+        assert "auto_migrate_schema must be False" in str(e)
 
 
 def test_portfolio_migrate_cli_calls_ensure_schema(tmp_path):

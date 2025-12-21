@@ -13,7 +13,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from kraken_bot.ui.context import AppContext
 from kraken_bot.ui.logging import build_request_log_extra
-from kraken_bot.ui.middleware import SetupAwareMiddleware
+from kraken_bot.ui.middleware import LifecycleMiddleware
 from kraken_bot.ui.routes import (
     config_router,
     execution_router,
@@ -60,55 +60,19 @@ class AuthMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 
-class SetupModeMiddleware(BaseHTTPMiddleware):
-    """Blocks non-setup endpoints while the app is in setup mode."""
-
-    def __init__(self, app, base_path: str = ""):
-        super().__init__(app)
-        normalized_base = base_path.rstrip("/") or ""
-        self._api_prefix = f"{normalized_base}/api" or "/api"
-        # Allow the health endpoint, the system setup/health endpoints, and config download.
-        self._allowed_prefixes = (
-            f"{self._api_prefix}/health",
-            f"{self._api_prefix}/system/health",
-            f"{self._api_prefix}/system/setup",
-            f"{self._api_prefix}/config",
-        )
-
-    async def dispatch(self, request: Request, call_next: Callable):
-        path = request.url.path
-        if path.startswith(self._api_prefix):
-            ctx = getattr(request.app.state, "context", None)
-            if ctx is not None and getattr(ctx, "is_setup_mode", False):
-                if not any(
-                    path.startswith(prefix) for prefix in self._allowed_prefixes
-                ):
-                    return JSONResponse(
-                        {"data": None, "error": "Setup required"}, status_code=409
-                    )
-        return await call_next(request)
-
-
 def create_api(context: AppContext) -> FastAPI:
     """Build a FastAPI app wired with routers and optional auth."""
 
     base_path = context.config.ui.base_path.rstrip("/") or ""
 
     middleware = [
-        Middleware(SetupAwareMiddleware, base_path=base_path),
+        Middleware(LifecycleMiddleware, base_path=base_path),
     ]
     auth_config = context.config.ui.auth
     if auth_config.enabled and auth_config.token:
         middleware.append(
             Middleware(AuthMiddleware, token=auth_config.token, base_path=base_path)
         )
-
-    middleware.append(
-        Middleware(
-            SetupModeMiddleware,
-            base_path=base_path,
-        )
-    )
 
     app = FastAPI(middleware=middleware)
     app.state.context = context

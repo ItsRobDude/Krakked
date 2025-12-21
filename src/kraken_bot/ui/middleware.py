@@ -1,4 +1,4 @@
-"""Middleware for blocking service access during setup mode."""
+"""Middleware for managing application lifecycle access."""
 
 import logging
 from typing import Callable
@@ -12,47 +12,73 @@ from kraken_bot.ui.logging import build_request_log_extra
 logger = logging.getLogger(__name__)
 
 
-class SetupAwareMiddleware(BaseHTTPMiddleware):
+class LifecycleMiddleware(BaseHTTPMiddleware):
     """
-    Middleware that inspects the request path and the application state.
-    If the application is in setup mode and the path requires services,
-    it returns a 503 Service Unavailable error.
+    Middleware that enforces access control based on the application lifecycle state.
+
+    In setup/locked mode (ctx.is_setup_mode=True), restricts access to a strict
+    allowlist of endpoints necessary for bootstrapping the system. All other
+    requests are blocked with a 503 Service Unavailable error.
     """
 
     def __init__(self, app, base_path: str = ""):
         super().__init__(app)
         normalized_base = base_path.rstrip("/")
-        # Define paths that ARE allowed in setup mode
-        self._allowed_paths = {
-            f"{normalized_base}/api/system/setup/status",
-            f"{normalized_base}/api/system/setup/config",
-            f"{normalized_base}/api/system/setup/credentials",
-            f"{normalized_base}/api/system/setup/unlock",
-            f"{normalized_base}/api/system/setup/forget",
-            f"{normalized_base}/api/system/reset",
+
+        # Exact match allowed paths (method-agnostic in set, but checked specifically)
+        # We store them without method here, logic will check method+path
+        self._allowed_paths_exact = {
+            f"{normalized_base}/api/system/session",
             f"{normalized_base}/api/system/health",
+            f"{normalized_base}/api/system/profiles",
             f"{normalized_base}/api/health",
-            # Fallback for root or docs if needed, but primarily API
+            f"{normalized_base}/api/config/runtime",
         }
+
+        # POST-only exact matches
+        self._allowed_post_exact = {
+            f"{normalized_base}/api/system/reset",
+        }
+
+        # Prefix allowed paths
+        self._allowed_prefixes = (
+            f"{normalized_base}/api/system/setup/",
+            f"{normalized_base}/api/system/accounts/",
+        )
+
         self._api_prefix = f"{normalized_base}/api"
 
-    async def dispatch(self, request: Request, call_next: Callable):  # type: ignore[override]
-        # We need to access the app context.
-        # Note: request.app.state.context might not be populated if app startup failed?
-        # But create_api ensures it.
+    async def dispatch(self, request: Request, call_next: Callable):
         try:
-            ctx = request.app.state.context
+            ctx = getattr(request.app.state, "context", None)
         except AttributeError:
-            # Should not happen in normal operation
+            # Should not happen if initialized correctly
             return await call_next(request)
 
-        # If not in setup mode, proceed
+        if ctx is None:
+            # Safety fallback
+            return await call_next(request)
+
+        # If unlocked, allow all
         if not ctx.is_setup_mode:
             return await call_next(request)
 
         path = request.url.path
-        # If path is allowed, proceed
-        if path in self._allowed_paths:
+        method = request.method
+
+        # Check Allowlist
+
+        # 1. Exact matches (GET usually, but we check method for strictness if needed)
+        # Requirement: EXACT PATH + METHOD for session/health/profiles
+        if method == "GET" and path in self._allowed_paths_exact:
+            return await call_next(request)
+
+        # 2. POST exact matches
+        if method == "POST" and path in self._allowed_post_exact:
+            return await call_next(request)
+
+        # 3. Prefix matches (Any Method)
+        if any(path.startswith(prefix) for prefix in self._allowed_prefixes):
             return await call_next(request)
 
         # If it's an API call but not allowed -> Block
@@ -64,11 +90,10 @@ class SetupAwareMiddleware(BaseHTTPMiddleware):
             return JSONResponse(
                 {
                     "data": None,
-                    "error": "System is in setup mode. Please complete configuration.",
+                    "error": "Setup required",
                 },
                 status_code=503,
             )
 
-        # For static files or other routes, we might allow or block.
-        # Assuming we only care about API protection here.
+        # Non-API paths (static files etc) are allowed
         return await call_next(request)

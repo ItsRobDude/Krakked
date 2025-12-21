@@ -56,7 +56,15 @@ def test_run_exits_on_portfolio_schema_error(monkeypatch, caplog):
     # Prevent main.run from nuking the caplog handler
     monkeypatch.setattr(main, "configure_logging", lambda **kwargs: None)
 
+    # Prevent BotController from hanging in the main loop
+    monkeypatch.setattr(
+        main.BotController, "start_ui", lambda self: self.stop_event.set()
+    )
+
+    # In the new UI-first boot, run() calls bootstrap_locked_context() which does NOT
+    # initialize PortfolioService, thus avoiding the schema error check at startup.
+    # So exit_code should be 0 (success).
     exit_code = main.run()
 
-    assert exit_code == 1
-    assert "schema mismatch" in caplog.text
+    assert exit_code == 0
+    # Schema check is deferred, so NO schema mismatch log is expected at boot.
