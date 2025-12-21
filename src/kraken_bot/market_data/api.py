@@ -84,7 +84,16 @@ def validate_pairs_with_client(client: KrakenRESTClient, pairs: List[str]) -> Li
 
 class MarketDataAPI:
     """
-    The main public interface for the market data module.
+    The central access point for market data in the system.
+
+    This class coordinates:
+    1. Universe Management: Discovering and storing metadata for tradable pairs.
+    2. Real-time Data: Streaming prices and candles via WebSocket V2.
+    3. Historical Data: Backfilling OHLC data via REST.
+    4. Staleness Checks: Enforcing strict freshness constraints on data access.
+
+    It is designed to be used as a context manager to ensure clean shutdown of
+    background threads (WebSocket, file store).
     """
 
     def __enter__(self):
@@ -133,8 +142,12 @@ class MarketDataAPI:
 
     def initialize(self, backfill: bool = True):
         """
-        Initializes the market data service: builds the universe, starts the WebSocket
-        client, and optionally backfills historical data.
+        Boots the market data service in sequence:
+        1. Refreshes the universe from Kraken API (or cache on failure).
+        2. Starts the WebSocket V2 client for real-time tickers and candles.
+        3. Optionally backfills historical OHLC data for all configured timeframes.
+
+        @param backfill - If True, triggers a blocking REST backfill loop.
         """
         logger.info("Initializing MarketDataAPI...")
         assert self._rest_client is not None
