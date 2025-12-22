@@ -3,6 +3,7 @@
 import logging
 from typing import Tuple
 
+from kraken_bot.accounts import ensure_default_account, resolve_secrets_path
 from kraken_bot.config import AppConfig, load_config
 from kraken_bot.connection.rate_limiter import RateLimiter
 from kraken_bot.connection.rest_client import KrakenRESTClient
@@ -72,7 +73,27 @@ def bootstrap(
     config = load_config()
     safety_status = check_safety(config)
     log_safety_status(safety_status)
-    credential_result = load_api_keys(allow_interactive_setup=allow_interactive_setup)
+
+    # Resolve account and secrets path
+    account_id = config.session.account_id or "default"
+    # Ensure registry integrity (creates default if missing)
+    ensure_default_account()
+
+    try:
+        secrets_path = resolve_secrets_path(None, account_id)
+    except ValueError as e:
+        # Should not happen given ensure_default_account, but fail gracefully
+        logger.error(f"Failed to resolve secrets for account {account_id}: {e}")
+        # Fallback to default secrets location if resolution fails
+        from kraken_bot.config import get_config_dir
+
+        secrets_path = get_config_dir() / "secrets.enc"
+
+    credential_result = load_api_keys(
+        allow_interactive_setup=allow_interactive_setup,
+        secrets_path=secrets_path,
+        account_id=account_id,
+    )
     api_key, api_secret = _validate_credentials(credential_result)
 
     rate_limiter = RateLimiter(calls_per_second=0.5)

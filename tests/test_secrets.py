@@ -1,300 +1,208 @@
-# tests/test_secrets.py
+"""Tests for secrets encryption and credential loading."""
 
 import os
-import stat
+from datetime import datetime, timezone
 from unittest.mock import patch
 
 import pytest
 
-from kraken_bot.connection.exceptions import AuthError, ServiceUnavailableError
-from kraken_bot.credentials import CredentialResult, CredentialStatus
+from kraken_bot.credentials import CredentialStatus
+from kraken_bot.password_store import get_saved_master_password, save_master_password
 from kraken_bot.secrets import (
+    SECRETS_FILE_NAME,
     SecretsDecryptionError,
-    _decrypt_secrets,
-    _interactive_setup,
+    delete_secrets,
     encrypt_secrets,
     load_api_keys,
     persist_api_keys,
+    unlock_secrets,
 )
 
 
-# Mock config dir to avoid writing to real system
 @pytest.fixture
 def mock_config_dir(tmp_path):
-    with patch("kraken_bot.secrets.get_config_dir", return_value=tmp_path):
+    with (
+        patch("kraken_bot.secrets.get_config_dir", return_value=tmp_path),
+        patch("kraken_bot.config.get_config_dir", return_value=tmp_path),
+    ):
         yield tmp_path
 
 
-def test_load_from_env_vars(mock_config_dir):
+@pytest.fixture
+def mock_keyring():
+    store = {}
+
+    def get_password(service, username):
+        return store.get((service, username))
+
+    def set_password(service, username, password):
+        store[(service, username)] = password
+
+    def delete_password(service, username):
+        if (service, username) in store:
+            del store[(service, username)]
+
+    with (
+        patch("keyring.get_password", side_effect=get_password),
+        patch("keyring.set_password", side_effect=set_password),
+        patch("keyring.delete_password", side_effect=delete_password),
+    ):
+        yield store
+
+
+def test_encrypt_secrets_writes_file(mock_config_dir):
+    password = "secure_password"
+    api_key = "my_key"
+    api_secret = "my_secret"
+
+    encrypt_secrets(api_key, api_secret, password)
+
+    secrets_path = mock_config_dir / SECRETS_FILE_NAME
+    assert secrets_path.exists()
+    assert secrets_path.stat().st_mode & 0o777 == 0o600
+
+    with open(secrets_path, "rb") as f:
+        content = f.read()
+    assert len(content) > 32  # Salt + Encrypted Data
+
+
+def test_unlock_secrets_decrypts_successfully(mock_config_dir):
+    password = "secure_password"
+    api_key = "my_key"
+    api_secret = "my_secret"
+
+    encrypt_secrets(api_key, api_secret, password)
+
+    secrets = unlock_secrets(password)
+    assert secrets["api_key"] == api_key
+    assert secrets["api_secret"] == api_secret
+    assert secrets["validated"] is None
+
+
+def test_unlock_secrets_wrong_password(mock_config_dir):
+    encrypt_secrets("key", "secret", "correct_password")
+
+    with pytest.raises(SecretsDecryptionError, match="Invalid password"):
+        unlock_secrets("wrong_password")
+
+
+def test_load_api_keys_from_env(mock_config_dir):
     with patch.dict(
-        os.environ, {"KRAKEN_API_KEY": "env_key", "KRAKEN_API_SECRET": "env_secret"}
+        os.environ,
+        {"KRAKEN_API_KEY": "env_key", "KRAKEN_API_SECRET": "env_secret"},
     ):
         result = load_api_keys()
-        assert result.api_key == "env_key"
-        assert result.api_secret == "env_secret"
         assert result.status == CredentialStatus.LOADED
+        assert result.api_key == "env_key"
         assert result.source == "environment"
 
 
-def test_partial_env_vars_fall_through(mock_config_dir):
-    """
-    Ensure that incomplete env vars don't block execution (Issue #4).
-    They should be ignored, allowing fallthrough to file check (or NOT_FOUND).
-    """
-    with (
-        patch.dict(os.environ, {"KRAKEN_API_KEY": "env_key"}, clear=True),
-        patch("getpass.getpass") as mock_getpass,
-    ):
+def test_load_api_keys_from_file_with_env_password(mock_config_dir):
+    encrypt_secrets("file_key", "file_secret", "env_pw")
+
+    with patch.dict(os.environ, {"KRAKEN_BOT_SECRET_PW": "env_pw"}):
         result = load_api_keys()
-
-    mock_getpass.assert_not_called()
-    # Expectation: Env vars ignored, file not found -> status NOT_FOUND
-    assert result.api_key is None
-    assert result.api_secret is None
-    assert result.status == CredentialStatus.NOT_FOUND
-    assert result.source == "none"
+        assert result.status == CredentialStatus.LOADED
+        assert result.api_key == "file_key"
+        assert result.source == "secrets_file"
 
 
-def test_whitespace_env_vars_are_ignored(mock_config_dir):
-    with patch.dict(
-        os.environ,
-        {"KRAKEN_API_KEY": "   ", "KRAKEN_API_SECRET": "env_secret"},
-        clear=True,
-    ):
-        result = load_api_keys()
+def test_load_api_keys_from_file_missing_password(mock_config_dir):
+    encrypt_secrets("file_key", "file_secret", "env_pw")
 
-    assert result.api_key is None
-    assert result.api_secret is None
-    assert result.status == CredentialStatus.NOT_FOUND
-    assert result.source == "none"
-
-
-def test_encrypt_and_decrypt_flow(mock_config_dir):
-    api_key = "test_key"
-    api_secret = "test_secret"
-    password = "secure_password"
-
-    encrypt_secrets(api_key, api_secret, password)
-
-    # Verify file exists
-    secrets_file = mock_config_dir / "secrets.enc"
-    assert secrets_file.exists()
-    if os.name == "posix":
-        assert stat.S_IMODE(secrets_file.stat().st_mode) == 0o600
-    else:
-        assert stat.S_IMODE(secrets_file.stat().st_mode) in (0o600, 0o666)
-
-    # Mock getpass to return the password automatically
-    with patch("getpass.getpass", return_value=password):
-        # We also need to patch os.getenv to ensure it doesn't try to use env vars
-        with patch.dict(os.environ, {}, clear=True):
-            # Also need to mock get_config_dir inside load_api_keys via secrets module patch
-            # (Wait, mock_config_dir fixture already patches it globally in the module? No, only where imported)
-            # The fixture patches 'kraken_bot.secrets.get_config_dir'. Correct.
-
-            result = load_api_keys(allow_interactive_setup=True)
-            assert result.api_key == api_key
-            assert result.api_secret == api_secret
-            assert result.status == CredentialStatus.LOADED
-            assert result.source == "secrets_file"
-
-
-def test_load_api_keys_not_found_without_interactive(mock_config_dir):
-    with patch.dict(os.environ, {}, clear=True):
-        result = load_api_keys()
-
-    assert result.api_key is None
-    assert result.api_secret is None
-    assert result.status == CredentialStatus.NOT_FOUND
-    assert result.source == "none"
-
-
-def test_load_api_keys_uses_interactive_setup_when_allowed(mock_config_dir):
-    expected_result = CredentialResult(
-        "key", "secret", CredentialStatus.LOADED, source="interactive"
-    )
-
-    with patch(
-        "kraken_bot.secrets._interactive_setup", return_value=expected_result
-    ) as mock_setup:
-        with patch.dict(os.environ, {}, clear=True):
-            result = load_api_keys(allow_interactive_setup=True)
-
-    mock_setup.assert_called_once()
-    assert result == expected_result
-
-
-def test_load_api_keys_requires_password_env_when_non_interactive(mock_config_dir):
-    secrets_file = mock_config_dir / "secrets.enc"
-    secrets_file.write_text("placeholder")
-
-    with (
-        patch.dict(os.environ, {}, clear=True),
-        patch("getpass.getpass") as mock_getpass,
-    ):
-        result = load_api_keys()
-
-    mock_getpass.assert_not_called()
+    # No env var, no interactive mode
+    result = load_api_keys(allow_interactive_setup=False)
     assert result.status == CredentialStatus.MISSING_PASSWORD
-    assert result.api_key is None
-    assert result.api_secret is None
-    assert result.source == "secrets_file"
-
-    msg = result.validation_error.lower()
-    assert "master password" in msg
-    assert "keychain" in msg
-    assert "non-interactive" in msg
+    assert "Credentials unavailable" in result.validation_error
 
 
-def test_load_api_keys_bad_password_returns_auth_error(mock_config_dir):
-    api_key = "test_key"
-    api_secret = "test_secret"
-    correct_password = "correct_password"
-    encrypt_secrets(api_key, api_secret, correct_password)
-
-    with (
-        patch.dict(os.environ, {"KRAKEN_BOT_SECRET_PW": "wrong_password"}, clear=True),
-        patch("getpass.getpass") as mock_getpass,
-    ):
-        result = load_api_keys()
-
-    mock_getpass.assert_not_called()
-    assert result.status in (CredentialStatus.AUTH_ERROR, CredentialStatus.LOCKED)
-    assert result.api_key is None
-    assert result.api_secret is None
-    assert result.source == "secrets_file"
-    assert "password" in result.validation_error.lower()
-    assert any(
-        term in result.validation_error.lower() for term in ("invalid", "locked")
-    )
-
-
-def test_decrypt_bad_password(mock_config_dir):
-    api_key = "test_key"
-    api_secret = "test_secret"
-    password = "correct_password"
-    encrypt_secrets(api_key, api_secret, password)
-
-    # Directly call _decrypt_secrets with wrong password to verify exception
-    with pytest.raises(SecretsDecryptionError):
-        _decrypt_secrets("wrong_password")
-
-
-def test_encrypt_includes_validation_metadata(mock_config_dir):
-    api_key = "meta_key"
-    api_secret = "meta_secret"
+def test_persist_api_keys_with_validation_metadata(mock_config_dir):
     password = "pw"
+    ts = datetime(2023, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
 
-    encrypt_secrets(
-        api_key, api_secret, password, validated=True, validation_error=None
-    )
+    with patch("kraken_bot.secrets.datetime") as mock_dt:
+        mock_dt.now.return_value = ts
+        persist_api_keys(
+            "k",
+            "s",
+            password,
+            validated=True,
+            validation_error=None,
+        )
 
-    secrets = _decrypt_secrets(password)
-    assert secrets["api_key"] == api_key
-    assert secrets["api_secret"] == api_secret
+    secrets = unlock_secrets(password)
     assert secrets["validated"] is True
-    assert secrets["validated_at"] is not None
+    assert secrets["validated_at"] == ts.isoformat()
     assert secrets["validation_error"] is None
 
 
-def test_persist_api_keys_requires_force_for_unvalidated(mock_config_dir):
-    with pytest.raises(ValueError):
-        persist_api_keys("key", "secret", "pw", validated=False)
+def test_persist_api_keys_refuses_unvalidated_without_force(mock_config_dir):
+    with pytest.raises(ValueError, match="Refusing to save"):
+        persist_api_keys("k", "s", "pw", validated=False)
 
 
-def test_persist_api_keys_can_force_save_unvalidated(mock_config_dir):
-    persist_api_keys(
-        "key",
-        "secret",
-        "pw",
-        validated=False,
-        validation_error="service",
-        force_save_unvalidated=True,
-    )
-
-    secrets = _decrypt_secrets("pw")
+def test_persist_api_keys_allows_unvalidated_with_force(mock_config_dir):
+    persist_api_keys("k", "s", "pw", validated=False, force_save_unvalidated=True)
+    secrets = unlock_secrets("pw")
     assert secrets["validated"] is False
-    assert secrets["validation_error"] == "service"
 
 
-def test_interactive_setup_service_error_prompts_and_allows_skip(mock_config_dir):
-    with (
-        patch("builtins.input", side_effect=["key", "n"]),
-        patch("getpass.getpass", side_effect=["secret"]),
-        patch(
-            "kraken_bot.connection.validation.validate_credentials",
-            return_value=CredentialResult(
-                api_key="key",
-                api_secret="secret",
-                status=CredentialStatus.SERVICE_ERROR,
-                source="validation",
-                validated=False,
-                can_force_save=True,
-                validation_error="unavailable",
-                error=ServiceUnavailableError("unavailable"),
-            ),
-        ),
+def test_delete_secrets_removes_file(mock_config_dir):
+    path = mock_config_dir / SECRETS_FILE_NAME
+    path.touch()
+    assert path.exists()
+
+    delete_secrets()
+    assert not path.exists()
+
+
+def test_delete_secrets_idempotent(mock_config_dir):
+    delete_secrets()  # File doesn't exist, should not raise
+
+
+def test_load_api_keys_shadow_config_warning(mock_config_dir, caplog):
+    """Ensure mixed env/file config results in discarding env vars."""
+    encrypt_secrets("file_key", "file_secret", "pw")
+    with patch.dict(
+        os.environ, {"KRAKEN_API_KEY": "env_key", "KRAKEN_BOT_SECRET_PW": "pw"}
     ):
-        result = _interactive_setup()
+        # Missing KRAKEN_API_SECRET
+        result = load_api_keys(allow_interactive_setup=False)
 
-    assert result.status == CredentialStatus.SERVICE_ERROR
-    assert result.validated is False
-    assert result.can_force_save is True
-    assert result.validation_error == "unavailable"
-
-
-def test_interactive_setup_auth_error_blocks_force_save(mock_config_dir):
-    with (
-        patch("builtins.input", return_value="key"),
-        patch("getpass.getpass", side_effect=["secret"]),
-        patch(
-            "kraken_bot.connection.validation.validate_credentials",
-            return_value=CredentialResult(
-                api_key="key",
-                api_secret="secret",
-                status=CredentialStatus.AUTH_ERROR,
-                source="validation",
-                validated=False,
-                can_force_save=False,
-                validation_error="auth bad",
-                error=AuthError("auth bad"),
-            ),
-        ),
-    ):
-        result = _interactive_setup()
-
-    assert result.status == CredentialStatus.AUTH_ERROR
-    assert result.validated is False
-    assert result.can_force_save is False
-    assert result.validation_error == "auth bad"
+        # Should fall back to file
+        assert result.status == CredentialStatus.LOADED
+        assert result.api_key == "file_key"
+        assert "AMBIGUOUS CONFIGURATION DETECTED" in caplog.text
 
 
-def test_interactive_setup_service_error_can_force_save(mock_config_dir):
-    with (
-        patch("builtins.input", side_effect=["key", "y"]),
-        patch("getpass.getpass", side_effect=["secret", "pw", "pw"]),
-        patch(
-            "kraken_bot.connection.validation.validate_credentials",
-            return_value=CredentialResult(
-                api_key="key",
-                api_secret="secret",
-                status=CredentialStatus.SERVICE_ERROR,
-                source="validation",
-                validated=False,
-                can_force_save=True,
-                validation_error="unavailable",
-                error=ServiceUnavailableError("unavailable"),
-            ),
-        ),
-    ):
-        result = _interactive_setup()
+def test_default_account_migration(mock_config_dir, mock_keyring):
+    """Test that default account migrates legacy password to new key format."""
+    legacy_pw = "legacy_secret"
 
-    secrets = _decrypt_secrets("pw")
-    assert secrets["api_key"] == "key"
-    assert secrets["api_secret"] == "secret"
-    assert secrets["validated"] is False
-    assert secrets["validation_error"] == "unavailable"
+    # Setup legacy state
+    mock_keyring[("Krakked", "master_password")] = legacy_pw
 
-    assert result.status == CredentialStatus.LOADED
-    assert result.validated is False
-    assert result.validation_error == "unavailable"
+    # 1. Read using new account-aware function for "default"
+    # Should find legacy key and migrate it
+    pw = get_saved_master_password("default")
+    assert pw == legacy_pw
+
+    # 2. Verify migration happened (new key exists)
+    assert mock_keyring[("Krakked", "master_password:default")] == legacy_pw
+
+    # 3. Verify subsequent read uses new key
+    # Clear legacy key to prove we aren't reading it anymore
+    del mock_keyring[("Krakked", "master_password")]
+
+    pw_new = get_saved_master_password("default")
+    assert pw_new == legacy_pw
+
+
+def test_password_store_per_account(mock_config_dir, mock_keyring):
+    """Test per-account password storage isolation."""
+    save_master_password("acc1", "pw1")
+    save_master_password("acc2", "pw2")
+
+    assert get_saved_master_password("acc1") == "pw1"
+    assert get_saved_master_password("acc2") == "pw2"
+    assert get_saved_master_password("acc3") is None

@@ -100,6 +100,7 @@ class SessionConfig:
     loop_interval_sec: float = 15.0
     ml_enabled: bool = True
     emergency_flatten: bool = False
+    account_id: Optional[str] = None
 
 
 @dataclass

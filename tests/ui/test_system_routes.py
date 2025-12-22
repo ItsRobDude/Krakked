@@ -1,5 +1,6 @@
 import logging
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 from starlette.testclient import TestClient
@@ -371,8 +372,15 @@ def test_config_redacts_auth_token(client, system_context):
 
 
 @pytest.mark.parametrize("ui_read_only", [False])
-def test_mode_change_updates_configs(client, system_context):
+def test_mode_change_updates_configs(monkeypatch, client, system_context):
     system_context.config.execution.allow_live_trading = True
+
+    # Mock account functions to avoid file IO and keyring access
+    monkeypatch.setattr("kraken_bot.ui.routes.system.resolve_secrets_path", MagicMock())
+    monkeypatch.setattr("kraken_bot.ui.routes.system.unlock_secrets", MagicMock())
+    monkeypatch.setattr(
+        "kraken_bot.ui.routes.system.set_session_master_password", MagicMock()
+    )
 
     response = client.post("/api/system/mode", json={"mode": "live"})
 
@@ -622,11 +630,17 @@ def test_setup_unlock_remember_failure_is_best_effort(
     system_context.is_setup_mode = True
     system_context.reinitialize_event.clear()
 
-    monkeypatch.setattr(system_routes, "unlock_secrets", lambda _pw: {"ok": True})
-    monkeypatch.setattr(system_routes, "set_session_master_password", lambda _pw: None)
+    # Mock all necessary functions to isolate test from FS/Keyring
+    monkeypatch.setattr(
+        system_routes, "unlock_secrets", lambda _pw, secrets_path=None: {"ok": True}
+    )
+    monkeypatch.setattr(
+        system_routes, "set_session_master_password", lambda _aid, _pw: None
+    )
+    monkeypatch.setattr(system_routes, "resolve_secrets_path", MagicMock())
 
     # Mock save_master_password to raise
-    def fail_save(pw):
+    def fail_save(_aid, _pw):
         raise RuntimeError("keyring down")
 
     monkeypatch.setattr(system_routes, "save_master_password", fail_save)
@@ -649,13 +663,18 @@ def test_setup_unlock_remember_success_sets_flag(monkeypatch, client, system_con
     system_context.is_setup_mode = True
     system_context.reinitialize_event.clear()
 
-    monkeypatch.setattr(system_routes, "unlock_secrets", lambda _pw: {"ok": True})
-    monkeypatch.setattr(system_routes, "set_session_master_password", lambda _pw: None)
+    monkeypatch.setattr(
+        system_routes, "unlock_secrets", lambda _pw, secrets_path=None: {"ok": True}
+    )
+    monkeypatch.setattr(
+        system_routes, "set_session_master_password", lambda _aid, _pw: None
+    )
+    monkeypatch.setattr(system_routes, "resolve_secrets_path", MagicMock())
 
     saved = {}
 
-    def _save(pw: str) -> None:
-        saved["pw"] = pw
+    def _save(aid, pw) -> None:
+        saved[aid] = pw
 
     monkeypatch.setattr(system_routes, "save_master_password", _save)
 
@@ -667,4 +686,8 @@ def test_setup_unlock_remember_success_sets_flag(monkeypatch, client, system_con
     assert payload["data"]["success"] is True
     assert payload["data"]["remember_saved"] is True
     assert payload["data"]["remember_error"] is None
-    assert saved["pw"] == "pw"
+    # Assuming default account for setup
+    assert (
+        saved.get("default") == "pw"
+        or saved.get(system_context.session.account_id) == "pw"
+    )
