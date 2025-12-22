@@ -691,3 +691,34 @@ def test_setup_unlock_remember_success_sets_flag(monkeypatch, client, system_con
         saved.get("default") == "pw"
         or saved.get(system_context.session.account_id) == "pw"
     )
+
+
+def test_system_reset_aborts_on_resolve_failure(monkeypatch, client, system_context):
+    """Ensure system_reset does not delete default secrets if resolution fails."""
+    import kraken_bot.ui.routes.system as system_routes
+
+    # Setup context with non-default account
+    system_context.session.account_id = "nondefault"
+
+    # Mock resolve_secrets_path to raise
+    monkeypatch.setattr(
+        system_routes,
+        "resolve_secrets_path",
+        MagicMock(side_effect=ValueError("Resolution failed")),
+    )
+
+    # Mock delete_secrets to spy on calls
+    mock_delete = MagicMock()
+    monkeypatch.setattr(system_routes, "delete_secrets", mock_delete)
+
+    # Call reset
+    resp = client.post("/api/system/reset")
+
+    # Assert failure response
+    assert resp.status_code == 200  # API returns 200 with error envelope
+    payload = resp.json()
+    assert payload["error"] == "Failed to resolve secrets path for selected account"
+    assert payload["data"] is None
+
+    # Assert delete_secrets was NOT called
+    mock_delete.assert_not_called()

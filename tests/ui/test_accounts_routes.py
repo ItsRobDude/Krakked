@@ -344,22 +344,30 @@ def test_cannot_delete_default_account(mock_config_dir, mock_keyring):
     resp = client.delete("/krakked/api/system/accounts/default")
     assert resp.json()["error"] == "Cannot delete default account"
 
-def test_select_account_clears_old_password(mock_config_dir, mock_keyring, mock_validation):
+
+def test_select_account_clears_old_password(
+    mock_config_dir, mock_keyring, mock_validation
+):
     ctx = _create_context(account_id="default")
     app = create_api(ctx)
     client = TestClient(app)
 
     # 1. Set password for current account
-    from kraken_bot.secrets import set_session_master_password, get_session_master_password
+    from kraken_bot.secrets import (
+        get_session_master_password,
+        set_session_master_password,
+    )
+
     set_session_master_password("default", "old_pw")
     assert get_session_master_password("default") == "old_pw"
 
     # 2. Create/Switch to new account
     # We use 'create' because it internally triggers select logic (or we can use select if we mock load_accounts)
     # Using 'create' is easier as it sets up the registry entry
-    resp = client.post("/krakked/api/system/accounts/create", json={
-        "name": "NewAcc", "apiKey": "k", "apiSecret": "s", "password": "p"
-    })
+    resp = client.post(
+        "/krakked/api/system/accounts/create",
+        json={"name": "NewAcc", "apiKey": "k", "apiSecret": "s", "password": "p"},
+    )
     assert resp.status_code == 200
 
     # Verify context updated to new account
@@ -379,7 +387,9 @@ def test_select_account_clears_old_password(mock_config_dir, mock_keyring, mock_
     # But wait, create writes to disk. select reads from disk.
     # We need to ensure select can see "default". ensure_default_account does this.
 
-    resp = client.post("/krakked/api/system/accounts/select", json={"account_id": "default"})
+    resp = client.post(
+        "/krakked/api/system/accounts/select", json={"account_id": "default"}
+    )
     assert resp.status_code == 200
     assert resp.json()["data"] is not None, f"Select failed: {resp.json()}"
     assert resp.json()["data"]["success"] is True
