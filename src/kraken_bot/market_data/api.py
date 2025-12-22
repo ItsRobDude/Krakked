@@ -134,7 +134,9 @@ class MarketDataAPI:
 
         # Instance-specific cache for normalize_pair to avoid global state
         # and support proper cache clearing per instance.
-        self._normalize_pair_cached = lru_cache(maxsize=2048)(self._normalize_pair_logic)
+        self._normalize_pair_cached = lru_cache(maxsize=2048)(
+            self._normalize_pair_logic
+        )
 
     def initialize(self, backfill: bool = True):
         """
