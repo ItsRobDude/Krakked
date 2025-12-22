@@ -574,6 +574,7 @@ async def create_account(
         base_slug = "account"
 
     config_dir = get_config_dir()
+    ensure_default_account(config_dir)
     accounts_map = load_accounts(config_dir)
 
     account_id = base_slug
@@ -620,10 +621,13 @@ async def create_account(
             logger.warning(f"Failed to save password for new account: {e}")
 
     # 6. Switch & Unlock
+    old_account_id = ctx.session.account_id
     ctx.session.account_id = account_id
     ctx.config.session.account_id = account_id
     dump_runtime_overrides(ctx.config, session=ctx.session, sections={"session"})
 
+    # Clear old session password for safety, set new one
+    set_session_master_password(old_account_id, None)
     set_session_master_password(account_id, payload.password)
 
     # Trigger reinit to load new state

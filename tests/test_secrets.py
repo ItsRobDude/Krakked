@@ -59,7 +59,15 @@ def test_encrypt_secrets_writes_file(mock_config_dir):
 
     secrets_path = mock_config_dir / SECRETS_FILE_NAME
     assert secrets_path.exists()
-    assert secrets_path.stat().st_mode & 0o777 == 0o600
+
+    import os
+    import stat
+
+    mode = stat.S_IMODE(secrets_path.stat().st_mode)
+    if os.name == "posix":
+        assert mode == 0o600
+    else:
+        assert mode in (0o600, 0o666)
 
     with open(secrets_path, "rb") as f:
         content = f.read()
