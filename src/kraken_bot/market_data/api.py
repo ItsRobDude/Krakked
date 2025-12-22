@@ -337,11 +337,12 @@ class MarketDataAPI:
         Normalize a pair string (e.g., 'BTC/USD', 'XBTUSD') to its canonical form (e.g., 'XBTUSD').
         Uses a dynamic alias index and falls back to asset aliasing for robustness.
         """
-        return self._normalize_pair_cached(pair)
+        return self._normalize_pair_cached(pair.strip().upper())
 
     def _normalize_pair_logic(self, pair: str) -> str:
         """Internal logic for normalize_pair, wrapped by LRU cache."""
-        pair = pair.strip().upper()
+        # Note: pair is assumed to be stripped and upper-cased by the caller (normalize_pair)
+        # to ensure efficient caching key usage.
 
         # 1. Direct lookup in alias map
         if pair in self._alias_map:
