@@ -1,7 +1,7 @@
 # src/kraken_bot/market_data/ohlc_fetcher.py
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterator, List, Optional
 
 from kraken_bot.config import OHLCBar, PairMetadata
 from kraken_bot.connection.rate_limiter import RateLimiter
@@ -25,25 +25,86 @@ def _parse_ohlc_response(response: Dict[str, Any], pair: str) -> List[OHLCBar]:
     Parses the raw OHLC data from the Kraken API into a list of OHLCBar objects.
     Note: The last entry in the response is the current, running candle. We exclude it.
     """
-    bars: List[OHLCBar] = []
     # The key for the pair data in the response can be the raw_name or altname
     pair_key = next((key for key in response.keys() if key != "last"), None)
     if not pair_key:
-        return bars
+        return []
 
     # Exclude the last item, which is the incomplete running candle
-    for row in response[pair_key][:-1]:
-        bars.append(
-            OHLCBar(
-                timestamp=int(row[0]),
-                open=float(row[1]),
-                high=float(row[2]),
-                low=float(row[3]),
-                close=float(row[4]),
-                volume=float(row[6]),  # vwap is row[5], volume is row[6]
-            )
+    raw_data = response[pair_key][:-1]
+
+    return [
+        OHLCBar(
+            timestamp=int(row[0]),
+            open=float(row[1]),
+            high=float(row[2]),
+            low=float(row[3]),
+            close=float(row[4]),
+            volume=float(row[6]),  # vwap is row[5], volume is row[6]
         )
-    return bars
+        for row in raw_data
+    ]
+
+
+def _fetch_ohlc_pages(
+    client: KrakenRESTClient,
+    pair_metadata: PairMetadata,
+    timeframe: str,
+    since: Optional[int],
+) -> Iterator[List[OHLCBar]]:
+    """
+    Yields batches of OHLC bars handling pagination.
+    Stops when no more data is available or an error occurs.
+    """
+    current_since = since
+
+    while True:
+        params = {
+            "pair": pair_metadata.rest_symbol,
+            "interval": TIMEFRAME_MAP[timeframe],
+        }
+        if current_since is not None:
+            params["since"] = current_since
+
+        try:
+            response = client.get_public("OHLC", params)
+        except Exception as e:
+            logger.error(
+                f"Failed to fetch OHLC data for {pair_metadata.canonical}: {e}"
+            )
+            break
+
+        if not response:
+            logger.info(
+                f"No more OHLC data returned for {pair_metadata.canonical}. Backfill complete."
+            )
+            break
+
+        bars = _parse_ohlc_response(response, pair_metadata.canonical)
+        if not bars:
+            logger.info(
+                f"No new closed candles for {pair_metadata.canonical}. Backfill complete."
+            )
+            break
+
+        yield bars
+
+        last_raw = response.get("last")
+        try:
+            last_ts = int(last_raw) if last_raw is not None else None
+        except (TypeError, ValueError):
+            logger.warning(
+                f"Received non-numeric 'last' value from OHLC response for {pair_metadata.canonical}: {last_raw}"
+            )
+            break
+
+        if last_ts is None:
+            break
+
+        if current_since is None or last_ts > current_since:
+            current_since = last_ts
+        else:
+            break
 
 
 def backfill_ohlc(
@@ -76,61 +137,14 @@ def backfill_ohlc(
 
     total_bars_fetched = 0
 
-    while True:
-        params = {
-            "pair": pair_metadata.rest_symbol,
-            "interval": TIMEFRAME_MAP[timeframe],
-        }
-        if since is not None:
-            params["since"] = since
-
-        try:
-            response = client.get_public("OHLC", params)
-        except Exception as e:
-            logger.error(
-                f"Failed to fetch OHLC data for {pair_metadata.canonical}: {e}"
-            )
-            break  # Exit on error
-
-        if not response or next(iter(response)) not in response:
-            logger.info(
-                f"No more OHLC data returned for {pair_metadata.canonical}. Backfill complete."
-            )
-            break
-
-        bars = _parse_ohlc_response(response, pair_metadata.canonical)
-
-        if not bars:
-            logger.info(
-                f"No new closed candles for {pair_metadata.canonical}. Backfill complete."
-            )
-            break
-
+    for bars in _fetch_ohlc_pages(client, pair_metadata, timeframe, since):
         if store:
             store.append_bars(pair_metadata.canonical, timeframe, bars)
-
         total_bars_fetched += len(bars)
 
-        # Kraken's pagination uses the 'last' timestamp from the response
-        last_raw = response.get("last")
-        if last_raw is None:
-            break
+    if total_bars_fetched > 0:
+        logger.info(
+            f"Completed backfill for {pair_metadata.canonical} ({timeframe}). Fetched {total_bars_fetched} new bars."
+        )
 
-        try:
-            last_ts = int(last_raw)
-        except (TypeError, ValueError):
-            logger.warning(
-                f"Received non-numeric 'last' value from OHLC response for {pair_metadata.canonical}: {last_raw}"
-            )
-            break
-
-        if since is None or last_ts > since:
-            since = last_ts
-        else:
-            # No more pages
-            break
-
-    logger.info(
-        f"Completed backfill for {pair_metadata.canonical} ({timeframe}). Fetched {total_bars_fetched} new bars."
-    )
     return total_bars_fetched
