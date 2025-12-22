@@ -257,8 +257,10 @@ Use the packaged console script for the common workflows:
 
 * `poetry run krakked run` — long-lived orchestrator with scheduler, OMS, and UI enabled.
 * `poetry run krakked run-once` — single paper/validate-only cycle for quick safety checks.
-* `poetry run krakked migrate-db --db-path <path>` — create or migrate the SQLite portfolio store (defaults to `portfolio.db`).
-* `poetry run krakked schema-version --db-path <path>` — inspect the current schema version recorded in the store.
+* `poetry run krakked migrate --db-path <path>` — create or migrate the SQLite portfolio store (defaults to `portfolio.db`).
+* `poetry run krakked db-schema-version --db-path <path>` — inspect the current schema version recorded in the store.
+* `poetry run krakked db-backup --db-path <path>` — create a timestamped backup of the portfolio database.
+* `poetry run krakked db-info --db-path <path>` — show row counts and schema info.
 * `poetry run krakked setup` / `poetry run krakked smoke-test` — interactive credential bootstrap and a basic authenticated probe.
 
 See the `--help` output of `poetry run krakked` for the full command list; all subcommands honor `--allow-interactive-setup` and `--db-path` where applicable.
