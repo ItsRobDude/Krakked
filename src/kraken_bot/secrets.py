@@ -7,6 +7,7 @@ import logging
 import os
 import threading
 from datetime import datetime, timezone
+from pathlib import Path
 
 from cryptography.fernet import Fernet, InvalidToken
 from cryptography.hazmat.backends import default_backend
@@ -38,18 +39,21 @@ logger = logging.getLogger(__name__)
 # --- Session In-Memory Store ---
 
 _session_lock = threading.Lock()
-_session_master_password: str | None = None
+_session_master_passwords: dict[str, str] = {}
 
 
-def set_session_master_password(password: str | None) -> None:
-    global _session_master_password
+def set_session_master_password(account_id: str, password: str | None) -> None:
+    global _session_master_passwords
     with _session_lock:
-        _session_master_password = password
+        if password is None:
+            _session_master_passwords.pop(account_id, None)
+        else:
+            _session_master_passwords[account_id] = password
 
 
-def get_session_master_password() -> str | None:
+def get_session_master_password(account_id: str) -> str | None:
     with _session_lock:
-        return _session_master_password
+        return _session_master_passwords.get(account_id)
 
 
 # --- Cryptographic Helpers ---
@@ -75,11 +79,16 @@ def encrypt_secrets(
     validated: bool | None = None,
     validated_at: datetime | None = None,
     validation_error: str | None = None,
+    secrets_path: Path | None = None,
 ) -> None:
     """Encrypts API credentials and saves them to the secrets file atomically."""
-    config_dir = get_config_dir()
-    config_dir.mkdir(parents=True, exist_ok=True)
-    secrets_path = config_dir / SECRETS_FILE_NAME
+    if secrets_path is None:
+        config_dir = get_config_dir()
+        config_dir.mkdir(parents=True, exist_ok=True)
+        secrets_path = config_dir / SECRETS_FILE_NAME
+
+    # Ensure parent directory exists for non-default paths
+    secrets_path.parent.mkdir(parents=True, exist_ok=True)
 
     # FIX #2: Write to a temporary file first
     tmp_path = secrets_path.with_suffix(".tmp")
@@ -113,9 +122,11 @@ def encrypt_secrets(
     tmp_path.replace(secrets_path)
 
 
-def _decrypt_secrets(password: str) -> dict:
+def _decrypt_secrets(password: str, secrets_path: Path | None = None) -> dict:
     """Loads and decrypts secrets from the file."""
-    secrets_path = get_config_dir() / SECRETS_FILE_NAME
+    if secrets_path is None:
+        secrets_path = get_config_dir() / SECRETS_FILE_NAME
+
     if not secrets_path.exists():
         raise FileNotFoundError(f"Secrets file not found at {secrets_path}")
 
@@ -217,6 +228,7 @@ def _interactive_setup() -> CredentialResult:
             )
 
         password = _prompt_for_password(create=True)
+        # Interactive setup typically for default account/first run, so no specific path/id passed
         persist_api_keys(
             api_key=api_key,
             api_secret=api_secret,
@@ -266,6 +278,7 @@ def persist_api_keys(
     validated: bool | None = None,
     validation_error: str | None = None,
     force_save_unvalidated: bool = False,
+    secrets_path: Path | None = None,
 ) -> None:
     """Persist API keys to the encrypted secrets file with validation metadata.
 
@@ -288,22 +301,25 @@ def persist_api_keys(
         password,
         validated=validated,
         validation_error=validation_error,
+        secrets_path=secrets_path,
     )
 
 
-def unlock_secrets(password: str) -> dict:
+def unlock_secrets(password: str, secrets_path: Path | None = None) -> dict:
     """
     Attempts to decrypt the secrets file with the provided password.
     Returns the dictionary of secrets if successful.
     """
-    return _decrypt_secrets(password)
+    return _decrypt_secrets(password, secrets_path=secrets_path)
 
 
-def delete_secrets() -> None:
+def delete_secrets(secrets_path: Path | None = None) -> None:
     """
     Safely deletes the secrets file if it exists.
     """
-    secrets_path = get_config_dir() / SECRETS_FILE_NAME
+    if secrets_path is None:
+        secrets_path = get_config_dir() / SECRETS_FILE_NAME
+
     if secrets_path.exists():
         secrets_path.unlink()
 
@@ -311,9 +327,18 @@ def delete_secrets() -> None:
 # --- Core Credential Loading ---
 
 
-def load_api_keys(allow_interactive_setup: bool = False) -> CredentialResult:
+def load_api_keys(
+    allow_interactive_setup: bool = False,
+    secrets_path: Path | None = None,
+    account_id: str = "default",
+) -> CredentialResult:
     """
     Loads API keys with strict precedence checks to prevent 'Shadow Configuration'.
+
+    Args:
+        allow_interactive_setup: If true, prompts user on CLI if keys missing.
+        secrets_path: Path to the encrypted secrets file. Defaults to standard location.
+        account_id: The ID of the account to load keys for (used for password lookup).
     """
     api_key = os.getenv("KRAKEN_API_KEY")
     api_secret = os.getenv("KRAKEN_API_SECRET")
@@ -343,12 +368,14 @@ def load_api_keys(allow_interactive_setup: bool = False) -> CredentialResult:
             api_key, api_secret, CredentialStatus.LOADED, source="environment"
         )
 
-    secrets_path = get_config_dir() / SECRETS_FILE_NAME
+    if secrets_path is None:
+        secrets_path = get_config_dir() / SECRETS_FILE_NAME
+
     if secrets_path.exists():
         password = (
             os.getenv("KRAKEN_BOT_SECRET_PW")
-            or get_session_master_password()
-            or get_saved_master_password()
+            or get_session_master_password(account_id)
+            or get_saved_master_password(account_id)
         )
 
         if not password and not allow_interactive_setup:
@@ -366,10 +393,12 @@ def load_api_keys(allow_interactive_setup: bool = False) -> CredentialResult:
             )
 
         if not password:
-            password = getpass.getpass("Enter master password to decrypt API keys: ")
+            password = getpass.getpass(
+                f"Enter master password for account '{account_id}': "
+            )
 
         try:
-            secrets = _decrypt_secrets(password)
+            secrets = _decrypt_secrets(password, secrets_path=secrets_path)
             print("Loaded API keys from encrypted file.")
             return CredentialResult(
                 secrets.get("api_key"),

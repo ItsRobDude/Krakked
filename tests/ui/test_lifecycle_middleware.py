@@ -30,6 +30,7 @@ def _mock_config_dirs(monkeypatch, tmp_path):
     monkeypatch.setattr("kraken_bot.secrets.get_config_dir", lambda: tmp_path)
     monkeypatch.setattr("kraken_bot.config.get_config_dir", lambda: tmp_path)
     monkeypatch.setattr("kraken_bot.ui.routes.config.get_config_dir", lambda: tmp_path)
+    monkeypatch.setattr("kraken_bot.accounts.get_config_dir", lambda: tmp_path)
 
 
 def _create_locked_context(base_path="/krakked", auth_enabled=False, auth_token=None):
@@ -105,6 +106,22 @@ def test_lifecycle_middleware_allowlist(monkeypatch, tmp_path):
     monkeypatch.setattr(system, "delete_master_password", mock_delete_pw)
     monkeypatch.setattr(system, "set_session_master_password", MagicMock())
 
+    # Mock accounts.py functions to prevent actual file I/O or crashes
+    monkeypatch.setattr(
+        "kraken_bot.ui.routes.system.load_accounts", MagicMock(return_value={})
+    )
+    monkeypatch.setattr(
+        "kraken_bot.ui.routes.system.ensure_default_account", MagicMock()
+    )
+    monkeypatch.setattr(
+        "kraken_bot.ui.routes.system.resolve_secrets_path",
+        MagicMock(return_value=tmp_path / "dummy.enc"),
+    )
+    monkeypatch.setattr(
+        "kraken_bot.ui.routes.system.get_saved_master_password",
+        MagicMock(return_value=None),
+    )
+
     ctx = _create_locked_context(base_path="/krakked")
     # Mock metrics for system health (SystemMetrics is not a Pydantic model so MagicMock is fine here)
     ctx.metrics = MagicMock()
@@ -144,11 +161,9 @@ def test_lifecycle_middleware_allowlist(monkeypatch, tmp_path):
     )
     assert resp.status_code == 200
 
-    # Accounts prefix (Future endpoint test - should be 404 not 503)
+    # Accounts prefix - explicitly allowed in PR3
     resp = client.get("/krakked/api/system/accounts/list")
-    assert (
-        resp.status_code == 404
-    ), "Expected 404 for missing accounts endpoint, got 503 (blocked) or other"
+    assert resp.status_code == 200
 
 
 def test_lifecycle_middleware_blocklist(monkeypatch, tmp_path):

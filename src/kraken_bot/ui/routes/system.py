@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import logging
 from dataclasses import asdict
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Literal, Optional
+from typing import List, Literal, Optional
 
 import yaml  # type: ignore[import-untyped]
 from fastapi import APIRouter, HTTPException, Request
@@ -13,6 +14,13 @@ from pydantic import BaseModel, Field
 
 import kraken_bot.connection.validation as validation_mod
 from kraken_bot import APP_VERSION
+from kraken_bot.accounts import (
+    AccountMeta,
+    ensure_default_account,
+    load_accounts,
+    resolve_secrets_path,
+    save_accounts,
+)
 from kraken_bot.config import dump_runtime_overrides, get_config_dir
 from kraken_bot.config_loader import write_initial_config
 from kraken_bot.connection.exceptions import (
@@ -22,9 +30,12 @@ from kraken_bot.connection.exceptions import (
 )
 from kraken_bot.credentials import CredentialStatus
 from kraken_bot.market_data.api import MarketDataStatus
-from kraken_bot.password_store import delete_master_password, save_master_password
+from kraken_bot.password_store import (
+    delete_master_password,
+    get_saved_master_password,
+    save_master_password,
+)
 from kraken_bot.secrets import (
-    SECRETS_FILE_NAME,
     SecretsDecryptionError,
     delete_secrets,
     persist_api_keys,
@@ -106,6 +117,7 @@ class SessionStatePayload(BaseModel):
     profile_name: Optional[str]
     ml_enabled: bool
     emergency_flatten: bool = False
+    account_id: str
 
 
 class ProfileSummaryPayload(BaseModel):
@@ -122,6 +134,41 @@ class ProfileCreatePayload(BaseModel):
     description: str = ""
     default_mode: str = "paper"
     base_config: Optional[dict] = None
+
+
+# --- Account Payloads ---
+
+
+class AccountItemPayload(BaseModel):
+    id: str
+    name: str
+    region: str
+    secrets_exist: bool
+    remembered: bool
+
+
+class AccountListPayload(BaseModel):
+    accounts: List[AccountItemPayload]
+    selected_account_id: str
+
+
+class AccountSelectPayload(BaseModel):
+    account_id: str
+
+
+class AccountCreatePayload(BaseModel):
+    name: str
+    apiKey: str
+    apiSecret: str
+    password: str
+    region: str = "US"
+    remember: bool = False
+
+
+class AccountUnlockPayload(BaseModel):
+    password: Optional[str] = None
+    use_saved_password: bool = False
+    remember: bool = False
 
 
 def _context(request: Request):
@@ -146,6 +193,7 @@ def _session_payload(ctx) -> SessionStatePayload:
         profile_name=session.profile_name,
         ml_enabled=session.ml_enabled,
         emergency_flatten=getattr(session, "emergency_flatten", False),
+        account_id=session.account_id,
     )
 
 
@@ -164,17 +212,21 @@ async def setup_status(request: Request) -> ApiEnvelope[SetupStatusPayload]:
     ctx = _context(request)
     config_dir = get_config_dir()
     config_path = config_dir / "config.yaml"
-    secrets_path = config_dir / SECRETS_FILE_NAME
+
+    # Resolve secrets path for current account
+    account_id = ctx.session.account_id
+    try:
+        secrets_path = resolve_secrets_path(config_dir, account_id)
+        secrets_exist = secrets_path.exists()
+    except Exception:
+        secrets_exist = False
 
     configured = config_path.exists()
-    secrets_exist = secrets_path.exists()
+
     # If secrets exist but we are still in setup mode, it means they are locked
     # (or config is missing, but 'configured' flag covers that).
     # If ctx.is_setup_mode is False, we are unlocked.
     unlocked = not ctx.is_setup_mode if secrets_exist else False
-
-    # Edge case: If secrets exist but we are in setup mode, we are locked.
-    # If secrets don't exist, 'unlocked' is False (conceptually locked/missing).
 
     return ApiEnvelope(
         data=SetupStatusPayload(
@@ -196,8 +248,14 @@ async def setup_config(
             # Default minimal structure
             "execution": {"mode": "paper"},
             "ui": {"enabled": True, "port": 8000},
+            # Initialize with default session account
+            "session": {"account_id": "default"},
         }
         write_initial_config(config_data)
+
+        # Also ensure default account exists in registry
+        ensure_default_account()
+
         logger.info(
             "Initial configuration written",
             extra=build_request_log_extra(request, event="setup_config_written"),
@@ -216,6 +274,9 @@ async def setup_credentials(
     payload: SetupCredentialsPayload, request: Request
 ) -> ApiEnvelope[dict]:
     """Validates and saves encrypted credentials."""
+    ctx = _context(request)
+    account_id = ctx.session.account_id
+
     try:
         # 1. Validate against Kraken
         result = validation_mod.validate_credentials(
@@ -229,11 +290,13 @@ async def setup_credentials(
             )
 
         # 2. Persist
+        secrets_path = resolve_secrets_path(None, account_id)
         persist_api_keys(
             api_key=payload.apiKey,
             api_secret=payload.apiSecret,
             password=payload.password,
             validated=True,
+            secrets_path=secrets_path,
         )
 
         logger.info(
@@ -256,19 +319,22 @@ async def setup_unlock(
 ) -> ApiEnvelope[dict]:
     """Attempts to unlock the system with the master password."""
     ctx = _context(request)
+    account_id = ctx.session.account_id
+
     try:
+        secrets_path = resolve_secrets_path(None, account_id)
         # Verify password by attempting decryption
-        _ = unlock_secrets(payload.password)
+        _ = unlock_secrets(payload.password, secrets_path=secrets_path)
 
         # Set session password for re-bootstrap
-        set_session_master_password(payload.password)
+        set_session_master_password(account_id, payload.password)
 
         remember_saved = False
         remember_error: str | None = None
 
         if payload.remember:
             try:
-                save_master_password(payload.password)
+                save_master_password(account_id, payload.password)
                 remember_saved = True
             except Exception as exc:
                 remember_error = str(exc)
@@ -314,10 +380,12 @@ async def setup_unlock(
 
 @router.post("/setup/forget", response_model=ApiEnvelope[dict])
 async def system_forget(request: Request) -> ApiEnvelope[dict]:
-    """Forgets the master password from this device."""
+    """Forgets the master password from this device for the selected account."""
+    ctx = _context(request)
+    account_id = ctx.session.account_id
     try:
-        set_session_master_password(None)
-        delete_master_password()
+        set_session_master_password(account_id, None)
+        delete_master_password(account_id)
 
         # Clean up env var if it exists from legacy flow
         import os
@@ -325,8 +393,10 @@ async def system_forget(request: Request) -> ApiEnvelope[dict]:
         os.environ.pop("KRAKEN_BOT_SECRET_PW", None)
 
         logger.info(
-            "Master password forgotten from device",
-            extra=build_request_log_extra(request, event="system_forget"),
+            f"Master password forgotten for account {account_id}",
+            extra=build_request_log_extra(
+                request, event="system_forget", account_id=account_id
+            ),
         )
         return ApiEnvelope(data={"success": True}, error=None)
     except Exception as exc:
@@ -341,13 +411,24 @@ async def system_forget(request: Request) -> ApiEnvelope[dict]:
 async def system_reset(request: Request) -> ApiEnvelope[dict]:
     """Resets the system by deleting credentials and entering setup mode."""
     ctx = _context(request)
+    account_id = ctx.session.account_id
     try:
-        delete_secrets()
+        # Resolve path to delete correct secrets file
+        try:
+            secrets_path = resolve_secrets_path(None, account_id)
+        except Exception as exc:
+            logger.error(f"Failed to resolve secrets path during reset: {exc}")
+            return ApiEnvelope(
+                data=None, error="Failed to resolve secrets path for selected account"
+            )
+
+        delete_secrets(secrets_path)
+
         # Also forget the password since the file it unlocks is gone
-        set_session_master_password(None)
+        set_session_master_password(account_id, None)
 
         try:
-            delete_master_password()
+            delete_master_password(account_id)
         except Exception as exc:
             logger.warning(
                 "Failed to delete master password from keyring during reset (ignoring)",
@@ -359,8 +440,10 @@ async def system_reset(request: Request) -> ApiEnvelope[dict]:
         ctx.is_setup_mode = True
 
         logger.info(
-            "System reset requested: credentials deleted",
-            extra=build_request_log_extra(request, event="system_reset"),
+            f"System reset requested for account {account_id}: credentials deleted",
+            extra=build_request_log_extra(
+                request, event="system_reset", account_id=account_id
+            ),
         )
         return ApiEnvelope(data={"success": True}, error=None)
     except Exception as exc:  # pragma: no cover - defensive
@@ -369,6 +452,322 @@ async def system_reset(request: Request) -> ApiEnvelope[dict]:
             extra=build_request_log_extra(request, event="system_reset_failed"),
         )
         return ApiEnvelope(data=None, error=str(exc))
+
+
+# --- Accounts API ---
+
+
+@router.get("/accounts/list", response_model=ApiEnvelope[AccountListPayload])
+async def list_accounts(request: Request) -> ApiEnvelope[AccountListPayload]:
+    ctx = _context(request)
+    # Do NOT check setup mode - allowed in locked state
+
+    config_dir = get_config_dir()
+    ensure_default_account(config_dir)
+    accounts_map = load_accounts(config_dir)
+
+    # Validation: Force valid selection
+    selected_id = ctx.session.account_id
+    if selected_id not in accounts_map:
+        logger.warning(
+            f"Selected account {selected_id} not found in registry, resetting to default"
+        )
+        selected_id = "default"
+        ctx.session.account_id = "default"
+        ctx.config.session.account_id = "default"
+        dump_runtime_overrides(ctx.config, session=ctx.session, sections={"session"})
+
+    payload_list = []
+    for acc in accounts_map.values():
+        secrets_path = resolve_secrets_path(config_dir, acc.id)
+
+        # Check if remembered
+        remembered = bool(get_saved_master_password(acc.id))
+
+        payload_list.append(
+            AccountItemPayload(
+                id=acc.id,
+                name=acc.name,
+                region=acc.region,
+                secrets_exist=secrets_path.exists(),
+                remembered=remembered,
+            )
+        )
+
+    return ApiEnvelope(
+        data=AccountListPayload(accounts=payload_list, selected_account_id=selected_id),
+        error=None,
+    )
+
+
+@router.post("/accounts/select", response_model=ApiEnvelope[dict])
+async def select_account(
+    payload: AccountSelectPayload, request: Request
+) -> ApiEnvelope[dict]:
+    ctx = _context(request)
+    # Do NOT check setup mode
+
+    if ctx.session.active:
+        return ApiEnvelope(
+            data=None, error="Cannot switch accounts while session is active"
+        )
+
+    config_dir = get_config_dir()
+    accounts_map = load_accounts(config_dir)
+
+    if payload.account_id not in accounts_map:
+        return ApiEnvelope(data=None, error=f"Account {payload.account_id} not found")
+
+    # Update last used
+    acc = accounts_map[payload.account_id]
+    acc.last_used_at = datetime.now(timezone.utc).isoformat()
+    save_accounts(config_dir, accounts_map)
+
+    # Capture old ID before update
+    old_account_id = ctx.session.account_id
+
+    # Update Session
+    ctx.session.account_id = payload.account_id
+    ctx.config.session.account_id = payload.account_id
+    dump_runtime_overrides(ctx.config, session=ctx.session, sections={"session"})
+
+    # Force Setup Mode (Locked)
+    ctx.is_setup_mode = True
+
+    # Clear session passwords for safety (both old and new)
+    set_session_master_password(old_account_id, None)
+    set_session_master_password(payload.account_id, None)
+
+    logger.info(
+        f"Switched from {old_account_id} to {payload.account_id}",
+        extra=build_request_log_extra(
+            request, event="account_switched", account_id=payload.account_id
+        ),
+    )
+
+    return ApiEnvelope(data={"success": True}, error=None)
+
+
+@router.post("/accounts/create", response_model=ApiEnvelope[dict])
+async def create_account(
+    payload: AccountCreatePayload, request: Request
+) -> ApiEnvelope[dict]:
+    ctx = _context(request)
+    # Do NOT check setup mode
+
+    # 1. Validate Credentials
+    try:
+        result = validation_mod.validate_credentials(
+            payload.apiKey, payload.apiSecret, region=payload.region
+        )
+        if not result.validated:
+            return ApiEnvelope(
+                data=None,
+                error=f"Validation failed: {result.validation_error or result.error}",
+            )
+    except Exception as e:
+        return ApiEnvelope(data=None, error=f"Validation error: {e}")
+
+    # 2. Generate ID
+    base_slug = sanitize_filename(payload.name).lower()
+    if not base_slug:
+        base_slug = "account"
+
+    config_dir = get_config_dir()
+    ensure_default_account(config_dir)
+    accounts_map = load_accounts(config_dir)
+
+    account_id = base_slug
+    counter = 2
+    while account_id in accounts_map:
+        account_id = f"{base_slug}-{counter}"
+        counter += 1
+
+    # 3. Resolve Paths & Persist
+    secrets_rel_path = f"accounts/{account_id}/secrets.enc"
+    secrets_path = config_dir / secrets_rel_path
+
+    # Ensure directory exists
+    secrets_path.parent.mkdir(parents=True, exist_ok=True)
+
+    try:
+        persist_api_keys(
+            api_key=payload.apiKey,
+            api_secret=payload.apiSecret,
+            password=payload.password,
+            validated=True,
+            secrets_path=secrets_path,
+        )
+    except Exception as e:
+        return ApiEnvelope(data=None, error=f"Failed to save secrets: {e}")
+
+    # 4. Update Registry
+    new_account = AccountMeta(
+        id=account_id,
+        name=payload.name,
+        region=payload.region,
+        secrets_path=secrets_rel_path,
+        created_at=datetime.now(timezone.utc).isoformat(),
+        last_used_at=datetime.now(timezone.utc).isoformat(),
+    )
+    accounts_map[account_id] = new_account
+    save_accounts(config_dir, accounts_map)
+
+    # 5. Handle Remember Me
+    if payload.remember:
+        try:
+            save_master_password(account_id, payload.password)
+        except Exception as e:
+            logger.warning(f"Failed to save password for new account: {e}")
+
+    # 6. Switch & Unlock
+    old_account_id = ctx.session.account_id
+    ctx.session.account_id = account_id
+    ctx.config.session.account_id = account_id
+    dump_runtime_overrides(ctx.config, session=ctx.session, sections={"session"})
+
+    # Clear old session password for safety, set new one
+    set_session_master_password(old_account_id, None)
+    set_session_master_password(account_id, payload.password)
+
+    # Trigger reinit to load new state
+    ctx.reinitialize_event.set()
+
+    logger.info(
+        f"Created account {account_id}",
+        extra=build_request_log_extra(
+            request, event="account_created", account_id=account_id
+        ),
+    )
+
+    return ApiEnvelope(data={"success": True, "account_id": account_id}, error=None)
+
+
+@router.post("/accounts/unlock", response_model=ApiEnvelope[dict])
+async def unlock_account(
+    payload: AccountUnlockPayload, request: Request
+) -> ApiEnvelope[dict]:
+    ctx = _context(request)
+    # Do NOT check setup mode
+
+    if ctx.session.active:
+        return ApiEnvelope(data=None, error="Cannot unlock while session is active")
+
+    account_id = ctx.session.account_id
+
+    password = payload.password
+
+    if payload.use_saved_password:
+        # Loopback check
+        # Using config host is reliable for checking configured intention
+        ui_host = ctx.config.ui.host
+        is_loopback = ui_host in ("127.0.0.1", "::1", "localhost")
+
+        if not is_loopback:
+            return ApiEnvelope(
+                data=None,
+                error="Saved password unlock only allowed on loopback interface",
+            )
+
+        saved_pw = get_saved_master_password(account_id)
+        if not saved_pw:
+            return ApiEnvelope(data=None, error="No saved password for account")
+        password = saved_pw
+
+    if not password:
+        return ApiEnvelope(data=None, error="Password required")
+
+    try:
+        secrets_path = resolve_secrets_path(None, account_id)
+        _ = unlock_secrets(password, secrets_path=secrets_path)
+
+        set_session_master_password(account_id, password)
+
+        if (
+            payload.remember and payload.password
+        ):  # Only update remember if explicit password provided
+            try:
+                save_master_password(account_id, password)
+            except Exception as e:
+                logger.warning(f"Failed to remember password: {e}")
+
+        # Update last used
+        config_dir = get_config_dir()
+        accounts_map = load_accounts(config_dir)
+        if account_id in accounts_map:
+            accounts_map[account_id].last_used_at = datetime.now(
+                timezone.utc
+            ).isoformat()
+            save_accounts(config_dir, accounts_map)
+
+        # Trigger reinit
+        ctx.reinitialize_event.set()
+
+        return ApiEnvelope(data={"success": True}, error=None)
+
+    except SecretsDecryptionError:
+        return ApiEnvelope(data=None, error="Invalid password")
+    except Exception as e:
+        return ApiEnvelope(data=None, error=str(e))
+
+
+@router.delete("/accounts/{account_id}", response_model=ApiEnvelope[dict])
+async def delete_account(account_id: str, request: Request) -> ApiEnvelope[dict]:
+    ctx = _context(request)
+    # Do NOT check setup mode
+
+    if ctx.session.active:
+        return ApiEnvelope(
+            data=None, error="Cannot delete account while session is active"
+        )
+
+    if account_id == "default":
+        return ApiEnvelope(data=None, error="Cannot delete default account")
+
+    config_dir = get_config_dir()
+    accounts_map = load_accounts(config_dir)
+
+    if account_id not in accounts_map:
+        return ApiEnvelope(data=None, error="Account not found")
+
+    # 1. Delete Secrets
+    try:
+        secrets_path = resolve_secrets_path(config_dir, account_id)
+        delete_secrets(secrets_path)
+        # Try to remove the directory if empty/exists
+        if secrets_path.parent.name == account_id:  # Confirm it's the dedicated dir
+            try:
+                secrets_path.parent.rmdir()
+            except Exception:
+                pass  # Directory might not be empty or other error
+    except Exception as e:
+        logger.warning(f"Error cleaning up secrets file: {e}")
+
+    # 2. Delete Keyring
+    delete_master_password(account_id)
+    set_session_master_password(account_id, None)
+
+    # 3. Remove from Registry
+    del accounts_map[account_id]
+    save_accounts(config_dir, accounts_map)
+
+    # 4. Handle Selection Reset
+    was_selected = ctx.session.account_id == account_id
+    if was_selected:
+        ctx.session.account_id = "default"
+        ctx.config.session.account_id = "default"
+        dump_runtime_overrides(ctx.config, session=ctx.session, sections={"session"})
+        ctx.is_setup_mode = True
+        set_session_master_password("default", None)
+
+    logger.info(
+        f"Deleted account {account_id}",
+        extra=build_request_log_extra(
+            request, event="account_deleted", account_id=account_id
+        ),
+    )
+
+    return ApiEnvelope(data={"success": True}, error=None)
 
 
 @router.get("/health", response_model=ApiEnvelope[SystemHealthPayload])
@@ -866,6 +1265,8 @@ async def set_execution_mode(
             error=None,
         )
 
+    account_id = ctx.session.account_id
+
     # GUARD: Switching TO live mode
     if new_mode == "live":
         # Only require password + confirmation if we aren't already allowed to trade live.
@@ -882,9 +1283,10 @@ async def set_execution_mode(
                 return ApiEnvelope(data=None, error="Invalid confirmation phrase")
 
             try:
-                unlock_secrets(payload.password)
+                secrets_path = resolve_secrets_path(None, account_id)
+                unlock_secrets(payload.password, secrets_path=secrets_path)
                 # Ensure we persist this for reload
-                set_session_master_password(payload.password)
+                set_session_master_password(account_id, payload.password)
             except Exception:
                 logger.warning(
                     "Live mode auth failed",

@@ -9,6 +9,7 @@ from kraken_bot.config import (
     PortfolioConfig,
     RegionCapabilities,
     RegionProfile,
+    SessionConfig,
     StrategiesConfig,
     UniverseConfig,
 )
@@ -28,6 +29,7 @@ def _sample_config() -> AppConfig:
         ),
         portfolio=PortfolioConfig(),
         strategies=StrategiesConfig(),
+        session=SessionConfig(account_id="default"),
     )
 
 
@@ -39,13 +41,23 @@ def test_bootstrap_returns_client_and_config():
             return_value=CredentialResult(
                 "k", "s", CredentialStatus.LOADED, validated=True
             ),
-        ),
+        ) as mock_load_keys,
         patch("kraken_bot.bootstrap.KrakenRESTClient") as mock_client,
+        patch("kraken_bot.bootstrap.ensure_default_account"),
+        patch(
+            "kraken_bot.bootstrap.resolve_secrets_path", return_value="path/to/secrets"
+        ),
     ):
         client_instance = object()
         mock_client.return_value = client_instance
 
         client, config, rate_limiter = bootstrap()
+
+    mock_load_keys.assert_called_once()
+    # verify args
+    call_kwargs = mock_load_keys.call_args.kwargs
+    assert call_kwargs.get("account_id") == "default"
+    assert call_kwargs.get("secrets_path") == "path/to/secrets"
 
     mock_client.assert_called_once_with(
         api_key="k", api_secret="s", rate_limiter=rate_limiter
@@ -63,6 +75,8 @@ def test_bootstrap_raises_on_missing_credentials():
                 None, None, CredentialStatus.NOT_FOUND, validation_error="missing"
             ),
         ),
+        patch("kraken_bot.bootstrap.ensure_default_account"),
+        patch("kraken_bot.bootstrap.resolve_secrets_path"),
     ):
         with pytest.raises(CredentialBootstrapError) as excinfo:
             bootstrap()
@@ -77,6 +91,8 @@ def test_bootstrap_raises_when_keys_absent_despite_loaded_status():
             "kraken_bot.bootstrap.load_api_keys",
             return_value=CredentialResult("k", None, CredentialStatus.LOADED),
         ),
+        patch("kraken_bot.bootstrap.ensure_default_account"),
+        patch("kraken_bot.bootstrap.resolve_secrets_path"),
     ):
         with pytest.raises(CredentialBootstrapError) as excinfo:
             bootstrap()

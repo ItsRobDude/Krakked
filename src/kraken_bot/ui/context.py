@@ -24,6 +24,7 @@ class SessionState:
     profile_name: Optional[str] = None
     ml_enabled: bool = True
     emergency_flatten: bool = False
+    account_id: str = "default"
 
 
 @dataclass
@@ -96,6 +97,7 @@ def build_app_context(allow_interactive_setup: bool = True) -> AppContext:
         profile_name=config.session.profile_name,
         ml_enabled=config.session.ml_enabled,
         emergency_flatten=config.session.emergency_flatten,
+        account_id=config.session.account_id or "default",
     )
 
     return AppContext(

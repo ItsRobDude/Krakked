@@ -469,6 +469,7 @@ class BotController:
             profile_name=config.session.profile_name,
             ml_enabled=config.session.ml_enabled,
             emergency_flatten=getattr(config.session, "emergency_flatten", False),
+            account_id=config.session.account_id or "default",
         )
 
         return AppContext(
@@ -563,6 +564,7 @@ class BotController:
                 profile_name=config.session.profile_name,
                 ml_enabled=config.session.ml_enabled,
                 emergency_flatten=getattr(config.session, "emergency_flatten", False),
+                account_id=config.session.account_id or "default",
             )
 
             self.is_setup_mode = False
