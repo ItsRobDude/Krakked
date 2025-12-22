@@ -137,7 +137,7 @@ def dump_runtime_overrides(
                 "emergency_flatten": getattr(
                     session_config, "emergency_flatten", False
                 ),
-                "account_id": session_config.account_id,
+                "account_id": session_config.account_id or "default",
             }
         else:
             # If explicitly requested but we have no session source, remove it.
@@ -654,7 +654,7 @@ def load_config(
         loop_interval_sec=float(session_loop_seconds),
         ml_enabled=bool(session_data.get("ml_enabled", True)),
         emergency_flatten=bool(session_data.get("emergency_flatten", False)),
-        account_id=session_data.get("account_id", "default"),
+        account_id=session_data.get("account_id") or "default",
     )
 
     universe_data = raw_config.get("universe") or {}

@@ -416,10 +416,13 @@ async def system_reset(request: Request) -> ApiEnvelope[dict]:
         # Resolve path to delete correct secrets file
         try:
             secrets_path = resolve_secrets_path(None, account_id)
-            delete_secrets(secrets_path)
-        except Exception:
-            # If resolution fails, maybe default?
-            delete_secrets()  # try default location
+        except Exception as exc:
+            logger.error(f"Failed to resolve secrets path during reset: {exc}")
+            return ApiEnvelope(
+                data=None, error="Failed to resolve secrets path for selected account"
+            )
+
+        delete_secrets(secrets_path)
 
         # Also forget the password since the file it unlocks is gone
         set_session_master_password(account_id, None)
@@ -520,6 +523,9 @@ async def select_account(
     acc.last_used_at = datetime.now(timezone.utc).isoformat()
     save_accounts(config_dir, accounts_map)
 
+    # Capture old ID before update
+    old_account_id = ctx.session.account_id
+
     # Update Session
     ctx.session.account_id = payload.account_id
     ctx.config.session.account_id = payload.account_id
@@ -528,11 +534,12 @@ async def select_account(
     # Force Setup Mode (Locked)
     ctx.is_setup_mode = True
 
-    # Clear session password for safety
+    # Clear session passwords for safety (both old and new)
+    set_session_master_password(old_account_id, None)
     set_session_master_password(payload.account_id, None)
 
     logger.info(
-        f"Switched to account {payload.account_id}",
+        f"Switched from {old_account_id} to {payload.account_id}",
         extra=build_request_log_extra(
             request, event="account_switched", account_id=payload.account_id
         ),
