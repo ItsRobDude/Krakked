@@ -279,12 +279,18 @@ export async function fetchSessionState(): Promise<SessionStateResponse | null> 
   return fetchJson<SessionStateResponse>('/system/session');
 }
 
-export async function startSession(
-  config: SessionConfigRequest,
+export async function updateSessionConfig(
+  patch: Partial<SessionConfigRequest>,
 ): Promise<SessionStateResponse | null> {
+  return fetchJson<SessionStateResponse>('/system/session/config', {
+    method: 'PATCH',
+    body: JSON.stringify(patch),
+  });
+}
+
+export async function startSession(): Promise<SessionStateResponse | null> {
   return fetchJson<SessionStateResponse>('/system/session/start', {
     method: 'POST',
-    body: JSON.stringify(config),
   });
 }
 
