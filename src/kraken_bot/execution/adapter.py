@@ -123,6 +123,50 @@ class KrakenExecutionAdapter:
 
         assert self.client is not None
 
+        # 1. Validate constraints (volume, notional, permissions)
+        if rejection := self._validate_submission_constraints(
+            order, payload, pair_metadata, latest_price
+        ):
+            return rejection
+
+        should_validate = payload.get("validate") == 1
+        live_trading_allowed = (
+            self.config.mode == "live"
+            and not self.config.validate_only
+            and getattr(self.config, "allow_live_trading", False)
+        )
+
+        # 2. Refresh Dead Man Switch (if active)
+        self._refresh_dead_man_switch(live_trading_allowed)
+
+        # 3. Final safety guard against unintentional live trading
+        if not should_validate and not live_trading_allowed:
+            order.status = "rejected"
+            order.last_error = "Live trading disabled by configuration"
+            logger.error(
+                order.last_error,
+                extra=structured_log_extra(
+                    event="order_rejected_live_guard",
+                    plan_id=order.plan_id,
+                    strategy_id=order.strategy_id,
+                    pair=order.pair,
+                    local_order_id=order.local_id,
+                    mode=self.config.mode,
+                ),
+            )
+            return order
+
+        # 4. Execute Submission Loop (Retry/Backoff)
+        return self._execute_submission_loop(order, payload)
+
+    def _validate_submission_constraints(
+        self,
+        order: LocalOrder,
+        payload: Dict[str, Any],
+        pair_metadata: PairMetadata,
+        latest_price: Optional[float],
+    ) -> Optional[LocalOrder]:
+        """Check order constraints. Returns the order object if rejected, else None."""
         rounded_volume = float(payload["volume"])
         if rounded_volume < pair_metadata.min_order_size:
             order.status = "rejected"
@@ -183,7 +227,6 @@ class KrakenExecutionAdapter:
                 )
                 return order
 
-        should_validate = payload.get("validate") == 1
         live_trading_allowed = (
             self.config.mode == "live"
             and not self.config.validate_only
@@ -207,70 +250,64 @@ class KrakenExecutionAdapter:
             )
             return order
 
-        if self.config.dead_man_switch_seconds > 0:
-            if live_trading_allowed:
-                if hasattr(self.client, "cancel_all_orders_after"):
-                    try:
-                        self.client.cancel_all_orders_after(
-                            self.config.dead_man_switch_seconds
-                        )
-                        logger.info(
-                            "Dead man switch heartbeat set",
-                            extra=structured_log_extra(
-                                event="dead_man_switch_set",
-                                timeout_seconds=self.config.dead_man_switch_seconds,
-                            ),
-                        )
-                    except (
-                        Exception
-                    ) as exc:  # pragma: no cover - passthrough for client errors
-                        logger.warning(
-                            "Failed to refresh dead man switch heartbeat",
-                            extra=structured_log_extra(
-                                event="dead_man_switch_error",
-                                timeout_seconds=self.config.dead_man_switch_seconds,
-                                error=str(exc),
-                            ),
-                        )
-                else:
-                    logger.warning(
-                        "Dead man switch configured but client does not support cancel_all_orders_after",
-                        extra=structured_log_extra(
-                            event="dead_man_switch_unavailable",
-                            timeout_seconds=self.config.dead_man_switch_seconds,
-                        ),
-                    )
-            else:
-                logger.info(
-                    "Dead man switch configured but live trading is disabled; skipping",
-                    extra=structured_log_extra(
-                        event="dead_man_switch_skipped",
-                        mode=self.config.mode,
-                        validate_only=self.config.validate_only,
-                        allow_live_trading=getattr(
-                            self.config, "allow_live_trading", False
-                        ),
-                    ),
-                )
+        return None
 
-        if not should_validate and not live_trading_allowed:
-            order.status = "rejected"
-            order.last_error = "Live trading disabled by configuration"
-            logger.error(
-                order.last_error,
+    def _refresh_dead_man_switch(self, live_trading_allowed: bool) -> None:
+        """Update the dead man switch heartbeat if configured."""
+        if self.config.dead_man_switch_seconds <= 0:
+            return
+
+        if not live_trading_allowed:
+            logger.info(
+                "Dead man switch configured but live trading is disabled; skipping",
                 extra=structured_log_extra(
-                    event="order_rejected_live_guard",
-                    plan_id=order.plan_id,
-                    strategy_id=order.strategy_id,
-                    pair=order.pair,
-                    local_order_id=order.local_id,
+                    event="dead_man_switch_skipped",
                     mode=self.config.mode,
+                    validate_only=self.config.validate_only,
+                    allow_live_trading=getattr(
+                        self.config, "allow_live_trading", False
+                    ),
                 ),
             )
-            return order
+            return
 
+        assert self.client is not None
+        if hasattr(self.client, "cancel_all_orders_after"):
+            try:
+                self.client.cancel_all_orders_after(self.config.dead_man_switch_seconds)
+                logger.info(
+                    "Dead man switch heartbeat set",
+                    extra=structured_log_extra(
+                        event="dead_man_switch_set",
+                        timeout_seconds=self.config.dead_man_switch_seconds,
+                    ),
+                )
+            except Exception as exc:  # pragma: no cover - passthrough for client errors
+                logger.warning(
+                    "Failed to refresh dead man switch heartbeat",
+                    extra=structured_log_extra(
+                        event="dead_man_switch_error",
+                        timeout_seconds=self.config.dead_man_switch_seconds,
+                        error=str(exc),
+                    ),
+                )
+        else:
+            logger.warning(
+                "Dead man switch configured but client does not support cancel_all_orders_after",
+                extra=structured_log_extra(
+                    event="dead_man_switch_unavailable",
+                    timeout_seconds=self.config.dead_man_switch_seconds,
+                ),
+            )
+
+    def _execute_submission_loop(
+        self, order: LocalOrder, payload: Dict[str, Any]
+    ) -> LocalOrder:
+        """Execute the order submission with retries and return the updated order."""
         attempts = 0
         backoff_seconds = self.config.retry_backoff_seconds
+        assert self.client is not None
+
         while True:
             try:
                 resp = self.client.add_order(payload)
