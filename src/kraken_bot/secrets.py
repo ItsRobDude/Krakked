@@ -43,7 +43,6 @@ _session_master_passwords: dict[str, str] = {}
 
 
 def set_session_master_password(account_id: str, password: str | None) -> None:
-    global _session_master_passwords
     with _session_lock:
         if password is None:
             _session_master_passwords.pop(account_id, None)

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import type { ExecutionMode, ProfileSummary, SessionConfigRequest } from '../services/api';
 
 export type StartupScreenProps = {

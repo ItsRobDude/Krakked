@@ -42,7 +42,6 @@ import {
   SystemHealth,
   SessionStateResponse,
   SessionConfigRequest,
-  SessionMode,
   SetupStatus,
   updateRiskConfig,
   setKillSwitch,
