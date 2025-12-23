@@ -56,6 +56,7 @@ import {
   ExecutionMode,
   flattenAllPositions,
   downloadRuntimeConfig,
+  updateSessionConfig,
 } from './services/api';
 import { RISK_PRESET_META, formatPresetSummary } from './constants/riskPresets';
 

@@ -24,6 +24,7 @@ export function StartupScreen({
   modeBusy,
   systemMessage,
   onCreateProfile,
+  onProfileChange,
   onSaveConfig,
   onStart,
 }: StartupScreenProps) {
