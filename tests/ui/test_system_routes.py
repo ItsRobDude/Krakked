@@ -267,7 +267,7 @@ def test_system_metrics_reports_snapshot_payload(client, system_context):
     assert payload["market_data_max_staleness"] == 1.25
 
 
-def test_start_session_skips_ml_sync_when_flag_unchanged(client, system_context):
+def test_patch_session_config_skips_ml_sync_when_flag_unchanged(client, system_context):
     system_context.config.session.ml_enabled = True
 
     system_context.config.strategies.configs = {
@@ -284,8 +284,8 @@ def test_start_session_skips_ml_sync_when_flag_unchanged(client, system_context)
         "ai_regression": SimpleNamespace(enabled=False),
     }
 
-    response = client.post(
-        "/api/system/session/start",
+    response = client.patch(
+        "/api/system/session/config",
         json={
             "profile_name": "default",
             "mode": "paper",
@@ -308,7 +308,9 @@ def test_start_session_skips_ml_sync_when_flag_unchanged(client, system_context)
     )
 
 
-def test_start_session_syncs_ml_strategies_when_flag_changes(client, system_context):
+def test_patch_session_config_syncs_ml_strategies_when_flag_changes(
+    client, system_context
+):
     system_context.config.session.ml_enabled = True
 
     system_context.config.strategies.configs = {
@@ -333,8 +335,8 @@ def test_start_session_syncs_ml_strategies_when_flag_changes(client, system_cont
         "vol_breakout": SimpleNamespace(enabled=True),
     }
 
-    response = client.post(
-        "/api/system/session/start",
+    response = client.patch(
+        "/api/system/session/config",
         json={
             "profile_name": "default",
             "mode": "paper",
@@ -396,61 +398,53 @@ def test_mode_change_updates_configs(monkeypatch, client, system_context):
     assert system_context.config.session.mode == "live"
 
 
-def test_start_session_syncs_all_ml_strategies(client, system_context):
+def test_start_session_syncs_all_ml_strategies_at_boundary(client, system_context):
+    # Test that start always ensures ML state matches config, even if changed elsewhere
+    system_context.session.ml_enabled = False  # Session config says disabled
+    system_context.config.session.ml_enabled = False
+
+    # BUT strategy engine is somehow enabled (drifted state)
     system_context.config.strategies.configs = {
         "ai_predictor": StrategyConfig(
             name="AI Predictor", type="machine_learning", enabled=True
         ),
-        "ai_predictor_alt": StrategyConfig(
-            name="AI Predictor (Alt Model)", type="machine_learning_alt", enabled=True
-        ),
-        "ai_regression": StrategyConfig(
-            name="AI Regression", type="machine_learning_regression", enabled=True
-        ),
-        "vol_breakout": StrategyConfig(
-            name="Volatility Breakout", type="vol_breakout", enabled=True
-        ),
     }
-    system_context.config.strategies.enabled = [
-        "ai_predictor",
-        "ai_predictor_alt",
-        "ai_regression",
-        "vol_breakout",
-    ]
     system_context.strategy_engine.strategy_states = {
         "ai_predictor": SimpleNamespace(enabled=True),
-        "ai_predictor_alt": SimpleNamespace(enabled=True),
-        "ai_regression": SimpleNamespace(enabled=True),
-        "vol_breakout": SimpleNamespace(enabled=True),
     }
 
-    response = client.post(
-        "/api/system/session/start",
-        json={
-            "profile_name": "default",
-            "mode": "paper",
-            "loop_interval_sec": 15,
-            "ml_enabled": False,
-        },
-    )
+    response = client.post("/api/system/session/start")
 
     assert response.status_code == 200
     assert response.json()["error"] is None
+    assert response.json()["data"]["ml_enabled"] is False
 
-    from kraken_bot.strategy.catalog import ML_STRATEGY_IDS
-
-    for sid in ML_STRATEGY_IDS:
-        strat_cfg = system_context.config.strategies.configs[sid]
-        assert strat_cfg.enabled is False
-
-    assert set(system_context.config.strategies.enabled) == {"vol_breakout"}
+    # Start should have forced it OFF
+    strat_cfg = system_context.config.strategies.configs["ai_predictor"]
+    assert strat_cfg.enabled is False
     assert (
-        system_context.strategy_engine.strategy_states["vol_breakout"].enabled is True
+        system_context.strategy_engine.strategy_states["ai_predictor"].enabled is False
     )
-    assert all(
-        system_context.strategy_engine.strategy_states[sid].enabled is False
-        for sid in ML_STRATEGY_IDS
+
+
+def test_patch_session_config_blocked_if_active(client, system_context):
+    system_context.session.active = True
+    response = client.patch(
+        "/api/system/session/config",
+        json={"loop_interval_sec": 10.0},
     )
+    assert response.status_code == 200
+    assert "active" in response.json()["error"]
+
+
+def test_start_session_blocked_during_reload(client, system_context):
+    system_context.reinitialize_event.set()
+    response = client.post("/api/system/session/start")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["data"] is None
+    assert "reloading" in payload["error"].lower()
+    assert system_context.session.active is False
 
 
 @pytest.mark.parametrize("ui_read_only", [True])

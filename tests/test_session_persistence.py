@@ -89,7 +89,7 @@ def test_start_stop_does_not_persist_active(mock_config_dirs):
     app = create_api(ctx)
     client = TestClient(app)
 
-    # 2. START SESSION
+    # 2. CONFIGURE SESSION
     profile_name = "default"
     payload = {
         "profile_name": profile_name,
@@ -97,40 +97,52 @@ def test_start_stop_does_not_persist_active(mock_config_dirs):
         "loop_interval_sec": 30.0,
         "ml_enabled": True,
     }
-    response = client.post("/api/system/session/start", json=payload)
-    assert response.status_code == 200, f"Start failed: {response.text}"
-    assert response.json()["data"]["active"] is True
-    assert ctx.session.active is True
+    response = client.patch("/api/system/session/config", json=payload)
+    assert response.status_code == 200, f"Config failed: {response.text}"
+    data = response.json()["data"]
+    assert data["loop_interval_sec"] == 30.0
+    assert data["active"] is False
 
-    # Verify Disk Artifacts (Start)
-    with open(config_path, "r") as f:
-        saved_main = yaml.safe_load(f)
-    assert "active" not in saved_main.get("session", {})
+    # Mock reinitialization completion (since test doesn't run main loop)
+    if ctx.reinitialize_event.is_set():
+        ctx.reinitialize_event.clear()
 
-    # Check PROFILE SPECIFIC runtime overrides
+    # Snapshot Disk Artifacts
+    with open(config_path, "rb") as f:
+        main_config_snapshot = f.read()
+
     profile_runtime_path = (
         mock_config_dirs / "profiles" / profile_name / RUNTIME_OVERRIDES_FILENAME
     )
     assert profile_runtime_path.exists(), "Profile runtime file should be created"
+    with open(profile_runtime_path, "rb") as f:
+        profile_runtime_snapshot = f.read()
 
-    with open(profile_runtime_path, "r") as f:
-        saved_runtime = yaml.safe_load(f)
-    assert "active" not in saved_runtime.get("session", {})
+    # 3. START SESSION (No payload)
+    response = client.post("/api/system/session/start")
+    assert response.status_code == 200, f"Start failed: {response.text}"
+    assert response.json()["data"]["active"] is True
+    assert ctx.session.active is True
 
-    # 3. STOP SESSION
+    # Verify Disk Unchanged (Start)
+    with open(config_path, "rb") as f:
+        assert f.read() == main_config_snapshot
+
+    with open(profile_runtime_path, "rb") as f:
+        assert f.read() == profile_runtime_snapshot
+
+    # 4. STOP SESSION (No payload)
     response = client.post("/api/system/session/stop")
     assert response.status_code == 200, f"Stop failed: {response.text}"
     assert response.json()["data"]["active"] is False
     assert ctx.session.active is False
 
-    # Verify Disk Artifacts (Stop)
-    with open(config_path, "r") as f:
-        saved_main = yaml.safe_load(f)
-    assert "active" not in saved_main.get("session", {})
+    # Verify Disk Unchanged (Stop)
+    with open(config_path, "rb") as f:
+        assert f.read() == main_config_snapshot
 
-    with open(profile_runtime_path, "r") as f:
-        saved_runtime = yaml.safe_load(f)
-    assert "active" not in saved_runtime.get("session", {})
+    with open(profile_runtime_path, "rb") as f:
+        assert f.read() == profile_runtime_snapshot
 
 
 def test_stale_runtime_file_cleanup(mock_config_dirs):
