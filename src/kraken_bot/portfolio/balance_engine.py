@@ -17,6 +17,9 @@ logger = logging.getLogger(__name__)
 
 
 class BalanceEngine:
+    # Using 1e-8 as the standard quantization quantum (Kraken standard)
+    QUANTIZATION = Decimal("1e-8")
+
     def __init__(self, initial_balances: Optional[Dict[str, AssetBalance]] = None):
         if initial_balances is not None:
             self.balances = initial_balances
@@ -24,6 +27,9 @@ class BalanceEngine:
             self.balances = defaultdict(
                 lambda: AssetBalance(asset="", total=0.0, free=0.0, reserved=0.0)
             )
+        # Cache to avoid repeated float->Decimal conversions
+        # asset -> (last_total_float, total_decimal, last_reserved_float, reserved_decimal)
+        self._decimal_cache: Dict[str, tuple[float, Decimal, float, Decimal]] = {}
 
     def _get_or_create_balance(self, asset: str) -> AssetBalance:
         if asset not in self.balances:
@@ -33,27 +39,34 @@ class BalanceEngine:
         return self.balances[asset]
 
     def apply_entry(self, e: LedgerEntry):
-        # Using 1e-8 as the standard quantization quantum (Kraken standard)
-        QUANTIZATION = Decimal("1e-8")
-
         bal = self._get_or_create_balance(e.asset)
 
-        # Convert current float balance to Decimal for calculation
-        current_total = Decimal(str(bal.total))
-        current_reserved = Decimal(str(bal.reserved))
+        # Smart cache: only use cached Decimal if the underlying float hasn't changed.
+        # This handles cases where bal.reserved or bal.total is modified externally.
+        cached = self._decimal_cache.get(e.asset)
+
+        if cached and cached[0] == bal.total:
+            current_total = cached[1]
+        else:
+            current_total = Decimal(str(bal.total))
+
+        if cached and cached[2] == bal.reserved:
+            current_reserved = cached[3]
+        else:
+            current_reserved = Decimal(str(bal.reserved))
 
         # Kraken invariant: new_balance = old_balance + amount - fee
         computed_new = current_total + e.amount - e.fee
 
         # Quantize computed_new to prevent float drift artifacts
-        computed_new = computed_new.quantize(QUANTIZATION)
-        if abs(computed_new) < QUANTIZATION:
+        computed_new = computed_new.quantize(self.QUANTIZATION)
+        if abs(computed_new) < self.QUANTIZATION:
             computed_new = Decimal("0.0")
 
         # Basic sanity check if Kraken provides the resulting balance
         if e.balance is not None:
             # Tolerance check (e.g. 1e-8)
-            if abs(computed_new - e.balance) > QUANTIZATION:
+            if abs(computed_new - e.balance) > self.QUANTIZATION:
                 logger.warning(
                     "Balance mismatch during replay",
                     extra=structured_log_extra(
@@ -73,13 +86,26 @@ class BalanceEngine:
         computed_free = max(computed_new - current_reserved, Decimal("0.0"))
 
         # Quantize free balance too
-        computed_free = computed_free.quantize(QUANTIZATION)
-        if abs(computed_free) < QUANTIZATION:
+        computed_free = computed_free.quantize(self.QUANTIZATION)
+        if abs(computed_free) < self.QUANTIZATION:
             computed_free = Decimal("0.0")
 
+        # Update model
         bal.total = float(computed_new)
         bal.free = float(computed_free)
         # bal.reserved is preserved as-is
+
+        # Update cache with the new state
+        # We perform bounds check to satisfy "Bounded growth" rule, though universe is small.
+        if len(self._decimal_cache) > 1000:
+            self._decimal_cache.clear()
+
+        self._decimal_cache[e.asset] = (
+            bal.total,  # use the exact float we just wrote
+            computed_new,
+            bal.reserved,
+            current_reserved
+        )
 
         self.balances[e.asset] = bal
 
