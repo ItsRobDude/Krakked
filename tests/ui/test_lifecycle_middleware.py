@@ -176,6 +176,7 @@ def test_lifecycle_middleware_blocklist(monkeypatch, tmp_path):
     blocked_paths = [
         ("POST", "/krakked/api/config/apply"),
         ("POST", "/krakked/api/system/session/start"),
+        ("PATCH", "/krakked/api/system/session/config"),
         ("GET", "/krakked/api/portfolio/summary"),
         ("GET", "/krakked/api/strategies"),
     ]

@@ -42,7 +42,6 @@ import {
   SystemHealth,
   SessionStateResponse,
   SessionConfigRequest,
-  SessionMode,
   SetupStatus,
   updateRiskConfig,
   setKillSwitch,
@@ -57,6 +56,7 @@ import {
   ExecutionMode,
   flattenAllPositions,
   downloadRuntimeConfig,
+  updateSessionConfig,
 } from './services/api';
 import { RISK_PRESET_META, formatPresetSummary } from './constants/riskPresets';
 
@@ -302,14 +302,6 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
   }, [session?.active]);
 
   useEffect(() => {
-    if (!session || strategies.length === 0) return;
-    if (mlStrategies.length === 0) return;
-
-    handleMlToggle(session.ml_enabled);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session?.ml_enabled, strategies.length, mlStrategies.length]);
-
-  useEffect(() => {
     if (!health || !summary) return;
 
     const baseKpis = buildKpis(summary);
@@ -518,7 +510,12 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
       await performModeSwitch('paper');
     }
 
-    const next = await startSession(config);
+    const updated = await updateSessionConfig(config);
+    if (!updated) {
+      throw new Error('Unable to configure session.');
+    }
+
+    const next = await startSession();
     if (!next) {
       throw new Error('Unable to start session.');
     }
@@ -533,8 +530,12 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
     }
 
     await performModeSwitch('live', password);
+    const updated = await updateSessionConfig(pendingLiveStart);
+    if (!updated) {
+      throw new Error('Unable to configure session.');
+    }
 
-    const next = await startSession(pendingLiveStart);
+    const next = await startSession();
     if (!next) {
       throw new Error('Unable to start session.');
     }
@@ -631,16 +632,28 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
       return;
     }
 
-    const updated = await startSession({
-      profile_name: session.profile_name ?? 'default',
-      mode: session.mode as SessionMode,
-      loop_interval_sec: loopIntervalDraft,
-      ml_enabled: session.ml_enabled,
-    });
+    if (session.active) {
+      setSystemMessage({ tone: 'error', message: 'Stop session to change loop frequency.' });
+      return;
+    }
 
+    const updated = await updateSessionConfig({ loop_interval_sec: loopIntervalDraft });
     if (updated) {
       setSession(updated);
       setLoopIntervalDraft(updated.loop_interval_sec);
+    }
+  };
+
+  const handleProfileChange = async (name: string) => {
+    if (health?.ui_read_only) {
+      throw new Error('Backend is in read-only mode.');
+    }
+    const updated = await updateSessionConfig({ profile_name: name });
+    if (updated) {
+      setSession(updated);
+      setLoopIntervalDraft(updated.loop_interval_sec);
+    } else {
+      throw new Error('Failed to update profile.');
     }
   };
 
@@ -1047,6 +1060,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
           modeBusy={modeBusy}
           systemMessage={systemMessage}
           onCreateProfile={handleCreateProfile}
+          onProfileChange={handleProfileChange}
           onSaveConfig={handleSaveConfig}
           onStart={handleStartSession}
         />

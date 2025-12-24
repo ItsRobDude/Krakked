@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import type { ExecutionMode, ProfileSummary, SessionConfigRequest } from '../services/api';
 
 export type StartupScreenProps = {
@@ -9,6 +9,7 @@ export type StartupScreenProps = {
   modeBusy?: boolean;
   systemMessage?: { tone: 'info' | 'success' | 'error'; message: string } | null;
   onCreateProfile: (name: string) => Promise<string>;
+  onProfileChange: (name: string) => Promise<void> | void;
   onSaveConfig: () => Promise<void>;
   onStart: (params: SessionConfigRequest) => Promise<void> | void;
 };
@@ -23,44 +24,43 @@ export function StartupScreen({
   modeBusy,
   systemMessage,
   onCreateProfile,
+  onProfileChange,
   onSaveConfig,
   onStart,
 }: StartupScreenProps) {
   const [mode, setMode] = useState<SessionConfigRequest['mode']>('paper');
   const [loopInterval, setLoopInterval] = useState<number>(DEFAULT_LOOP_INTERVAL);
   const [mlEnabled, setMlEnabled] = useState(true);
-  const [selectedProfile, setSelectedProfile] = useState<string>(
-    () => activeProfileName ?? profiles[0]?.name ?? '',
-  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Sync internal selection with active profile prop
+  // We prioritize activeProfileName (the source of truth) over local assumption
+  const selectedProfile = activeProfileName || profiles[0]?.name || '';
 
   const selectedProfileMeta = useMemo(
     () => profiles.find((profile) => profile.name === selectedProfile),
     [profiles, selectedProfile],
   );
 
-  useEffect(() => {
-    if (!profiles.length) {
-      if (selectedProfile) setSelectedProfile('');
+  const handleProfileSelect = async (name: string) => {
+    if (readOnly) {
+      setError('Backend is in read-only mode.');
       return;
     }
+    // Don't re-trigger if same
+    if (name === selectedProfile) return;
 
-    if (
-      activeProfileName &&
-      profiles.some((profile) => profile.name === activeProfileName) &&
-      !selectedProfile
-    ) {
-      setSelectedProfile(activeProfileName);
-      return;
+    setBusy(true);
+    setError(null);
+    try {
+      await onProfileChange(name);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to switch profile');
+    } finally {
+      setBusy(false);
     }
-
-    if (selectedProfile && profiles.some((profile) => profile.name === selectedProfile)) {
-      return;
-    }
-
-    setSelectedProfile(profiles[0].name);
-  }, [activeProfileName, profiles, selectedProfile]);
+  };
 
   const handleCreateProfile = async () => {
     if (readOnly) {
@@ -79,7 +79,7 @@ export function StartupScreen({
 
     try {
       const createdName = await onCreateProfile(trimmed);
-      setSelectedProfile(createdName);
+      await onProfileChange(createdName);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to create profile');
     } finally {
@@ -175,7 +175,8 @@ export function StartupScreen({
             <select
               id="startup-profile"
               value={selectedProfile}
-              onChange={(event) => setSelectedProfile(event.target.value)}
+              onChange={(event) => handleProfileSelect(event.target.value)}
+              disabled={busy || modeBusy || readOnly}
             >
               {profiles.map((profile) => (
                 <option key={profile.name} value={profile.name}>
