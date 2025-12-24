@@ -87,6 +87,39 @@ class KrakenRESTClient:
 
         raise KrakenAPIError(error_msg)
 
+    def _process_response(self, response: requests.Response) -> Dict[str, Any]:
+        """
+        Process the API response: parse JSON, check for API-level errors,
+        and validate HTTP status codes.
+        """
+        # 1. Attempt to parse JSON first to catch API-specific errors
+        # even if the status code implies a generic failure (e.g. 500 or 520)
+        try:
+            response_json = response.json()
+            if error_messages := response_json.get("error"):
+                self._handle_api_error(error_messages)
+        except ValueError:
+            # Not JSON, proceed to status checks
+            response_json = {}
+
+        # 2. Handle HTTP Errors if no API error was caught above
+        if response.status_code == 429:
+            raise RateLimitError("Rate limit exceeded")
+
+        if 500 <= response.status_code < 600:
+            # Include the first 200 chars of body for debugging context
+            body_preview = response.text[:200] if response.text else "No body"
+            raise ServiceUnavailableError(
+                f"Kraken API Service Error: HTTP {response.status_code} - {body_preview}"
+            )
+
+        try:
+            response.raise_for_status()
+        except HTTPError as e:
+            raise KrakenAPIError(f"HTTP Error: {e}") from e
+
+        return response_json.get("result", {})
+
     def _request(
         self,
         endpoint: str,
@@ -128,41 +161,8 @@ class KrakenRESTClient:
                 headers=headers,
                 timeout=self.request_timeout,
             )
+            return self._process_response(response)
 
-            # 1. Attempt to parse JSON first to catch API-specific errors
-            # even if the status code implies a generic failure (e.g. 500 or 520)
-            try:
-                response_json = response.json()
-                if error_messages := response_json.get("error"):
-                    self._handle_api_error(error_messages)
-            except ValueError:
-                # Not JSON, proceed to status checks
-                response_json = {}
-
-            # 2. Handle HTTP Errors if no API error was caught above
-            if response.status_code == 429:
-                raise RateLimitError("Rate limit exceeded")
-
-            if 500 <= response.status_code < 600:
-                # Include the first 200 chars of body for debugging context
-                body_preview = response.text[:200] if response.text else "No body"
-                raise ServiceUnavailableError(
-                    f"Kraken API Service Error: HTTP {response.status_code} - {body_preview}"
-                )
-
-            response.raise_for_status()
-
-            # 3. Return successful result
-            return response_json.get("result", {})
-
-        except HTTPError as e:
-            # Re-check status codes in case raise_for_status() triggered this
-            status_code = e.response.status_code if e.response else None
-            if status_code == 429:
-                raise RateLimitError("Rate limit exceeded") from e
-            if status_code and 500 <= status_code < 600:
-                raise ServiceUnavailableError(f"Kraken API Service Error: {e}") from e
-            raise KrakenAPIError(f"HTTP Error: {e}") from e
         except Timeout as e:
             raise ServiceUnavailableError(f"Request timed out: {e}") from e
         except RequestException as e:
