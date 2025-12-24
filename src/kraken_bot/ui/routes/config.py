@@ -6,7 +6,7 @@ import logging
 from copy import deepcopy
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 import yaml  # type: ignore[import-untyped]
 from fastapi import APIRouter, HTTPException, Request
@@ -14,7 +14,12 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from kraken_bot.config import get_config_dir
-from kraken_bot.config_loader import RUNTIME_OVERRIDES_FILENAME
+from kraken_bot.config_loader import (
+    RUNTIME_OVERRIDES_FILENAME,
+    _load_yaml_mapping,
+    _resolve_effective_env,
+    parse_app_config,
+)
 from kraken_bot.market_data.api import validate_pairs_with_client
 from kraken_bot.ui.logging import build_request_log_extra
 from kraken_bot.ui.models import ApiEnvelope
@@ -70,6 +75,28 @@ def _validate_universe_pairs(pairs: List[str], ctx) -> List[str]:
     )
 
 
+def _split_ui_payload(ui_payload: Any) -> Tuple[Dict, Dict]:
+    """
+    Splits a UI configuration payload into profile-bound and main-bound parts.
+    - Profile: 'refresh_intervals'
+    - Main: everything else (host, port, auth, etc.)
+    """
+    if not isinstance(ui_payload, dict):
+        return {}, {}
+
+    profile_ui = {}
+    main_ui = {}
+
+    if "refresh_intervals" in ui_payload:
+        profile_ui["refresh_intervals"] = ui_payload["refresh_intervals"]
+
+    for k, v in ui_payload.items():
+        if k != "refresh_intervals":
+            main_ui[k] = v
+
+    return profile_ui, main_ui
+
+
 def _prune_runtime_overrides(
     overrides_path: Path, payload_keys: set[str], preserve_keys: set[str]
 ) -> None:
@@ -81,8 +108,7 @@ def _prune_runtime_overrides(
         return
 
     try:
-        with open(overrides_path, "r") as f:
-            overrides = yaml.safe_load(f) or {}
+        overrides = _load_yaml_mapping(overrides_path)
 
         original_keys = set(overrides.keys())
         keys_to_remove = (original_keys & payload_keys) - preserve_keys
@@ -150,14 +176,10 @@ async def apply_config(
     config_data = payload.config
 
     # Strip restricted sections that should never be modified via apply
-    # session: stateful, managed by system endpoints
-    # profiles: registry, managed by profiles endpoints
     config_data.pop("session", None)
     config_data.pop("profiles", None)
 
     # 1. Security Check: Execution Mode Guards
-    # Block any attempt to CHANGE restricted execution keys via generic config apply.
-    # Users must use the dedicated /api/system/mode endpoint for mode changes.
     execution_payload = config_data.get("execution")
     restricted_keys = {
         "mode",
@@ -178,7 +200,6 @@ async def apply_config(
                         data=None,
                         error=f"Execution '{key}' cannot be modified via config apply. Use /api/system/mode.",
                     )
-                # If same value, safe to ignore/strip
                 keys_to_remove.append(key)
 
         for k in keys_to_remove:
@@ -192,8 +213,6 @@ async def apply_config(
     include_pairs = new_universe.get("include_pairs", [])
     if include_pairs:
         try:
-            # Must catch any exception from validation (ServiceUnavailable etc)
-            # and translate to API error.
             invalid_pairs = _validate_universe_pairs(include_pairs, ctx)
             if invalid_pairs:
                 return ApiEnvelope(
@@ -208,31 +227,34 @@ async def apply_config(
                 data=None, error=f"Universe validation unavailable: {str(e)}"
             )
 
-    if payload.dry_run:
-        return ApiEnvelope(data={"status": "valid"}, error=None)
-
     config_dir = get_config_dir()
     profile_name = ctx.session.profile_name
+    main_config_path = config_dir / "config.yaml"
 
     try:
-        # 3. Determine target file(s) and Load existing content for Deep Merge
-        main_config_path = config_dir / "config.yaml"
+        # --- Strict Full Validation (Matches Load Behavior) ---
+        # 1. Load Existing Base
+        try:
+            existing_main = _load_yaml_mapping(main_config_path)
+        except Exception as e:
+            return ApiEnvelope(
+                data=None, error=f"Main config corrupted, cannot validate apply: {e}"
+            )
 
-        trading_sections = {
-            "region",
-            "universe",
-            "market_data",
-            "portfolio",
-            "execution",
-            "risk",
-            "strategies",
-        }
+        # 2. Resolve Environment
+        effective_env = _resolve_effective_env(None, str(main_config_path))
+        env_config_path = main_config_path.parent / f"config.{effective_env}.yaml"
+        try:
+            env_config = _load_yaml_mapping(env_config_path)
+        except Exception as e:
+            return ApiEnvelope(
+                data=None, error=f"Environment config corrupted, cannot validate: {e}"
+            )
 
-        # Keys present in the cleaned payload (used for pruning overrides)
-        payload_keys = set(config_data.keys())
-
-        # Sections always preserved in runtime overrides (never pruned by config apply)
-        preserve_override_keys = {"session"}
+        # 3. Handle Profiles & Split Payloads
+        existing_profile: Dict[str, Any] = {}
+        profile_config_path: Path | None = None
+        profiles_entry = None
 
         if profile_name:
             profiles_entry = ctx.config.profiles.get(profile_name)
@@ -241,92 +263,196 @@ async def apply_config(
                     data=None,
                     error=f"Active profile '{profile_name}' not found in registry",
                 )
-
             p_path_str = profiles_entry.config_path
             p_path = Path(p_path_str)
             if not p_path.is_absolute():
                 p_path = config_dir / p_path
-
-            # Read existing profile config
-            existing_profile_config: Dict[str, Any] = {}
-            if p_path.exists():
-                with open(p_path, "r") as f:
-                    existing_profile_config = yaml.safe_load(f) or {}
-
-            # Split payload: trading sections for profile, others for main
-            profile_payload = {
-                k: v for k, v in config_data.items() if k in trading_sections
-            }
-            main_payload = {
-                k: v for k, v in config_data.items() if k not in trading_sections
-            }
-
-            # Calculate ALL keys being applied (profile OR main) to prune from profile runtime overrides
-            # This ensures that if a user applies a main-config key (like 'ui') while a profile is active,
-            # we still prune 'ui' from the profile's runtime override file if it exists there.
-            all_applied_keys = set(config_data.keys())
-
-            if profile_payload:
-                merged_profile_config = deep_merge_dicts(
-                    existing_profile_config, profile_payload
-                )
-                backup_file(p_path)
-                atomic_write(p_path, merged_profile_config, dump_func=yaml.safe_dump)
-
-            # Always attempt to prune profile runtime overrides if ANY key was applied
-            # (even if only main payload was present)
-            if profile_payload or main_payload:
-                profile_overrides_path = (
-                    config_dir / "profiles" / profile_name / RUNTIME_OVERRIDES_FILENAME
-                )
-                _prune_runtime_overrides(
-                    profile_overrides_path,
-                    all_applied_keys,
-                    preserve_override_keys,
+            profile_config_path = p_path
+            try:
+                existing_profile = _load_yaml_mapping(profile_config_path)
+            except Exception as e:
+                return ApiEnvelope(
+                    data=None,
+                    error=f"Profile config corrupted, cannot validate apply: {e}",
                 )
 
-            if main_payload:
-                existing_main_config_for_split: Dict[str, Any] = {}
-                if main_config_path.exists():
-                    with open(main_config_path, "r") as f:
-                        existing_main_config_for_split = yaml.safe_load(f) or {}
+        # Split Config Data into Profile vs Main payloads
+        trading_sections = {
+            "region",
+            "universe",
+            "market_data",
+            "portfolio",
+            "execution",
+            "risk",
+            "strategies",
+            # UI handled specially below
+        }
 
-                merged_main_config = deep_merge_dicts(
-                    existing_main_config_for_split, main_payload
-                )
-                backup_file(main_config_path)
-                atomic_write(
-                    main_config_path, merged_main_config, dump_func=yaml.safe_dump
-                )
+        profile_payload = {}
+        main_payload = {}
 
-                # Prune main runtime overrides
-                # Remove any keys that we just persisted to the static main config
-                main_overrides_path = config_dir / RUNTIME_OVERRIDES_FILENAME
-                _prune_runtime_overrides(
-                    main_overrides_path,
-                    set(main_payload.keys()),
-                    preserve_override_keys,
-                )
+        # Handle UI splitting
+        ui_payload = config_data.get("ui")
+        profile_ui, main_ui = _split_ui_payload(ui_payload)
 
+        # Assign other sections
+        for k, v in config_data.items():
+            if k == "ui":
+                continue
+            if profile_name and k in trading_sections:
+                profile_payload[k] = v
+            else:
+                main_payload[k] = v
+
+        # Inject separated UI
+        if profile_ui and profile_name:
+            profile_payload["ui"] = profile_ui
+        if main_ui:
+            if "ui" not in main_payload:
+                main_payload["ui"] = {}
+            main_payload["ui"].update(main_ui)
+
+        # 4. Determine Relevant Overrides File
+        # STRICT RULE: Load exactly the same file load_config uses.
+        if profile_name:
+            overrides_path = (
+                config_dir / "profiles" / profile_name / RUNTIME_OVERRIDES_FILENAME
+            )
         else:
-            # No profile - everything to main config
-            existing_main_config: Dict[str, Any] = {}
-            if main_config_path.exists():
-                with open(main_config_path, "r") as f:
-                    existing_main_config = yaml.safe_load(f) or {}
+            overrides_path = config_dir / RUNTIME_OVERRIDES_FILENAME
 
-            merged_main_config = deep_merge_dicts(existing_main_config, config_data)
-            backup_file(main_config_path)
-            atomic_write(main_config_path, merged_main_config, dump_func=yaml.safe_dump)
-
-            # Prune main runtime overrides
-            # Remove any keys that we just persisted to the static main config
-            main_overrides_path = config_dir / RUNTIME_OVERRIDES_FILENAME
-            _prune_runtime_overrides(
-                main_overrides_path, payload_keys, preserve_override_keys
+        try:
+            relevant_overrides = _load_yaml_mapping(overrides_path)
+        except Exception as e:
+            return ApiEnvelope(
+                data=None,
+                error=f"Runtime overrides corrupted, cannot validate apply: {e}",
             )
 
-        # 4. Trigger Reload
+        # 5. Build Candidates & Merge (In-Memory Validation)
+        # Main Candidate
+        main_candidate = deep_merge_dicts(existing_main, main_payload)
+
+        # Start Merge Chain
+        merged_candidate = main_candidate
+
+        # Env Overlay
+        if env_config:
+            merged_candidate = deep_merge_dicts(merged_candidate, env_config)
+
+        # Profile Overlay
+        if profile_name:
+            profile_candidate = deep_merge_dicts(existing_profile, profile_payload)
+            merged_candidate = deep_merge_dicts(merged_candidate, profile_candidate)
+
+        # Prune Overrides (In-Memory Simulation)
+        preserve_override_keys = {"session"}
+        applied_keys = set()
+        if profile_name:
+            # If profile active, apply prunes on union of ALL applied keys
+            # (matches persistence logic where main keys are pruned from profile overrides)
+            # Both profile_payload and main_payload contribute to "applied" set
+            applied_keys.update(profile_payload.keys())
+            applied_keys.update(main_payload.keys())
+            # Ensure "ui" is tracked if split happened
+            if ui_payload:
+                applied_keys.add("ui")
+        else:
+            # If no profile, just main payload keys
+            applied_keys.update(main_payload.keys())
+            if ui_payload:
+                applied_keys.add("ui")
+
+        keys_to_prune = (set(relevant_overrides.keys()) & applied_keys) - preserve_override_keys
+        pruned_overrides = {
+            k: v for k, v in relevant_overrides.items() if k not in keys_to_prune
+        }
+
+        # Merge Pruned Overrides
+        if pruned_overrides:
+            merged_candidate = deep_merge_dicts(merged_candidate, pruned_overrides)
+
+        # 6. Parse & Verify
+        try:
+            parse_app_config(
+                merged_candidate,
+                config_path=main_config_path,
+                effective_env=effective_env,
+            )
+        except Exception as e:
+            # This catches invariant violations (like max_per_strategy_pct missing)
+            return ApiEnvelope(data=None, error=f"Validation failed: {str(e)}")
+
+        # Validation Passed!
+        if payload.dry_run:
+            return ApiEnvelope(data={"status": "valid"}, error=None)
+
+        # --- Persistence Phase (Writes) ---
+
+        # Write Profile Config
+        if profile_name and profile_config_path:
+            if profile_payload:
+                # We already computed profile_candidate = existing + payload
+                # Recompute to be safe/clean or reuse profile_candidate
+                final_profile_write = deep_merge_dicts(
+                    existing_profile, profile_payload
+                )
+                backup_file(profile_config_path)
+                atomic_write(
+                    profile_config_path, final_profile_write, dump_func=yaml.safe_dump
+                )
+
+        # Write Main Config
+        if main_payload:
+            # Recompute final main to write
+            final_main_write = deep_merge_dicts(existing_main, main_payload)
+            backup_file(main_config_path)
+            atomic_write(
+                main_config_path, final_main_write, dump_func=yaml.safe_dump
+            )
+
+        # Prune Overrides on Disk
+        # Logic:
+        # If Profile Active:
+        #   - Prune Profile Overrides using UNION (profile + main keys + ui)
+        #   - Prune Main Overrides using ONLY Main keys (main payload + main ui)
+        # If No Profile:
+        #   - Prune Main Overrides using Payload keys
+
+        all_applied_keys_set = set(config_data.keys()) # Original full set
+
+        if profile_name:
+            # Prune Profile Overrides (Union)
+            profile_overrides_path = (
+                config_dir / "profiles" / profile_name / RUNTIME_OVERRIDES_FILENAME
+            )
+            _prune_runtime_overrides(
+                profile_overrides_path,
+                all_applied_keys_set,
+                preserve_override_keys,
+            )
+
+            # Prune Main Overrides (Main Payload Only)
+            main_keys_only = set(main_payload.keys())
+            if main_ui:
+                main_keys_only.add("ui")
+
+            main_overrides_path = config_dir / RUNTIME_OVERRIDES_FILENAME
+            _prune_runtime_overrides(
+                main_overrides_path,
+                main_keys_only,
+                preserve_override_keys,
+            )
+        else:
+            # Prune Main Overrides (Full Payload)
+            main_overrides_path = config_dir / RUNTIME_OVERRIDES_FILENAME
+            _prune_runtime_overrides(
+                main_overrides_path,
+                all_applied_keys_set,
+                preserve_override_keys,
+            )
+
+        # Trigger Reload
         ctx.reinitialize_event.set()
 
         logger.info(

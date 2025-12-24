@@ -22,7 +22,12 @@ from kraken_bot.accounts import (
     save_accounts,
 )
 from kraken_bot.config import dump_runtime_overrides, get_config_dir
-from kraken_bot.config_loader import write_initial_config
+from kraken_bot.config_loader import (
+    _load_yaml_mapping,
+    _resolve_effective_env,
+    parse_app_config,
+    write_initial_config,
+)
 from kraken_bot.connection.exceptions import (
     AuthError,
     KrakenAPIError,
@@ -44,7 +49,7 @@ from kraken_bot.secrets import (
 )
 from kraken_bot.ui.logging import build_request_log_extra
 from kraken_bot.ui.models import ApiEnvelope, SystemHealthPayload, SystemMetricsPayload
-from kraken_bot.utils.io import atomic_write, backup_file, sanitize_filename
+from kraken_bot.utils.io import atomic_write, backup_file, deep_merge_dicts, sanitize_filename
 
 logger = logging.getLogger(__name__)
 
@@ -1186,6 +1191,7 @@ async def create_profile(
         )
 
     config_dir = get_config_dir()
+    main_config_path = config_dir / "config.yaml"
 
     try:
         safe_name = sanitize_filename(payload.name)
@@ -1201,10 +1207,25 @@ async def create_profile(
         )
 
     try:
-        # 1. Create Profile File
+        # 1. Prepare Base Config
         base_config = payload.base_config or {}
 
-        # Security: Prevent setting restricted execution keys in new profiles
+        # 2. UI Key Boundary Check
+        if "ui" in base_config:
+            if not isinstance(base_config["ui"], dict):
+                return ApiEnvelope(data=None, error="UI config must be a dictionary")
+
+            allowed_ui_keys = {"refresh_intervals"}
+            present_ui_keys = set(base_config["ui"].keys())
+            invalid_keys = present_ui_keys - allowed_ui_keys
+
+            if invalid_keys:
+                return ApiEnvelope(
+                    data=None,
+                    error=f"UI server settings cannot be set in profile base_config; only ui.refresh_intervals is allowed. Found: {invalid_keys}"
+                )
+
+        # 3. Security: Prevent setting restricted execution keys in new profiles
         execution_payload = base_config.get("execution", {})
         restricted_keys = {
             "mode",
@@ -1214,24 +1235,18 @@ async def create_profile(
         }
         for key in restricted_keys:
             if key in execution_payload:
-                # Special case: 'mode' might be allowed if it matches default_mode AND isn't live?
-                # But generally, we should enforce that `default_mode` argument controls the initial mode.
-                # If user tries to sneak in `allow_live_trading: true` via base_config, block it.
                 return ApiEnvelope(
                     data=None,
                     error=f"Execution '{key}' cannot be set via base_config. It is controlled by system state.",
                 )
 
         # Ensure minimal structure using the declared default mode
-        # If execution dict exists (but passed checks), update it. If not, create it.
         if "execution" not in base_config:
             base_config["execution"] = {}
 
         base_config["execution"]["mode"] = payload.default_mode
-        # Force safe defaults
         base_config["execution"]["allow_live_trading"] = False
         base_config["execution"]["validate_only"] = payload.default_mode != "live"
-        # Actually, even if default_mode is live (which we might block?), we can't allow live trading without the guard.
 
         if payload.default_mode == "live":
             return ApiEnvelope(
@@ -1239,10 +1254,38 @@ async def create_profile(
                 error="Cannot create profile with default mode 'live'. Use 'paper' or 'dry_run' and upgrade later.",
             )
 
+        # 4. FULL LOADER VALIDATION (Effective Config)
+        try:
+            # Load Main
+            existing_main = _load_yaml_mapping(main_config_path)
+
+            # Resolve Env
+            effective_env = _resolve_effective_env(None, str(main_config_path))
+            env_config_path = main_config_path.parent / f"config.{effective_env}.yaml"
+            env_config = _load_yaml_mapping(env_config_path)
+
+            # Build Effective
+            merged = deep_merge_dicts(existing_main, env_config)
+            merged = deep_merge_dicts(merged, base_config)
+
+            # No runtime overrides yet for new profile
+
+            # Parse
+            parse_app_config(
+                merged,
+                config_path=main_config_path,
+                effective_env=effective_env,
+            )
+        except Exception as e:
+            return ApiEnvelope(
+                data=None,
+                error=f"Profile configuration invalid: {e}"
+            )
+
+        # 5. Write Profile File
         atomic_write(profile_path, base_config, dump_func=yaml.safe_dump)
 
-        # 2. Update Main Config Registry
-        main_config_path = config_dir / "config.yaml"
+        # 6. Update Main Config Registry
         backup_file(main_config_path)
 
         with open(main_config_path, "r") as f:
@@ -1260,7 +1303,7 @@ async def create_profile(
 
         atomic_write(main_config_path, main_data, dump_func=yaml.safe_dump)
 
-        # 3. Trigger Reload
+        # 7. Trigger Reload
         ctx.reinitialize_event.set()
 
         logger.info(

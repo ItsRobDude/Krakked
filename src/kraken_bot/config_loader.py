@@ -31,6 +31,8 @@ from kraken_bot.strategy.catalog import CANONICAL_STRATEGIES
 
 RUNTIME_OVERRIDES_FILENAME = "config.runtime.yaml"
 
+logger = logging.getLogger(__name__)
+
 
 def get_config_dir() -> Path:
     """
@@ -48,13 +50,76 @@ def get_default_ohlc_store_config() -> Dict[str, str]:
     return {"root_dir": str(default_root), "backend": "parquet"}
 
 
-def _load_runtime_overrides(config_dir: Path) -> dict:
-    path = config_dir / RUNTIME_OVERRIDES_FILENAME
+def _load_yaml_mapping(path: Path) -> dict:
+    """
+    Helper to load a YAML file as a dict.
+    - If missing: returns {}.
+    - If invalid YAML: RAISES exception (fail closed).
+    - If valid but not a mapping (e.g. list/string): returns {} (fail safe).
+    """
     if not path.exists():
         return {}
     with open(path, "r") as f:
-        data = yaml.safe_load(f) or {}
-    return data if isinstance(data, dict) else {}
+        data = yaml.safe_load(f)
+    if not isinstance(data, dict):
+        return {}
+    return data
+
+
+def _resolve_effective_env(env: Optional[str], config_path: Optional[str] = None) -> str:
+    """
+    Resolves the effective environment string from param or OS env.
+    Default: 'paper'.
+    Logs warning if invalid.
+    """
+    allowed_envs = {"dev", "paper", "live"}
+    initial_env = env if env is not None else os.environ.get("KRAKEN_BOT_ENV")
+
+    if initial_env not in allowed_envs:
+        # We only log here if we can verify it's invalid (not None)
+        # or if we want to log the fallback. The original logic logged if not allowed.
+        logger.warning(
+            "Invalid or missing environment '%s'; defaulting to 'paper'",
+            initial_env,
+            extra={"event": "config_invalid_env", "config_path": str(config_path)},
+        )
+        return "paper"
+    return initial_env
+
+
+def _load_runtime_overrides(config_dir: Path) -> dict:
+    # This existing function is kept for backward compat or specific usage,
+    # but we should ideally use _load_yaml_mapping now.
+    # Note: original implementation swallowed exceptions.
+    # The new plan implies stricter validation in apply_config, but load_config
+    # might still want to be lenient? The instructions said:
+    # "For PR5 validation ... ANY YAML parse failure ... must be treated as a hard validation error"
+    # This suggests that for regular boot, we might keep leniency, or unify.
+    # Given "No behavior regressions", we'll keep `load_config` relying on helpers that might be safer,
+    # but let's stick to the refactor plan which introduces _load_yaml_mapping.
+    # _load_yaml_mapping RAISES on error. `_load_runtime_overrides` historically swallowed.
+    # We will let `load_config` handle exceptions or use a safe wrapper if needed.
+    # But wait, `load_config` historically just warned on invalid format or file missing.
+    # If `yaml.safe_load` raised, `load_config` would crash unless wrapped.
+    # Original `load_config` did: `raw_config = yaml.safe_load(f) or {}`. It did NOT catch YAMLError.
+    # So `load_config` was already failing closed on syntax error!
+    # So `_load_yaml_mapping` raising is consistent with `load_config`.
+    path = config_dir / RUNTIME_OVERRIDES_FILENAME
+    try:
+        return _load_yaml_mapping(path)
+    except Exception:
+        # Original _load_runtime_overrides implementation was:
+        # with open(path, "r") as f: data = yaml.safe_load(f) or {}
+        # return data if isinstance(data, dict) else {}
+        # It did NOT catch exceptions in the snippet I read.
+        # Wait, I might have misread the snippet in memory.
+        # Snippet:
+        # if not path.exists(): return {}
+        # with open(path, "r") as f: data = yaml.safe_load(f) or {}
+        # return data if isinstance(data, dict) else {}
+        # No try/except block. So it raised on corrupt YAML.
+        # So _load_yaml_mapping is a perfect replacement.
+        raise
 
 
 def dump_runtime_overrides(
@@ -98,6 +163,8 @@ def dump_runtime_overrides(
     existing: dict = {}
     if path.exists():
         try:
+            # We use local safe load here to handle corruption gracefully during DUMP
+            # (overwrite corrupt file with new state)
             with open(path, "r") as f:
                 loaded = yaml.safe_load(f) or {}
             if isinstance(loaded, dict):
@@ -191,26 +258,21 @@ def write_initial_config(config_data: dict, config_dir: Path | None = None) -> N
                 pass
 
 
-def load_config(
-    config_path: Optional[Path] = None, env: Optional[str] = None
+def parse_app_config(
+    raw_config: Dict[str, Any],
+    *,
+    config_path: Path,
+    effective_env: str,
 ) -> AppConfig:
     """
-    Loads the main application configuration from the default location or a specified path.
+    Parses a fully merged dictionary into an AppConfig object, running all validations.
     """
-    logger = logging.getLogger(__name__)
+    is_live_env = effective_env == "live"
 
     def _validated_int(
         value: Any, default: int, field_name: str, min_value: int = 1
     ) -> int:
-        """Validate a config value intended to be an integer.
-
-        Accepts either an int or a numeric string (e.g. "30"). Missing
-        values (None) fall back to the provided default without warning.
-
-        Notes:
-          - bool is a subclass of int; treat it as invalid.
-        """
-
+        """Validate a config value intended to be an integer."""
         if value is None:
             return default
 
@@ -239,127 +301,15 @@ def load_config(
             stripped = value.strip()
             if stripped == "":
                 return _warn_invalid(value)
-
             try:
                 parsed = int(stripped, 10)
             except ValueError:
                 return _warn_invalid(value)
-
             if parsed >= min_value:
                 return parsed
             return _warn_invalid(parsed)
 
         return _warn_invalid(value)
-
-    allowed_envs = {"dev", "paper", "live"}
-
-    if config_path is None:
-        config_path = get_config_dir() / "config.yaml"
-
-    config_path = config_path.expanduser()
-
-    initial_env = env if env is not None else os.environ.get("KRAKEN_BOT_ENV")
-    if initial_env not in allowed_envs:
-        logger.warning(
-            "Invalid or missing environment '%s'; defaulting to 'paper'",
-            initial_env,
-            extra={"event": "config_invalid_env", "config_path": str(config_path)},
-        )
-        effective_env = "paper"
-    else:
-        effective_env = initial_env
-
-    is_live_env = effective_env == "live"
-
-    if not config_path.exists():
-        logger.warning(
-            "Configuration file not found; using defaults",
-            extra={"event": "config_missing_file", "config_path": str(config_path)},
-        )
-        raw_config: Dict[str, Any] = {}
-    else:
-        with open(config_path, "r") as f:
-            raw_config = yaml.safe_load(f) or {}
-
-    if not isinstance(raw_config, dict):
-        logger.warning(
-            "Configuration file is not a mapping; falling back to defaults",
-            extra={"event": "config_invalid_format", "config_path": str(config_path)},
-        )
-        raw_config = {}
-
-    # _deep_merge_dicts is now imported from utils.io if needed,
-    # or we can keep a local reference to avoid circular imports if utils imports config (it doesn't).
-    from kraken_bot.utils.io import deep_merge_dicts as _deep_merge_dicts
-
-    env_config_path = config_path.parent / f"config.{effective_env}.yaml"
-    if env_config_path.exists():
-        with open(env_config_path, "r") as f:
-            env_config = yaml.safe_load(f) or {}
-
-        if not isinstance(env_config, dict):
-            logger.warning(
-                "Environment config is not a mapping; skipping env overlay",
-                extra={
-                    "event": "config_invalid_env_file",
-                    "config_path": str(env_config_path),
-                },
-            )
-            env_config = {}
-
-        raw_config = _deep_merge_dicts(raw_config, env_config)
-
-    config_dir = get_config_dir()
-
-    # --- Profile Loading Logic ---
-    # Check if a profile is active in the current config state
-    session_data = raw_config.get("session") or {}
-    active_profile = session_data.get("profile_name")
-    profiles_registry = raw_config.get("profiles") or {}
-
-    if active_profile and active_profile in profiles_registry:
-        profile_entry = profiles_registry[active_profile]
-        # Allow path to be absolute or relative to config_dir
-        profile_path_str = profile_entry.get("config_path")
-        if profile_path_str:
-            profile_path = Path(profile_path_str)
-            if not profile_path.is_absolute():
-                profile_path = config_dir / profile_path
-
-            if profile_path.exists():
-                with open(profile_path, "r") as f:
-                    profile_config = yaml.safe_load(f) or {}
-                if isinstance(profile_config, dict):
-                    # We merge the profile config ON TOP of the main config
-                    # Typically profile config contains trading logic (strategies, risk, etc.)
-                    raw_config = _deep_merge_dicts(raw_config, profile_config)
-            else:
-                logger.warning(
-                    "Profile config path %s does not exist; skipping profile load",
-                    profile_path,
-                    extra={
-                        "event": "config_profile_missing",
-                        "profile": active_profile,
-                    },
-                )
-
-    # --- Runtime Overrides ---
-    # If a profile is active, we look for overrides in the profile's directory or name-derived path
-    # Pattern: profiles/<profile>/runtime.yaml
-    if active_profile:
-        overrides_path = (
-            config_dir / "profiles" / active_profile / RUNTIME_OVERRIDES_FILENAME
-        )
-        # Fallback to old behavior if nested folder structure not used yet?
-        # For now strict adherence to new plan: profiles/<profile>/runtime.yaml
-    else:
-        overrides_path = config_dir / RUNTIME_OVERRIDES_FILENAME
-
-    if overrides_path.exists():
-        with open(overrides_path, "r") as f:
-            runtime_overrides = yaml.safe_load(f) or {}
-        if isinstance(runtime_overrides, dict):
-            raw_config = _deep_merge_dicts(raw_config, runtime_overrides)
 
     default_region = RegionProfile(
         code="US_CA",
@@ -434,7 +384,6 @@ def load_config(
                 },
             )
             continue
-        # Copy cfg to avoid modifying the original dictionary during pop
         cfg_copy = cfg.copy()
 
         cfg_name = cfg_copy.pop("name", config_key)
@@ -472,15 +421,8 @@ def load_config(
             )
             s_type = canonical_def.type
 
-        # In the config file, 'enabled' might be on the specific strategy config
-        # or just inferred from the global enabled list. We'll support both, defaulting to True here
-        # and checking the global list separately if needed, or assume the global list drives execution.
-        # But strictly speaking, the global 'enabled' list in StrategiesConfig is the driver.
-        # We'll just load the 'enabled' flag if present in the specific config too.
         s_enabled = cfg_copy.pop("enabled", True)
         userref = cfg_copy.pop("userref", None)
-
-        # The rest are params
         params = cfg_copy
 
         strategy_configs[cfg_name] = StrategyConfig(
@@ -704,7 +646,6 @@ def load_config(
     allowed_execution_modes = {"live", "paper", "dry_run", "simulation"}
     execution_mode = execution_data.get("mode", "paper")
 
-    # Map 'dev' to 'dry_run' for convenience / legacy support
     if execution_mode == "dev":
         execution_mode = "dry_run"
 
@@ -770,7 +711,6 @@ def load_config(
         max_plan_age_seconds=max_plan_age_seconds,
     )
 
-    # Parsing Portfolio Config
     portfolio_data = raw_config.get("portfolio") or {}
     if not isinstance(portfolio_data, dict):
         logger.warning(
@@ -826,12 +766,10 @@ def load_config(
         )
         risk_tolerance = 1.0
 
-    # Safety: Auto-migration defaults to False in live/paper modes unless explicitly enabled
     default_auto_migrate = True
     if execution_mode in ("live", "paper"):
         default_auto_migrate = False
 
-    # We prioritize the user's config value if present, otherwise use our safe default
     auto_migrate_schema = portfolio_data.get(
         "auto_migrate_schema", default_auto_migrate
     )
@@ -849,7 +787,6 @@ def load_config(
         auto_migrate_schema=auto_migrate_schema,
     )
 
-    # Execution/Risk validation for per-mode settings
     if execution_config.mode == "live":
         if not execution_config.allow_live_trading:
             logger.warning(
@@ -870,7 +807,6 @@ def load_config(
                 },
             )
 
-    # Parsing UI Config
     ui_data = raw_config.get("ui") or {}
     if not isinstance(ui_data, dict):
         logger.warning(
@@ -1029,4 +965,64 @@ def load_config(
         ui=ui_config,
         profiles=profiles,
         session=session_config,
+    )
+
+
+def load_config(
+    config_path: Optional[Path] = None, env: Optional[str] = None
+) -> AppConfig:
+    """
+    Loads the main application configuration from the default location or a specified path.
+    """
+    if config_path is None:
+        config_path = get_config_dir() / "config.yaml"
+
+    config_path = config_path.expanduser()
+    effective_env = _resolve_effective_env(env, str(config_path))
+    from kraken_bot.utils.io import deep_merge_dicts as _deep_merge_dicts
+
+    # 1. Load Base Config
+    raw_config = _load_yaml_mapping(config_path)
+
+    # 2. Merge Environment Overlay
+    env_config_path = config_path.parent / f"config.{effective_env}.yaml"
+    env_config = _load_yaml_mapping(env_config_path)
+    if env_config:
+        raw_config = _deep_merge_dicts(raw_config, env_config)
+
+    config_dir = get_config_dir()
+
+    # 3. Merge Active Profile
+    session_data = raw_config.get("session") or {}
+    active_profile = session_data.get("profile_name")
+    profiles_registry = raw_config.get("profiles") or {}
+
+    if active_profile and active_profile in profiles_registry:
+        profile_entry = profiles_registry[active_profile]
+        profile_path_str = profile_entry.get("config_path")
+        if profile_path_str:
+            profile_path = Path(profile_path_str)
+            if not profile_path.is_absolute():
+                profile_path = config_dir / profile_path
+
+            profile_config = _load_yaml_mapping(profile_path)
+            if profile_config:
+                raw_config = _deep_merge_dicts(raw_config, profile_config)
+
+    # 4. Merge Runtime Overrides
+    # If active profile, look for profiles/<profile>/config.runtime.yaml
+    if active_profile:
+        overrides_path = (
+            config_dir / "profiles" / active_profile / RUNTIME_OVERRIDES_FILENAME
+        )
+    else:
+        overrides_path = config_dir / RUNTIME_OVERRIDES_FILENAME
+
+    runtime_overrides = _load_yaml_mapping(overrides_path)
+    if runtime_overrides:
+        raw_config = _deep_merge_dicts(raw_config, runtime_overrides)
+
+    # 5. Parse and Validate
+    return parse_app_config(
+        raw_config, config_path=config_path, effective_env=effective_env
     )
