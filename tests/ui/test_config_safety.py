@@ -171,7 +171,7 @@ def test_apply_config_restricted_keys_stripped_if_same(
                     "mode": "paper",  # Same as current default
                     "validate_only": True,  # Same as current default
                 },
-                "ui": {"theme": "light"},
+                "ui": {"host": "127.0.0.1"},
             }
         }
 
@@ -219,12 +219,12 @@ def test_profile_runtime_override_pruning_with_main_key(
         profile_overrides = profile_overrides_dir / RUNTIME_OVERRIDES_FILENAME
 
         # Initial content: UI override exists
-        initial_overrides = {"ui": {"theme": "overridden_in_profile"}}
+        initial_overrides = {"ui": {"host": "0.0.0.0"}}
         with open(profile_overrides, "w") as f:
             yaml.safe_dump(initial_overrides, f)
 
         # Apply 'ui' config (should write to main config, but MUST prune from profile override)
-        payload = {"config": {"ui": {"theme": "new_main_theme"}}}
+        payload = {"config": {"ui": {"host": "127.0.0.2"}}}
 
         response = client.post("/api/config/apply", json=payload)
         assert response.status_code == 200
@@ -234,7 +234,7 @@ def test_profile_runtime_override_pruning_with_main_key(
         # Verify UI written to main config
         with open(temp_config_dir / "config.yaml") as f:
             main_cfg = yaml.safe_load(f)
-            assert main_cfg.get("ui", {}).get("theme") == "new_main_theme"
+            assert main_cfg.get("ui", {}).get("host") == "127.0.0.2"
 
         # Verify 'ui' pruned from PROFILE overrides
         # The file might be deleted if empty, or just missing the key
@@ -301,7 +301,7 @@ def test_ui_refresh_intervals_profile_bound(client, safe_context, temp_config_di
             "config": {
                 "ui": {
                     "refresh_intervals": {"dashboard_ms": 9999},
-                    "theme": "dark_mode"  # Should go to main
+                    "host": "127.0.0.5"  # Should go to main
                 }
             }
         }
@@ -314,20 +314,14 @@ def test_ui_refresh_intervals_profile_bound(client, safe_context, temp_config_di
         with open(profile_path) as f:
             p_cfg = yaml.safe_load(f)
             assert p_cfg["ui"]["refresh_intervals"]["dashboard_ms"] == 9999
-            assert "theme" not in p_cfg["ui"]
+            assert "host" not in p_cfg["ui"]
 
-        # Verify Main has theme
+        # Verify Main has host
         with open(temp_config_dir / "config.yaml") as f:
             m_cfg = yaml.safe_load(f)
-            assert m_cfg["ui"]["theme"] == "dark_mode"
-            # refresh_intervals *might* exist if merged but apply logic should separate.
-            # wait, main_payload receives keys NOT in refresh_intervals.
-            # Does it receive refresh_intervals? _split_ui_payload removes it from main dict.
-            # So main config should NOT have refresh_intervals update.
-            # If main config didn't have UI section before, it shouldn't have refresh_intervals key.
-            # If it did, it should remain unchanged.
-            if "refresh_intervals" in m_cfg.get("ui", {}):
-                 # Assuming empty start, it shouldn't be there
+            assert m_cfg["ui"]["host"] == "127.0.0.5"
+            # Main config should NOT have refresh_intervals update (it is stripped from main payload)
+            if "ui" in m_cfg and "refresh_intervals" in m_cfg["ui"]:
                  assert "refresh_intervals" not in m_cfg["ui"]
 
 
@@ -395,10 +389,45 @@ def test_corrupted_yaml_triggers_validation_failure(client, safe_context, temp_c
         with open(temp_config_dir / "config.yaml", "w") as f:
             f.write("execution: mode: paper: [BROKEN YAML")
 
-        payload = {"config": {"ui": {"theme": "new"}}, "dry_run": True}
+        payload = {"config": {"ui": {"host": "127.0.0.1"}}, "dry_run": True}
 
         response = client.post("/api/config/apply", json=payload)
         data = response.json()
 
         assert data["error"] is not None
         assert "Main config corrupted" in data["error"]
+
+
+def test_apply_refresh_intervals_no_profile_fails(client, safe_context, temp_config_dir):
+    """Test F: Applying ui.refresh_intervals requires active profile."""
+    with patch("kraken_bot.ui.routes.config.get_config_dir", return_value=temp_config_dir):
+
+        # Ensure NO profile active
+        safe_context.session.profile_name = None
+
+        # Seed overrides to verify they are NOT pruned
+        overrides_path = temp_config_dir / RUNTIME_OVERRIDES_FILENAME
+        with open(overrides_path, "w") as f:
+            yaml.safe_dump({"ui": {"refresh_intervals": {"dashboard_ms": 500}}}, f)
+
+        initial_mtime = overrides_path.stat().st_mtime
+
+        payload = {
+            "config": {
+                "ui": {
+                    "refresh_intervals": {"dashboard_ms": 1000}
+                }
+            }
+        }
+
+        response = client.post("/api/config/apply", json=payload)
+        data = response.json()
+
+        assert data["error"] is not None
+        assert "ui.refresh_intervals requires an active profile" in data["error"]
+
+        # Verify overrides file untouched
+        current_mtime = overrides_path.stat().st_mtime
+        with open(overrides_path) as f:
+            content = yaml.safe_load(f)
+            assert content["ui"]["refresh_intervals"]["dashboard_ms"] == 500

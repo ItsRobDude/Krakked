@@ -295,6 +295,13 @@ async def apply_config(
         ui_payload = config_data.get("ui")
         profile_ui, main_ui = _split_ui_payload(ui_payload)
 
+        # BLOCKER FIX: Enforce profile requirement for profile-bound UI settings
+        if profile_ui and not profile_name:
+            return ApiEnvelope(
+                data=None,
+                error="ui.refresh_intervals requires an active profile",
+            )
+
         # Assign other sections
         for k, v in config_data.items():
             if k == "ui":
@@ -311,6 +318,10 @@ async def apply_config(
             if "ui" not in main_payload:
                 main_payload["ui"] = {}
             main_payload["ui"].update(main_ui)
+
+        # Calculate applied keys based on payload content
+        main_applied = set(main_payload.keys())
+        profile_applied = set(profile_payload.keys())
 
         # 4. Determine Relevant Overrides File
         # STRICT RULE: Load exactly the same file load_config uses.
@@ -347,23 +358,13 @@ async def apply_config(
 
         # Prune Overrides (In-Memory Simulation)
         preserve_override_keys = {"session"}
-        applied_keys = set()
-        if profile_name:
-            # If profile active, apply prunes on union of ALL applied keys
-            # (matches persistence logic where main keys are pruned from profile overrides)
-            # Both profile_payload and main_payload contribute to "applied" set
-            applied_keys.update(profile_payload.keys())
-            applied_keys.update(main_payload.keys())
-            # Ensure "ui" is tracked if split happened
-            if ui_payload:
-                applied_keys.add("ui")
-        else:
-            # If no profile, just main payload keys
-            applied_keys.update(main_payload.keys())
-            if ui_payload:
-                applied_keys.add("ui")
 
-        keys_to_prune = (set(relevant_overrides.keys()) & applied_keys) - preserve_override_keys
+        if profile_name:
+            applied_for_pruning = main_applied | profile_applied
+        else:
+            applied_for_pruning = main_applied
+
+        keys_to_prune = (set(relevant_overrides.keys()) & applied_for_pruning) - preserve_override_keys
         pruned_overrides = {
             k: v for k, v in relevant_overrides.items() if k not in keys_to_prune
         }
@@ -392,8 +393,6 @@ async def apply_config(
         # Write Profile Config
         if profile_name and profile_config_path:
             if profile_payload:
-                # We already computed profile_candidate = existing + payload
-                # Recompute to be safe/clean or reuse profile_candidate
                 final_profile_write = deep_merge_dicts(
                     existing_profile, profile_payload
                 )
@@ -404,7 +403,6 @@ async def apply_config(
 
         # Write Main Config
         if main_payload:
-            # Recompute final main to write
             final_main_write = deep_merge_dicts(existing_main, main_payload)
             backup_file(main_config_path)
             atomic_write(
@@ -412,43 +410,32 @@ async def apply_config(
             )
 
         # Prune Overrides on Disk
-        # Logic:
-        # If Profile Active:
-        #   - Prune Profile Overrides using UNION (profile + main keys + ui)
-        #   - Prune Main Overrides using ONLY Main keys (main payload + main ui)
-        # If No Profile:
-        #   - Prune Main Overrides using Payload keys
-
-        all_applied_keys_set = set(config_data.keys()) # Original full set
-
         if profile_name:
             # Prune Profile Overrides (Union)
             profile_overrides_path = (
                 config_dir / "profiles" / profile_name / RUNTIME_OVERRIDES_FILENAME
             )
+            # Re-calculate union here just to be explicit
+            applied_union = main_applied | profile_applied
             _prune_runtime_overrides(
                 profile_overrides_path,
-                all_applied_keys_set,
+                applied_union,
                 preserve_override_keys,
             )
 
             # Prune Main Overrides (Main Payload Only)
-            main_keys_only = set(main_payload.keys())
-            if main_ui:
-                main_keys_only.add("ui")
-
             main_overrides_path = config_dir / RUNTIME_OVERRIDES_FILENAME
             _prune_runtime_overrides(
                 main_overrides_path,
-                main_keys_only,
+                main_applied,
                 preserve_override_keys,
             )
         else:
-            # Prune Main Overrides (Full Payload)
+            # Prune Main Overrides (Main Payload)
             main_overrides_path = config_dir / RUNTIME_OVERRIDES_FILENAME
             _prune_runtime_overrides(
                 main_overrides_path,
-                all_applied_keys_set,
+                main_applied,
                 preserve_override_keys,
             )
 
