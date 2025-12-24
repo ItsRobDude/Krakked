@@ -47,6 +47,8 @@ def apply_slippage(order: LocalOrder, config: ExecutionConfig) -> Optional[float
     """
     Adjust the requested price by the configured slippage tolerance.
 
+    For BUY orders, the price is increased by the slippage factor (willing to pay more).
+    For SELL orders, the price is decreased by the slippage factor (willing to accept less).
     Performs calculation in Decimal to avoid floating point drift before rounding.
     """
     if order.requested_price is None:
@@ -143,6 +145,13 @@ def build_order_from_plan_action(
 ) -> Tuple[Optional[LocalOrder], Optional[str]]:
     """
     Build a :class:`LocalOrder` from a plan action using live market data.
+
+    If the plan action specifies a limit order without an explicit price, this function
+    attempts to calculate a mid-price using the latest bid/ask from ``market_data``.
+
+    The ``local_id`` for the order is generated deterministically using UUID5 seeded
+    with the plan ID, strategy ID, pair, and side. This ensures idempotency when
+    re-processing the same plan.
 
     Returns a tuple of (order, warning). When market data is unavailable for a
     required limit price, the order will be ``None`` and the warning will
