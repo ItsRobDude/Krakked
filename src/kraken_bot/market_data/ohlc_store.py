@@ -192,8 +192,20 @@ class FileOHLCStore:
             return []
 
         key = (pair, timeframe)
+
+        # Optimistic cache read (lock-free)
+        # We retrieve the list reference. Since _update_cache always replaces the list
+        # rather than mutating it in place, this reference is safe to read.
+        cached_bars = self._bar_cache.get(key)
+        if cached_bars is not None:
+            # Slice first to ensure we have a stable snapshot of the tail
+            # (though the list should be immutable, this is defensively correct)
+            snapshot = cached_bars[-lookback:]
+            if len(snapshot) == lookback:
+                return [OHLCBar(**b.__dict__) for b in snapshot]
+
         with self._file_lock:
-            # Serve from cache if available and sufficient
+            # Serve from cache if available and sufficient (check again under lock)
             if key in self._bar_cache:
                 cached_bars = self._bar_cache[key]
                 if len(cached_bars) >= lookback:
