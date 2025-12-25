@@ -155,6 +155,37 @@ class PortfolioService:
             "new_cash_flows": new_cash_flows,
         }
 
+    def _enrich_trade_record(
+        self, txid: str, trade_data: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Enrich trade data with local order metadata (strategy tag, userref).
+
+        TradesHistory does not reliably include order-level metadata like `userref`.
+        If this trade belongs to an order we submitted/tracked locally, we look up
+        the order to attach the strategy ID and userref.
+        """
+        trade_record: Dict[str, Any] = dict(trade_data)
+        trade_record["id"] = txid
+
+        # --- Strategy attribution ---
+        try:
+            ordertxid = trade_record.get("ordertxid")
+            local_order = (
+                self.store.get_order_by_reference(kraken_order_id=ordertxid)
+                if ordertxid
+                else None
+            )
+        except Exception:
+            local_order = None
+
+        if local_order is not None:
+            trade_record.setdefault("strategy_tag", local_order.strategy_id)
+            if getattr(local_order, "userref", None) is not None:
+                trade_record.setdefault("userref", local_order.userref)
+
+        return trade_record
+
     def _sync_trades_history(self, since_ts: Optional[float]) -> int:
         """Fetch, deduplicate, enrich, and persist new trades."""
         params = {}
@@ -163,17 +194,11 @@ class PortfolioService:
         if since_ts:
             params["start"] = since_ts
             # Prefetch trades at the boundary to prevent duplicates
-            # Store methods expect int timestamps but allow float as well in practice.
-            # We explicit cast if necessary, but here since_ts + 1e-6 is float.
-            # The store implementation _to_timestamp handles float fine.
-            # We just need to make sure the type checker is happy or ignore it if store.py types are strict.
             boundary_trades = self.store.get_trades(
                 since=since_ts, until=since_ts + 1e-6  # type: ignore[arg-type]
             )
             for t in boundary_trades:
                 known_txids_at_boundary.add(t.get("ordertxid"))
-                # Also add trade ID itself if available (usually 'id' in our store matches what we'd expect?)
-                # Actually, 'ordertxid' is the order ID, trade ID is usually the key in the map or 'id'
                 if t.get("id"):
                     known_txids_at_boundary.add(t.get("id"))
 
@@ -193,29 +218,7 @@ class PortfolioService:
                 if txid in known_txids_at_boundary:
                     continue
 
-                trade_record: Dict[str, Any] = dict(trade_data)
-                trade_record["id"] = txid
-
-                # --- Strategy attribution ---
-                # TradesHistory does not reliably include order-level metadata like `userref`.
-                # If this trade belongs to an order we submitted/tracked locally, enrich the
-                # stored trade record with a strategy tag (and userref when available) so that
-                # PnL attribution works even when Kraken does not return `userref` on trades.
-                try:
-                    ordertxid = trade_record.get("ordertxid")
-                    local_order = (
-                        self.store.get_order_by_reference(kraken_order_id=ordertxid)
-                        if ordertxid
-                        else None
-                    )
-                except Exception:
-                    local_order = None
-
-                if local_order is not None:
-                    trade_record.setdefault("strategy_tag", local_order.strategy_id)
-                    if getattr(local_order, "userref", None) is not None:
-                        trade_record.setdefault("userref", local_order.userref)
-
+                trade_record = self._enrich_trade_record(txid, trade_data)
                 batch.append(trade_record)
 
             batch.sort(key=lambda x: x["time"])
@@ -223,29 +226,29 @@ class PortfolioService:
             if batch:
                 new_trades.extend(batch)
 
+            # --- Pagination Logic ---
             resp_last = resp.get("last")
             try:
                 resp_last = float(resp_last) if resp_last is not None else None
             except (TypeError, ValueError):
                 resp_last = None
 
+            # If the API returns the same cursor as we just requested, we are done
             if resp_last is not None and resp_last == last_cursor:
                 break
 
             if resp_last is not None:
+                # Normal case: API gives us the next cursor
                 params["start"] = resp_last
                 last_cursor = resp_last
+            elif batch:
+                # Fallback: if 'last' is missing but we got data, use the last trade's time
+                last_ts = batch[-1]["time"]
+                last_cursor = last_ts + 1e-6
+                params["start"] = last_cursor
             else:
-                if batch:
-                    last_ts = batch[-1]["time"]
-                    last_cursor = last_ts + 1e-6
-                    params["start"] = last_cursor
-                else:
-                    if resp_last:
-                        params["start"] = resp_last
-                        last_cursor = resp_last
-                    else:
-                        break
+                # No data and no cursor -> Done
+                break
 
             safety_counter += 1
             if safety_counter > 200:
