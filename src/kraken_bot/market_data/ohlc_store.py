@@ -192,13 +192,18 @@ class FileOHLCStore:
             return []
 
         key = (pair, timeframe)
+        # Optimistic cache read (lock-free)
+        # Since _bar_cache is updated via atomic dictionary replacement, we can
+        # safely grab a reference to the list without the lock.
+        cached_bars = self._bar_cache.get(key)
+        if cached_bars and len(cached_bars) >= lookback:
+            return [OHLCBar(**b.__dict__) for b in cached_bars[-lookback:]]
+
         with self._file_lock:
-            # Serve from cache if available and sufficient
-            if key in self._bar_cache:
-                cached_bars = self._bar_cache[key]
-                if len(cached_bars) >= lookback:
-                    # Return copies to prevent caller mutation affecting cache
-                    return [OHLCBar(**b.__dict__) for b in cached_bars[-lookback:]]
+            # Double-check cache inside lock in case it was just updated
+            cached_bars = self._bar_cache.get(key)
+            if cached_bars and len(cached_bars) >= lookback:
+                return [OHLCBar(**b.__dict__) for b in cached_bars[-lookback:]]
 
             file_path = self._get_file_path(pair, timeframe)
             if not file_path.exists():
@@ -231,16 +236,22 @@ class FileOHLCStore:
     def get_bars_since(self, pair: str, timeframe: str, since_ts: int) -> List[OHLCBar]:
         """Retrieves all bars since a given timestamp."""
         key = (pair, timeframe)
+        # Optimistic cache read
+        cached_bars = self._bar_cache.get(key)
+        if cached_bars and cached_bars[0].timestamp <= since_ts:
+            return [
+                OHLCBar(**b.__dict__) for b in cached_bars if b.timestamp >= since_ts
+            ]
+
         with self._file_lock:
-            if key in self._bar_cache:
-                cached_bars = self._bar_cache[key]
-                if cached_bars and cached_bars[0].timestamp <= since_ts:
-                    # Return copies to prevent caller mutation affecting cache
-                    return [
-                        OHLCBar(**b.__dict__)
-                        for b in cached_bars
-                        if b.timestamp >= since_ts
-                    ]
+            # Double-check
+            cached_bars = self._bar_cache.get(key)
+            if cached_bars and cached_bars[0].timestamp <= since_ts:
+                return [
+                    OHLCBar(**b.__dict__)
+                    for b in cached_bars
+                    if b.timestamp >= since_ts
+                ]
 
             file_path = self._get_file_path(pair, timeframe)
             if not file_path.exists():
