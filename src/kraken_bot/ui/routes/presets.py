@@ -183,33 +183,65 @@ async def apply_preset(
     """Apply a saved preset to the active profile configuration."""
     ctx = _context(request)
 
-    # Note: We must duplicate some basic checks here before validation to ensure
-    # we return consistent ApiEnvelope 200 OK errors (helper does this too but we
-    # need fail-fast logic for file loading which happens before helper call).
+    # Sanitize name
+    try:
+        safe_name = sanitize_filename(payload.name)
+    except ValueError as e:
+        # Cannot log sanitized name if sanitization fails
+        # But we can log original name
+        logger.error(
+            "Preset apply failed: invalid name",
+            extra=build_request_log_extra(
+                request,
+                event="preset_apply_failed",
+                preset_kind=payload.kind,
+                preset_name=payload.name,
+                profile_name=ctx.session.profile_name,
+                dry_run=payload.dry_run,
+                stage="sanitize",
+                error=str(e),
+            ),
+        )
+        return ApiEnvelope(data=None, error=str(e))
+
+    def _log_fail(stage: str, err: str):
+        logger.error(
+            "Preset apply failed",
+            extra=build_request_log_extra(
+                request,
+                event="preset_apply_failed",
+                preset_kind=payload.kind,
+                preset_name=payload.name,
+                preset_safe_name=safe_name,
+                profile_name=ctx.session.profile_name,
+                dry_run=payload.dry_run,
+                stage=stage,
+                error=err,
+            ),
+        )
 
     if ctx.config.ui.read_only:
+        _log_fail("check_read_only", "UI is in read-only mode")
         return ApiEnvelope(data=None, error="UI is in read-only mode")
 
     if ctx.session.active:
+        _log_fail("check_session", "Cannot apply preset while session is active")
         return ApiEnvelope(
             data=None, error="Cannot apply preset while session is active"
         )
 
     if not ctx.session.profile_name:
+        _log_fail("check_profile", "No active profile selected")
         return ApiEnvelope(data=None, error="No active profile selected")
 
     if payload.kind not in ALLOWED_KINDS:
-        return ApiEnvelope(data=None, error=f"Invalid kind. Allowed: {ALLOWED_KINDS}")
-
-    # Sanitize name
-    try:
-        safe_name = sanitize_filename(payload.name)
-    except ValueError as e:
-        return ApiEnvelope(data=None, error=str(e))
+        err_msg = f"Invalid kind. Allowed: {sorted(ALLOWED_KINDS)}"
+        _log_fail("check_kind", err_msg)
+        return ApiEnvelope(data=None, error=err_msg)
 
     path = _presets_dir() / payload.kind / f"{safe_name}.yaml"
     if not path.exists():
-        # Consistent with get/delete
+        _log_fail("load_preset", "Preset not found")
         return ApiEnvelope(data=None, error="Preset not found")
 
     # Load & Validate Structure
@@ -217,18 +249,33 @@ async def apply_preset(
         with open(path, "r") as f:
             data = yaml.safe_load(f)
     except Exception as e:
-        # YAML syntax error or permission error
-        logger.error(f"Failed to load preset {path}: {e}")
+        logger.exception(
+            "Failed to load preset file",
+            extra=build_request_log_extra(
+                request,
+                event="preset_apply_failed",
+                preset_kind=payload.kind,
+                preset_name=payload.name,
+                preset_safe_name=safe_name,
+                profile_name=ctx.session.profile_name,
+                dry_run=payload.dry_run,
+                stage="load_preset",
+                error=str(e),
+            ),
+        )
         return ApiEnvelope(data=None, error=f"Failed to load preset: {str(e)}")
 
     if not isinstance(data, dict):
+        _log_fail("validate_structure", "Preset file is not a mapping")
         return ApiEnvelope(data=None, error="Preset file is not a mapping")
 
     if data.get("kind") != payload.kind:
+        _log_fail("validate_kind", "Preset kind mismatch")
         return ApiEnvelope(data=None, error="Preset kind mismatch")
 
     preset_payload = data.get("payload")
     if not isinstance(preset_payload, dict):
+        _log_fail("validate_payload", "Preset payload must be a mapping")
         return ApiEnvelope(data=None, error="Preset payload must be a mapping")
 
     # Construct Patch
@@ -256,25 +303,15 @@ async def apply_preset(
                 preset_safe_name=safe_name,
                 profile_name=ctx.session.profile_name,
                 dry_run=payload.dry_run,
+                stage="apply_exception",
+                error=str(e),
             ),
         )
         return ApiEnvelope(data=None, error=str(e))
 
     # Handle Result Logging
     if result.error:
-        logger.error(
-            "Preset apply failed",
-            extra=build_request_log_extra(
-                request,
-                event="preset_apply_failed",
-                preset_kind=payload.kind,
-                preset_name=payload.name,
-                preset_safe_name=safe_name,
-                profile_name=ctx.session.profile_name,
-                dry_run=payload.dry_run,
-                error=result.error,
-            ),
-        )
+        _log_fail("apply", result.error)
     else:
         logger.info(
             "Preset applied",
