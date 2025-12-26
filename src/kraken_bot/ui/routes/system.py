@@ -49,7 +49,12 @@ from kraken_bot.secrets import (
 )
 from kraken_bot.ui.logging import build_request_log_extra
 from kraken_bot.ui.models import ApiEnvelope, SystemHealthPayload, SystemMetricsPayload
-from kraken_bot.utils.io import atomic_write, backup_file, deep_merge_dicts, sanitize_filename
+from kraken_bot.utils.io import (
+    atomic_write,
+    backup_file,
+    deep_merge_dicts,
+    sanitize_filename,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1222,7 +1227,7 @@ async def create_profile(
             if invalid_keys:
                 return ApiEnvelope(
                     data=None,
-                    error=f"UI server settings cannot be set in profile base_config; only ui.refresh_intervals is allowed. Found: {invalid_keys}"
+                    error=f"UI server settings cannot be set in profile base_config; only ui.refresh_intervals is allowed. Found: {invalid_keys}",
                 )
 
         # 3. Security: Prevent setting restricted execution keys in new profiles
@@ -1277,10 +1282,7 @@ async def create_profile(
                 effective_env=effective_env,
             )
         except Exception as e:
-            return ApiEnvelope(
-                data=None,
-                error=f"Profile configuration invalid: {e}"
-            )
+            return ApiEnvelope(data=None, error=f"Profile configuration invalid: {e}")
 
         # 5. Write Profile File
         atomic_write(profile_path, base_config, dump_func=yaml.safe_dump)

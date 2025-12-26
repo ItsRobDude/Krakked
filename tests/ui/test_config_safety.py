@@ -1,6 +1,7 @@
+import os
 import threading
 from unittest.mock import MagicMock, patch
-import os
+
 import pytest
 import yaml
 from fastapi.testclient import TestClient
@@ -149,7 +150,10 @@ def test_config_apply_succeeds_on_valid_universe(client, safe_context, temp_conf
     with patch(
         "kraken_bot.ui.routes.config.get_config_dir", return_value=temp_config_dir
     ):
-        payload = {"config": {"universe": {"include_pairs": ["XBTUSD"]}}, "dry_run": True}
+        payload = {
+            "config": {"universe": {"include_pairs": ["XBTUSD"]}},
+            "dry_run": True,
+        }
         response = client.post("/api/config/apply", json=payload)
         assert response.status_code == 200
         data = response.json()
@@ -252,12 +256,25 @@ def test_profile_runtime_override_pruning_with_main_key(
 def test_dry_run_full_validation_failure(client, safe_context, temp_config_dir):
     """Test A: dry_run fails on invalid config (e.g., missing risk limits)."""
     # Simulate LIVE env to force strict checks
-    with patch.dict(os.environ, {"KRAKEN_BOT_ENV": "live"}), \
-            patch("kraken_bot.ui.routes.config.get_config_dir", return_value=temp_config_dir):
+    with (
+        patch.dict(os.environ, {"KRAKEN_BOT_ENV": "live"}),
+        patch(
+            "kraken_bot.ui.routes.config.get_config_dir", return_value=temp_config_dir
+        ),
+    ):
 
         # Valid config.yaml content
         with open(temp_config_dir / "config.yaml", "w") as f:
-            yaml.safe_dump({"execution": {"mode": "live", "allow_live_trading": True, "paper_tests_completed": True}}, f)
+            yaml.safe_dump(
+                {
+                    "execution": {
+                        "mode": "live",
+                        "allow_live_trading": True,
+                        "paper_tests_completed": True,
+                    }
+                },
+                f,
+            )
 
         # Payload enabling strategy WITHOUT risk limit
         payload = {
@@ -267,9 +284,9 @@ def test_dry_run_full_validation_failure(client, safe_context, temp_config_dir):
                     "configs": {"my_strat": {"type": "momentum"}},
                 },
                 # MISSING max_per_strategy_pct for 'my_strat'
-                "risk": {"max_per_strategy_pct": {}}
+                "risk": {"max_per_strategy_pct": {}},
             },
-            "dry_run": True
+            "dry_run": True,
         }
 
         response = client.post("/api/config/apply", json=payload)
@@ -283,7 +300,9 @@ def test_dry_run_full_validation_failure(client, safe_context, temp_config_dir):
 
 def test_ui_refresh_intervals_profile_bound(client, safe_context, temp_config_dir):
     """Test B: UI refresh_intervals persist to Profile, others to Main."""
-    with patch("kraken_bot.ui.routes.config.get_config_dir", return_value=temp_config_dir):
+    with patch(
+        "kraken_bot.ui.routes.config.get_config_dir", return_value=temp_config_dir
+    ):
 
         # Setup active profile
         safe_context.session.profile_name = "test_profile"
@@ -303,7 +322,7 @@ def test_ui_refresh_intervals_profile_bound(client, safe_context, temp_config_di
             "config": {
                 "ui": {
                     "refresh_intervals": {"dashboard_ms": 9999},
-                    "host": "127.0.0.5"  # Should go to main
+                    "host": "127.0.0.5",  # Should go to main
                 }
             }
         }
@@ -329,15 +348,13 @@ def test_ui_refresh_intervals_profile_bound(client, safe_context, temp_config_di
 
 def test_profile_create_rejects_invalid_ui_keys(client, safe_context, temp_config_dir):
     """Test C: Profile creation rejects invalid UI keys."""
-    with patch("kraken_bot.ui.routes.system.get_config_dir", return_value=temp_config_dir):
+    with patch(
+        "kraken_bot.ui.routes.system.get_config_dir", return_value=temp_config_dir
+    ):
 
         payload = {
             "name": "bad_ui_profile",
-            "base_config": {
-                "ui": {
-                    "host": "0.0.0.0"  # NOT ALLOWED in profile
-                }
-            }
+            "base_config": {"ui": {"host": "0.0.0.0"}},  # NOT ALLOWED in profile
         }
 
         response = client.post("/api/system/profiles", json=payload)
@@ -349,22 +366,39 @@ def test_profile_create_rejects_invalid_ui_keys(client, safe_context, temp_confi
 
 def test_atomic_failure_no_writes(client, safe_context, temp_config_dir):
     """Test D: Validation failure results in NO disk writes."""
-    with patch.dict(os.environ, {"KRAKEN_BOT_ENV": "live"}), \
-            patch("kraken_bot.ui.routes.config.get_config_dir", return_value=temp_config_dir):
+    with (
+        patch.dict(os.environ, {"KRAKEN_BOT_ENV": "live"}),
+        patch(
+            "kraken_bot.ui.routes.config.get_config_dir", return_value=temp_config_dir
+        ),
+    ):
 
         # Initial config state
         main_path = temp_config_dir / "config.yaml"
         with open(main_path, "w") as f:
-            yaml.safe_dump({"execution": {"mode": "live", "allow_live_trading": True, "paper_tests_completed": True}, "foo": "original"}, f)
+            yaml.safe_dump(
+                {
+                    "execution": {
+                        "mode": "live",
+                        "allow_live_trading": True,
+                        "paper_tests_completed": True,
+                    },
+                    "foo": "original",
+                },
+                f,
+            )
 
         # Invalid payload (missing risk limit in live mode)
         payload = {
             "config": {
-                "strategies": {"enabled": ["s1"], "configs": {"s1": {"type": "momentum"}}},
+                "strategies": {
+                    "enabled": ["s1"],
+                    "configs": {"s1": {"type": "momentum"}},
+                },
                 "risk": {"max_per_strategy_pct": {}},
-                "foo": "changed"
+                "foo": "changed",
             },
-            "dry_run": False
+            "dry_run": False,
         }
 
         response = client.post("/api/config/apply", json=payload)
@@ -378,9 +412,13 @@ def test_atomic_failure_no_writes(client, safe_context, temp_config_dir):
             assert content["foo"] == "original"
 
 
-def test_corrupted_yaml_triggers_validation_failure(client, safe_context, temp_config_dir):
+def test_corrupted_yaml_triggers_validation_failure(
+    client, safe_context, temp_config_dir
+):
     """Test E: Corrupted YAML file triggers validation failure."""
-    with patch("kraken_bot.ui.routes.config.get_config_dir", return_value=temp_config_dir):
+    with patch(
+        "kraken_bot.ui.routes.config.get_config_dir", return_value=temp_config_dir
+    ):
 
         # Corrupt the main config file
         with open(temp_config_dir / "config.yaml", "w") as f:
@@ -395,9 +433,13 @@ def test_corrupted_yaml_triggers_validation_failure(client, safe_context, temp_c
         assert "Main config corrupted" in data["error"]
 
 
-def test_apply_refresh_intervals_no_profile_fails(client, safe_context, temp_config_dir):
+def test_apply_refresh_intervals_no_profile_fails(
+    client, safe_context, temp_config_dir
+):
     """Test F: Applying ui.refresh_intervals requires active profile."""
-    with patch("kraken_bot.ui.routes.config.get_config_dir", return_value=temp_config_dir):
+    with patch(
+        "kraken_bot.ui.routes.config.get_config_dir", return_value=temp_config_dir
+    ):
 
         # Ensure NO profile active
         safe_context.session.profile_name = None
@@ -407,13 +449,7 @@ def test_apply_refresh_intervals_no_profile_fails(client, safe_context, temp_con
         with open(overrides_path, "w") as f:
             yaml.safe_dump({"ui": {"refresh_intervals": {"dashboard_ms": 500}}}, f)
 
-        payload = {
-            "config": {
-                "ui": {
-                    "refresh_intervals": {"dashboard_ms": 1000}
-                }
-            }
-        }
+        payload = {"config": {"ui": {"refresh_intervals": {"dashboard_ms": 1000}}}}
 
         response = client.post("/api/config/apply", json=payload)
         data = response.json()

@@ -364,7 +364,9 @@ async def apply_config(
         else:
             applied_for_pruning = main_applied
 
-        keys_to_prune = (set(relevant_overrides.keys()) & applied_for_pruning) - preserve_override_keys
+        keys_to_prune = (
+            set(relevant_overrides.keys()) & applied_for_pruning
+        ) - preserve_override_keys
         pruned_overrides = {
             k: v for k, v in relevant_overrides.items() if k not in keys_to_prune
         }
@@ -405,9 +407,7 @@ async def apply_config(
         if main_payload:
             final_main_write = deep_merge_dicts(existing_main, main_payload)
             backup_file(main_config_path)
-            atomic_write(
-                main_config_path, final_main_write, dump_func=yaml.safe_dump
-            )
+            atomic_write(main_config_path, final_main_write, dump_func=yaml.safe_dump)
 
         # Prune Overrides on Disk
         if profile_name:

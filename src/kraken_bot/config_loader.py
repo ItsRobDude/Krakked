@@ -66,7 +66,9 @@ def _load_yaml_mapping(path: Path) -> dict:
     return data
 
 
-def _resolve_effective_env(env: Optional[str], config_path: Optional[str] = None) -> str:
+def _resolve_effective_env(
+    env: Optional[str], config_path: Optional[str] = None
+) -> str:
     """
     Resolves the effective environment string from param or OS env.
     Default: 'paper'.
