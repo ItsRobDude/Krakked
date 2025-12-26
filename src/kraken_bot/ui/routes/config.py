@@ -156,15 +156,18 @@ async def get_runtime_config(request: Request) -> JSONResponse:
         )
 
 
-@router.post("/apply", response_model=ApiEnvelope[dict])
-async def apply_config(
-    payload: ConfigApplyPayload, request: Request
+def _apply_config_dict(
+    *,
+    ctx,
+    request: Request,
+    config_data: Dict[str, Any],
+    dry_run: bool,
+    log_events: bool = True,
 ) -> ApiEnvelope[dict]:
     """
     Validates, persists, and applies configuration changes.
-    Supports hot-reload by triggering re-initialization.
+    Internal helper for reusability.
     """
-    ctx = _context(request)
     if ctx.config.ui.read_only:
         return ApiEnvelope(data=None, error="UI is in read-only mode")
 
@@ -172,8 +175,6 @@ async def apply_config(
         return ApiEnvelope(
             data=None, error="Cannot apply configuration while session is active"
         )
-
-    config_data = payload.config
 
     # Strip restricted sections that should never be modified via apply
     config_data.pop("session", None)
@@ -387,7 +388,7 @@ async def apply_config(
             return ApiEnvelope(data=None, error=f"Validation failed: {str(e)}")
 
         # Validation Passed!
-        if payload.dry_run:
+        if dry_run:
             return ApiEnvelope(data={"status": "valid"}, error=None)
 
         # --- Persistence Phase (Writes) ---
@@ -442,18 +443,38 @@ async def apply_config(
         # Trigger Reload
         ctx.reinitialize_event.set()
 
-        logger.info(
-            "Configuration applied and reload triggered",
-            extra=build_request_log_extra(
-                request, event="config_applied", profile=profile_name
-            ),
-        )
+        if log_events:
+            logger.info(
+                "Configuration applied and reload triggered",
+                extra=build_request_log_extra(
+                    request, event="config_applied", profile=profile_name
+                ),
+            )
 
         return ApiEnvelope(data={"status": "applied", "reloading": True}, error=None)
 
     except Exception as exc:
-        logger.exception(
-            "Failed to apply config",
-            extra=build_request_log_extra(request, event="config_apply_failed"),
-        )
+        if log_events:
+            logger.exception(
+                "Failed to apply config",
+                extra=build_request_log_extra(request, event="config_apply_failed"),
+            )
         return ApiEnvelope(data=None, error=str(exc))
+
+
+@router.post("/apply", response_model=ApiEnvelope[dict])
+async def apply_config(
+    payload: ConfigApplyPayload, request: Request
+) -> ApiEnvelope[dict]:
+    """
+    Validates, persists, and applies configuration changes.
+    Supports hot-reload by triggering re-initialization.
+    """
+    ctx = _context(request)
+    return _apply_config_dict(
+        ctx=ctx,
+        request=request,
+        config_data=payload.config,
+        dry_run=payload.dry_run,
+        log_events=True,
+    )
