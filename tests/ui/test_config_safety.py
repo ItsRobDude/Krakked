@@ -1,3 +1,4 @@
+import os
 import threading
 from unittest.mock import MagicMock, patch
 
@@ -143,15 +144,21 @@ def test_config_apply_blocks_on_universe_validation_failure(client, safe_context
     assert "Universe validation unavailable" in data["error"]
 
 
-def test_config_apply_succeeds_on_valid_universe(client, safe_context):
+def test_config_apply_succeeds_on_valid_universe(client, safe_context, temp_config_dir):
     safe_context.market_data.validate_pairs.return_value = []  # No invalid pairs
 
-    payload = {"config": {"universe": {"include_pairs": ["XBTUSD"]}}, "dry_run": True}
-    response = client.post("/api/config/apply", json=payload)
-    assert response.status_code == 200
-    data = response.json()
-    assert data["error"] is None
-    assert data["data"]["status"] == "valid"
+    with patch(
+        "kraken_bot.ui.routes.config.get_config_dir", return_value=temp_config_dir
+    ):
+        payload = {
+            "config": {"universe": {"include_pairs": ["XBTUSD"]}},
+            "dry_run": True,
+        }
+        response = client.post("/api/config/apply", json=payload)
+        assert response.status_code == 200
+        data = response.json()
+        assert data["error"] is None
+        assert data["data"]["status"] == "valid"
 
 
 def test_apply_config_restricted_keys_stripped_if_same(
@@ -168,7 +175,7 @@ def test_apply_config_restricted_keys_stripped_if_same(
                     "mode": "paper",  # Same as current default
                     "validate_only": True,  # Same as current default
                 },
-                "ui": {"theme": "light"},
+                "ui": {"host": "127.0.0.1"},
             }
         }
 
@@ -216,20 +223,22 @@ def test_profile_runtime_override_pruning_with_main_key(
         profile_overrides = profile_overrides_dir / RUNTIME_OVERRIDES_FILENAME
 
         # Initial content: UI override exists
-        initial_overrides = {"ui": {"theme": "overridden_in_profile"}}
+        initial_overrides = {"ui": {"host": "0.0.0.0"}}
         with open(profile_overrides, "w") as f:
             yaml.safe_dump(initial_overrides, f)
 
         # Apply 'ui' config (should write to main config, but MUST prune from profile override)
-        payload = {"config": {"ui": {"theme": "new_main_theme"}}}
+        payload = {"config": {"ui": {"host": "127.0.0.2"}}}
 
         response = client.post("/api/config/apply", json=payload)
         assert response.status_code == 200
+        data = response.json()
+        assert data["error"] is None
 
         # Verify UI written to main config
         with open(temp_config_dir / "config.yaml") as f:
             main_cfg = yaml.safe_load(f)
-            assert main_cfg.get("ui", {}).get("theme") == "new_main_theme"
+            assert main_cfg.get("ui", {}).get("host") == "127.0.0.2"
 
         # Verify 'ui' pruned from PROFILE overrides
         # The file might be deleted if empty, or just missing the key
@@ -239,3 +248,216 @@ def test_profile_runtime_override_pruning_with_main_key(
         else:
             # If file is gone, that's also valid pruning (empty dict -> delete)
             pass
+
+
+# --- PR5 NEW TESTS START HERE ---
+
+
+def test_dry_run_full_validation_failure(client, safe_context, temp_config_dir):
+    """Test A: dry_run fails on invalid config (e.g., missing risk limits)."""
+    # Simulate LIVE env to force strict checks
+    with (
+        patch.dict(os.environ, {"KRAKEN_BOT_ENV": "live"}),
+        patch(
+            "kraken_bot.ui.routes.config.get_config_dir", return_value=temp_config_dir
+        ),
+    ):
+
+        # Valid config.yaml content
+        with open(temp_config_dir / "config.yaml", "w") as f:
+            yaml.safe_dump(
+                {
+                    "execution": {
+                        "mode": "live",
+                        "allow_live_trading": True,
+                        "paper_tests_completed": True,
+                    }
+                },
+                f,
+            )
+
+        # Payload enabling strategy WITHOUT risk limit
+        payload = {
+            "config": {
+                "strategies": {
+                    "enabled": ["my_strat"],
+                    "configs": {"my_strat": {"type": "momentum"}},
+                },
+                # MISSING max_per_strategy_pct for 'my_strat'
+                "risk": {"max_per_strategy_pct": {}},
+            },
+            "dry_run": True,
+        }
+
+        response = client.post("/api/config/apply", json=payload)
+        assert response.status_code == 200
+        data = response.json()
+
+        # Should contain ValueError from loader
+        assert data["error"] is not None
+        assert "Live trading requires explicit max_per_strategy_pct" in data["error"]
+
+
+def test_ui_refresh_intervals_profile_bound(client, safe_context, temp_config_dir):
+    """Test B: UI refresh_intervals persist to Profile, others to Main."""
+    with patch(
+        "kraken_bot.ui.routes.config.get_config_dir", return_value=temp_config_dir
+    ):
+
+        # Setup active profile
+        safe_context.session.profile_name = "test_profile"
+
+        profile_dir = temp_config_dir / "profiles"
+        profile_dir.mkdir(exist_ok=True)
+        profile_path = profile_dir / "test.yaml"
+        with open(profile_path, "w") as f:
+            yaml.safe_dump({}, f)
+
+        safe_context.config.profiles["test_profile"] = MagicMock(
+            config_path="profiles/test.yaml"
+        )
+
+        # Payload mixing profile-bound UI and main-bound UI
+        payload = {
+            "config": {
+                "ui": {
+                    "refresh_intervals": {"dashboard_ms": 9999},
+                    "host": "127.0.0.5",  # Should go to main
+                }
+            }
+        }
+
+        response = client.post("/api/config/apply", json=payload)
+        assert response.status_code == 200
+        assert response.json()["error"] is None
+
+        # Verify Profile has refresh_intervals
+        with open(profile_path) as f:
+            p_cfg = yaml.safe_load(f)
+            assert p_cfg["ui"]["refresh_intervals"]["dashboard_ms"] == 9999
+            assert "host" not in p_cfg["ui"]
+
+        # Verify Main has host
+        with open(temp_config_dir / "config.yaml") as f:
+            m_cfg = yaml.safe_load(f)
+            assert m_cfg["ui"]["host"] == "127.0.0.5"
+            # Main config should NOT have refresh_intervals update (it is stripped from main payload)
+            if "ui" in m_cfg and "refresh_intervals" in m_cfg["ui"]:
+                assert "refresh_intervals" not in m_cfg["ui"]
+
+
+def test_profile_create_rejects_invalid_ui_keys(client, safe_context, temp_config_dir):
+    """Test C: Profile creation rejects invalid UI keys."""
+    with patch(
+        "kraken_bot.ui.routes.system.get_config_dir", return_value=temp_config_dir
+    ):
+
+        payload = {
+            "name": "bad_ui_profile",
+            "base_config": {"ui": {"host": "0.0.0.0"}},  # NOT ALLOWED in profile
+        }
+
+        response = client.post("/api/system/profiles", json=payload)
+        assert response.status_code == 200
+        data = response.json()
+        assert data["error"] is not None
+        assert "only ui.refresh_intervals is allowed" in data["error"]
+
+
+def test_atomic_failure_no_writes(client, safe_context, temp_config_dir):
+    """Test D: Validation failure results in NO disk writes."""
+    with (
+        patch.dict(os.environ, {"KRAKEN_BOT_ENV": "live"}),
+        patch(
+            "kraken_bot.ui.routes.config.get_config_dir", return_value=temp_config_dir
+        ),
+    ):
+
+        # Initial config state
+        main_path = temp_config_dir / "config.yaml"
+        with open(main_path, "w") as f:
+            yaml.safe_dump(
+                {
+                    "execution": {
+                        "mode": "live",
+                        "allow_live_trading": True,
+                        "paper_tests_completed": True,
+                    },
+                    "foo": "original",
+                },
+                f,
+            )
+
+        # Invalid payload (missing risk limit in live mode)
+        payload = {
+            "config": {
+                "strategies": {
+                    "enabled": ["s1"],
+                    "configs": {"s1": {"type": "momentum"}},
+                },
+                "risk": {"max_per_strategy_pct": {}},
+                "foo": "changed",
+            },
+            "dry_run": False,
+        }
+
+        response = client.post("/api/config/apply", json=payload)
+        data = response.json()
+
+        assert data["error"] is not None
+
+        # Verify file untouched
+        with open(main_path) as f:
+            content = yaml.safe_load(f)
+            assert content["foo"] == "original"
+
+
+def test_corrupted_yaml_triggers_validation_failure(
+    client, safe_context, temp_config_dir
+):
+    """Test E: Corrupted YAML file triggers validation failure."""
+    with patch(
+        "kraken_bot.ui.routes.config.get_config_dir", return_value=temp_config_dir
+    ):
+
+        # Corrupt the main config file
+        with open(temp_config_dir / "config.yaml", "w") as f:
+            f.write("execution: mode: paper: [BROKEN YAML")
+
+        payload = {"config": {"ui": {"host": "127.0.0.1"}}, "dry_run": True}
+
+        response = client.post("/api/config/apply", json=payload)
+        data = response.json()
+
+        assert data["error"] is not None
+        assert "Main config corrupted" in data["error"]
+
+
+def test_apply_refresh_intervals_no_profile_fails(
+    client, safe_context, temp_config_dir
+):
+    """Test F: Applying ui.refresh_intervals requires active profile."""
+    with patch(
+        "kraken_bot.ui.routes.config.get_config_dir", return_value=temp_config_dir
+    ):
+
+        # Ensure NO profile active
+        safe_context.session.profile_name = None
+
+        # Seed overrides to verify they are NOT pruned
+        overrides_path = temp_config_dir / RUNTIME_OVERRIDES_FILENAME
+        with open(overrides_path, "w") as f:
+            yaml.safe_dump({"ui": {"refresh_intervals": {"dashboard_ms": 500}}}, f)
+
+        payload = {"config": {"ui": {"refresh_intervals": {"dashboard_ms": 1000}}}}
+
+        response = client.post("/api/config/apply", json=payload)
+        data = response.json()
+
+        assert data["error"] is not None
+        assert "ui.refresh_intervals requires an active profile" in data["error"]
+
+        # Verify overrides file untouched
+        with open(overrides_path) as f:
+            content = yaml.safe_load(f)
+            assert content["ui"]["refresh_intervals"]["dashboard_ms"] == 500
