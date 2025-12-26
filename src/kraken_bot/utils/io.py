@@ -106,8 +106,8 @@ def atomic_write(
         # Default to 0o666 if new file (respects umask)
         create_mode = original_mode if original_mode is not None else 0o666
         flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
-        if hasattr(os, "O_BINARY"):
-            flags |= os.O_BINARY
+        # Use getattr to avoid pyright errors on non-Windows systems
+        flags |= int(getattr(os, "O_BINARY", 0))
 
         # We must handle binary mode vs text mode for fdopen
         fd = os.open(tmp_path, flags, create_mode)
