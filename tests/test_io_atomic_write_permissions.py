@@ -1,6 +1,8 @@
 import os
 import stat
+
 import pytest
+
 from kraken_bot.utils.io import atomic_write
 
 

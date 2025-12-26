@@ -134,13 +134,13 @@ def atomic_write(
         # path.replace(tmp_path) -> replace fails if dst exists on Windows sometimes without unlink
         # But standard lib replace should be atomic on POSIX.
         tmp_path.replace(path)
-    except Exception as e:
+    except Exception:
         if tmp_path.exists():
             try:
                 tmp_path.unlink()
             except Exception:
                 pass
-        raise e
+        raise
 
 
 def deep_merge_dicts(base: Dict[str, Any], overlay: Dict[str, Any]) -> Dict[str, Any]:
