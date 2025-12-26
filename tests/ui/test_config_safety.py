@@ -245,13 +245,15 @@ def test_profile_runtime_override_pruning_with_main_key(
             # If file is gone, that's also valid pruning (empty dict -> delete)
             pass
 
+
 # --- PR5 NEW TESTS START HERE ---
+
 
 def test_dry_run_full_validation_failure(client, safe_context, temp_config_dir):
     """Test A: dry_run fails on invalid config (e.g., missing risk limits)."""
     # Simulate LIVE env to force strict checks
     with patch.dict(os.environ, {"KRAKEN_BOT_ENV": "live"}), \
-         patch("kraken_bot.ui.routes.config.get_config_dir", return_value=temp_config_dir):
+            patch("kraken_bot.ui.routes.config.get_config_dir", return_value=temp_config_dir):
 
         # Valid config.yaml content
         with open(temp_config_dir / "config.yaml", "w") as f:
@@ -290,7 +292,7 @@ def test_ui_refresh_intervals_profile_bound(client, safe_context, temp_config_di
         profile_dir.mkdir(exist_ok=True)
         profile_path = profile_dir / "test.yaml"
         with open(profile_path, "w") as f:
-             yaml.safe_dump({}, f)
+            yaml.safe_dump({}, f)
 
         safe_context.config.profiles["test_profile"] = MagicMock(
             config_path="profiles/test.yaml"
@@ -322,7 +324,7 @@ def test_ui_refresh_intervals_profile_bound(client, safe_context, temp_config_di
             assert m_cfg["ui"]["host"] == "127.0.0.5"
             # Main config should NOT have refresh_intervals update (it is stripped from main payload)
             if "ui" in m_cfg and "refresh_intervals" in m_cfg["ui"]:
-                 assert "refresh_intervals" not in m_cfg["ui"]
+                assert "refresh_intervals" not in m_cfg["ui"]
 
 
 def test_profile_create_rejects_invalid_ui_keys(client, safe_context, temp_config_dir):
@@ -333,7 +335,7 @@ def test_profile_create_rejects_invalid_ui_keys(client, safe_context, temp_confi
             "name": "bad_ui_profile",
             "base_config": {
                 "ui": {
-                    "host": "0.0.0.0" # NOT ALLOWED in profile
+                    "host": "0.0.0.0"  # NOT ALLOWED in profile
                 }
             }
         }
@@ -348,14 +350,12 @@ def test_profile_create_rejects_invalid_ui_keys(client, safe_context, temp_confi
 def test_atomic_failure_no_writes(client, safe_context, temp_config_dir):
     """Test D: Validation failure results in NO disk writes."""
     with patch.dict(os.environ, {"KRAKEN_BOT_ENV": "live"}), \
-         patch("kraken_bot.ui.routes.config.get_config_dir", return_value=temp_config_dir):
+            patch("kraken_bot.ui.routes.config.get_config_dir", return_value=temp_config_dir):
 
         # Initial config state
         main_path = temp_config_dir / "config.yaml"
         with open(main_path, "w") as f:
-             yaml.safe_dump({"execution": {"mode": "live", "allow_live_trading": True, "paper_tests_completed": True}, "foo": "original"}, f)
-
-        initial_mtime = main_path.stat().st_mtime
+            yaml.safe_dump({"execution": {"mode": "live", "allow_live_trading": True, "paper_tests_completed": True}, "foo": "original"}, f)
 
         # Invalid payload (missing risk limit in live mode)
         payload = {
@@ -373,12 +373,9 @@ def test_atomic_failure_no_writes(client, safe_context, temp_config_dir):
         assert data["error"] is not None
 
         # Verify file untouched
-        current_mtime = main_path.stat().st_mtime
         with open(main_path) as f:
-             content = yaml.safe_load(f)
-             assert content["foo"] == "original"
-
-        # In fast tests, mtime might not change if < 1s, but content check confirms.
+            content = yaml.safe_load(f)
+            assert content["foo"] == "original"
 
 
 def test_corrupted_yaml_triggers_validation_failure(client, safe_context, temp_config_dir):
@@ -410,8 +407,6 @@ def test_apply_refresh_intervals_no_profile_fails(client, safe_context, temp_con
         with open(overrides_path, "w") as f:
             yaml.safe_dump({"ui": {"refresh_intervals": {"dashboard_ms": 500}}}, f)
 
-        initial_mtime = overrides_path.stat().st_mtime
-
         payload = {
             "config": {
                 "ui": {
@@ -427,7 +422,6 @@ def test_apply_refresh_intervals_no_profile_fails(client, safe_context, temp_con
         assert "ui.refresh_intervals requires an active profile" in data["error"]
 
         # Verify overrides file untouched
-        current_mtime = overrides_path.stat().st_mtime
         with open(overrides_path) as f:
             content = yaml.safe_load(f)
             assert content["ui"]["refresh_intervals"]["dashboard_ms"] == 500
