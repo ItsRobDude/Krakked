@@ -984,8 +984,8 @@ def load_config(
 
     Args:
         config_path: Path to the base config file. Defaults to the user config directory.
-        env: Execution environment ('paper', 'live', 'dry_run'). Defaults to 'paper'
-             if not provided or found in ``KRAKEN_BOT_ENV``.
+        env: Environment overlay selector ('dev', 'paper', 'live'). Defaults to 'paper' if not
+             provided and KRAKEN_BOT_ENV is missing/invalid.
 
     Returns:
         AppConfig: The fully merged, validated, and typed configuration object.
