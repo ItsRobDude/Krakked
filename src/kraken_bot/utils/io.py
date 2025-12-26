@@ -72,6 +72,8 @@ def atomic_write(
     Ensures that the target file is either fully written or not modified at all.
     This prevents file corruption if the process crashes during writing.
 
+    Preserves the file permissions of the target file if it already exists.
+
     Args:
         path: The target file path.
         content: The data to write (string, bytes, or object if dump_func is used).
@@ -85,6 +87,15 @@ def atomic_write(
     path = Path(path)
     tmp_path = path.with_suffix(path.suffix + ".tmp")
 
+    # Aegis: prevent information leakage by preserving permissions of sensitive files
+    # Capture original permissions if file exists
+    original_mode = None
+    if path.exists():
+        try:
+            original_mode = path.stat().st_mode
+        except Exception:
+            pass  # Best effort
+
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(tmp_path, mode) as f:
@@ -92,6 +103,13 @@ def atomic_write(
                 dump_func(content, f)
             else:
                 f.write(content)
+
+        # Restore permissions to temp file before replacing
+        if original_mode is not None:
+            try:
+                tmp_path.chmod(original_mode)
+            except Exception:
+                pass  # Best effort
 
         # Windows compatibility for atomic replace?
         # path.replace(tmp_path) -> replace fails if dst exists on Windows sometimes without unlink
