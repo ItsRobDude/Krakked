@@ -1,7 +1,9 @@
 """I/O and utility functions for file management."""
 
 import logging
+import os
 import shutil
+import stat
 import time
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
@@ -72,6 +74,9 @@ def atomic_write(
     Ensures that the target file is either fully written or not modified at all.
     This prevents file corruption if the process crashes during writing.
 
+    Preserves the file permissions of the target file if it already exists by
+    creating the temporary file with matching permissions.
+
     Args:
         path: The target file path.
         content: The data to write (string, bytes, or object if dump_func is used).
@@ -85,25 +90,57 @@ def atomic_write(
     path = Path(path)
     tmp_path = path.with_suffix(path.suffix + ".tmp")
 
+    # Aegis: prevent information leakage by preserving permissions of sensitive files
+    original_mode = None
+    if path.exists():
+        try:
+            # Capture only the permission bits
+            original_mode = stat.S_IMODE(path.stat().st_mode)
+        except Exception:
+            pass  # Best effort
+
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        with open(tmp_path, mode) as f:
+
+        # Use os.open to set permissions at creation time (no race window)
+        # Default to 0o666 if new file (respects umask)
+        create_mode = original_mode if original_mode is not None else 0o666
+        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+        # Use getattr to avoid pyright errors on non-Windows systems
+        flags |= int(getattr(os, "O_BINARY", 0))
+
+        # We must handle binary mode vs text mode for fdopen
+        fd = os.open(tmp_path, flags, create_mode)
+        try:
+            f = os.fdopen(fd, mode)
+        except Exception:
+            os.close(fd)
+            raise
+
+        with f:
             if dump_func:
                 dump_func(content, f)
             else:
                 f.write(content)
 
+        # Best-effort chmod to ensure exact bits (in case umask stripped something we wanted)
+        if original_mode is not None:
+            try:
+                os.chmod(tmp_path, original_mode)
+            except Exception:
+                pass
+
         # Windows compatibility for atomic replace?
         # path.replace(tmp_path) -> replace fails if dst exists on Windows sometimes without unlink
         # But standard lib replace should be atomic on POSIX.
         tmp_path.replace(path)
-    except Exception as e:
+    except Exception:
         if tmp_path.exists():
             try:
                 tmp_path.unlink()
             except Exception:
                 pass
-        raise e
+        raise
 
 
 def deep_merge_dicts(base: Dict[str, Any], overlay: Dict[str, Any]) -> Dict[str, Any]:
