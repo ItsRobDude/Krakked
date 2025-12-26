@@ -974,7 +974,21 @@ def load_config(
     config_path: Optional[Path] = None, env: Optional[str] = None
 ) -> AppConfig:
     """
-    Loads the main application configuration from the default location or a specified path.
+    Loads and merges application configuration from multiple layers.
+
+    Configuration loading follows this precedence order (later layers override earlier ones):
+    1. Base Config (e.g., ``config.yaml``)
+    2. Environment Overlay (e.g., ``config.paper.yaml``)
+    3. Active Profile Config (if ``session.profile_name`` is set in the accumulated config)
+    4. Runtime Overrides (``config.runtime.yaml``, scoped to profile if active)
+
+    Args:
+        config_path: Path to the base config file. Defaults to the user config directory.
+        env: Execution environment ('paper', 'live', 'dry_run'). Defaults to 'paper'
+             if not provided or found in ``KRAKEN_BOT_ENV``.
+
+    Returns:
+        AppConfig: The fully merged, validated, and typed configuration object.
     """
     if config_path is None:
         config_path = get_config_dir() / "config.yaml"
