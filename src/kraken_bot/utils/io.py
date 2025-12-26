@@ -106,20 +106,22 @@ def atomic_write(
         # Default to 0o666 if new file (respects umask)
         create_mode = original_mode if original_mode is not None else 0o666
         flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+        if hasattr(os, "O_BINARY"):
+            flags |= os.O_BINARY
 
         # We must handle binary mode vs text mode for fdopen
         fd = os.open(tmp_path, flags, create_mode)
         try:
-            with os.fdopen(fd, mode) as f:
-                if dump_func:
-                    dump_func(content, f)
-                else:
-                    f.write(content)
+            f = os.fdopen(fd, mode)
         except Exception:
-            # If fdopen/write fails, we must ensure fd is not leaked if fdopen didn't close it
-            # But "with os.fdopen" handles closure of fd.
-            # The outer try/except handles cleanup of the file.
+            os.close(fd)
             raise
+
+        with f:
+            if dump_func:
+                dump_func(content, f)
+            else:
+                f.write(content)
 
         # Best-effort chmod to ensure exact bits (in case umask stripped something we wanted)
         if original_mode is not None:

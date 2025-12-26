@@ -1,10 +1,12 @@
 import os
 import stat
 import pytest
-from pathlib import Path
 from kraken_bot.utils.io import atomic_write
 
-@pytest.mark.skipif(os.name == "nt", reason="POSIX permissions tests not relevant on Windows")
+
+@pytest.mark.skipif(
+    os.name == "nt", reason="POSIX permissions tests not relevant on Windows"
+)
 def test_atomic_write_preserves_strict_permissions(tmp_path):
     """
     Verify that atomic_write preserves 0600 permissions on update.
@@ -28,7 +30,10 @@ def test_atomic_write_preserves_strict_permissions(tmp_path):
     # Verify no temp file residue
     assert not (target.with_suffix(target.suffix + ".tmp")).exists()
 
-@pytest.mark.skipif(os.name == "nt", reason="POSIX permissions tests not relevant on Windows")
+
+@pytest.mark.skipif(
+    os.name == "nt", reason="POSIX permissions tests not relevant on Windows"
+)
 def test_atomic_write_preserves_group_permissions(tmp_path):
     """
     Verify that atomic_write preserves 0640 permissions (owner read/write, group read).
@@ -44,6 +49,7 @@ def test_atomic_write_preserves_group_permissions(tmp_path):
 
     # Verify permissions
     assert stat.S_IMODE(target.stat().st_mode) == 0o640
+
 
 def test_atomic_write_new_file_defaults(tmp_path):
     """
