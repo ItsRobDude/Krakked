@@ -90,37 +90,10 @@ def _resolve_effective_env(
 
 
 def _load_runtime_overrides(config_dir: Path) -> dict:
-    # This existing function is kept for backward compat or specific usage,
-    # but we should ideally use _load_yaml_mapping now.
-    # Note: original implementation swallowed exceptions.
-    # The new plan implies stricter validation in apply_config, but load_config
-    # might still want to be lenient? The instructions said:
-    # "For PR5 validation ... ANY YAML parse failure ... must be treated as a hard validation error"
-    # This suggests that for regular boot, we might keep leniency, or unify.
-    # Given "No behavior regressions", we'll keep `load_config` relying on helpers that might be safer,
-    # but let's stick to the refactor plan which introduces _load_yaml_mapping.
-    # _load_yaml_mapping RAISES on error. `_load_runtime_overrides` historically swallowed.
-    # We will let `load_config` handle exceptions or use a safe wrapper if needed.
-    # But wait, `load_config` historically just warned on invalid format or file missing.
-    # If `yaml.safe_load` raised, `load_config` would crash unless wrapped.
-    # Original `load_config` did: `raw_config = yaml.safe_load(f) or {}`. It did NOT catch YAMLError.
-    # So `load_config` was already failing closed on syntax error!
-    # So `_load_yaml_mapping` raising is consistent with `load_config`.
     path = config_dir / RUNTIME_OVERRIDES_FILENAME
     try:
         return _load_yaml_mapping(path)
     except Exception:
-        # Original _load_runtime_overrides implementation was:
-        # with open(path, "r") as f: data = yaml.safe_load(f) or {}
-        # return data if isinstance(data, dict) else {}
-        # It did NOT catch exceptions in the snippet I read.
-        # Wait, I might have misread the snippet in memory.
-        # Snippet:
-        # if not path.exists(): return {}
-        # with open(path, "r") as f: data = yaml.safe_load(f) or {}
-        # return data if isinstance(data, dict) else {}
-        # No try/except block. So it raised on corrupt YAML.
-        # So _load_yaml_mapping is a perfect replacement.
         raise
 
 
@@ -260,6 +233,174 @@ def write_initial_config(config_data: dict, config_dir: Path | None = None) -> N
                 pass
 
 
+def _validate_config_int(
+    value: Any, default: int, field_name: str, config_path: Path, min_value: int = 1
+) -> int:
+    """Validate a config value intended to be an integer."""
+    if value is None:
+        return default
+
+    def _warn_invalid(provided: object) -> int:
+        logger.warning(
+            "%s is invalid; using default",
+            field_name,
+            extra={
+                "event": field_name,
+                "config_path": str(config_path),
+                "provided": repr(provided),
+                "provided_type": type(provided).__name__,
+            },
+        )
+        return default
+
+    if isinstance(value, bool):
+        return _warn_invalid(value)
+
+    if isinstance(value, int):
+        if value >= min_value:
+            return value
+        return _warn_invalid(value)
+
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped == "":
+            return _warn_invalid(value)
+        try:
+            parsed = int(stripped, 10)
+        except ValueError:
+            return _warn_invalid(value)
+        if parsed >= min_value:
+            return parsed
+        return _warn_invalid(parsed)
+
+    return _warn_invalid(value)
+
+
+def _parse_ui_config(
+    ui_data: Dict[str, Any],
+    default_ui: UIConfig,
+    is_live_env: bool,
+    config_path: Path,
+) -> UIConfig:
+    auth_data = ui_data.get("auth") or {}
+    if not isinstance(auth_data, dict):
+        logger.warning(
+            "UI auth config is not a mapping; using defaults",
+            extra={"event": "config_invalid_ui_auth", "config_path": str(config_path)},
+        )
+        auth_data = {}
+
+    refresh_data = ui_data.get("refresh_intervals") or {}
+    if not isinstance(refresh_data, dict):
+        logger.warning(
+            "UI refresh intervals config is not a mapping; using defaults",
+            extra={
+                "event": "config_invalid_ui_refresh_intervals",
+                "config_path": str(config_path),
+            },
+        )
+        refresh_data = {}
+
+    auth_enabled = bool(auth_data.get("enabled", default_ui.auth.enabled))
+    auth_token = (auth_data.get("token", default_ui.auth.token) or "").strip()
+
+    if auth_enabled and not auth_token:
+        logger.warning(
+            "UI auth misconfigured: enabled but token is empty; forcing auth.enabled = False",
+            extra=structured_log_extra(
+                env=get_log_environment(),
+                event="ui_auth_empty_token",
+            ),
+        )
+        auth_enabled = False
+
+    auth_config = UIAuthConfig(enabled=auth_enabled, token=auth_token)
+
+    refresh_config = UIRefreshConfig(
+        dashboard_ms=_validate_config_int(
+            refresh_data.get("dashboard_ms"),
+            default_ui.refresh_intervals.dashboard_ms,
+            "config_ui_dashboard_ms",
+            config_path,
+        ),
+        orders_ms=_validate_config_int(
+            refresh_data.get("orders_ms"),
+            default_ui.refresh_intervals.orders_ms,
+            "config_ui_orders_ms",
+            config_path,
+        ),
+        strategies_ms=_validate_config_int(
+            refresh_data.get("strategies_ms"),
+            default_ui.refresh_intervals.strategies_ms,
+            "config_ui_strategies_ms",
+            config_path,
+        ),
+    )
+
+    base_path = ui_data.get("base_path", default_ui.base_path)
+    if not isinstance(base_path, str):
+        logger.warning(
+            "UI base_path is not a string; using default",
+            extra={
+                "event": "config_invalid_ui_base_path",
+                "config_path": str(config_path),
+            },
+        )
+        base_path = default_ui.base_path
+    if not base_path.startswith("/"):
+        base_path = f"/{base_path}"
+
+    ui_port = _validate_config_int(
+        ui_data.get("port"), default_ui.port, "config_ui_port", config_path
+    )
+    if ui_port > 65535:
+        logger.warning(
+            "UI port is out of valid range; using default",
+            extra={"event": "config_invalid_ui_port", "config_path": str(config_path)},
+        )
+        ui_port = default_ui.port
+
+    ui_config = UIConfig(
+        enabled=ui_data.get("enabled", default_ui.enabled),
+        host=(
+            ui_data.get("host", default_ui.host)
+            if isinstance(ui_data.get("host", default_ui.host), str)
+            else default_ui.host
+        ),
+        port=ui_port,
+        base_path=base_path,
+        auth=auth_config,
+        read_only=ui_data.get("read_only", default_ui.read_only),
+        refresh_intervals=refresh_config,
+    )
+
+    if is_live_env and ui_config.enabled:
+        if not ui_config.auth.enabled:
+            logger.warning(
+                "Disabling UI in live environment: ui.auth.enabled is False",
+                extra=structured_log_extra(
+                    env="live",
+                    event="live_ui_disabled_no_auth",
+                    ui_host=ui_config.host,
+                    ui_port=ui_config.port,
+                ),
+            )
+            ui_config.enabled = False
+
+        if ui_config.host == "0.0.0.0":
+            logger.warning(
+                "UI is configured to listen on 0.0.0.0 in live environment",
+                extra=structured_log_extra(
+                    env="live",
+                    event="live_ui_public_host_warning",
+                    ui_host=ui_config.host,
+                    ui_port=ui_config.port,
+                ),
+            )
+
+    return ui_config
+
+
 def parse_app_config(
     raw_config: Dict[str, Any],
     *,
@@ -270,48 +411,6 @@ def parse_app_config(
     Parses a fully merged dictionary into an AppConfig object, running all validations.
     """
     is_live_env = effective_env == "live"
-
-    def _validated_int(
-        value: Any, default: int, field_name: str, min_value: int = 1
-    ) -> int:
-        """Validate a config value intended to be an integer."""
-        if value is None:
-            return default
-
-        def _warn_invalid(provided: object) -> int:
-            logger.warning(
-                "%s is invalid; using default",
-                field_name,
-                extra={
-                    "event": field_name,
-                    "config_path": str(config_path),
-                    "provided": repr(provided),
-                    "provided_type": type(provided).__name__,
-                },
-            )
-            return default
-
-        if isinstance(value, bool):
-            return _warn_invalid(value)
-
-        if isinstance(value, int):
-            if value >= min_value:
-                return value
-            return _warn_invalid(value)
-
-        if isinstance(value, str):
-            stripped = value.strip()
-            if stripped == "":
-                return _warn_invalid(value)
-            try:
-                parsed = int(stripped, 10)
-            except ValueError:
-                return _warn_invalid(value)
-            if parsed >= min_value:
-                return parsed
-            return _warn_invalid(parsed)
-
-        return _warn_invalid(value)
 
     default_region = RegionProfile(
         code="US_CA",
@@ -687,10 +786,11 @@ def parse_app_config(
             },
         )
 
-    max_plan_age_seconds = _validated_int(
+    max_plan_age_seconds = _validate_config_int(
         execution_data.get("max_plan_age_seconds"),
         ExecutionConfig().max_plan_age_seconds,
         "config_execution_max_plan_age_seconds",
+        config_path,
     )
 
     execution_config = ExecutionConfig(
@@ -817,116 +917,7 @@ def parse_app_config(
         )
         ui_data = {}
 
-    auth_data = ui_data.get("auth") or {}
-    if not isinstance(auth_data, dict):
-        logger.warning(
-            "UI auth config is not a mapping; using defaults",
-            extra={"event": "config_invalid_ui_auth", "config_path": str(config_path)},
-        )
-        auth_data = {}
-
-    refresh_data = ui_data.get("refresh_intervals") or {}
-    if not isinstance(refresh_data, dict):
-        logger.warning(
-            "UI refresh intervals config is not a mapping; using defaults",
-            extra={
-                "event": "config_invalid_ui_refresh_intervals",
-                "config_path": str(config_path),
-            },
-        )
-        refresh_data = {}
-
-    auth_enabled = bool(auth_data.get("enabled", default_ui.auth.enabled))
-    auth_token = (auth_data.get("token", default_ui.auth.token) or "").strip()
-
-    if auth_enabled and not auth_token:
-        logger.warning(
-            "UI auth misconfigured: enabled but token is empty; forcing auth.enabled = False",
-            extra=structured_log_extra(
-                env=get_log_environment(),
-                event="ui_auth_empty_token",
-            ),
-        )
-        auth_enabled = False
-
-    auth_config = UIAuthConfig(enabled=auth_enabled, token=auth_token)
-
-    refresh_config = UIRefreshConfig(
-        dashboard_ms=_validated_int(
-            refresh_data.get("dashboard_ms"),
-            default_ui.refresh_intervals.dashboard_ms,
-            "config_ui_dashboard_ms",
-        ),
-        orders_ms=_validated_int(
-            refresh_data.get("orders_ms"),
-            default_ui.refresh_intervals.orders_ms,
-            "config_ui_orders_ms",
-        ),
-        strategies_ms=_validated_int(
-            refresh_data.get("strategies_ms"),
-            default_ui.refresh_intervals.strategies_ms,
-            "config_ui_strategies_ms",
-        ),
-    )
-
-    base_path = ui_data.get("base_path", default_ui.base_path)
-    if not isinstance(base_path, str):
-        logger.warning(
-            "UI base_path is not a string; using default",
-            extra={
-                "event": "config_invalid_ui_base_path",
-                "config_path": str(config_path),
-            },
-        )
-        base_path = default_ui.base_path
-    if not base_path.startswith("/"):
-        base_path = f"/{base_path}"
-
-    ui_port = _validated_int(ui_data.get("port"), default_ui.port, "config_ui_port")
-    if ui_port > 65535:
-        logger.warning(
-            "UI port is out of valid range; using default",
-            extra={"event": "config_invalid_ui_port", "config_path": str(config_path)},
-        )
-        ui_port = default_ui.port
-
-    ui_config = UIConfig(
-        enabled=ui_data.get("enabled", default_ui.enabled),
-        host=(
-            ui_data.get("host", default_ui.host)
-            if isinstance(ui_data.get("host", default_ui.host), str)
-            else default_ui.host
-        ),
-        port=ui_port,
-        base_path=base_path,
-        auth=auth_config,
-        read_only=ui_data.get("read_only", default_ui.read_only),
-        refresh_intervals=refresh_config,
-    )
-
-    if is_live_env and ui_config.enabled:
-        if not ui_config.auth.enabled:
-            logger.warning(
-                "Disabling UI in live environment: ui.auth.enabled is False",
-                extra=structured_log_extra(
-                    env="live",
-                    event="live_ui_disabled_no_auth",
-                    ui_host=ui_config.host,
-                    ui_port=ui_config.port,
-                ),
-            )
-            ui_config.enabled = False
-
-        if ui_config.host == "0.0.0.0":
-            logger.warning(
-                "UI is configured to listen on 0.0.0.0 in live environment",
-                extra=structured_log_extra(
-                    env="live",
-                    event="live_ui_public_host_warning",
-                    ui_host=ui_config.host,
-                    ui_port=ui_config.port,
-                ),
-            )
+    ui_config = _parse_ui_config(ui_data, default_ui, is_live_env, config_path)
 
     return AppConfig(
         region=RegionProfile(
