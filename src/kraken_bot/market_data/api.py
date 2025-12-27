@@ -545,6 +545,28 @@ class MarketDataAPI:
         return _get_val("c")
 
     def get_latest_price(self, pair: str) -> Optional[float]:
+        """
+        Get the latest mid-price for a pair using the best available data source.
+
+        Priority:
+        1. **WebSocket Ticker (Mid)**: If connected and fresh, returns ``(bid + ask) / 2``.
+        2. **REST Ticker (Mid/Last)**: If WS is stale/unavailable, polls REST API.
+           Returns mid-price if bid/ask are present, otherwise falls back to last trade price.
+
+        Special Cases:
+        - If ``pair`` normalizes to "USD", returns 1.0 (Identity).
+
+        Args:
+            pair: The trading pair (e.g., "XBTUSD", "BTC/USD").
+
+        Returns:
+            float: The latest mid-price.
+
+        Raises:
+            DataStaleError: If both WebSocket and REST data are unavailable or stale
+                           beyond ``ws_stale_tolerance``.
+            PairNotFoundError: If the pair is not in the configured universe.
+        """
         canonical = self.normalize_pair(pair)
 
         # Special case: identity valuation
@@ -567,6 +589,23 @@ class MarketDataAPI:
         raise DataStaleError(canonical, stale_time, self._ws_stale_tolerance)
 
     def get_best_bid_ask(self, pair: str) -> Optional[Dict[str, float]]:
+        """
+        Get the current Best Bid and Offer (BBO) from the WebSocket cache.
+
+        Unlike ``get_latest_price``, this method does **not** fall back to REST,
+        as BBO data is typically needed for immediate order pricing where latency matters.
+
+        Args:
+            pair: The trading pair (e.g., "XBTUSD").
+
+        Returns:
+            Optional[Dict[str, float]]: A dictionary ``{"bid": float, "ask": float}``
+            if available, otherwise ``None``.
+
+        Raises:
+            DataStaleError: If the WebSocket data for this pair is stale.
+            PairNotFoundError: If the pair is not in the universe.
+        """
         canonical = self.normalize_pair(pair)
         self._check_ticker_staleness(canonical)
         if not self._ws_client:
