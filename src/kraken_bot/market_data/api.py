@@ -60,13 +60,18 @@ def validate_pairs_with_client(client: KrakenRESTClient, pairs: List[str]) -> Li
         known_altnames = {
             v.get("altname") for v in known_pairs.values() if isinstance(v, dict)
         }
+        valid_names = known_keys | known_altnames
 
         invalid = []
         for pair in pairs:
-            if pair not in known_keys and pair not in known_altnames:
-                slashless = pair.replace("/", "")
-                if slashless not in known_keys and slashless not in known_altnames:
-                    invalid.append(pair)
+            if pair in valid_names:
+                continue
+
+            slashless = pair.replace("/", "")
+            if slashless in valid_names:
+                continue
+
+            invalid.append(pair)
         return invalid
 
     except Exception as e:
