@@ -276,30 +276,45 @@ def _validate_config_int(
     return _warn_invalid(value)
 
 
+def _get_config_section(
+    raw_config: Dict[str, Any],
+    key: str,
+    config_path: Path,
+    section_desc: str,
+    event_name: str,
+) -> Dict[str, Any]:
+    """
+    Safely retrieves a configuration section.
+    If missing or invalid (not a dict), logs a warning and returns an empty dict.
+    """
+    data = raw_config.get(key) or {}
+    if isinstance(data, dict):
+        return data
+
+    logger.warning(
+        "%s config is not a mapping; using defaults",
+        section_desc,
+        extra={"event": event_name, "config_path": str(config_path)},
+    )
+    return {}
+
+
 def _parse_ui_config(
     ui_data: Dict[str, Any],
     default_ui: UIConfig,
     is_live_env: bool,
     config_path: Path,
 ) -> UIConfig:
-    auth_data = ui_data.get("auth") or {}
-    if not isinstance(auth_data, dict):
-        logger.warning(
-            "UI auth config is not a mapping; using defaults",
-            extra={"event": "config_invalid_ui_auth", "config_path": str(config_path)},
-        )
-        auth_data = {}
-
-    refresh_data = ui_data.get("refresh_intervals") or {}
-    if not isinstance(refresh_data, dict):
-        logger.warning(
-            "UI refresh intervals config is not a mapping; using defaults",
-            extra={
-                "event": "config_invalid_ui_refresh_intervals",
-                "config_path": str(config_path),
-            },
-        )
-        refresh_data = {}
+    auth_data = _get_config_section(
+        ui_data, "auth", config_path, "UI auth", "config_invalid_ui_auth"
+    )
+    refresh_data = _get_config_section(
+        ui_data,
+        "refresh_intervals",
+        config_path,
+        "UI refresh intervals",
+        "config_invalid_ui_refresh_intervals",
+    )
 
     auth_enabled = bool(auth_data.get("enabled", default_ui.auth.enabled))
     auth_token = (auth_data.get("token", default_ui.auth.token) or "").strip()
@@ -423,57 +438,37 @@ def parse_app_config(
     )
     default_ui = UIConfig()
 
-    region_data = raw_config.get("region") or {}
-    if not isinstance(region_data, dict):
-        logger.warning(
-            "Region config is not a mapping; using default region profile",
-            extra={"event": "config_invalid_region", "config_path": str(config_path)},
-        )
-        region_data = {}
+    region_data = _get_config_section(
+        raw_config, "region", config_path, "Region", "config_invalid_region"
+    )
 
-    capabilities_data = region_data.get("capabilities") or {}
-    if not isinstance(capabilities_data, dict):
-        logger.warning(
-            "Region capabilities config is not a mapping; defaulting to conservative capabilities",
-            extra={
-                "event": "config_invalid_capabilities",
-                "config_path": str(config_path),
-            },
-        )
-        capabilities_data = {}
+    capabilities_data = _get_config_section(
+        region_data,
+        "capabilities",
+        config_path,
+        "Region capabilities",
+        "config_invalid_capabilities",
+    )
 
-    risk_data = raw_config.get("risk") or {}
-    if not isinstance(risk_data, dict):
-        logger.warning(
-            "Risk config is not a mapping; using defaults",
-            extra={"event": "config_invalid_risk", "config_path": str(config_path)},
-        )
-        risk_data = {}
+    risk_data = _get_config_section(
+        raw_config, "risk", config_path, "Risk", "config_invalid_risk"
+    )
 
     # Parsing Strategies Config
-    strategies_data = raw_config.get("strategies") or {}
-    if not isinstance(strategies_data, dict):
-        logger.warning(
-            "Strategies config is not a mapping; using defaults",
-            extra={
-                "event": "config_invalid_strategies",
-                "config_path": str(config_path),
-            },
-        )
-        strategies_data = {}
+    strategies_data = _get_config_section(
+        raw_config, "strategies", config_path, "Strategies", "config_invalid_strategies"
+    )
     strategy_configs: Dict[str, StrategyConfig] = {}
 
     # Process 'configs' section
-    raw_strategy_configs = strategies_data.get("configs") or {}
-    if not isinstance(raw_strategy_configs, dict):
-        logger.warning(
-            "Strategy configs section is not a mapping; skipping strategy-specific configs",
-            extra={
-                "event": "config_invalid_strategy_configs",
-                "config_path": str(config_path),
-            },
-        )
-        raw_strategy_configs = {}
+    raw_strategy_configs = _get_config_section(
+        strategies_data,
+        "configs",
+        config_path,
+        "Strategy configs section",
+        "config_invalid_strategy_configs",
+    )
+
     for config_key, cfg in raw_strategy_configs.items():
         if not isinstance(cfg, dict):
             logger.warning(
@@ -636,14 +631,10 @@ def parse_app_config(
         max_strategy_weight_pct=risk_data.get("max_strategy_weight_pct", 50.0),
     )
 
-    profiles_data = raw_config.get("profiles") or {}
+    profiles_data = _get_config_section(
+        raw_config, "profiles", config_path, "Profiles", "config_invalid_profiles"
+    )
     profiles: Dict[str, ProfileConfig] = {}
-    if not isinstance(profiles_data, dict):
-        logger.warning(
-            "Profiles config is not a mapping; defaulting to empty profiles",
-            extra={"event": "config_invalid_profiles", "config_path": str(config_path)},
-        )
-        profiles_data = {}
 
     for profile_name, profile_cfg in profiles_data.items():
         if not isinstance(profile_cfg, dict):
@@ -670,13 +661,9 @@ def parse_app_config(
             default_ml_enabled=bool(profile_cfg.get("default_ml_enabled", True)),
         )
 
-    session_data = raw_config.get("session") or {}
-    if not isinstance(session_data, dict):
-        logger.warning(
-            "Session config is not a mapping; using defaults",
-            extra={"event": "config_invalid_session", "config_path": str(config_path)},
-        )
-        session_data = {}
+    session_data = _get_config_section(
+        raw_config, "session", config_path, "Session", "config_invalid_session"
+    )
 
     session_loop_seconds = session_data.get("loop_interval_sec", 15.0)
     if not isinstance(session_loop_seconds, (int, float)) or session_loop_seconds <= 0:
@@ -700,49 +687,24 @@ def parse_app_config(
         account_id=session_data.get("account_id") or "default",
     )
 
-    universe_data = raw_config.get("universe") or {}
-    if not isinstance(universe_data, dict):
-        logger.warning(
-            "Universe config is not a mapping; using defaults",
-            extra={"event": "config_invalid_universe", "config_path": str(config_path)},
-        )
-        universe_data = {}
+    universe_data = _get_config_section(
+        raw_config, "universe", config_path, "Universe", "config_invalid_universe"
+    )
 
-    market_data = raw_config.get("market_data") or {}
-    if not isinstance(market_data, dict):
-        logger.warning(
-            "Market data config is not a mapping; using defaults",
-            extra={
-                "event": "config_invalid_market_data",
-                "config_path": str(config_path),
-            },
-        )
-        market_data = {}
+    market_data = _get_config_section(
+        raw_config, "market_data", config_path, "Market data", "config_invalid_market_data"
+    )
 
-    ohlc_store = market_data.get("ohlc_store", {})
-    if not isinstance(ohlc_store, dict):
-        logger.warning(
-            "OHLC store config is not a mapping; using defaults",
-            extra={
-                "event": "config_invalid_ohlc_store",
-                "config_path": str(config_path),
-            },
-        )
-        ohlc_store = {}
+    ohlc_store = _get_config_section(
+        market_data, "ohlc_store", config_path, "OHLC store", "config_invalid_ohlc_store"
+    )
 
     default_ohlc_store = get_default_ohlc_store_config()
     merged_ohlc_store = {**default_ohlc_store, **ohlc_store}
 
-    execution_data = raw_config.get("execution") or {}
-    if not isinstance(execution_data, dict):
-        logger.warning(
-            "Execution config is not a mapping; using defaults",
-            extra={
-                "event": "config_invalid_execution",
-                "config_path": str(config_path),
-            },
-        )
-        execution_data = {}
+    execution_data = _get_config_section(
+        raw_config, "execution", config_path, "Execution", "config_invalid_execution"
+    )
 
     allowed_execution_modes = {"live", "paper", "dry_run", "simulation"}
     execution_mode = execution_data.get("mode", "paper")
@@ -813,27 +775,17 @@ def parse_app_config(
         max_plan_age_seconds=max_plan_age_seconds,
     )
 
-    portfolio_data = raw_config.get("portfolio") or {}
-    if not isinstance(portfolio_data, dict):
-        logger.warning(
-            "Portfolio config is not a mapping; using defaults",
-            extra={
-                "event": "config_invalid_portfolio",
-                "config_path": str(config_path),
-            },
-        )
-        portfolio_data = {}
+    portfolio_data = _get_config_section(
+        raw_config, "portfolio", config_path, "Portfolio", "config_invalid_portfolio"
+    )
 
-    valuation_pairs = portfolio_data.get("valuation_pairs", {})
-    if not isinstance(valuation_pairs, dict):
-        logger.warning(
-            "valuation_pairs should be a mapping; defaulting to empty",
-            extra={
-                "event": "config_invalid_valuation_pairs",
-                "config_path": str(config_path),
-            },
-        )
-        valuation_pairs = {}
+    valuation_pairs = _get_config_section(
+        portfolio_data,
+        "valuation_pairs",
+        config_path,
+        "Valuation pairs",
+        "config_invalid_valuation_pairs",
+    )
 
     include_assets = portfolio_data.get("include_assets", [])
     if not isinstance(include_assets, list):
@@ -909,13 +861,9 @@ def parse_app_config(
                 },
             )
 
-    ui_data = raw_config.get("ui") or {}
-    if not isinstance(ui_data, dict):
-        logger.warning(
-            "UI config is not a mapping; using defaults",
-            extra={"event": "config_invalid_ui", "config_path": str(config_path)},
-        )
-        ui_data = {}
+    ui_data = _get_config_section(
+        raw_config, "ui", config_path, "UI", "config_invalid_ui"
+    )
 
     ui_config = _parse_ui_config(ui_data, default_ui, is_live_env, config_path)
 
