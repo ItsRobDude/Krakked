@@ -1,6 +1,7 @@
 import shutil
 import tempfile
 from unittest.mock import MagicMock
+import dataclasses
 
 import pandas as pd
 import pytest
@@ -225,7 +226,7 @@ class TestFileOHLCStoreCache:
         assert fetched_neg == []
 
     def test_cache_immutability(self, store_and_dir):
-        """Verify that mutating returned bars does not affect the cache."""
+        """Verify that mutating returned bars is not possible (frozen objects)."""
         store, _ = store_and_dir
         pair = "XBTUSD"
         timeframe = "1m"
@@ -239,11 +240,13 @@ class TestFileOHLCStoreCache:
         fetched1 = store.get_bars(pair, timeframe, 1)
         assert fetched1[0].open == 100
 
-        # Mutate the returned object
-        fetched1[0].open = 9999
-        assert fetched1[0].open == 9999
+        # Attempt to mutate the returned object should fail
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            fetched1[0].open = 9999
 
-        # Fetch again - should be original value
+        # Verify value remains unchanged
+        assert fetched1[0].open == 100
+
+        # Verify subsequent fetches return the same immutable object
         fetched2 = store.get_bars(pair, timeframe, 1)
-        assert fetched2[0].open == 100
-        assert fetched2[0] is not fetched1[0]  # Should be different objects
+        assert fetched2[0] is fetched1[0]  # Now they ARE the same object, which is fine because they are immutable
