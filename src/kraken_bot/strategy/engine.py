@@ -293,7 +293,24 @@ class StrategyEngine:
         return base * weight_factor
 
     def run_cycle(self, now: Optional[datetime] = None) -> ExecutionPlan:
-        """Run a full decision cycle and persist the resulting execution plan."""
+        """
+        Executes a single strategy decision loop to generate an execution plan.
+
+        The cycle proceeds through the following stages:
+        1. **Data Readiness**: Verifies market data health (API reachability, WebSocket connectivity) and syncs the portfolio.
+        2. **Regime Inference**: Analyzes the current market conditions (e.g., trend, volatility) using the defined universe.
+        3. **Weight Computation**: Calculates dynamic strategy weights based on performance and regime (if enabled).
+        4. **Intent Collection**: Aggregates trading signals from all active strategies across their configured timeframes.
+        5. **Scoring & Filtering**: Ranks intents by confidence and dynamic weights, discarding low-confidence or excess signals.
+        6. **Risk Processing**: Passes filtered intents through the Risk Engine to enforce limits (exposure, liquidity, drift) and generate safe actions.
+        7. **Persistence**: Saves the resulting `ExecutionPlan` and decision records for auditing and execution.
+
+        Args:
+            now: Optional override for the cycle timestamp (defaults to current UTC time).
+
+        Returns:
+            ExecutionPlan: The final set of risk-adjusted actions (including blocked ones) ready for the OMS.
+        """
         now = now or datetime.now(timezone.utc)
         plan_id = f"plan_{int(now.timestamp())}"
         logger.info(
