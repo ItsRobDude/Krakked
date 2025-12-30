@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { FooterHotkeys } from './components/FooterHotkeys';
 import { KpiGrid, Kpi } from './components/KpiGrid';
 import { Layout } from './components/Layout';
@@ -85,8 +85,6 @@ const isRiskProfile = (value: unknown): value is StrategyRiskProfile =>
   value === 'conservative' || value === 'balanced' || value === 'aggressive';
 
 const RISK_PRESET_OPTIONS: RiskPresetName[] = ['conservative', 'balanced', 'aggressive', 'degen'];
-const ML_STRATEGY_IDS = ['ai_predictor', 'ai_predictor_alt', 'ai_regression'] as const;
-type MlStrategyId = (typeof ML_STRATEGY_IDS)[number];
 
 const buildKpis = (summary: PortfolioSummary) => [
   {
@@ -194,15 +192,8 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
   const [showLiveModal, setShowLiveModal] = useState(false);
   const [pendingLiveStart, setPendingLiveStart] = useState<SessionConfigRequest | null>(null);
 
-  const mlStrategies = useMemo(
-    () => strategies.filter((strategy) => ML_STRATEGY_IDS.includes(strategy.strategy_id as MlStrategyId)),
-    [strategies],
-  );
-
-  const mlEnabled = useMemo(
-    () => mlStrategies.length > 0 && mlStrategies.every((strategy) => strategy.enabled),
-    [mlStrategies],
-  );
+  // Derive global ML state directly from session config, not individual strategies
+  const mlEnabled = session?.ml_enabled ?? false;
 
   const sidebarItems = [
     { label: 'Overview', description: 'KPIs & positions', active: true, badge: 'Live' },
@@ -218,35 +209,33 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
     { keys: 'G', description: 'Refresh balances and positions' },
   ];
 
+  const loadSession = async () => {
+    const [sessionState, profileSummaries, systemHealth] = await Promise.all([
+      fetchSessionState(),
+      fetchProfiles(),
+      fetchSystemHealth(),
+    ]);
+
+    if (sessionState) {
+      setSession(sessionState);
+      setLoopIntervalDraft(sessionState.loop_interval_sec);
+    }
+
+    if (systemHealth) {
+      setHealth(systemHealth);
+      const healthy = systemHealth.market_data_ok && systemHealth.execution_ok;
+      setConnectionState(healthy ? 'connected' : 'degraded');
+    }
+
+    setProfiles(profileSummaries);
+    setSessionLoading(false);
+  };
+
   useEffect(() => {
     let cancelled = false;
-
-    const loadSession = async () => {
-      const [sessionState, profileSummaries, systemHealth] = await Promise.all([
-        fetchSessionState(),
-        fetchProfiles(),
-        fetchSystemHealth(),
-      ]);
-
+    loadSession().then(() => {
       if (cancelled) return;
-
-      if (sessionState) {
-        setSession(sessionState);
-        setLoopIntervalDraft(sessionState.loop_interval_sec);
-      }
-
-      if (systemHealth) {
-        setHealth(systemHealth);
-        const healthy = systemHealth.market_data_ok && systemHealth.execution_ok;
-        setConnectionState(healthy ? 'connected' : 'degraded');
-      }
-
-      setProfiles(profileSummaries);
-      setSessionLoading(false);
-    };
-
-    loadSession();
-
+    });
     return () => {
       cancelled = true;
     };
@@ -582,7 +571,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
 
     const snapshot = await fetchSystemConfig();
 
-    const sections = ['region', 'universe', 'market_data', 'portfolio', 'execution', 'risk', 'strategies'] as const;
+    const sections = ['region', 'universe', 'market_data', 'portfolio', 'execution', 'risk', 'strategies', 'ml'] as const;
     const configPayload: Record<string, unknown> = {};
     for (const section of sections) {
       if (snapshot && typeof snapshot === 'object' && section in snapshot) {
@@ -805,34 +794,28 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
       return;
     }
 
-    const mlIds = strategies
-      .filter((strategy) => ML_STRATEGY_IDS.includes(strategy.strategy_id as MlStrategyId))
-      .map((strategy) => strategy.strategy_id);
+    if (session?.active) {
+      setStrategyFeedback('ML settings cannot be changed while session is active.');
+      return;
+    }
 
-    if (mlIds.length === 0) {
-      setStrategyFeedback('No ML strategies are configured.');
+    if (!session?.profile_name) {
+      setStrategyFeedback('Active profile required to change ML settings.');
       return;
     }
 
     setStrategyFeedback(null);
-
-    const previousStrategies = strategies.map((strategy) => ({ ...strategy }));
-    mlIds.forEach((id) => setStrategyBusyState(id, true));
-
-    setStrategies((current) =>
-      current.map((strategy) =>
-        mlIds.includes(strategy.strategy_id) ? { ...strategy, enabled } : strategy,
-      ),
-    );
+    setStrategyBusyState("ml_toggle", true);
 
     try {
-      await Promise.all(mlIds.map((id) => setStrategyEnabled(id, enabled)));
-      setStrategyFeedback(`Machine learning strategies ${enabled ? 'enabled' : 'disabled'}.`);
+      await applyConfig({ ml: { enabled } });
+      setStrategyFeedback(`Machine learning strategies ${enabled ? 'enabled' : 'disabled'}. reloading...`);
+      // Reload session/config to reflect changes
+      await loadSession();
     } catch (error) {
-      setStrategies(previousStrategies);
-      setStrategyFeedback('Unable to update ML strategies. Restored previous state.');
+      setStrategyFeedback(error instanceof Error ? error.message : 'Unable to update ML settings.');
     } finally {
-      mlIds.forEach((id) => setStrategyBusyState(id, false));
+      setStrategyBusyState("ml_toggle", false);
     }
   };
 
@@ -990,6 +973,8 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
             const riskProfile = strategy.params?.risk_profile;
             if (isRiskProfile(riskProfile)) {
               next[strategy.strategy_id] = riskProfile;
+            } else if (!next[strategy.strategy_id]) {
+              next[strategy.strategy_id] = 'balanced';
             }
           });
           return next;
@@ -1059,10 +1044,12 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
           systemMode={resolveExecutionMode(health)}
           modeBusy={modeBusy}
           systemMessage={systemMessage}
+          configMlEnabled={mlEnabled}
           onCreateProfile={handleCreateProfile}
           onProfileChange={handleProfileChange}
           onSaveConfig={handleSaveConfig}
           onStart={handleStartSession}
+          onRefreshConfig={loadSession}
         />
         <LiveModeModal isOpen={showLiveModal} onClose={handleCloseLiveModal} onConfirm={handleConfirmLiveStart} />
       </>
@@ -1431,6 +1418,8 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
         onLearningToggle={handleLearningToggle}
         mlEnabled={mlEnabled}
         onMlToggle={handleMlToggle}
+        sessionActive={session.active}
+        hasActiveProfile={Boolean(session.profile_name)}
       />
 
       <KpiGrid items={kpis} />

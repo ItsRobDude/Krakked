@@ -115,7 +115,6 @@ class SessionConfigPayload(BaseModel):
     profile_name: str
     mode: Literal["paper", "live"]
     loop_interval_sec: float = Field(15.0, ge=1.0, le=300.0)
-    ml_enabled: bool = True
 
 
 class SessionConfigPatchPayload(BaseModel):
@@ -124,7 +123,6 @@ class SessionConfigPatchPayload(BaseModel):
     profile_name: Optional[str] = None
     mode: Optional[Literal["paper", "live"]] = None
     loop_interval_sec: Optional[float] = Field(None, ge=1.0, le=300.0)
-    ml_enabled: Optional[bool] = None
 
 
 class SessionStatePayload(BaseModel):
@@ -216,28 +214,12 @@ def _session_payload(ctx) -> SessionStatePayload:
     )
 
 
-def _sync_ml_strategies(ctx, enabled: bool) -> None:
-    """Syncs ML strategy enablement with the session flag."""
-    for sid, strat_cfg in ctx.config.strategies.configs.items():
-        if getattr(strat_cfg, "type", "").startswith("machine_learning"):
-            strat_cfg.enabled = enabled
-            if enabled:
-                if sid not in ctx.config.strategies.enabled:
-                    ctx.config.strategies.enabled.append(sid)
-            else:
-                if sid in ctx.config.strategies.enabled:
-                    ctx.config.strategies.enabled.remove(sid)
-            if sid in ctx.strategy_engine.strategy_states:
-                ctx.strategy_engine.strategy_states[sid].enabled = enabled
-
-
 def _persist_session_config_to_main_config(
     config_dir: Path,
     *,
     profile_name: Optional[str] = None,
     mode: Optional[str] = None,
     loop_interval_sec: Optional[float] = None,
-    ml_enabled: Optional[bool] = None,
 ) -> None:
     """Persists session configuration to the main config file, excluding active state."""
     main_config_path = config_dir / "config.yaml"
@@ -260,8 +242,9 @@ def _persist_session_config_to_main_config(
             session_data["mode"] = mode
         if loop_interval_sec is not None:
             session_data["loop_interval_sec"] = loop_interval_sec
-        if ml_enabled is not None:
-            session_data["ml_enabled"] = ml_enabled
+
+        # Explicitly remove legacy ml_enabled field from session if present
+        session_data.pop("ml_enabled", None)
 
         # Never persist active state to disk
         session_data.pop("active", None)
@@ -325,6 +308,8 @@ async def setup_config(
             "ui": {"enabled": True, "port": 8000},
             # Initialize with default session account
             "session": {"account_id": "default"},
+            # Default ML config
+            "ml": {"enabled": True},
         }
         write_initial_config(config_data)
 
@@ -1008,11 +993,8 @@ async def update_session_config(
         if payload.loop_interval_sec is not None
         else getattr(ctx.session, "loop_interval_sec", 15.0)
     )
-    next_ml = (
-        payload.ml_enabled
-        if payload.ml_enabled is not None
-        else getattr(ctx.session, "ml_enabled", True)
-    )
+
+    # ML config is no longer part of session updates
 
     # Validate Profile
     if payload.profile_name is not None:
@@ -1044,24 +1026,19 @@ async def update_session_config(
             )
 
     old_profile = getattr(ctx.session, "profile_name", None)
-    old_ml_enabled = ctx.config.session.ml_enabled
 
     # Apply to Memory
     ctx.session.profile_name = next_profile
     ctx.session.mode = next_mode
     ctx.session.loop_interval_sec = next_loop
-    ctx.session.ml_enabled = next_ml
+    # ML enabled status is just reflecting current config state in memory, not set here
+
     ctx.session.active = False  # Ensure remains false
 
     ctx.config.session.profile_name = next_profile
     ctx.config.session.mode = next_mode
     ctx.config.session.loop_interval_sec = next_loop
-    ctx.config.session.ml_enabled = next_ml
     ctx.config.session.active = False
-
-    # Sync ML Strategies
-    if payload.ml_enabled is not None and next_ml != old_ml_enabled:
-        _sync_ml_strategies(ctx, bool(next_ml))
 
     # Persist
     config_dir = get_config_dir()
@@ -1070,7 +1047,6 @@ async def update_session_config(
         profile_name=next_profile,
         mode=next_mode,
         loop_interval_sec=next_loop,
-        ml_enabled=bool(next_ml),
     )
     dump_runtime_overrides(ctx.config, session=ctx.session, sections={"session"})
 
@@ -1116,8 +1092,8 @@ async def start_session(request: Request) -> ApiEnvelope[SessionStatePayload]:
                 error="Live trading not enabled. Use system mode switch with authentication first.",
             )
 
-    # Sync ML strategies unconditionally at run boundary
-    _sync_ml_strategies(ctx, bool(ctx.session.ml_enabled))
+    # Update runtime session state from config source of truth
+    ctx.session.ml_enabled = ctx.config.ml.enabled
 
     # Activate Memory Only
     ctx.session.active = True

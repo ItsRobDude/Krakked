@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Callable
 from uuid import uuid4
 
 from fastapi import APIRouter, FastAPI, Request
 from fastapi.middleware import Middleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from kraken_bot.ui.context import AppContext
@@ -101,6 +103,20 @@ def create_api(context: AppContext) -> FastAPI:
     )
 
     app.include_router(health_router)
+
+    # Mount UI static files
+    # We are in src/kraken_bot/ui/api.py. Repo root is 4 levels up.
+    repo_root = Path(__file__).resolve().parent.parent.parent.parent
+    ui_dir = repo_root / "ui" / "dist"
+
+    if ui_dir.exists() and (ui_dir / "index.html").exists():
+        app.mount("/", StaticFiles(directory=str(ui_dir), html=True), name="ui")
+    else:
+        logger.warning(
+            "UI build not found at %s; serving API only.",
+            ui_dir,
+            extra=build_request_log_extra(None, event="ui_build_missing"),
+        )
 
     logger.info(
         "UI API initialized",

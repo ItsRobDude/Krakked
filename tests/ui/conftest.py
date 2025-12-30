@@ -12,10 +12,12 @@ from kraken_bot.config import (
     AppConfig,
     ExecutionConfig,
     MarketDataConfig,
+    MLConfig,
     PortfolioConfig,
     RegionCapabilities,
     RegionProfile,
     RiskConfig,
+    SessionConfig,
     StrategiesConfig,
     UIAuthConfig,
     UIConfig,
@@ -24,7 +26,7 @@ from kraken_bot.config import (
 )
 from kraken_bot.metrics import SystemMetrics
 from kraken_bot.ui.api import create_api
-from kraken_bot.ui.context import AppContext
+from kraken_bot.ui.context import AppContext, SessionState
 
 
 def _build_app_config(
@@ -66,6 +68,15 @@ def _build_app_config(
             auth=UIAuthConfig(enabled=auth_enabled, token=auth_token),
             read_only=read_only,
             refresh_intervals=UIRefreshConfig(),
+        ),
+        ml=MLConfig(enabled=True),
+        session=SessionConfig(
+            active=False,
+            profile_name=None,
+            mode="paper",
+            loop_interval_sec=15.0,
+            emergency_flatten=False,
+            account_id="default",
         ),
     )
 
@@ -151,6 +162,17 @@ def build_test_context(
 
     metrics = SystemMetrics()
 
+    # Create proper SessionState object to mimic main.py behavior
+    session_state = SessionState(
+        active=config.session.active,
+        mode=config.session.mode,
+        loop_interval_sec=config.session.loop_interval_sec,
+        profile_name=config.session.profile_name,
+        ml_enabled=config.ml.enabled,
+        emergency_flatten=config.session.emergency_flatten,
+        account_id=config.session.account_id or "default",
+    )
+
     return AppContext(
         config=config,
         client=rest_client,
@@ -160,6 +182,7 @@ def build_test_context(
         strategy_engine=strategy_engine,
         execution_service=execution_service,
         metrics=metrics,
+        session=session_state,
     )
 
 

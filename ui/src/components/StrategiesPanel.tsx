@@ -27,6 +27,10 @@ export type StrategiesPanelProps = {
   onLearningToggle: (strategyId: string, enabled: boolean) => void;
   mlEnabled: boolean;
   onMlToggle: (enabled: boolean) => void;
+  // Indicates if the session is currently active
+  sessionActive: boolean;
+  // Indicates if there is an active profile
+  hasActiveProfile: boolean;
 };
 
 export function StrategiesPanel({
@@ -42,6 +46,8 @@ export function StrategiesPanel({
   onLearningToggle,
   mlEnabled,
   onMlToggle,
+  sessionActive,
+  hasActiveProfile,
 }: StrategiesPanelProps) {
   const formatPnl = (value?: number) => {
     if (value === undefined) return '—';
@@ -72,16 +78,21 @@ export function StrategiesPanel({
           <h2>Strategies</h2>
           <p className="panel__hint">Toggle live strategies and pick a risk posture</p>
         </div>
-        <label className="strategy-toggle__label">
-          <input
-            type="checkbox"
-            className="strategy-toggle"
-            checked={mlEnabled}
-            disabled={readOnly}
-            onChange={(event) => onMlToggle(event.target.checked)}
-          />
-          <span className="pill pill--info">{mlEnabled ? 'ML: On' : 'ML: Off'}</span>
-        </label>
+        <div className="strategy-ml-group">
+          <label className="strategy-toggle__label" title={sessionActive ? "ML settings cannot be changed while session is active" : (hasActiveProfile ? "Toggle ML for active profile" : "Active profile required for ML settings")}>
+            <input
+              type="checkbox"
+              className="strategy-toggle"
+              checked={mlEnabled}
+              // Disabled if read-only, session is active (applyConfig is stopped-only), OR no active profile
+              disabled={readOnly || sessionActive || !hasActiveProfile}
+              onChange={(event) => onMlToggle(event.target.checked)}
+            />
+            <span className={`pill ${sessionActive || !hasActiveProfile ? 'pill--muted' : 'pill--info'}`}>
+              {mlEnabled ? 'ML: On' : 'ML: Off'}
+            </span>
+          </label>
+        </div>
       </div>
       <p className="panel__description">
         Enable or pause each strategy and set its risk profile. Changes respect backend read-only mode.
