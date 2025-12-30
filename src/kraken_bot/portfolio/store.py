@@ -963,6 +963,16 @@ class SQLitePortfolioStore(PortfolioStore):
             """
             params: List[Any] = []
 
+            if after_id:
+                # Optimized keyset pagination: find reference point first
+                cursor.execute("SELECT time FROM ledger_entries WHERE id = ?", (after_id,))
+                ref = cursor.fetchone()
+                if not ref:
+                    return []
+                # Use row value comparison for efficient keyset pagination
+                query += " AND (time, id) > (?, ?)"
+                params.extend([ref[0], after_id])
+
             if since is not None:
                 query += " AND time >= ?"
                 params.append(since)
@@ -970,47 +980,30 @@ class SQLitePortfolioStore(PortfolioStore):
             # Always order by time, then id for deterministic replay
             query += " ORDER BY time ASC, id ASC"
 
-            if limit and not after_id:
-                # If we are filtering by ID in python, we can't limit in SQL efficiently without subquery
-                # But if no after_id, we can limit.
+            if limit:
                 query += " LIMIT ?"
                 params.append(limit)
 
             cursor.execute(query, params)
             rows = cursor.fetchall()
 
-        entries = []
-        skip = True if after_id else False
-
-        for row in rows:
-            lid = row[0]
-            if skip:
-                if lid == after_id:
-                    skip = False
-                continue
-
-            entries.append(
-                LedgerEntry(
-                    id=lid,
-                    time=row[1],
-                    type=row[2],
-                    subtype=row[3],
-                    aclass=row[4],
-                    asset=row[5],
-                    amount=Decimal(row[6]),
-                    fee=Decimal(row[7]),
-                    balance=Decimal(row[8]) if row[8] is not None else None,
-                    refid=row[9],
-                    misc=row[10],
-                    raw=json.loads(row[11]),
-                )
+        return [
+            LedgerEntry(
+                id=row[0],
+                time=row[1],
+                type=row[2],
+                subtype=row[3],
+                aclass=row[4],
+                asset=row[5],
+                amount=Decimal(row[6]),
+                fee=Decimal(row[7]),
+                balance=Decimal(row[8]) if row[8] is not None else None,
+                refid=row[9],
+                misc=row[10],
+                raw=json.loads(row[11]),
             )
-
-        # Apply limit if we had after_id logic
-        if after_id and limit and len(entries) > limit:
-            entries = entries[:limit]
-
-        return entries
+            for row in rows
+        ]
 
     def get_all_ledger_entries(self) -> List[LedgerEntry]:
         return self.get_ledger_entries(after_id=None)
