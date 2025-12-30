@@ -89,7 +89,6 @@ class ProfileConfig:
     credentials_path: str = ""
     default_mode: str = "paper"
     default_loop_interval_sec: float = 15.0
-    default_ml_enabled: bool = True
 
 
 @dataclass
@@ -98,7 +97,6 @@ class SessionConfig:
     profile_name: Optional[str] = None
     mode: str = "paper"
     loop_interval_sec: float = 15.0
-    ml_enabled: bool = True
     emergency_flatten: bool = False
     account_id: Optional[str] = None
 
@@ -198,6 +196,14 @@ class StrategiesConfig:
 
 
 @dataclass
+class MLConfig:
+    enabled: bool = True
+    training_window_examples: int = 5000
+    catch_up_max_days: int = 7
+    catch_up_max_bars: int = 500
+
+
+@dataclass
 class AppConfig:
     region: RegionProfile
     universe: UniverseConfig
@@ -209,3 +215,4 @@ class AppConfig:
     ui: UIConfig = field(default_factory=UIConfig)
     profiles: Dict[str, ProfileConfig] = field(default_factory=dict)
     session: SessionConfig = field(default_factory=SessionConfig)
+    ml: MLConfig = field(default_factory=MLConfig)

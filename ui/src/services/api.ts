@@ -177,7 +177,7 @@ export type SessionConfigRequest = {
   profile_name: string;
   mode: SessionMode;
   loop_interval_sec: number;
-  ml_enabled: boolean;
+  // ml_enabled removed
 };
 
 export type ProfileSummary = {

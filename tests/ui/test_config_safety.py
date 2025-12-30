@@ -10,6 +10,7 @@ from kraken_bot.config import (
     AppConfig,
     ExecutionConfig,
     MarketDataConfig,
+    MLConfig,
     PortfolioConfig,
     RegionCapabilities,
     RegionProfile,
@@ -17,7 +18,7 @@ from kraken_bot.config import (
     UIConfig,
     UniverseConfig,
 )
-from kraken_bot.config_loader import RUNTIME_OVERRIDES_FILENAME
+from kraken_bot.config_loader import RUNTIME_OVERRIDES_FILENAME, parse_app_config
 from kraken_bot.connection.exceptions import ServiceUnavailableError
 from kraken_bot.market_data.api import MarketDataAPI
 from kraken_bot.ui.api import create_api
@@ -46,6 +47,7 @@ def safe_context():
         ui=UIConfig(base_path="/", read_only=False, enabled=True),
         # Default profiles dict
         profiles={},
+        ml=MLConfig(enabled=True),
     )
 
     session = SessionConfig(
@@ -53,7 +55,6 @@ def safe_context():
         profile_name=None,
         mode="paper",
         loop_interval_sec=60,
-        ml_enabled=True,
         emergency_flatten=False,
     )
 
@@ -461,3 +462,79 @@ def test_apply_refresh_intervals_no_profile_fails(
         with open(overrides_path) as f:
             content = yaml.safe_load(f)
             assert content["ui"]["refresh_intervals"]["dashboard_ms"] == 500
+
+
+def test_apply_ml_config_profile_bound(client, safe_context, temp_config_dir):
+    """Test G: ML config changes require an active profile and persist to profile."""
+    with patch(
+        "kraken_bot.ui.routes.config.get_config_dir", return_value=temp_config_dir
+    ):
+        # 1. Test without active profile
+        safe_context.session.profile_name = None
+        payload = {"config": {"ml": {"enabled": False}}}
+
+        response = client.post("/api/config/apply", json=payload)
+        assert response.status_code == 200
+        assert "ml settings require an active profile" in response.json()["error"]
+
+        # 2. Test with active profile
+        safe_context.session.profile_name = "test_profile"
+        profile_dir = temp_config_dir / "profiles"
+        profile_dir.mkdir(exist_ok=True)
+        profile_path = profile_dir / "test.yaml"
+        with open(profile_path, "w") as f:
+            yaml.safe_dump({}, f)
+
+        safe_context.config.profiles["test_profile"] = MagicMock(
+            config_path="profiles/test.yaml"
+        )
+
+        response = client.post("/api/config/apply", json=payload)
+        assert response.status_code == 200
+        assert response.json()["error"] is None
+
+        # Verify written to profile config
+        with open(profile_path) as f:
+            p_cfg = yaml.safe_load(f)
+            assert p_cfg["ml"]["enabled"] is False
+
+
+def test_config_loader_gating_live_mode_safety(client, safe_context, temp_config_dir):
+    """
+    Test H: In live env, if ml.enabled=False, ML strategies are disabled
+    and removed from enabled list, bypassing the risk limit check.
+    """
+    with patch.dict(os.environ, {"KRAKEN_BOT_ENV": "live"}):
+
+        # Valid base config
+        base_config = {
+            "execution": {
+                "mode": "live",
+                "allow_live_trading": True,
+                "paper_tests_completed": True,
+            },
+            "ml": {"enabled": False},
+            "strategies": {
+                "enabled": ["ai_strat", "basic_strat"],
+                "configs": {
+                    "ai_strat": {"type": "machine_learning"},
+                    "basic_strat": {"type": "basic"},
+                },
+            },
+            "risk": {
+                # Only provide limit for basic_strat, intentionally missing ai_strat
+                "max_per_strategy_pct": {"basic_strat": 5.0}
+            },
+        }
+
+        # This call should succeed because ai_strat gets gated off before risk check
+        config = parse_app_config(
+            base_config,
+            config_path=temp_config_dir / "config.yaml",
+            effective_env="live",
+        )
+
+        assert "ai_strat" not in config.strategies.enabled
+        assert "basic_strat" in config.strategies.enabled
+        assert config.strategies.configs["ai_strat"].enabled is False
+        assert config.ml.enabled is False
