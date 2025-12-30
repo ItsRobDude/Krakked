@@ -51,6 +51,31 @@ def compute_atr(ohlc_df: pd.DataFrame, window: int) -> float:
 
 @dataclass
 class RiskContext:
+    """
+    Snapshot of portfolio state and risk metrics used for decision making.
+
+    Aggregated at the start of a strategy cycle, this context provides a frozen view
+    of equity, exposure, and PnL to ensure consistent decision making across multiple
+    strategies.
+
+    Attributes:
+        equity_usd: Total account equity in USD (Balance + Unrealized PnL).
+        realized_pnl_usd: Cumulative realized PnL in USD from available history.
+        unrealized_pnl_usd: Unrealized PnL of currently open positions.
+        total_exposure_usd: Total value of all open positions in USD. Includes manual positions if manual_positions_included is True.
+        total_exposure_pct: Total exposure as a percentage of equity_usd.
+        manual_exposure_usd: Value of positions flagged as 'manual' (no strategy tag).
+        manual_exposure_pct: Manual exposure as a percentage of equity_usd.
+        per_strategy_exposure_usd: Breakdown of exposure value by strategy ID.
+        per_strategy_exposure_pct: Breakdown of exposure percentage by strategy ID.
+        open_positions: List of all active SpotPosition objects.
+        asset_exposures: List of AssetExposure objects showing per-asset allocation.
+        manual_positions: Subset of open_positions identified as manual.
+        manual_positions_included: Whether manual positions are counted towards the total risk budget (config: include_manual_positions).
+        drift_flag: True if portfolio drift (balance mismatch) or pricing errors are detected.
+        daily_drawdown_pct: Percentage drawdown from the 24h high water mark of equity.
+    """
+
     equity_usd: float
     realized_pnl_usd: float
     unrealized_pnl_usd: float
