@@ -519,19 +519,19 @@ def test_config_loader_gating_live_mode_safety(client, safe_context, temp_config
                 "configs": {
                     "ai_strat": {"type": "machine_learning"},
                     "basic_strat": {"type": "basic"},
-                }
+                },
             },
             "risk": {
                 # Only provide limit for basic_strat, intentionally missing ai_strat
                 "max_per_strategy_pct": {"basic_strat": 5.0}
-            }
+            },
         }
 
         # This call should succeed because ai_strat gets gated off before risk check
         config = parse_app_config(
             base_config,
             config_path=temp_config_dir / "config.yaml",
-            effective_env="live"
+            effective_env="live",
         )
 
         assert "ai_strat" not in config.strategies.enabled

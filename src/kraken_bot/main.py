@@ -455,7 +455,7 @@ class BotController:
                     },
                     "ml": {
                         "enabled": True,
-                    }
+                    },
                 },
                 config_dir=config_dir,
             )
@@ -617,7 +617,7 @@ class BotController:
                         },
                         "ml": {
                             "enabled": True,
-                        }
+                        },
                     },
                     config_dir=config_dir,
                 )

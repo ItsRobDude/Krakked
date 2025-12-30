@@ -15,7 +15,6 @@ from kraken_bot.connection.exceptions import (
 from kraken_bot.credentials import CredentialResult, CredentialStatus
 from kraken_bot.market_data.api import MarketDataStatus
 from kraken_bot.metrics import SystemMetrics
-from kraken_bot.strategy.catalog import ML_STRATEGY_IDS
 from kraken_bot.ui.api import create_api
 from tests.ui.conftest import build_test_context
 
@@ -323,12 +322,12 @@ def test_config_loader_gating_prevents_risk_validation_failure(monkeypatch):
             "configs": {
                 "ai_predictor": {"type": "machine_learning"},
                 "regular_strat": {"type": "regular"},
-            }
+            },
         },
         "risk": {
             # Only provide limit for regular strat, missing AI one
             "max_per_strategy_pct": {"regular_strat": 5.0}
-        }
+        },
     }
 
     # Should NOT raise ValueError because ai_predictor is filtered out
@@ -351,7 +350,9 @@ def test_config_redacts_auth_token(client, system_context):
 
 
 @pytest.mark.parametrize("ui_read_only", [False])
-def test_mode_change_updates_configs(monkeypatch, client, system_context, temp_config_dir):
+def test_mode_change_updates_configs(
+    monkeypatch, client, system_context, temp_config_dir
+):
     system_context.config.execution.allow_live_trading = True
 
     # Mock account functions to avoid file IO and keyring access
@@ -362,7 +363,9 @@ def test_mode_change_updates_configs(monkeypatch, client, system_context, temp_c
     )
 
     # Patch get_config_dir to use temp dir
-    monkeypatch.setattr("kraken_bot.ui.routes.system.get_config_dir", lambda: temp_config_dir)
+    monkeypatch.setattr(
+        "kraken_bot.ui.routes.system.get_config_dir", lambda: temp_config_dir
+    )
 
     response = client.post("/api/system/mode", json={"mode": "live"})
 

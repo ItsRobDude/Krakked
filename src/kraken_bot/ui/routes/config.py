@@ -455,9 +455,13 @@ def _apply_config_dict(
         # This provides a responsive UI experience even before the reload completes or if
         # the reload is debounced/queued. We use the candidate config to ensure we reflect
         # what was just validated.
-        if "ml" in config_data and "enabled" in config_data["ml"]:
-             if not ctx.session.active:
-                 ctx.session.ml_enabled = bool(app_config_candidate.ml.enabled)
+        ml_payload = config_data.get("ml")
+        if (
+            isinstance(ml_payload, dict)
+            and "enabled" in ml_payload
+            and not ctx.session.active
+        ):
+            ctx.session.ml_enabled = bool(app_config_candidate.ml.enabled)
 
         if log_events:
             logger.info(
