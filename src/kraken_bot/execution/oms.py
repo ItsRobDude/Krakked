@@ -171,6 +171,34 @@ class ExecutionService:
 
         return order
 
+    def _get_eligible_actions(self, plan: ExecutionPlan) -> List["RiskAdjustedAction"]:
+        """Filter actions that are blocked, 'none', or have negligible delta."""
+        eligible_actions = []
+        for action in plan.actions:
+            if action.blocked or action.action_type == "none":
+                continue
+
+            # Calculate delta using Decimal to avoid 0.1 + 0.2 != 0.3 issues.
+            # We treat differences smaller than a tiny epsilon as zero (noise).
+            try:
+                tgt = Decimal(str(action.target_base_size))
+                cur = Decimal(str(action.current_base_size))
+                delta_dec = tgt - cur
+
+                # If the difference is extremely small (e.g. < 1 satoshi for BTC), ignore it.
+                # Kraken's smallest divisible unit is usually 1e-8.
+                # We use 1e-9 as a safe "zero" threshold.
+                if abs(delta_dec) < Decimal("1e-9"):
+                    continue
+            except Exception:
+                # Fallback to standard float math if something bizarre happens
+                delta = action.target_base_size - action.current_base_size
+                if delta == 0:
+                    continue
+
+            eligible_actions.append(action)
+        return eligible_actions
+
     def execute_plan(self, plan: ExecutionPlan) -> ExecutionResult:
         """
             Execute a plan by building orders, enforcing guardrails, and routing submissions.
@@ -226,33 +254,7 @@ class ExecutionService:
                     self.store.save_execution_result(result)
                 return result
 
-        eligible_actions = []
-        for action in plan.actions:
-            if action.blocked or action.action_type == "none":
-                continue
-
-            # Calculate delta using Decimal to avoid 0.1 + 0.2 != 0.3 issues.
-            # We treat differences smaller than a tiny epsilon as zero (noise).
-            try:
-                tgt = Decimal(str(action.target_base_size))
-                cur = Decimal(str(action.current_base_size))
-                delta_dec = tgt - cur
-
-                # If the difference is extremely small (e.g. < 1 satoshi for BTC), ignore it.
-                # Kraken's smallest divisible unit is usually 1e-8.
-                # We use 1e-9 as a safe "zero" threshold.
-                if abs(delta_dec) < Decimal("1e-9"):
-                    continue
-
-                # Convert back to float for the rest of the system
-                delta = float(delta_dec)
-            except Exception:
-                # Fallback to standard float math if something bizarre happens
-                delta = action.target_base_size - action.current_base_size
-                if delta == 0:
-                    continue
-
-            eligible_actions.append(action)
+        eligible_actions = self._get_eligible_actions(plan)
 
         if self._kill_switch_active(plan_id=plan.plan_id):
             blocked_reason = "Execution blocked by kill switch"
