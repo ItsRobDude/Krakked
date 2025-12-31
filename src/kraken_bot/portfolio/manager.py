@@ -24,6 +24,20 @@ logger = logging.getLogger(__name__)
 
 
 class PortfolioService:
+    """
+    Manages portfolio state, trade synchronization, and balance reconciliation.
+
+    This service acts as the single source of truth for the bot's accounting by:
+    1.  Synchronizing `TradesHistory` and `Ledgers` from Kraken to a local SQLite store.
+    2.  Replaying ledger entries through the :class:`BalanceEngine` to reconstruct
+        accurate balances (including fees and non-trade transfers).
+    3.  Reconciling the calculated local state against the live Kraken `Balance` API
+        to detect and flag drift.
+
+    It also handles the persistence of strategy decisions and execution plans,
+    serving as the data layer for the strategy engine.
+    """
+
     def __init__(
         self,
         config: AppConfig,
