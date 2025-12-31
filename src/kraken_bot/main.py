@@ -406,6 +406,11 @@ def _run_loop_iteration(
     return updated_portfolio_sync, updated_strategy_cycle
 
 
+class _NoSignalUvicornServer(uvicorn.Server):
+    def install_signal_handlers(self) -> None:  # type: ignore[override]
+        return
+
+
 class BotController:
     """
     Encapsulates the application lifecycle, state management, and hot-reloading.
@@ -692,7 +697,7 @@ class BotController:
             log_level="info",
             log_config=None,
         )
-        self.ui_server = uvicorn.Server(config)
+        self.ui_server = _NoSignalUvicornServer(config)
         self.ui_thread = threading.Thread(target=self.ui_server.run, daemon=True)
         self.ui_thread.start()
 
