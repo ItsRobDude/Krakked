@@ -11,7 +11,6 @@ def test_build_emergency_flatten_plan_skips_dust():
     """Ensure flatten plan skips dust and populates metadata correctly."""
     # Setup
     config = MagicMock(spec=AppConfig)
-    # Important: Set 'risk' attribute to avoid AttributeError
     config.risk = MagicMock()
     config.strategies = MagicMock()
     config.strategies.configs = {}
@@ -41,9 +40,42 @@ def test_build_emergency_flatten_plan_skips_dust():
     engine = StrategyEngine(config, market, portfolio)
 
     positions = [
-        SpotPosition("A", "A", "USD", 10.0, 10.0, 0, 0, "s1", 100.0),
-        SpotPosition("B", "B", "USD", 0.5, 10.0, 0, 0, "s2", 5.0),
-        SpotPosition("C", "C", "USD", 10.0, 10.0, 0, 0, "s3", 100.0),
+        SpotPosition(
+            pair="A",
+            base_asset="A",
+            quote_asset="USD",
+            base_size=10.0,
+            avg_entry_price=10.0,
+            realized_pnl_base=0.0,
+            fees_paid_base=0.0,
+            unrealized_pnl_base=0.0,
+            current_value_base=100.0,
+            strategy_tag="s1",
+        ),
+        SpotPosition(
+            pair="B",
+            base_asset="B",
+            quote_asset="USD",
+            base_size=0.5,
+            avg_entry_price=10.0,
+            realized_pnl_base=0.0,
+            fees_paid_base=0.0,
+            unrealized_pnl_base=0.0,
+            current_value_base=5.0,
+            strategy_tag="s2",
+        ),
+        SpotPosition(
+            pair="C",
+            base_asset="C",
+            quote_asset="USD",
+            base_size=10.0,
+            avg_entry_price=10.0,
+            realized_pnl_base=0.0,
+            fees_paid_base=0.0,
+            unrealized_pnl_base=0.0,
+            current_value_base=100.0,
+            strategy_tag="s3",
+        ),
     ]
 
     plan = engine.build_emergency_flatten_plan(positions)

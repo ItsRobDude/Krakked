@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from kraken_bot.main import _run_loop_iteration
 
@@ -150,34 +150,51 @@ def test_emergency_flatten_clears_on_dust_only():
     refresh_metrics_state = MagicMock()
     market_data = MagicMock()
 
-    session = SimpleNamespace(emergency_flatten=True)
-
-    updated_sync, updated_cycle = _run_loop_iteration(
-        now=now,
-        strategy_interval=strategy_interval,
-        portfolio_interval=portfolio_interval,
-        last_strategy_cycle=last_strategy_cycle,
-        last_portfolio_sync=last_portfolio_sync,
-        portfolio=portfolio,
-        market_data=market_data,
-        strategy_engine=strategy_engine,
-        execution_service=execution_service,
-        metrics=metrics,
-        refresh_metrics_state=refresh_metrics_state,
-        session_active=False,
-        session=session,
+    # Mirror real SessionState
+    session = SimpleNamespace(
+        active=False,
+        mode="paper",
+        loop_interval_sec=15.0,
+        profile_name="default",
+        ml_enabled=True,
+        emergency_flatten=True,
+        account_id="default",
     )
 
-    # Assertions
-    # 1. Flatten logic called
-    strategy_engine.build_emergency_flatten_plan.assert_called()
+    with patch("kraken_bot.main.dump_runtime_overrides") as mock_dump:
+        updated_sync, updated_cycle = _run_loop_iteration(
+            now=now,
+            strategy_interval=strategy_interval,
+            portfolio_interval=portfolio_interval,
+            last_strategy_cycle=last_strategy_cycle,
+            last_portfolio_sync=last_portfolio_sync,
+            portfolio=portfolio,
+            market_data=market_data,
+            strategy_engine=strategy_engine,
+            execution_service=execution_service,
+            metrics=metrics,
+            refresh_metrics_state=refresh_metrics_state,
+            session_active=False,
+            session=session,
+        )
 
-    # 2. Execution NOT called (empty actions)
-    execution_service.execute_plan.assert_not_called()
+        # Assertions
+        # 1. Flatten logic called
+        strategy_engine.build_emergency_flatten_plan.assert_called()
 
-    # 3. Emergency flag cleared
-    assert session.emergency_flatten is False
-    assert strategy_engine.config.session.emergency_flatten is False
+        # 2. Execution NOT called (empty actions)
+        execution_service.execute_plan.assert_not_called()
 
-    # 4. Metrics refreshed
-    refresh_metrics_state.assert_called()
+        # 3. Emergency flag cleared
+        assert session.emergency_flatten is False
+        assert strategy_engine.config.session.emergency_flatten is False
+
+        # 4. Metrics refreshed
+        refresh_metrics_state.assert_called()
+
+        # 5. Config persisted (prevent FS writes)
+        mock_dump.assert_called_once()
+
+        # 6. Timestamps updated
+        assert updated_sync == last_portfolio_sync
+        assert updated_cycle == last_strategy_cycle
