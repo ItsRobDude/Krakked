@@ -7,6 +7,7 @@ from typing import Any, Dict, List
 
 from fastapi import APIRouter, Request
 
+from kraken_bot.execution.router import classify_volume, dust_reason
 from kraken_bot.portfolio.models import SpotPosition
 from kraken_bot.ui.logging import build_request_log_extra
 from kraken_bot.ui.models import (
@@ -28,7 +29,7 @@ def _context(request: Request):
 
 
 def _build_position_payload(
-    position: SpotPosition, price: float | None
+    position: SpotPosition, price: float | None, metadata: Any | None
 ) -> PositionPayload:
     current_value: float | None = None
     unrealized: float | None = None
@@ -36,6 +37,23 @@ def _build_position_payload(
     if price is not None:
         current_value = position.base_size * price
         unrealized = current_value - (position.base_size * position.avg_entry_price)
+
+    is_dust = False
+    min_order_size = None
+    rounded_close_size = None
+    dust_reason_text = None
+
+    if metadata:
+        min_order_size = metadata.min_order_size
+        rounded, ok = classify_volume(metadata, abs(position.base_size))
+        rounded_close_size = rounded
+        if not ok:
+            is_dust = True
+            dust_reason_text = dust_reason(metadata, abs(position.base_size), rounded)
+    else:
+        # Missing metadata => untradeable => treat as dust-like
+        is_dust = True
+        dust_reason_text = "Untradeable: missing pair metadata"
 
     return PositionPayload(
         pair=position.pair,
@@ -46,6 +64,10 @@ def _build_position_payload(
         value_usd=current_value,
         unrealized_pnl_usd=unrealized,
         strategy_tag=position.strategy_tag,
+        is_dust=is_dust,
+        min_order_size=min_order_size,
+        rounded_close_size=rounded_close_size,
+        dust_reason=dust_reason_text,
     )
 
 
@@ -79,6 +101,7 @@ async def get_positions(request: Request) -> ApiEnvelope[List[PositionPayload]]:
         positions: List[PositionPayload] = []
         for position in ctx.portfolio.get_positions():
             price = None
+            metadata = None
             try:
                 price = ctx.market_data.get_latest_price(position.pair)
             except Exception:
@@ -88,7 +111,18 @@ async def get_positions(request: Request) -> ApiEnvelope[List[PositionPayload]]:
                         request, event="price_lookup_failed", pair=position.pair
                     ),
                 )
-            positions.append(_build_position_payload(position, price))
+
+            try:
+                metadata = ctx.market_data.get_pair_metadata(position.pair)
+            except Exception:
+                logger.debug(
+                    "Metadata lookup failed",
+                    extra=build_request_log_extra(
+                        request, event="metadata_lookup_failed", pair=position.pair
+                    ),
+                )
+
+            positions.append(_build_position_payload(position, price, metadata))
 
         return ApiEnvelope(data=positions, error=None)
     except Exception as exc:  # pragma: no cover - defensive

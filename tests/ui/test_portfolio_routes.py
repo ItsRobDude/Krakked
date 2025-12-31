@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 from starlette.testclient import TestClient
@@ -46,6 +47,12 @@ def test_positions_shape_matches_payload(client, portfolio_context):
     )
 
     portfolio_context.market_data.get_latest_price.return_value = price
+    # Mock metadata for dust check
+    mock_meta = MagicMock()
+    mock_meta.min_order_size = 0.0001
+    mock_meta.volume_decimals = 8
+    portfolio_context.market_data.get_pair_metadata.return_value = mock_meta
+
     portfolio_context.portfolio.get_positions.return_value = [position]
 
     response = client.get("/api/portfolio/positions")
@@ -57,6 +64,7 @@ def test_positions_shape_matches_payload(client, portfolio_context):
     # Phase 3 PnL formula: (current_price - avg_entry_price) * base_size
     expected_unrealized = (price - position.avg_entry_price) * position.base_size
     assert data[0]["unrealized_pnl_usd"] == pytest.approx(expected_unrealized)
+    assert data[0]["is_dust"] is False
 
 
 def test_exposure_breakdown_enveloped(client, portfolio_context):

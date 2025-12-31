@@ -35,6 +35,10 @@ class PositionPayload(BaseModel):
     value_usd: Optional[float]
     unrealized_pnl_usd: Optional[float]
     strategy_tag: Optional[str] = None
+    is_dust: bool = False
+    min_order_size: Optional[float] = None
+    rounded_close_size: Optional[float] = None
+    dust_reason: Optional[str] = None
 
 
 class AssetExposureBreakdown(BaseModel):

@@ -318,6 +318,15 @@ def test_actions_inherit_userref_and_persist_in_execution_plan():
 
 def test_build_emergency_flatten_plan():
     engine = StrategyRiskEngine.__new__(StrategyRiskEngine)
+    engine.market_data = MagicMock()
+
+    # Mock metadata returns a valid object so dust check passes
+    mock_meta = MagicMock()
+    mock_meta.min_order_size = 0.0001
+    mock_meta.volume_decimals = 4
+    mock_meta.canonical = "PAIR"
+    engine.market_data.get_pair_metadata.return_value = mock_meta
+
     positions = [
         SpotPosition(
             pair="XBTUSD",

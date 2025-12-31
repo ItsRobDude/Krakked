@@ -159,6 +159,39 @@ def _run_loop_iteration(
             and positions
         ):
             plan = strategy_engine.build_emergency_flatten_plan(positions)
+
+            # If plan is empty, it means only dust/untradeable positions remain.
+            # We can safely clear the emergency flag to prevent infinite looping.
+            if not plan.actions:
+                try:
+                    setattr(session, "emergency_flatten", False)
+                    if hasattr(strategy_engine, "config") and hasattr(
+                        strategy_engine.config, "session"
+                    ):
+                        setattr(
+                            strategy_engine.config.session, "emergency_flatten", False
+                        )
+                    dump_runtime_overrides(
+                        strategy_engine.config, session=session, sections={"session"}
+                    )
+
+                    dust_count = plan.metadata.get("dust_count_total", 0)
+                    untradeable_count = plan.metadata.get("untradeable_count_total", 0)
+
+                    logger.info(
+                        "Emergency flatten cleared (only dust/untradeable remaining)",
+                        extra=structured_log_extra(
+                            event="emergency_flatten_cleared_dust_remaining",
+                            dust_count=dust_count,
+                            untradeable_count=untradeable_count,
+                        ),
+                    )
+                except Exception as exc:  # pragma: no cover
+                    metrics.record_error(f"Failed to clear emergency flatten: {exc}")
+                finally:
+                    refresh_metrics_state()
+                return updated_portfolio_sync, updated_strategy_cycle
+
             try:
                 updated_strategy_cycle = now
                 metrics.record_plan(blocked_actions=0)

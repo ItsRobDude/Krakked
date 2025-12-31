@@ -10,16 +10,20 @@ export type PositionRow = {
 
 export type PositionsTableProps = {
   positions: PositionRow[];
+  title?: string;
+  hint?: string;
 };
 
-export function PositionsTable({ positions }: PositionsTableProps) {
+export function PositionsTable({ positions, title = "Open Positions", hint = "Live feed ready" }: PositionsTableProps) {
+  if (positions.length === 0) return null;
+
   return (
     <div className="panel">
       <div className="panel__header">
-        <h2>Open Positions</h2>
-        <p className="panel__hint">Live feed ready</p>
+        <h2>{title}</h2>
+        <p className="panel__hint">{hint}</p>
       </div>
-      <div className="table table--positions" role="table" aria-label="Open positions">
+      <div className="table table--positions" role="table" aria-label={title}>
         <div className="table__head" role="row">
           <span role="columnheader">Pair</span>
           <span role="columnheader">Side</span>

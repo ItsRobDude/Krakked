@@ -21,6 +21,10 @@ export type PositionPayload = {
   value_usd: number | null;
   unrealized_pnl_usd: number | null;
   strategy_tag?: string | null;
+  is_dust: boolean;
+  min_order_size?: number | null;
+  rounded_close_size?: number | null;
+  dust_reason?: string | null;
 };
 
 export type ExposureBreakdown = {
@@ -81,6 +85,7 @@ export type RecentExecution = {
   }>;
   errors: string[];
   warnings: string[];
+  orders_count?: number; // Optional derived field
 };
 
 export type SystemHealth = {

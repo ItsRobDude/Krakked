@@ -20,7 +20,7 @@ import {
   fetchRiskDecisions,
   fetchSystemHealth,
   fetchSessionState,
-  fetchProfiles,
+  fetchProfiles, ProfileSummary,
   fetchStrategies,
   fetchStrategyPerformance,
   fetchRiskConfig,
@@ -28,7 +28,6 @@ import {
   getRiskStatus,
   fetchSetupStatus,
   ExposureBreakdown,
-  ProfileSummary,
   PortfolioSummary,
   PositionPayload,
   RiskConfig,
@@ -97,7 +96,7 @@ const buildKpis = (summary: PortfolioSummary) => [
   { label: 'Unrealized PnL', value: formatCurrency(summary.unrealized_pnl_usd), hint: summary.drift_flag ? 'Rebalance suggested' : 'In bounds' },
 ];
 
-const transformPositions = (payload: PositionPayload[]) =>
+const transformPositions = (payload: PositionPayload[]): PositionRow[] =>
   payload.map((position) => {
     const side: PositionRow['side'] = position.base_size < 0 ? 'short' : 'long';
     const size = `${Math.abs(position.base_size).toFixed(4)} ${position.base_asset}`;
@@ -105,7 +104,11 @@ const transformPositions = (payload: PositionPayload[]) =>
     const mark = position.current_price ? formatCurrency(position.current_price) : '—';
     const pnlValue = position.unrealized_pnl_usd ?? 0;
     const pnl = pnlValue === 0 ? '$0.00' : formatCurrency(pnlValue);
-    const status = position.strategy_tag || 'Tracking';
+
+    let status = position.strategy_tag || 'Tracking';
+    if (position.is_dust) {
+      status = 'Dust';
+    }
 
     return { pair: position.pair, side, size, entry, mark, pnl, status };
   });
@@ -161,7 +164,8 @@ const transformRiskDecisions = (decisions: RiskDecision[]) =>
 
 function DashboardShell({ onLogout }: { onLogout: () => void }) {
   const [kpis, setKpis] = useState<Kpi[]>([]);
-  const [positions, setPositions] = useState<PositionRow[]>([]);
+  const [activePositions, setActivePositions] = useState<PositionRow[]>([]);
+  const [dustPositions, setDustPositions] = useState<PositionRow[]>([]);
   const [balances, setBalances] = useState<WalletRow[]>([]);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [connectionState, setConnectionState] = useState<'connected' | 'degraded'>('degraded');
@@ -336,7 +340,12 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
     const loadPositions = async () => {
       const data = await fetchPositions();
       if (cancelled) return;
-      if (data) setPositions(transformPositions(data));
+      if (data) {
+         const active = data.filter(p => !p.is_dust);
+         const dust = data.filter(p => p.is_dust);
+         setActivePositions(transformPositions(active));
+         setDustPositions(transformPositions(dust));
+      }
     };
 
     loadPositions();
@@ -1426,7 +1435,14 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
 
       <div className="dashboard__columns">
         <div className="dashboard__column dashboard__column--wide">
-          <PositionsTable positions={positions} />
+          <PositionsTable positions={activePositions} />
+          {dustPositions.length > 0 && (
+             <PositionsTable
+               positions={dustPositions}
+               title="Dust"
+               hint="Below Kraken minimum order size; will become sellable if accumulated."
+             />
+          )}
           <LogPanel entries={logs} />
         </div>
         <div className="dashboard__column">

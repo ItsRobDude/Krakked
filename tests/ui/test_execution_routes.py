@@ -6,7 +6,7 @@ from starlette.testclient import TestClient
 
 from kraken_bot.execution.models import ExecutionResult, LocalOrder
 from kraken_bot.portfolio.models import SpotPosition
-from kraken_bot.strategy.models import ExecutionPlan
+from kraken_bot.strategy.models import ExecutionPlan, RiskAdjustedAction
 
 
 @pytest.fixture
@@ -113,10 +113,22 @@ def test_cancel_order_blocked(client, exec_context):
 
 @pytest.mark.parametrize("ui_read_only", [False])
 def test_flatten_all_executes_plan(client, exec_context):
+    # Add an action to ensure execution is called
+    action = RiskAdjustedAction(
+        pair="BTC/USD",
+        strategy_id="manual",
+        action_type="close",
+        target_base_size=0.0,
+        target_notional_usd=0.0,
+        current_base_size=1.0,
+        reason="flatten",
+        blocked=False,
+        blocked_reasons=[],
+    )
     plan = ExecutionPlan(
         plan_id="flatten_1",
         generated_at=datetime.now(UTC),
-        actions=[],
+        actions=[action],
     )
     exec_context.portfolio.get_positions.return_value = [
         SpotPosition(
@@ -204,3 +216,52 @@ def test_flatten_all_fails_if_open_orders_remain(client, exec_context):
         exec_context.execution_service.execute_plan.assert_not_called()
         assert exec_context.session.emergency_flatten is True
         mock_dump.assert_called_once()
+
+
+@pytest.mark.parametrize("ui_read_only", [False])
+def test_flatten_all_handles_dust_only(client, exec_context):
+    """Verify flatten_all returns success and warnings without arming emergency mode if only dust remains."""
+    # Plan with no actions (dust/untradeable only)
+    plan = ExecutionPlan(
+        plan_id="flatten_dust",
+        generated_at=datetime.now(UTC),
+        actions=[],
+        metadata={"dust_count_total": 5, "untradeable_count_total": 2},
+    )
+
+    # Setup mocks
+    exec_context.portfolio.get_positions.return_value = (
+        []
+    )  # Content doesn't matter as engine is mocked
+    exec_context.strategy_engine.build_emergency_flatten_plan.return_value = plan
+    exec_context.execution_service.cancel_all.return_value = None
+    exec_context.execution_service.get_open_orders.return_value = []
+    exec_context.portfolio.last_sync_ok = True
+
+    # Ensure emergency flag starts False
+    exec_context.session.emergency_flatten = False
+
+    with patch("kraken_bot.ui.routes.execution.dump_runtime_overrides") as mock_dump:
+        response = client.post("/api/execution/flatten_all")
+
+        assert response.status_code == 200
+        data = response.json()
+
+        # Verify success envelope
+        assert data["error"] is None
+        result = data["data"]
+        assert result["success"] is True
+        assert result["plan_id"] == "flatten_dust"
+        assert len(result["orders"]) == 0
+
+        # Verify warning text
+        assert len(result["warnings"]) > 0
+        warning = result["warnings"][0]
+        assert "No sellable positions" in warning
+        assert "dust=5" in warning
+        assert "untradeable=2" in warning
+
+        # Verify side effects: NO execution, NO emergency arming
+        exec_context.execution_service.execute_plan.assert_not_called()
+        assert exec_context.session.emergency_flatten is False
+        mock_dump.assert_not_called()
