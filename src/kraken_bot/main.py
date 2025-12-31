@@ -452,9 +452,7 @@ class BotController:
                         "mode": "paper",
                         "loop_interval_sec": 15.0,
                         "profile_name": None,
-                    },
-                    "ml": {
-                        "enabled": True,
+                        "ml_enabled": True,
                     },
                 },
                 config_dir=config_dir,
@@ -469,7 +467,7 @@ class BotController:
             mode=config.session.mode,
             loop_interval_sec=config.session.loop_interval_sec,
             profile_name=config.session.profile_name,
-            ml_enabled=config.ml.enabled,
+            ml_enabled=config.session.ml_enabled,
             emergency_flatten=getattr(config.session, "emergency_flatten", False),
             account_id=config.session.account_id or "default",
         )
@@ -564,7 +562,7 @@ class BotController:
                 mode=config.session.mode,
                 loop_interval_sec=config.session.loop_interval_sec,
                 profile_name=config.session.profile_name,
-                ml_enabled=config.ml.enabled,
+                ml_enabled=config.session.ml_enabled,
                 emergency_flatten=getattr(config.session, "emergency_flatten", False),
                 account_id=config.session.account_id or "default",
             )
@@ -614,9 +612,7 @@ class BotController:
                             "mode": "paper",
                             "loop_interval_sec": 15.0,
                             "profile_name": None,
-                        },
-                        "ml": {
-                            "enabled": True,
+                            "ml_enabled": True,
                         },
                     },
                     config_dir=config_dir,
@@ -691,6 +687,7 @@ class BotController:
             port=self.context.config.ui.port,
             log_level="info",
             log_config=None,
+            install_signal_handlers=False,  # type: ignore[call-arg]
         )
         self.ui_server = uvicorn.Server(config)
         self.ui_thread = threading.Thread(target=self.ui_server.run, daemon=True)

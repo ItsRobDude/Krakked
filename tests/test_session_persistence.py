@@ -91,11 +91,11 @@ def test_start_stop_does_not_persist_active(mock_config_dirs):
 
     # 2. CONFIGURE SESSION
     profile_name = "default"
-    # ml_enabled removed from payload
     payload = {
         "profile_name": profile_name,
         "mode": "paper",
         "loop_interval_sec": 30.0,
+        "ml_enabled": True,
     }
     response = client.patch("/api/system/session/config", json=payload)
     assert response.status_code == 200, f"Config failed: {response.text}"
@@ -202,28 +202,3 @@ def test_emergency_flatten_persistence(mock_config_dirs):
     session_block = data.get("session", {})
     assert session_block.get("emergency_flatten") is True
     assert "active" not in session_block
-
-
-def test_ml_persistence_scrubbed(mock_config_dirs):
-    """Test E: ml_enabled is NOT persisted in session block."""
-    runtime_path = mock_config_dirs / RUNTIME_OVERRIDES_FILENAME
-
-    config_path = mock_config_dirs / "config.yaml"
-    config = load_config(config_path)
-
-    # SessionState with ml_enabled set (runtime only)
-    session_config = SessionState(ml_enabled=True)
-
-    # Dump session section
-    dump_runtime_overrides(
-        config,
-        config_dir=mock_config_dirs,
-        session=session_config,
-        sections={"session"},
-    )
-
-    with open(runtime_path, "r") as f:
-        data = yaml.safe_load(f)
-
-    session_block = data.get("session", {})
-    assert "ml_enabled" not in session_block

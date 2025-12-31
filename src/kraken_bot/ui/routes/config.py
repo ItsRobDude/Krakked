@@ -286,7 +286,6 @@ def _apply_config_dict(
             "execution",
             "risk",
             "strategies",
-            "ml",  # Added ML here to route to profile
             # UI handled specially below
         }
 
@@ -302,13 +301,6 @@ def _apply_config_dict(
             return ApiEnvelope(
                 data=None,
                 error="ui.refresh_intervals requires an active profile",
-            )
-
-        # Enforce profile requirement for ML settings
-        if "ml" in config_data and not profile_name:
-            return ApiEnvelope(
-                data=None,
-                error="ml settings require an active profile",
             )
 
         # Assign other sections
@@ -386,7 +378,7 @@ def _apply_config_dict(
 
         # 6. Parse & Verify
         try:
-            app_config_candidate = parse_app_config(
+            parse_app_config(
                 merged_candidate,
                 config_path=main_config_path,
                 effective_env=effective_env,
@@ -450,18 +442,6 @@ def _apply_config_dict(
 
         # Trigger Reload
         ctx.reinitialize_event.set()
-
-        # Optional: Sync ML enabled state immediately for UI feedback if session is inactive.
-        # This provides a responsive UI experience even before the reload completes or if
-        # the reload is debounced/queued. We use the candidate config to ensure we reflect
-        # what was just validated.
-        ml_payload = config_data.get("ml")
-        if (
-            isinstance(ml_payload, dict)
-            and "enabled" in ml_payload
-            and not ctx.session.active
-        ):
-            ctx.session.ml_enabled = bool(app_config_candidate.ml.enabled)
 
         if log_events:
             logger.info(

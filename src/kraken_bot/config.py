@@ -14,7 +14,6 @@ from .config_models import (
     AppConfig,
     ExecutionConfig,
     MarketDataConfig,
-    MLConfig,
     PortfolioConfig,
     ProfileConfig,
     RegionCapabilities,
@@ -48,7 +47,6 @@ __all__ = [
     "RiskConfig",
     "StrategyConfig",
     "StrategiesConfig",
-    "MLConfig",
     "AppConfig",
     # loader/runtime
     "RUNTIME_OVERRIDES_FILENAME",

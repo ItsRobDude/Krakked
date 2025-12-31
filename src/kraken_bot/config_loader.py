@@ -13,7 +13,6 @@ from kraken_bot.config_models import (
     AppConfig,
     ExecutionConfig,
     MarketDataConfig,
-    MLConfig,
     PortfolioConfig,
     ProfileConfig,
     RegionCapabilities,
@@ -149,11 +148,10 @@ def dump_runtime_overrides(
             # If the file is unreadable/corrupt, fall back to a clean slate.
             existing = {}
 
-    # Unconditionally scrub 'active' and 'ml_enabled' from existing session config if present
-    # to ensure they are never persisted even if 'session' section is not updated.
+    # Unconditionally scrub 'active' from existing session config if present
+    # to ensure it is never persisted even if 'session' section is not updated.
     if isinstance(existing.get("session"), dict):
         existing["session"].pop("active", None)
-        existing["session"].pop("ml_enabled", None)
 
     update_sections = sections or {"risk", "strategies", "ui", "session"}
 
@@ -177,7 +175,7 @@ def dump_runtime_overrides(
                 "profile_name": session_config.profile_name,
                 "mode": session_config.mode,
                 "loop_interval_sec": session_config.loop_interval_sec,
-                # ml_enabled removed
+                "ml_enabled": session_config.ml_enabled,
                 "emergency_flatten": getattr(
                     session_config, "emergency_flatten", False
                 ),
@@ -536,59 +534,6 @@ def parse_app_config(
             params=params,
         )
 
-    # --- ML Config Parsing ---
-    ml_data = raw_config.get("ml") or {}
-    if not isinstance(ml_data, dict):
-        logger.warning(
-            "ML config is not a mapping; using defaults",
-            extra={"event": "config_invalid_ml", "config_path": str(config_path)},
-        )
-        ml_data = {}
-
-    session_data = raw_config.get("session") or {}
-    if not isinstance(session_data, dict):
-        session_data = {}
-
-    # ML Enablement Precedence:
-    # 1. ml.enabled (if present in config)
-    # 2. session.ml_enabled (legacy fallback)
-    # 3. default True
-    ml_enabled_value: bool = True
-    if "enabled" in ml_data:
-        ml_enabled_value = bool(ml_data["enabled"])
-    elif "ml_enabled" in session_data:
-        ml_enabled_value = bool(session_data["ml_enabled"])
-        logger.warning(
-            "Using legacy session.ml_enabled; please migrate to ml.enabled",
-            extra={
-                "event": "config_legacy_ml_enabled",
-                "config_path": str(config_path),
-            },
-        )
-
-    # Validate ML numeric fields
-    training_window = _validate_config_int(
-        ml_data.get("training_window_examples"),
-        5000,
-        "ml_training_window_examples",
-        config_path,
-    )
-    catch_up_days = _validate_config_int(
-        ml_data.get("catch_up_max_days"), 7, "ml_catch_up_max_days", config_path
-    )
-    catch_up_bars = _validate_config_int(
-        ml_data.get("catch_up_max_bars"), 500, "ml_catch_up_max_bars", config_path
-    )
-
-    ml_config = MLConfig(
-        enabled=ml_enabled_value,
-        training_window_examples=training_window,
-        catch_up_max_days=catch_up_days,
-        catch_up_max_bars=catch_up_bars,
-    )
-
-    # --- Strategy Gating ---
-
     raw_enabled = strategies_data.get("enabled", [])
     if not isinstance(raw_enabled, list):
         logger.warning(
@@ -613,16 +558,6 @@ def parse_app_config(
                 },
             )
             continue
-
-        # If ML is disabled, we remove ML strategies from the enabled list
-        # regardless of what the user put in 'enabled'
-        if not ml_config.enabled:
-            scfg = strategy_configs[strategy_id]
-            if scfg.type.startswith("machine_learning"):
-                # Also force config flag to False to be safe
-                scfg.enabled = False
-                continue
-
         normalized_enabled.append(strategy_id)
 
     strategies_config = StrategiesConfig(
@@ -732,8 +667,16 @@ def parse_app_config(
             default_loop_interval_sec=float(
                 profile_cfg.get("default_loop_interval_sec", 15.0)
             ),
-            # default_ml_enabled removed
+            default_ml_enabled=bool(profile_cfg.get("default_ml_enabled", True)),
         )
+
+    session_data = raw_config.get("session") or {}
+    if not isinstance(session_data, dict):
+        logger.warning(
+            "Session config is not a mapping; using defaults",
+            extra={"event": "config_invalid_session", "config_path": str(config_path)},
+        )
+        session_data = {}
 
     session_loop_seconds = session_data.get("loop_interval_sec", 15.0)
     if not isinstance(session_loop_seconds, (int, float)) or session_loop_seconds <= 0:
@@ -752,7 +695,7 @@ def parse_app_config(
         profile_name=session_data.get("profile_name"),
         mode=session_data.get("mode", "paper"),
         loop_interval_sec=float(session_loop_seconds),
-        # ml_enabled removed
+        ml_enabled=bool(session_data.get("ml_enabled", True)),
         emergency_flatten=bool(session_data.get("emergency_flatten", False)),
         account_id=session_data.get("account_id") or "default",
     )
@@ -1015,7 +958,6 @@ def parse_app_config(
         ui=ui_config,
         profiles=profiles,
         session=session_config,
-        ml=ml_config,
     )
 
 

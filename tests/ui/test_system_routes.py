@@ -15,24 +15,14 @@ from kraken_bot.connection.exceptions import (
 from kraken_bot.credentials import CredentialResult, CredentialStatus
 from kraken_bot.market_data.api import MarketDataStatus
 from kraken_bot.metrics import SystemMetrics
+from kraken_bot.strategy.catalog import ML_STRATEGY_IDS
 from kraken_bot.ui.api import create_api
 from tests.ui.conftest import build_test_context
-
-logger = logging.getLogger(__name__)
 
 
 @pytest.fixture
 def system_context(client: TestClient):
     return client.context  # type: ignore[attr-defined]
-
-
-@pytest.fixture
-def temp_config_dir(tmp_path):
-    config_dir = tmp_path / "config"
-    config_dir.mkdir()
-    # Create main config
-    (config_dir / "config.yaml").write_text("execution:\n  mode: paper\n")
-    return config_dir
 
 
 def test_auth_middleware_respects_base_path():
@@ -277,65 +267,99 @@ def test_system_metrics_reports_snapshot_payload(client, system_context):
     assert payload["market_data_max_staleness"] == 1.25
 
 
-def test_start_session_reads_ml_from_config(client, system_context):
-    """Ensures starting session aligns runtime state with config source of truth."""
-    # Setup state: config says disabled, session memory is undefined or default
-    system_context.config.ml.enabled = False
+def test_patch_session_config_skips_ml_sync_when_flag_unchanged(client, system_context):
+    system_context.config.session.ml_enabled = True
 
-    # Pre-configure some strategies
     system_context.config.strategies.configs = {
         "ai_predictor": StrategyConfig(
             name="AI Predictor", type="machine_learning", enabled=True
         ),
+        "ai_regression": StrategyConfig(
+            name="AI Regression", type="machine_learning_regression", enabled=False
+        ),
     }
-    # Manually enable in engine to simulate drift/default
+    system_context.config.strategies.enabled = ["ai_predictor"]
     system_context.strategy_engine.strategy_states = {
         "ai_predictor": SimpleNamespace(enabled=True),
+        "ai_regression": SimpleNamespace(enabled=False),
     }
 
-    # Start session
-    response = client.post("/api/system/session/start")
+    response = client.patch(
+        "/api/system/session/config",
+        json={
+            "profile_name": "default",
+            "mode": "paper",
+            "loop_interval_sec": 30.0,
+            "ml_enabled": True,
+        },
+    )
 
     assert response.status_code == 200
-    payload = response.json()["data"]
+    assert response.json()["error"] is None
 
-    # Assert session payload reflects config state
-    assert payload["ml_enabled"] is False
+    assert system_context.config.strategies.configs["ai_predictor"].enabled is True
+    assert system_context.config.strategies.configs["ai_regression"].enabled is False
+    assert set(system_context.config.strategies.enabled) == {"ai_predictor"}
+    assert (
+        system_context.strategy_engine.strategy_states["ai_predictor"].enabled is True
+    )
+    assert (
+        system_context.strategy_engine.strategy_states["ai_regression"].enabled is False
+    )
 
-    # Assert runtime sync happened
-    assert system_context.session.ml_enabled is False
 
+def test_patch_session_config_syncs_ml_strategies_when_flag_changes(
+    client, system_context
+):
+    system_context.config.session.ml_enabled = True
 
-def test_config_loader_gating_prevents_risk_validation_failure(monkeypatch):
-    """
-    Ensures that when ml.enabled=False, ML strategies are stripped from enabled list
-    so that missing risk limits don't trigger validation errors in live mode.
-    """
-    from kraken_bot.config_loader import parse_app_config
-
-    # Setup raw config
-    raw_config = {
-        "execution": {"mode": "live", "allow_live_trading": True},
-        "ml": {"enabled": False},
-        "strategies": {
-            "enabled": ["ai_predictor", "regular_strat"],
-            "configs": {
-                "ai_predictor": {"type": "machine_learning"},
-                "regular_strat": {"type": "regular"},
-            },
-        },
-        "risk": {
-            # Only provide limit for regular strat, missing AI one
-            "max_per_strategy_pct": {"regular_strat": 5.0}
-        },
+    system_context.config.strategies.configs = {
+        "ai_predictor": StrategyConfig(
+            name="AI Predictor", type="machine_learning", enabled=True
+        ),
+        "ai_regression": StrategyConfig(
+            name="AI Regression", type="machine_learning_regression", enabled=True
+        ),
+        "vol_breakout": StrategyConfig(
+            name="Volatility Breakout", type="vol_breakout", enabled=True
+        ),
+    }
+    system_context.config.strategies.enabled = [
+        "ai_predictor",
+        "ai_regression",
+        "vol_breakout",
+    ]
+    system_context.strategy_engine.strategy_states = {
+        "ai_predictor": SimpleNamespace(enabled=True),
+        "ai_regression": SimpleNamespace(enabled=True),
+        "vol_breakout": SimpleNamespace(enabled=True),
     }
 
-    # Should NOT raise ValueError because ai_predictor is filtered out
-    config = parse_app_config(raw_config, config_path=MagicMock(), effective_env="live")
+    response = client.patch(
+        "/api/system/session/config",
+        json={
+            "profile_name": "default",
+            "mode": "paper",
+            "loop_interval_sec": 20.0,
+            "ml_enabled": False,
+        },
+    )
 
-    assert "ai_predictor" not in config.strategies.enabled
-    assert "regular_strat" in config.strategies.enabled
-    assert config.ml.enabled is False
+    assert response.status_code == 200
+    assert response.json()["error"] is None
+
+    for sid in ML_STRATEGY_IDS:
+        strat_cfg = system_context.config.strategies.configs[sid]
+        assert strat_cfg.enabled is False
+
+    assert set(system_context.config.strategies.enabled) == {"vol_breakout"}
+    assert (
+        system_context.strategy_engine.strategy_states["vol_breakout"].enabled is True
+    )
+    assert all(
+        system_context.strategy_engine.strategy_states[sid].enabled is False
+        for sid in ML_STRATEGY_IDS
+    )
 
 
 def test_config_redacts_auth_token(client, system_context):
@@ -350,9 +374,7 @@ def test_config_redacts_auth_token(client, system_context):
 
 
 @pytest.mark.parametrize("ui_read_only", [False])
-def test_mode_change_updates_configs(
-    monkeypatch, client, system_context, temp_config_dir
-):
+def test_mode_change_updates_configs(monkeypatch, client, system_context):
     system_context.config.execution.allow_live_trading = True
 
     # Mock account functions to avoid file IO and keyring access
@@ -360,11 +382,6 @@ def test_mode_change_updates_configs(
     monkeypatch.setattr("kraken_bot.ui.routes.system.unlock_secrets", MagicMock())
     monkeypatch.setattr(
         "kraken_bot.ui.routes.system.set_session_master_password", MagicMock()
-    )
-
-    # Patch get_config_dir to use temp dir
-    monkeypatch.setattr(
-        "kraken_bot.ui.routes.system.get_config_dir", lambda: temp_config_dir
     )
 
     response = client.post("/api/system/mode", json={"mode": "live"})
@@ -379,6 +396,35 @@ def test_mode_change_updates_configs(
     assert system_context.execution_service.adapter.config.mode == "live"
     assert system_context.session.mode == "live"
     assert system_context.config.session.mode == "live"
+
+
+def test_start_session_syncs_all_ml_strategies_at_boundary(client, system_context):
+    # Test that start always ensures ML state matches config, even if changed elsewhere
+    system_context.session.ml_enabled = False  # Session config says disabled
+    system_context.config.session.ml_enabled = False
+
+    # BUT strategy engine is somehow enabled (drifted state)
+    system_context.config.strategies.configs = {
+        "ai_predictor": StrategyConfig(
+            name="AI Predictor", type="machine_learning", enabled=True
+        ),
+    }
+    system_context.strategy_engine.strategy_states = {
+        "ai_predictor": SimpleNamespace(enabled=True),
+    }
+
+    response = client.post("/api/system/session/start")
+
+    assert response.status_code == 200
+    assert response.json()["error"] is None
+    assert response.json()["data"]["ml_enabled"] is False
+
+    # Start should have forced it OFF
+    strat_cfg = system_context.config.strategies.configs["ai_predictor"]
+    assert strat_cfg.enabled is False
+    assert (
+        system_context.strategy_engine.strategy_states["ai_predictor"].enabled is False
+    )
 
 
 def test_patch_session_config_blocked_if_active(client, system_context):
@@ -523,7 +569,6 @@ def test_credential_validation_auth_and_missing_fields(
         "data": {"valid": False},
         "error": "Authentication failed. Please verify your API key/secret.",
     }
-    return api_error.json()
 
 
 @pytest.mark.parametrize("ui_auth_enabled", [True])

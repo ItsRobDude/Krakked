@@ -1,5 +1,4 @@
 import { useMemo, useState } from 'react';
-import { applyConfig } from '../services/api';
 import type { ExecutionMode, ProfileSummary, SessionConfigRequest } from '../services/api';
 
 export type StartupScreenProps = {
@@ -9,13 +8,10 @@ export type StartupScreenProps = {
   systemMode?: ExecutionMode | null;
   modeBusy?: boolean;
   systemMessage?: { tone: 'info' | 'success' | 'error'; message: string } | null;
-  // NOTE: mlEnabled now comes from external config state, not session state request
-  configMlEnabled?: boolean;
   onCreateProfile: (name: string) => Promise<string>;
   onProfileChange: (name: string) => Promise<void> | void;
   onSaveConfig: () => Promise<void>;
   onStart: (params: SessionConfigRequest) => Promise<void> | void;
-  onRefreshConfig?: () => void;
 };
 
 const DEFAULT_LOOP_INTERVAL = 15;
@@ -27,15 +23,14 @@ export function StartupScreen({
   systemMode,
   modeBusy,
   systemMessage,
-  configMlEnabled = true,
   onCreateProfile,
   onProfileChange,
   onSaveConfig,
   onStart,
-  onRefreshConfig,
 }: StartupScreenProps) {
   const [mode, setMode] = useState<SessionConfigRequest['mode']>('paper');
   const [loopInterval, setLoopInterval] = useState<number>(DEFAULT_LOOP_INTERVAL);
+  const [mlEnabled, setMlEnabled] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -139,31 +134,12 @@ export function StartupScreen({
         profile_name: selectedProfile,
         mode,
         loop_interval_sec: loopInterval,
-        // ml_enabled is no longer part of session request
+        ml_enabled: mlEnabled,
       });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to start session');
     } finally {
       setBusy(false);
-    }
-  };
-
-  const handleMlToggle = async (enabled: boolean) => {
-    if (readOnly) return;
-
-    if (!activeProfileName || selectedProfile !== activeProfileName) {
-      setError('Active profile required to toggle ML settings.');
-      return;
-    }
-
-    setError(null);
-    try {
-      await applyConfig({ ml: { enabled } });
-      if (onRefreshConfig) {
-        onRefreshConfig();
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to update ML settings');
     }
   };
 
@@ -252,15 +228,11 @@ export function StartupScreen({
             <label>
               <input
                 type="checkbox"
-                checked={configMlEnabled}
-                disabled={readOnly || modeBusy || !activeProfileName}
-                onChange={(event) => handleMlToggle(event.target.checked)}
+                checked={mlEnabled}
+                onChange={(event) => setMlEnabled(event.target.checked)}
               />
               Enable machine learning strategies
             </label>
-            {!activeProfileName && (
-              <p className="field__hint field__hint--warn">Select and activate a profile to change ML settings.</p>
-            )}
           </div>
         </div>
 

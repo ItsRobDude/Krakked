@@ -95,8 +95,8 @@ def build_app_context(allow_interactive_setup: bool = True) -> AppContext:
         mode=config.session.mode,
         loop_interval_sec=config.session.loop_interval_sec,
         profile_name=config.session.profile_name,
-        ml_enabled=config.ml.enabled,
-        emergency_flatten=getattr(config.session, "emergency_flatten", False),
+        ml_enabled=config.session.ml_enabled,
+        emergency_flatten=config.session.emergency_flatten,
         account_id=config.session.account_id or "default",
     )
 
