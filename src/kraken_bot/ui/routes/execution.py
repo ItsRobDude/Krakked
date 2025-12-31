@@ -239,21 +239,21 @@ async def flatten_all_positions(
 
         # If plan is empty, it means only dust/untradeable positions remain.
         if not plan.actions:
-             dust_count = plan.metadata.get("dust_count_total", 0)
-             untradeable_count = plan.metadata.get("untradeable_count_total", 0)
+            dust_count = plan.metadata.get("dust_count_total", 0)
+            untradeable_count = plan.metadata.get("untradeable_count_total", 0)
 
-             result = ExecutionResult(
-                 plan_id=plan.plan_id,
-                 started_at=datetime.now(timezone.utc),
-                 completed_at=datetime.now(timezone.utc),
-                 success=True,
-                 orders=[],
-                 errors=[],
-                 warnings=[
-                     f"No sellable positions. Dust/untradeable holdings remain (dust={dust_count}, untradeable={untradeable_count})."
-                 ]
-             )
-             return ApiEnvelope(data=_serialize_execution_result(result), error=None)
+            result = ExecutionResult(
+                plan_id=plan.plan_id,
+                started_at=datetime.now(timezone.utc),
+                completed_at=datetime.now(timezone.utc),
+                success=True,
+                orders=[],
+                errors=[],
+                warnings=[
+                    f"No sellable positions. Dust/untradeable holdings remain (dust={dust_count}, untradeable={untradeable_count})."
+                ],
+            )
+            return ApiEnvelope(data=_serialize_execution_result(result), error=None)
 
         # Set and persist emergency flag so the main loop picks it up and retries if we crash/restart
         ctx.session.emergency_flatten = True

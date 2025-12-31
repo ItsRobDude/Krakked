@@ -427,19 +427,23 @@ class RiskEngine:
                     is_dust_no_op = True
                     dust_reason_text = f"Untradeable: missing pair metadata. {reason}"
                 else:
-                    sell_delta = abs(target_base - current_size)
+                    sell_delta = max(current_size - target_base, 0.0)
                     # Check delta
                     rounded_delta, delta_ok = classify_volume(meta, sell_delta)
                     if not delta_ok:
                         is_dust_no_op = True
-                        dust_reason_text = f"{dust_reason(meta, sell_delta, rounded_delta)}. {reason}"
+                        dust_reason_text = (
+                            f"{dust_reason(meta, sell_delta, rounded_delta)}. {reason}"
+                        )
 
                 if is_dust_no_op:
                     actions.append(
                         RiskAdjustedAction(
                             pair=intent.pair,
                             strategy_id=intent.strategy_id,
-                            strategy_tag=self._resolve_strategy_tag([intent.strategy_id]),
+                            strategy_tag=self._resolve_strategy_tag(
+                                [intent.strategy_id]
+                            ),
                             userref=self._resolve_userref(
                                 [intent.strategy_id], intent.timeframe
                             ),
@@ -458,7 +462,9 @@ class RiskEngine:
                         RiskAdjustedAction(
                             pair=intent.pair,
                             strategy_id=intent.strategy_id,
-                            strategy_tag=self._resolve_strategy_tag([intent.strategy_id]),
+                            strategy_tag=self._resolve_strategy_tag(
+                                [intent.strategy_id]
+                            ),
                             userref=self._resolve_userref(
                                 [intent.strategy_id], intent.timeframe
                             ),
@@ -640,7 +646,9 @@ class RiskEngine:
                     pair=pair,
                     strategy_id=",".join(strategies_involved),
                     strategy_tag=self._resolve_strategy_tag(strategies_involved),
-                    userref=self._resolve_userref(strategies_involved, intents[0].timeframe),
+                    userref=self._resolve_userref(
+                        strategies_involved, intents[0].timeframe
+                    ),
                     action_type="none",
                     target_base_size=current_base,
                     target_notional_usd=current_usd,
@@ -657,11 +665,13 @@ class RiskEngine:
             rounded_delta, delta_ok = classify_volume(pair_meta, sell_delta)
 
             if not delta_ok:
-                 return RiskAdjustedAction(
+                return RiskAdjustedAction(
                     pair=pair,
                     strategy_id=",".join(strategies_involved),
                     strategy_tag=self._resolve_strategy_tag(strategies_involved),
-                    userref=self._resolve_userref(strategies_involved, intents[0].timeframe),
+                    userref=self._resolve_userref(
+                        strategies_involved, intents[0].timeframe
+                    ),
                     action_type="none",
                     target_base_size=current_base,
                     target_notional_usd=current_usd,
@@ -675,13 +685,15 @@ class RiskEngine:
 
         # Special check for full close / reduce where position ITSELF might be dust
         if action_type in {"close", "reduce"} and pair_meta:
-             rounded_pos, pos_ok = classify_volume(pair_meta, current_base)
-             if not pos_ok:
-                  return RiskAdjustedAction(
+            rounded_pos, pos_ok = classify_volume(pair_meta, current_base)
+            if not pos_ok:
+                return RiskAdjustedAction(
                     pair=pair,
                     strategy_id=",".join(strategies_involved),
                     strategy_tag=self._resolve_strategy_tag(strategies_involved),
-                    userref=self._resolve_userref(strategies_involved, intents[0].timeframe),
+                    userref=self._resolve_userref(
+                        strategies_involved, intents[0].timeframe
+                    ),
                     action_type="none",
                     target_base_size=current_base,
                     target_notional_usd=current_usd,

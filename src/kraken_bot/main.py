@@ -6,7 +6,7 @@ import logging
 import signal
 import sqlite3
 import threading
-from dataclasses import asdict, dataclass
+from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, List, Optional, Tuple
 
@@ -168,7 +168,9 @@ def _run_loop_iteration(
                     if hasattr(strategy_engine, "config") and hasattr(
                         strategy_engine.config, "session"
                     ):
-                        setattr(strategy_engine.config.session, "emergency_flatten", False)
+                        setattr(
+                            strategy_engine.config.session, "emergency_flatten", False
+                        )
                     dump_runtime_overrides(
                         strategy_engine.config, session=session, sections={"session"}
                     )
@@ -181,7 +183,7 @@ def _run_loop_iteration(
                         extra=structured_log_extra(
                             event="emergency_flatten_cleared_dust_remaining",
                             dust_count=dust_count,
-                            untradeable_count=untradeable_count
+                            untradeable_count=untradeable_count,
                         ),
                     )
                 except Exception as exc:  # pragma: no cover

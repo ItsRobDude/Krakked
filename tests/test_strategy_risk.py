@@ -41,13 +41,23 @@ def test_risk_engine_sizing():
     market.get_latest_price.return_value = 100.0
 
     real_meta = PairMetadata(
-        canonical="XBTUSD", base="XBT", quote="USD", rest_symbol="XXBTZUSD", ws_symbol="XBT/USD",
-        raw_name="XXBTZUSD", price_decimals=1, volume_decimals=4, lot_size=1, min_order_size=0.0001,
-        status="online", liquidity_24h_usd=1_000_000.0
+        canonical="XBTUSD",
+        base="XBT",
+        quote="USD",
+        rest_symbol="XXBTZUSD",
+        ws_symbol="XBT/USD",
+        raw_name="XXBTZUSD",
+        price_decimals=1,
+        volume_decimals=4,
+        lot_size=1,
+        min_order_size=0.0001,
+        status="online",
+        liquidity_24h_usd=1_000_000.0,
     )
     market.get_pair_metadata.return_value = real_meta
 
     from dataclasses import dataclass
+
     @dataclass
     class MockBar:
         high: float
@@ -103,9 +113,18 @@ def test_kill_switch_drawdown():
     portfolio = MagicMock(spec=PortfolioService)
 
     real_meta = PairMetadata(
-        canonical="XBTUSD", base="XBT", quote="USD", rest_symbol="XXBTZUSD", ws_symbol="XBT/USD",
-        raw_name="XXBTZUSD", price_decimals=1, volume_decimals=4, lot_size=1, min_order_size=0.0001,
-        status="online", liquidity_24h_usd=1_000_000.0
+        canonical="XBTUSD",
+        base="XBT",
+        quote="USD",
+        rest_symbol="XXBTZUSD",
+        ws_symbol="XBT/USD",
+        raw_name="XXBTZUSD",
+        price_decimals=1,
+        volume_decimals=4,
+        lot_size=1,
+        min_order_size=0.0001,
+        status="online",
+        liquidity_24h_usd=1_000_000.0,
     )
     market.get_pair_metadata.return_value = real_meta
 
@@ -143,9 +162,17 @@ def test_manual_kill_switch_blocks_opens_allows_reductions():
     market.get_latest_price.return_value = 100.0
 
     real_meta = PairMetadata(
-        canonical="XBTUSD", base="XBT", quote="USD", rest_symbol="XXBTZUSD", ws_symbol="XBT/USD",
-        raw_name="XXBTZUSD", price_decimals=1, volume_decimals=4, lot_size=1, min_order_size=0.0001,
-        status="online"
+        canonical="XBTUSD",
+        base="XBT",
+        quote="USD",
+        rest_symbol="XXBTZUSD",
+        ws_symbol="XBT/USD",
+        raw_name="XXBTZUSD",
+        price_decimals=1,
+        volume_decimals=4,
+        lot_size=1,
+        min_order_size=0.0001,
+        status="online",
     )
     market.get_pair_metadata.return_value = real_meta
 
@@ -158,9 +185,15 @@ def test_manual_kill_switch_blocks_opens_allows_reductions():
     )
 
     pos = SpotPosition(
-        pair="XBTUSD", base_asset="XBT", quote_asset="USD", base_size=1.0,
-        avg_entry_price=100.0, realized_pnl_base=0, fees_paid_base=0, strategy_tag="test",
-        current_value_base=100.0
+        pair="XBTUSD",
+        base_asset="XBT",
+        quote_asset="USD",
+        base_size=1.0,
+        avg_entry_price=100.0,
+        realized_pnl_base=0,
+        fees_paid_base=0,
+        strategy_tag="test",
+        current_value_base=100.0,
     )
     portfolio.get_positions.return_value = [pos]
 
@@ -172,8 +205,26 @@ def test_manual_kill_switch_blocks_opens_allows_reductions():
     engine.set_manual_kill_switch(True)
 
     intents = [
-        StrategyIntent("test", "XBTUSD", "long", "enter", 1000.0, 1.0, "1h", datetime.now(timezone.utc)),
-        StrategyIntent("test", "XBTUSD", "flat", "exit", None, 1.0, "1h", datetime.now(timezone.utc)),
+        StrategyIntent(
+            "test",
+            "XBTUSD",
+            "long",
+            "enter",
+            1000.0,
+            1.0,
+            "1h",
+            datetime.now(timezone.utc),
+        ),
+        StrategyIntent(
+            "test",
+            "XBTUSD",
+            "flat",
+            "exit",
+            None,
+            1.0,
+            "1h",
+            datetime.now(timezone.utc),
+        ),
     ]
 
     actions = engine.process_intents(intents)
@@ -191,6 +242,7 @@ def test_manual_kill_switch_blocks_opens_allows_reductions():
 
 # --- Restored Tests ---
 
+
 def test_kill_switch_reasons_are_additive():
     config = RiskConfig(kill_switch_on_drift=True)
     market = MagicMock(spec=MarketDataAPI)
@@ -198,9 +250,17 @@ def test_kill_switch_reasons_are_additive():
 
     market.get_latest_price.return_value = 100.0
     real_meta = PairMetadata(
-        canonical="XBTUSD", base="XBT", quote="USD", rest_symbol="XXBTZUSD", ws_symbol="XBT/USD",
-        raw_name="XXBTZUSD", price_decimals=1, volume_decimals=4, lot_size=1, min_order_size=0.0001,
-        status="online"
+        canonical="XBTUSD",
+        base="XBT",
+        quote="USD",
+        rest_symbol="XXBTZUSD",
+        ws_symbol="XBT/USD",
+        raw_name="XXBTZUSD",
+        price_decimals=1,
+        volume_decimals=4,
+        lot_size=1,
+        min_order_size=0.0001,
+        status="online",
     )
     market.get_pair_metadata.return_value = real_meta
 
@@ -237,9 +297,17 @@ def test_drift_kill_switch_blocks_opening_orders():
 
     market.get_latest_price.return_value = 100.0
     real_meta = PairMetadata(
-        canonical="XBTUSD", base="XBT", quote="USD", rest_symbol="XXBTZUSD", ws_symbol="XBT/USD",
-        raw_name="XXBTZUSD", price_decimals=1, volume_decimals=4, lot_size=1, min_order_size=0.0001,
-        status="online"
+        canonical="XBTUSD",
+        base="XBT",
+        quote="USD",
+        rest_symbol="XXBTZUSD",
+        ws_symbol="XBT/USD",
+        raw_name="XXBTZUSD",
+        price_decimals=1,
+        volume_decimals=4,
+        lot_size=1,
+        min_order_size=0.0001,
+        status="online",
     )
     market.get_pair_metadata.return_value = real_meta
 
@@ -276,10 +344,24 @@ def test_drift_kill_switch_blocks_opening_orders():
 
     intents = [
         StrategyIntent(
-            "trend_core", "XBTUSD", "long", "enter", 1000.0, 1.0, "1h", datetime.now(timezone.utc),
+            "trend_core",
+            "XBTUSD",
+            "long",
+            "enter",
+            1000.0,
+            1.0,
+            "1h",
+            datetime.now(timezone.utc),
         ),
         StrategyIntent(
-            "trend_core", "XBTUSD", "long", "reduce", 0.0, 1.0, "1h", datetime.now(timezone.utc),
+            "trend_core",
+            "XBTUSD",
+            "long",
+            "reduce",
+            0.0,
+            1.0,
+            "1h",
+            datetime.now(timezone.utc),
         ),
     ]
 
@@ -297,9 +379,17 @@ def test_max_per_asset():
     portfolio = MagicMock(spec=PortfolioService)
     market.get_latest_price.return_value = 100.0
     real_meta = PairMetadata(
-        canonical="XBTUSD", base="XBT", quote="USD", rest_symbol="XXBTZUSD", ws_symbol="XBT/USD",
-        raw_name="XXBTZUSD", price_decimals=1, volume_decimals=4, lot_size=1, min_order_size=0.0001,
-        status="online"
+        canonical="XBTUSD",
+        base="XBT",
+        quote="USD",
+        rest_symbol="XXBTZUSD",
+        ws_symbol="XBT/USD",
+        raw_name="XXBTZUSD",
+        price_decimals=1,
+        volume_decimals=4,
+        lot_size=1,
+        min_order_size=0.0001,
+        status="online",
     )
     market.get_pair_metadata.return_value = real_meta
 
@@ -373,11 +463,17 @@ def test_manual_vs_strategy_grouping_and_exposure():
     )
 
     exposures_total = [
-        AssetExposure(asset="XBT", amount=3.0, value_base=300.0, percentage_of_equity=0.3),
-        AssetExposure(asset="ETH", amount=2.0, value_base=100.0, percentage_of_equity=0.1),
+        AssetExposure(
+            asset="XBT", amount=3.0, value_base=300.0, percentage_of_equity=0.3
+        ),
+        AssetExposure(
+            asset="ETH", amount=2.0, value_base=100.0, percentage_of_equity=0.1
+        ),
     ]
     exposures_strategy_only = [
-        AssetExposure(asset="ETH", amount=2.0, value_base=100.0, percentage_of_equity=0.1)
+        AssetExposure(
+            asset="ETH", amount=2.0, value_base=100.0, percentage_of_equity=0.1
+        )
     ]
 
     portfolio.get_equity.return_value = equity
@@ -449,6 +545,7 @@ def test_userref_falls_back_to_strategy_id_when_missing_mapping():
 
 # --- New Dust Tests ---
 
+
 def test_dust_sell_is_noop():
     """Verify that a sell delta below min_order_size results in a NO-OP action."""
     # Ensure limits don't clamp
@@ -465,17 +562,31 @@ def test_dust_sell_is_noop():
 
     # Use real PairMetadata to ensure logic works
     real_meta = PairMetadata(
-        canonical="DOGEUSD", base="DOGE", quote="USD", rest_symbol="XDGUSD", ws_symbol="DOGE/USD",
-        raw_name="XDGUSD", price_decimals=1, volume_decimals=1, lot_size=1, min_order_size=1.0,
-        status="online"
+        canonical="DOGEUSD",
+        base="DOGE",
+        quote="USD",
+        rest_symbol="XDGUSD",
+        ws_symbol="DOGE/USD",
+        raw_name="XDGUSD",
+        price_decimals=1,
+        volume_decimals=1,
+        lot_size=1,
+        min_order_size=1.0,
+        status="online",
     )
     market.get_pair_metadata.return_value = real_meta
 
     # Current Position: 10.5 DOGE
     pos = SpotPosition(
-        pair="DOGEUSD", base_asset="DOGE", quote_asset="USD", base_size=10.5,
-        avg_entry_price=100.0, realized_pnl_base=0, fees_paid_base=0, strategy_tag="test",
-        current_value_base=1050.0
+        pair="DOGEUSD",
+        base_asset="DOGE",
+        quote_asset="USD",
+        base_size=10.5,
+        avg_entry_price=100.0,
+        realized_pnl_base=0,
+        fees_paid_base=0,
+        strategy_tag="test",
+        current_value_base=1050.0,
     )
     portfolio.get_positions.return_value = [pos]
 
@@ -489,9 +600,16 @@ def test_dust_sell_is_noop():
 
     # Intent: Reduce to 10.0 DOGE (Sell 0.5)
     # 0.5 < min 1.0 => Dust sell
-    target_usd = 10.0 * 100.0 # 1000 USD
+    target_usd = 10.0 * 100.0  # 1000 USD
     intent = StrategyIntent(
-        "test", "DOGEUSD", "long", "reduce", target_usd, 1.0, "1h", datetime.now(timezone.utc)
+        "test",
+        "DOGEUSD",
+        "long",
+        "reduce",
+        target_usd,
+        1.0,
+        "1h",
+        datetime.now(timezone.utc),
     )
 
     actions = engine.process_intents([intent])
@@ -517,9 +635,15 @@ def test_untradeable_missing_metadata():
     market.get_pair_metadata.side_effect = Exception("Not found")
 
     pos = SpotPosition(
-        pair="UNK", base_asset="UNK", quote_asset="USD", base_size=10.0,
-        avg_entry_price=10.0, realized_pnl_base=0, fees_paid_base=0, strategy_tag="test",
-        current_value_base=1000.0
+        pair="UNK",
+        base_asset="UNK",
+        quote_asset="USD",
+        base_size=10.0,
+        avg_entry_price=10.0,
+        realized_pnl_base=0,
+        fees_paid_base=0,
+        strategy_tag="test",
+        current_value_base=1000.0,
     )
     portfolio.get_positions.return_value = [pos]
     portfolio.get_equity.return_value = EquityView(10000.0, 10000.0, 0, 0, False)
@@ -541,3 +665,56 @@ def test_untradeable_missing_metadata():
     assert action.action_type == "none"
     assert action.blocked is False
     assert "Untradeable: missing pair metadata" in action.reason
+
+
+def test_manual_pnl_grouped_under_manual_key():
+    portfolio = Portfolio(PortfolioConfig(), MagicMock(spec=MarketDataAPI), MagicMock())
+    portfolio.realized_pnl_history = [
+        RealizedPnLRecord(
+            trade_id="t1",
+            order_id=None,
+            pair="XBTUSD",
+            time=0,
+            side="sell",
+            base_delta=0.0,
+            quote_delta=0.0,
+            fee_asset="USD",
+            fee_amount=0.0,
+            pnl_quote=25.0,
+            strategy_tag=None,
+        ),
+        RealizedPnLRecord(
+            trade_id="t2",
+            order_id=None,
+            pair="XBTUSD",
+            time=1,
+            side="sell",
+            base_delta=0.0,
+            quote_delta=0.0,
+            fee_asset="USD",
+            fee_amount=0.0,
+            pnl_quote=10.0,
+            strategy_tag="manual",
+        ),
+        RealizedPnLRecord(
+            trade_id="t3",
+            order_id=None,
+            pair="ETHUSD",
+            time=2,
+            side="sell",
+            base_delta=0.0,
+            quote_delta=0.0,
+            fee_asset="USD",
+            fee_amount=0.0,
+            pnl_quote=40.0,
+            strategy_tag="trend_core",
+        ),
+    ]
+
+    with_manual = portfolio.get_realized_pnl_by_strategy(include_manual=True)
+    without_manual = portfolio.get_realized_pnl_by_strategy(include_manual=False)
+
+    assert with_manual["manual"] == 35.0
+    assert with_manual["trend_core"] == 40.0
+    assert "manual" not in without_manual
+    assert without_manual["trend_core"] == 40.0

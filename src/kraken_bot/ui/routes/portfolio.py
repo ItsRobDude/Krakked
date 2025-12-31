@@ -115,7 +115,7 @@ async def get_positions(request: Request) -> ApiEnvelope[List[PositionPayload]]:
             try:
                 metadata = ctx.market_data.get_pair_metadata(position.pair)
             except Exception:
-                 logger.debug(
+                logger.debug(
                     "Metadata lookup failed",
                     extra=build_request_log_extra(
                         request, event="metadata_lookup_failed", pair=position.pair

@@ -1,7 +1,6 @@
-from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
-from kraken_bot.config import AppConfig, StrategyConfig
+from kraken_bot.config import AppConfig
 from kraken_bot.market_data.api import MarketDataAPI
 from kraken_bot.portfolio.manager import PortfolioService
 from kraken_bot.portfolio.models import SpotPosition
@@ -31,8 +30,10 @@ def test_build_emergency_flatten_plan_skips_dust():
     meta_b.canonical = "B"
 
     def get_meta(pair):
-        if pair == "A": return meta_a
-        if pair == "B": return meta_b
+        if pair == "A":
+            return meta_a
+        if pair == "B":
+            return meta_b
         raise Exception("Missing")
 
     market.get_pair_metadata.side_effect = get_meta
@@ -61,4 +62,6 @@ def test_build_emergency_flatten_plan_skips_dust():
     assert "Dust:" in plan.metadata["dust_positions"][0]["reason"]
 
     assert plan.metadata["untradeable_positions"][0]["pair"] == "C"
-    assert "Missing pair metadata" in plan.metadata["untradeable_positions"][0]["reason"]
+    assert (
+        "Missing pair metadata" in plan.metadata["untradeable_positions"][0]["reason"]
+    )

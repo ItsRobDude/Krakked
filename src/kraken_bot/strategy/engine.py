@@ -579,22 +579,30 @@ class StrategyEngine:
                 pass
 
             if not meta:
-                untradeable_positions.append({
-                    "pair": position.pair,
-                    "base_size": position.base_size,
-                    "reason": "Missing pair metadata"
-                })
+                untradeable_positions.append(
+                    {
+                        "pair": position.pair,
+                        "base_size": position.base_size,
+                        "reason": "Missing pair metadata",
+                    }
+                )
                 continue
 
-            rounded_close, is_executable = classify_volume(meta, abs(position.base_size))
+            rounded_close, is_executable = classify_volume(
+                meta, abs(position.base_size)
+            )
             if not is_executable:
-                dust_positions.append({
-                    "pair": position.pair,
-                    "base_size": position.base_size,
-                    "rounded_close": rounded_close,
-                    "min_order_size": meta.min_order_size,
-                    "reason": dust_reason(meta, abs(position.base_size), rounded_close)
-                })
+                dust_positions.append(
+                    {
+                        "pair": position.pair,
+                        "base_size": position.base_size,
+                        "rounded_close": rounded_close,
+                        "min_order_size": meta.min_order_size,
+                        "reason": dust_reason(
+                            meta, abs(position.base_size), rounded_close
+                        ),
+                    }
+                )
                 continue
 
             strategy_tag = position.strategy_tag or "manual"
