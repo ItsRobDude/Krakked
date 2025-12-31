@@ -109,13 +109,14 @@ def create_api(context: AppContext) -> FastAPI:
     repo_root = Path(__file__).resolve().parent.parent.parent.parent
     ui_dir = repo_root / "ui" / "dist"
 
+    # IMPORTANT: StaticFiles mount MUST remain the final route registration; do not add routers after this.
     if ui_dir.exists() and (ui_dir / "index.html").exists():
         app.mount("/", StaticFiles(directory=str(ui_dir), html=True), name="ui")
     else:
         logger.warning(
             "UI build not found at %s; serving API only.",
             ui_dir,
-            extra=build_request_log_extra(None, event="ui_build_missing"),
+            extra={"event": "ui_build_missing", "ui_dir": str(ui_dir)},
         )
 
     logger.info(
