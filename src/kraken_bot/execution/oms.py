@@ -191,68 +191,21 @@ class ExecutionService:
 
         adapter_config = self._execution_config
 
-        max_age = getattr(adapter_config, "max_plan_age_seconds", None)
-        if isinstance(max_age, int) and max_age > 0:
-            generated_at = getattr(plan, "generated_at", None)
+        # 1. Check Plan Staleness
+        stale_reason = self._check_plan_staleness(
+            plan=plan, config=adapter_config, started_at=started_at
+        )
+        if stale_reason:
+            result.errors.append(stale_reason)
+            result.completed_at = datetime.now(UTC)
+            result.success = False
+            self.record_execution_result(result)
+            if self.store:
+                self.store.save_execution_result(result)
+            return result
 
-            if isinstance(generated_at, datetime):
-                if generated_at.tzinfo is None:
-                    generated_at = generated_at.replace(tzinfo=UTC)
-                plan_age_seconds = (started_at - generated_at).total_seconds()
-            else:
-                # Missing or invalid generated_at is treated as infinitely stale.
-                plan_age_seconds = float("inf")
-
-            if plan_age_seconds > max_age:
-                reason = (
-                    "Execution plan age "
-                    f"{plan_age_seconds:.1f}s exceeds max_plan_age_seconds={max_age}s; "
-                    "rejecting without order submission"
-                )
-                logger.warning(
-                    "Execution plan stale; blocking execution",
-                    extra=structured_log_extra(
-                        event="plan_stale",
-                        plan_id=plan.plan_id,
-                        plan_age_seconds=plan_age_seconds,
-                        max_plan_age_seconds=max_age,
-                    ),
-                )
-                result.errors.append(reason)
-                result.completed_at = datetime.now(UTC)
-                result.success = False
-                self.record_execution_result(result)
-                if self.store:
-                    self.store.save_execution_result(result)
-                return result
-
-        eligible_actions = []
-        for action in plan.actions:
-            if action.blocked or action.action_type == "none":
-                continue
-
-            # Calculate delta using Decimal to avoid 0.1 + 0.2 != 0.3 issues.
-            # We treat differences smaller than a tiny epsilon as zero (noise).
-            try:
-                tgt = Decimal(str(action.target_base_size))
-                cur = Decimal(str(action.current_base_size))
-                delta_dec = tgt - cur
-
-                # If the difference is extremely small (e.g. < 1 satoshi for BTC), ignore it.
-                # Kraken's smallest divisible unit is usually 1e-8.
-                # We use 1e-9 as a safe "zero" threshold.
-                if abs(delta_dec) < Decimal("1e-9"):
-                    continue
-
-                # Convert back to float for the rest of the system
-                delta = float(delta_dec)
-            except Exception:
-                # Fallback to standard float math if something bizarre happens
-                delta = action.target_base_size - action.current_base_size
-                if delta == 0:
-                    continue
-
-            eligible_actions.append(action)
+        # 2. Filter Eligible Actions (remove dust, blocked, none)
+        eligible_actions = self._get_eligible_actions(plan)
 
         if self._kill_switch_active(plan_id=plan.plan_id):
             blocked_reason = "Execution blocked by kill switch"
@@ -885,6 +838,71 @@ class ExecutionService:
                 reconciliation_available=reconciliation_available,
             ),
         )
+
+    def _check_plan_staleness(
+        self,
+        plan: ExecutionPlan,
+        config: ExecutionConfig,
+        started_at: datetime,
+    ) -> Optional[str]:
+        """Check if plan is too old to execute based on max_plan_age_seconds."""
+        max_age = getattr(config, "max_plan_age_seconds", None)
+        if isinstance(max_age, int) and max_age > 0:
+            generated_at = getattr(plan, "generated_at", None)
+
+            if isinstance(generated_at, datetime):
+                if generated_at.tzinfo is None:
+                    generated_at = generated_at.replace(tzinfo=UTC)
+                plan_age_seconds = (started_at - generated_at).total_seconds()
+            else:
+                # Missing or invalid generated_at is treated as infinitely stale.
+                plan_age_seconds = float("inf")
+
+            if plan_age_seconds > max_age:
+                reason = (
+                    "Execution plan age "
+                    f"{plan_age_seconds:.1f}s exceeds max_plan_age_seconds={max_age}s; "
+                    "rejecting without order submission"
+                )
+                logger.warning(
+                    "Execution plan stale; blocking execution",
+                    extra=structured_log_extra(
+                        event="plan_stale",
+                        plan_id=plan.plan_id,
+                        plan_age_seconds=plan_age_seconds,
+                        max_plan_age_seconds=max_age,
+                    ),
+                )
+                return reason
+        return None
+
+    def _get_eligible_actions(self, plan: ExecutionPlan) -> List["RiskAdjustedAction"]:
+        """Filter actions that are blocked, 'none', or effectively zero (dust)."""
+        eligible = []
+        for action in plan.actions:
+            if action.blocked or action.action_type == "none":
+                continue
+
+            # Calculate delta using Decimal to avoid 0.1 + 0.2 != 0.3 issues.
+            # We treat differences smaller than a tiny epsilon as zero (noise).
+            try:
+                tgt = Decimal(str(action.target_base_size))
+                cur = Decimal(str(action.current_base_size))
+                delta_dec = tgt - cur
+
+                # If the difference is extremely small (e.g. < 1 satoshi for BTC), ignore it.
+                # Kraken's smallest divisible unit is usually 1e-8.
+                # We use 1e-9 as a safe "zero" threshold.
+                if abs(delta_dec) < Decimal("1e-9"):
+                    continue
+            except Exception:
+                # Fallback to standard float math if something bizarre happens
+                delta = action.target_base_size - action.current_base_size
+                if delta == 0:
+                    continue
+
+            eligible.append(action)
+        return eligible
 
     def _calculate_projected_exposure(
         self,
