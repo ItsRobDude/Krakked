@@ -4,9 +4,66 @@ from unittest.mock import MagicMock
 import pytest
 
 from kraken_bot.config import ExecutionConfig
-from kraken_bot.execution.router import build_order_from_plan_action
+from kraken_bot.execution.router import (
+    build_order_from_plan_action,
+    classify_volume,
+    dust_reason,
+)
 from kraken_bot.market_data.models import PairMetadata
 from kraken_bot.strategy.models import ExecutionPlan, RiskAdjustedAction
+
+
+def test_classify_volume_logic():
+    meta = PairMetadata(
+        canonical="XBTUSD",
+        base="XBT",
+        quote="USD",
+        rest_symbol="XXBTZUSD",
+        ws_symbol="XBT/USD",
+        raw_name="XXBTZUSD",
+        min_order_size=0.0001,
+        volume_decimals=4,
+        price_decimals=1,
+        lot_size=1,
+        status="online",
+    )
+
+    # 1. OK case
+    rounded, ok = classify_volume(meta, 0.0002)
+    assert rounded == 0.0002
+    assert ok is True
+
+    # 2. Dust case
+    rounded, ok = classify_volume(meta, 0.00009)
+    # round_order_size(0.00009, decimals=4) -> 0.0000
+    assert rounded == 0.0
+    assert ok is False
+
+    # 3. Exact boundary
+    rounded, ok = classify_volume(meta, 0.0001)
+    assert rounded == 0.0001
+    assert ok is True
+
+
+def test_dust_reason_format():
+    meta = PairMetadata(
+        canonical="XBTUSD",
+        base="XBT",
+        quote="USD",
+        rest_symbol="XXBTZUSD",
+        ws_symbol="XBT/USD",
+        raw_name="XXBTZUSD",
+        min_order_size=0.0001,
+        volume_decimals=4,
+        price_decimals=1,
+        lot_size=1,
+        status="online",
+    )
+    msg = dust_reason(meta, 0.00009, 0.0)
+    assert "Dust:" in msg
+    assert "rounded sell volume 0.0" in msg
+    assert "min_order_size 0.0001" in msg
+    assert "XBTUSD" in msg
 
 
 def test_local_order_preserves_strategy_id_and_userref():
@@ -54,7 +111,7 @@ def test_local_order_preserves_strategy_id_and_userref():
     assert order.userref == 42
 
 
-def test_rounding_and_min_size_enforced():
+def test_rounding_and_min_size_enforced_via_classify_volume():
     pair_metadata = PairMetadata(
         canonical="ETHUSD",
         base="ETH",
@@ -69,13 +126,14 @@ def test_rounding_and_min_size_enforced():
         status="online",
     )
 
+    # Dust volume
     action = RiskAdjustedAction(
         pair="ETHUSD",
         strategy_id="alpha",
         action_type="close",
         target_base_size=0.0,
         target_notional_usd=0.0,
-        current_base_size=0.00095,
+        current_base_size=0.00095,  # < min 0.001
         reason="flatten",
         blocked=False,
         blocked_reasons=[],
@@ -90,9 +148,12 @@ def test_rounding_and_min_size_enforced():
         metadata={"order_type": "limit", "requested_price": 123.456},
     )
 
-    with pytest.raises(ValueError):
+    # Should raise ValueError from helper
+    with pytest.raises(ValueError) as exc:
         build_order_from_plan_action(action, plan, pair_metadata, ExecutionConfig())
+    assert "Dust:" in str(exc.value)
 
+    # Valid volume
     action.current_base_size = 0.00123456
     order, warning = build_order_from_plan_action(
         action, plan, pair_metadata, ExecutionConfig()

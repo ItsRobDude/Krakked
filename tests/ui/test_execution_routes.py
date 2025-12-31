@@ -6,7 +6,7 @@ from starlette.testclient import TestClient
 
 from kraken_bot.execution.models import ExecutionResult, LocalOrder
 from kraken_bot.portfolio.models import SpotPosition
-from kraken_bot.strategy.models import ExecutionPlan
+from kraken_bot.strategy.models import ExecutionPlan, RiskAdjustedAction
 
 
 @pytest.fixture
@@ -113,10 +113,22 @@ def test_cancel_order_blocked(client, exec_context):
 
 @pytest.mark.parametrize("ui_read_only", [False])
 def test_flatten_all_executes_plan(client, exec_context):
+    # Add an action to ensure execution is called
+    action = RiskAdjustedAction(
+        pair="BTC/USD",
+        strategy_id="manual",
+        action_type="close",
+        target_base_size=0.0,
+        target_notional_usd=0.0,
+        current_base_size=1.0,
+        reason="flatten",
+        blocked=False,
+        blocked_reasons=[],
+    )
     plan = ExecutionPlan(
         plan_id="flatten_1",
         generated_at=datetime.now(UTC),
-        actions=[],
+        actions=[action],
     )
     exec_context.portfolio.get_positions.return_value = [
         SpotPosition(

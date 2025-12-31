@@ -12,6 +12,7 @@ import pandas as pd
 
 from kraken_bot.config import RiskConfig
 from kraken_bot.execution.models import LocalOrder
+from kraken_bot.execution.router import classify_volume, dust_reason
 from kraken_bot.logging_config import structured_log_extra
 from kraken_bot.market_data.api import MarketDataAPI
 from kraken_bot.market_data.exceptions import DataStaleError
@@ -379,6 +380,14 @@ class RiskEngine:
                 (p for p in ctx.open_positions if p.pair == intent.pair), None
             )
             current_size = current_pos.base_size if current_pos else 0.0
+
+            # Fetch metadata to check for dust
+            meta = None
+            try:
+                meta = self.market_data.get_pair_metadata(intent.pair)
+            except Exception:
+                pass
+
             try:
                 price = self.market_data.get_latest_price(intent.pair) or 0.0
             except DataStaleError as exc:
@@ -409,24 +418,60 @@ class RiskEngine:
                     else 0.0
                 )
                 target_base = (target_usd / price) if price > 0 else 0.0
-                actions.append(
-                    RiskAdjustedAction(
-                        pair=intent.pair,
-                        strategy_id=intent.strategy_id,
-                        strategy_tag=self._resolve_strategy_tag([intent.strategy_id]),
-                        userref=self._resolve_userref(
-                            [intent.strategy_id], intent.timeframe
-                        ),
-                        action_type="reduce" if target_base > 0 else "close",
-                        target_base_size=target_base,
-                        target_notional_usd=target_usd,
-                        current_base_size=current_size,
-                        reason=f"Allowed close/reduce during kill switch: {reason}",
-                        blocked=False,
-                        blocked_reasons=[],
-                        risk_limits_snapshot=asdict(self.config),
+
+                # Dust / Untradeable Check for Kill Switch
+                is_dust_no_op = False
+                dust_reason_text = ""
+
+                if not meta:
+                    is_dust_no_op = True
+                    dust_reason_text = f"Untradeable: missing pair metadata. {reason}"
+                else:
+                    sell_delta = abs(target_base - current_size)
+                    # Check delta
+                    rounded_delta, delta_ok = classify_volume(meta, sell_delta)
+                    if not delta_ok:
+                        is_dust_no_op = True
+                        dust_reason_text = f"{dust_reason(meta, sell_delta, rounded_delta)}. {reason}"
+
+                if is_dust_no_op:
+                    actions.append(
+                        RiskAdjustedAction(
+                            pair=intent.pair,
+                            strategy_id=intent.strategy_id,
+                            strategy_tag=self._resolve_strategy_tag([intent.strategy_id]),
+                            userref=self._resolve_userref(
+                                [intent.strategy_id], intent.timeframe
+                            ),
+                            action_type="none",
+                            target_base_size=current_size,
+                            target_notional_usd=current_size * price,
+                            current_base_size=current_size,
+                            reason=dust_reason_text,
+                            blocked=False,
+                            blocked_reasons=[],
+                            risk_limits_snapshot=asdict(self.config),
+                        )
                     )
-                )
+                else:
+                    actions.append(
+                        RiskAdjustedAction(
+                            pair=intent.pair,
+                            strategy_id=intent.strategy_id,
+                            strategy_tag=self._resolve_strategy_tag([intent.strategy_id]),
+                            userref=self._resolve_userref(
+                                [intent.strategy_id], intent.timeframe
+                            ),
+                            action_type="reduce" if target_base > 0 else "close",
+                            target_base_size=target_base,
+                            target_notional_usd=target_usd,
+                            current_base_size=current_size,
+                            reason=f"Allowed close/reduce during kill switch: {reason}",
+                            blocked=False,
+                            blocked_reasons=[],
+                            risk_limits_snapshot=asdict(self.config),
+                        )
+                    )
                 continue
 
             actions.append(
@@ -456,6 +501,14 @@ class RiskEngine:
         ctx: RiskContext,
         per_strategy_caps: Dict[str, float],
     ) -> RiskAdjustedAction:
+
+        # Fetch metadata ONCE
+        pair_meta = None
+        try:
+            pair_meta = self.market_data.get_pair_metadata(pair)
+        except Exception:
+            pass
+
         try:
             price = self.market_data.get_latest_price(pair)
         except DataStaleError as exc:
@@ -573,6 +626,72 @@ class RiskEngine:
         else:
             prefix = "Blocked" if blocked else "Clamped"
             reason_text = f"{prefix}: {'; '.join(blocked_reasons)}"
+
+        # --- Dust / Untradeable Logic ---
+
+        # Determine if this action implies a sell
+        delta = target_base - current_base
+        is_sell = delta < 0
+
+        if is_sell:
+            # If metadata missing, treat as untradeable
+            if not pair_meta:
+                return RiskAdjustedAction(
+                    pair=pair,
+                    strategy_id=",".join(strategies_involved),
+                    strategy_tag=self._resolve_strategy_tag(strategies_involved),
+                    userref=self._resolve_userref(strategies_involved, intents[0].timeframe),
+                    action_type="none",
+                    target_base_size=current_base,
+                    target_notional_usd=current_usd,
+                    current_base_size=current_base,
+                    reason=f"Untradeable: missing pair metadata. {reason_text}",
+                    blocked=False,
+                    blocked_reasons=[],
+                    clamped=False,
+                    risk_limits_snapshot=asdict(self.config),
+                )
+
+            # Check if sell delta is executable
+            sell_delta = abs(delta)
+            rounded_delta, delta_ok = classify_volume(pair_meta, sell_delta)
+
+            if not delta_ok:
+                 return RiskAdjustedAction(
+                    pair=pair,
+                    strategy_id=",".join(strategies_involved),
+                    strategy_tag=self._resolve_strategy_tag(strategies_involved),
+                    userref=self._resolve_userref(strategies_involved, intents[0].timeframe),
+                    action_type="none",
+                    target_base_size=current_base,
+                    target_notional_usd=current_usd,
+                    current_base_size=current_base,
+                    reason=f"{dust_reason(pair_meta, sell_delta, rounded_delta)}. {reason_text}",
+                    blocked=False,
+                    blocked_reasons=[],
+                    clamped=False,
+                    risk_limits_snapshot=asdict(self.config),
+                )
+
+        # Special check for full close / reduce where position ITSELF might be dust
+        if action_type in {"close", "reduce"} and pair_meta:
+             rounded_pos, pos_ok = classify_volume(pair_meta, current_base)
+             if not pos_ok:
+                  return RiskAdjustedAction(
+                    pair=pair,
+                    strategy_id=",".join(strategies_involved),
+                    strategy_tag=self._resolve_strategy_tag(strategies_involved),
+                    userref=self._resolve_userref(strategies_involved, intents[0].timeframe),
+                    action_type="none",
+                    target_base_size=current_base,
+                    target_notional_usd=current_usd,
+                    current_base_size=current_base,
+                    reason=f"{dust_reason(pair_meta, current_base, rounded_pos)} (Position). {reason_text}",
+                    blocked=False,
+                    blocked_reasons=[],
+                    clamped=False,
+                    risk_limits_snapshot=asdict(self.config),
+                )
 
         return RiskAdjustedAction(
             pair=pair,

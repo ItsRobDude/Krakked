@@ -38,6 +38,24 @@ def round_order_price(metadata: PairMetadata, price: float) -> float:
         return price
 
 
+def classify_volume(metadata: PairMetadata, volume: float) -> Tuple[float, bool]:
+    """
+    Classify whether a given raw volume is executable (not dust).
+    Returns (rounded_volume, is_executable).
+    """
+    rounded = round_order_size(metadata, abs(volume))
+    is_executable = rounded > 0 and rounded >= metadata.min_order_size
+    return rounded, is_executable
+
+
+def dust_reason(metadata: PairMetadata, raw_volume: float, rounded: float) -> str:
+    """Return a stable explanation for why a volume is considered dust."""
+    return (
+        f"Dust: rounded sell volume {rounded} < min_order_size {metadata.min_order_size} "
+        f"for {metadata.canonical}"
+    )
+
+
 def determine_order_type(order: LocalOrder, config: ExecutionConfig) -> str:
     """Selects an order type based on configuration and order context."""
     return order.order_type or config.default_order_type
@@ -188,12 +206,9 @@ def build_order_from_plan_action(
                 warning = f"Invalid bid/ask data for {action.pair}: {bid_ask}"
                 return None, warning
 
-    rounded_size = round_order_size(pair_metadata, volume)
-    if rounded_size <= 0 or rounded_size < pair_metadata.min_order_size:
-        raise ValueError(
-            f"Requested size {volume} too small for pair "
-            f"{pair_metadata.canonical} (min={pair_metadata.min_order_size})"
-        )
+    rounded_size, is_executable = classify_volume(pair_metadata, volume)
+    if not is_executable:
+        raise ValueError(dust_reason(pair_metadata, volume, rounded_size))
 
     rounded_price: Optional[float] = None
     if requested_price is not None:

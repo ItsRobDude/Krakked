@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Sequence, Type
 
 from kraken_bot.config import AppConfig, StrategyConfig
+from kraken_bot.execution.router import classify_volume, dust_reason
 from kraken_bot.logging_config import structured_log_extra
 from kraken_bot.market_data.api import MarketDataAPI
 from kraken_bot.market_data.exceptions import DataStaleError
@@ -563,9 +564,37 @@ class StrategyEngine:
 
         now = datetime.now(timezone.utc)
         actions: list[RiskAdjustedAction] = []
+        dust_positions: list[dict[str, Any]] = []
+        untradeable_positions: list[dict[str, Any]] = []
 
         for position in positions:
             if position.base_size == 0:
+                continue
+
+            # Fetch metadata
+            meta = None
+            try:
+                meta = self.market_data.get_pair_metadata(position.pair)
+            except Exception:
+                pass
+
+            if not meta:
+                untradeable_positions.append({
+                    "pair": position.pair,
+                    "base_size": position.base_size,
+                    "reason": "Missing pair metadata"
+                })
+                continue
+
+            rounded_close, is_executable = classify_volume(meta, abs(position.base_size))
+            if not is_executable:
+                dust_positions.append({
+                    "pair": position.pair,
+                    "base_size": position.base_size,
+                    "rounded_close": rounded_close,
+                    "min_order_size": meta.min_order_size,
+                    "reason": dust_reason(meta, abs(position.base_size), rounded_close)
+                })
                 continue
 
             strategy_tag = position.strategy_tag or "manual"
@@ -586,11 +615,21 @@ class StrategyEngine:
                 )
             )
 
+        # Cap metadata list sizes
+        capped_dust = dust_positions[:50]
+        capped_untradeable = untradeable_positions[:50]
+
         plan = ExecutionPlan(
             plan_id=f"flatten_{int(now.timestamp())}",
             generated_at=now,
             actions=actions,
-            metadata={"order_type": "market"},
+            metadata={
+                "order_type": "market",
+                "dust_positions": capped_dust,
+                "untradeable_positions": capped_untradeable,
+                "dust_count_total": len(dust_positions),
+                "untradeable_count_total": len(untradeable_positions),
+            },
         )
 
         return plan
