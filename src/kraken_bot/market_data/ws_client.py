@@ -192,7 +192,18 @@ class KrakenWSClientV2:
                 return
 
             if channel == "ticker":
-                self.ticker_cache[canonical_pair] = data["data"][0]
+                ticker_data = data["data"][0]
+                # Pre-calculate mid price and parse floats to optimize reads
+                try:
+                    bid = float(ticker_data["bid"])
+                    ask = float(ticker_data["ask"])
+                    ticker_data["bid"] = bid
+                    ticker_data["ask"] = ask
+                    ticker_data["mid"] = (bid + ask) / 2
+                except (ValueError, KeyError):
+                    pass  # Fallback to raw data if malformed
+
+                self.ticker_cache[canonical_pair] = ticker_data
                 self.last_ticker_update_ts[canonical_pair] = time.monotonic()
             elif channel == "ohlc":
                 interval = data.get("params", {}).get("interval")

@@ -557,7 +557,10 @@ class MarketDataAPI:
             ticker = self._ws_client.ticker_cache.get(canonical)
             if ticker:
                 # Return mid-price (avg of best bid and ask)
-                return (float(ticker["bid"]) + float(ticker["ask"])) / 2
+                # Use pre-calculated mid if available (set by ws_client)
+                return ticker.get("mid") or (
+                    float(ticker["bid"]) + float(ticker["ask"])
+                ) / 2
 
         # Fallback to REST ticker
         fallback_price = self._get_rest_ticker_price(canonical)
