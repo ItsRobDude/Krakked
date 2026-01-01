@@ -65,6 +65,10 @@ def apply_slippage(order: LocalOrder, config: ExecutionConfig) -> Optional[float
     """
     Adjust the requested price by the configured slippage tolerance.
 
+    Calculates the adjusted price to ensure execution within tolerance:
+    - Buys are adjusted upwards (price * (1 + factor))
+    - Sells are adjusted downwards (price * (1 - factor))
+
     Performs calculation in Decimal to avoid floating point drift before rounding.
     """
     if order.requested_price is None:
@@ -161,6 +165,10 @@ def build_order_from_plan_action(
 ) -> Tuple[Optional[LocalOrder], Optional[str]]:
     """
     Build a :class:`LocalOrder` from a plan action using live market data.
+
+    If a limit order does not specify a ``requested_price``, this function attempts
+    to calculate a mid-price from the current best bid/ask. If market data is
+    unavailable or the book is empty, the order build will fail with a warning.
 
     Returns a tuple of (order, warning). When market data is unavailable for a
     required limit price, the order will be ``None`` and the warning will
