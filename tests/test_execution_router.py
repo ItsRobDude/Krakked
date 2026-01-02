@@ -300,3 +300,67 @@ def test_risk_reducing_open():
     )
 
     assert order.risk_reducing is False
+
+
+def test_build_order_limit_price_resolution():
+    """Test resolution of limit prices from market data."""
+    pair_metadata = PairMetadata(
+        canonical="XBTUSD",
+        base="XBT",
+        quote="USD",
+        rest_symbol="XXBTZUSD",
+        ws_symbol="XBT/USD",
+        raw_name="XXBTZUSD",
+        min_order_size=0.0001,
+        volume_decimals=4,
+        price_decimals=1,
+        lot_size=1,
+        status="online",
+    )
+    exec_config = ExecutionConfig(mode="paper", default_order_type="limit")
+    action = RiskAdjustedAction(
+        pair="XBTUSD",
+        strategy_id="test",
+        action_type="open",
+        target_base_size=1.0,
+        target_notional_usd=50000,
+        current_base_size=0.0,
+        reason="test",
+        blocked=False,
+        blocked_reasons=[],
+    )
+    plan = ExecutionPlan(plan_id="p1", generated_at=MagicMock(), actions=[action])
+
+    # 1. Missing market data
+    order, warning = build_order_from_plan_action(
+        action, plan, pair_metadata, exec_config, market_data=None
+    )
+    assert order is None
+    assert "Missing market data" in warning
+
+    # 2. Market data present but returns None
+    market_data = MagicMock()
+    market_data.get_best_bid_ask.return_value = None
+    order, warning = build_order_from_plan_action(
+        action, plan, pair_metadata, exec_config, market_data=market_data
+    )
+    assert order is None
+    assert "Invalid bid/ask data" in warning
+
+    # 3. Market data raises exception
+    market_data.get_best_bid_ask.side_effect = Exception("API fail")
+    order, warning = build_order_from_plan_action(
+        action, plan, pair_metadata, exec_config, market_data=market_data
+    )
+    assert order is None
+    assert "Failed to fetch market data" in warning
+
+    # 4. Valid market data
+    market_data.get_best_bid_ask.side_effect = None
+    market_data.get_best_bid_ask.return_value = {"bid": 49990.0, "ask": 50010.0}
+    order, warning = build_order_from_plan_action(
+        action, plan, pair_metadata, exec_config, market_data=market_data
+    )
+    assert order is not None
+    assert warning is None
+    assert order.requested_price == 50000.0  # Midpoint

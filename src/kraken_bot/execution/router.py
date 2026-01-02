@@ -152,6 +152,41 @@ def build_order_payload(
     return payload
 
 
+def _resolve_limit_price(
+    pair: str,
+    market_data: Optional["MarketDataAPI"],
+    requested_price: Optional[float],
+) -> Tuple[Optional[float], Optional[str]]:
+    """
+    Helper to resolve the limit price.
+    Returns (price, warning).
+    """
+    if requested_price is not None:
+        return requested_price, None
+
+    if not market_data:
+        return None, f"Missing market data for limit order on {pair}"
+
+    try:
+        bid_ask = market_data.get_best_bid_ask(pair)
+    except Exception as exc:  # pragma: no cover - passthrough for data errors
+        return None, f"Failed to fetch market data for {pair}: {exc}"
+
+    try:
+        bid_value = bid_ask.get("bid") if bid_ask else None
+        ask_value = bid_ask.get("ask") if bid_ask else None
+
+        if bid_value is None or ask_value is None:
+            return None, f"Invalid bid/ask data for {pair}: {bid_ask}"
+
+        bid = float(bid_value)
+        ask = float(ask_value)
+        mid_price = (bid + ask) / 2
+        return mid_price, None
+    except (AttributeError, TypeError, ValueError):
+        return None, f"Invalid bid/ask data for {pair}: {bid_ask}"
+
+
 def build_order_from_plan_action(
     action: "RiskAdjustedAction",
     plan: "ExecutionPlan",
@@ -173,38 +208,17 @@ def build_order_from_plan_action(
 
     order_type = plan.metadata.get("order_type") or config.default_order_type
 
-    requested_price: Optional[float] = None
-
     # Only limit orders require a price. Market orders should not be blocked by
     # missing/stale websocket bid/ask data.
+    requested_price: Optional[float] = None
     if order_type == "limit":
-        requested_price = plan.metadata.get("requested_price")
-
-        if requested_price is None:
-            if not market_data:
-                warning = f"Missing market data for limit order on {action.pair}"
-                return None, warning
-
-            try:
-                bid_ask = market_data.get_best_bid_ask(action.pair)
-            except Exception as exc:  # pragma: no cover - passthrough for data errors
-                warning = f"Failed to fetch market data for {action.pair}: {exc}"
-                return None, warning
-
-            try:
-                bid_value = bid_ask.get("bid") if bid_ask else None
-                ask_value = bid_ask.get("ask") if bid_ask else None
-
-                if bid_value is None or ask_value is None:
-                    warning = f"Invalid bid/ask data for {action.pair}: {bid_ask}"
-                    return None, warning
-
-                bid = float(bid_value)
-                ask = float(ask_value)
-                requested_price = (bid + ask) / 2
-            except (AttributeError, TypeError, ValueError):
-                warning = f"Invalid bid/ask data for {action.pair}: {bid_ask}"
-                return None, warning
+        requested_price, warning = _resolve_limit_price(
+            action.pair,
+            market_data,
+            plan.metadata.get("requested_price"),
+        )
+        if warning:
+            return None, warning
 
     rounded_size, is_executable = classify_volume(pair_metadata, volume)
     if not is_executable:
