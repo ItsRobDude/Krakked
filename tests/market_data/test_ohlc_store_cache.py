@@ -1,6 +1,7 @@
 import shutil
 import tempfile
 from unittest.mock import MagicMock
+from dataclasses import FrozenInstanceError
 
 import pandas as pd
 import pytest
@@ -34,11 +35,11 @@ class TestFileOHLCStoreCache:
         bars = [
             OHLCBar(
                 timestamp=1000 + i * 60,
-                open=100,
-                high=110,
-                low=90,
-                close=105,
-                volume=10,
+                open=100.0,
+                high=110.0,
+                low=90.0,
+                close=105.0,
+                volume=10.0,
             )
             for i in range(10)
         ]
@@ -64,9 +65,9 @@ class TestFileOHLCStoreCache:
 
         # Bars out of order
         bars = [
-            OHLCBar(timestamp=2000, open=100, high=110, low=90, close=105, volume=10),
-            OHLCBar(timestamp=1000, open=100, high=110, low=90, close=105, volume=10),
-            OHLCBar(timestamp=3000, open=100, high=110, low=90, close=105, volume=10),
+            OHLCBar(timestamp=2000, open=100.0, high=110.0, low=90.0, close=105.0, volume=10.0),
+            OHLCBar(timestamp=1000, open=100.0, high=110.0, low=90.0, close=105.0, volume=10.0),
+            OHLCBar(timestamp=3000, open=100.0, high=110.0, low=90.0, close=105.0, volume=10.0),
         ]
 
         store._persist_bars(pair, timeframe, bars)
@@ -92,7 +93,7 @@ class TestFileOHLCStoreCache:
 
         bars = [
             OHLCBar(
-                timestamp=1000 + i, open=100, high=110, low=90, close=105, volume=10
+                timestamp=1000 + i, open=100.0, high=110.0, low=90.0, close=105.0, volume=10.0
             )
             for i in range(10)
         ]
@@ -119,11 +120,11 @@ class TestFileOHLCStoreCache:
         bars = [
             OHLCBar(
                 timestamp=1000 + i * 60,
-                open=100,
-                high=110,
-                low=90,
-                close=105,
-                volume=10,
+                open=100.0,
+                high=110.0,
+                low=90.0,
+                close=105.0,
+                volume=10.0,
             )
             for i in range(20)
         ]
@@ -145,11 +146,11 @@ class TestFileOHLCStoreCache:
         bars = [
             OHLCBar(
                 timestamp=1000 + i * 60,
-                open=100,
-                high=110,
-                low=90,
-                close=105,
-                volume=10,
+                open=100.0,
+                high=110.0,
+                low=90.0,
+                close=105.0,
+                volume=10.0,
             )
             for i in range(10)
         ]
@@ -177,11 +178,11 @@ class TestFileOHLCStoreCache:
             [
                 {
                     "timestamp": 1000,
-                    "open": 100,
-                    "high": 110,
-                    "low": 90,
-                    "close": 105,
-                    "volume": 10,
+                    "open": 100.0,
+                    "high": 110.0,
+                    "low": 90.0,
+                    "close": 105.0,
+                    "volume": 10.0,
                 }
             ]
         )
@@ -206,7 +207,7 @@ class TestFileOHLCStoreCache:
 
         bars = [
             OHLCBar(
-                timestamp=1000 + i, open=100, high=110, low=90, close=105, volume=10
+                timestamp=1000 + i, open=100.0, high=110.0, low=90.0, close=105.0, volume=10.0
             )
             for i in range(10)
         ]
@@ -225,25 +226,28 @@ class TestFileOHLCStoreCache:
         assert fetched_neg == []
 
     def test_cache_immutability(self, store_and_dir):
-        """Verify that mutating returned bars does not affect the cache."""
+        """Verify that returned bars are immutable and direct references where possible."""
         store, _ = store_and_dir
         pair = "XBTUSD"
         timeframe = "1m"
 
         bars = [
-            OHLCBar(timestamp=1000, open=100, high=110, low=90, close=105, volume=10)
+            OHLCBar(timestamp=1000, open=100.0, high=110.0, low=90.0, close=105.0, volume=10.0)
         ]
         store._persist_bars(pair, timeframe, bars)
 
         # Fetch from cache
         fetched1 = store.get_bars(pair, timeframe, 1)
-        assert fetched1[0].open == 100
+        assert fetched1[0].open == 100.0
 
-        # Mutate the returned object
-        fetched1[0].open = 9999
-        assert fetched1[0].open == 9999
+        # Attempt to mutate the returned object should raise FrozenInstanceError
+        with pytest.raises(FrozenInstanceError):
+            fetched1[0].open = 9999.0
 
-        # Fetch again - should be original value
+        # Verify value remains unchanged
+        assert fetched1[0].open == 100.0
+
+        # Fetch again - should be same object (since we are not copying anymore)
         fetched2 = store.get_bars(pair, timeframe, 1)
-        assert fetched2[0].open == 100
-        assert fetched2[0] is not fetched1[0]  # Should be different objects
+        assert fetched2[0].open == 100.0
+        assert fetched2[0] is fetched1[0]  # Should be same objects due to direct reference return
