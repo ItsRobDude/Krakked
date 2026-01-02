@@ -115,6 +115,10 @@ class KrakenExecutionAdapter:
         REST call is handled here. Validates volume and notional constraints
         before submission.
 
+        Critically, orders flagged as ``risk_reducing`` (e.g., closing positions)
+        bypass the ``min_order_notional_usd`` check to prevent stranding small
+        "dust" positions that would otherwise be rejected.
+
         In 'paper' mode (or validate_only=True), the order is sent with validate=True.
         In 'live' mode, the order is executed if allow_live_trading is enabled.
         """
@@ -448,6 +452,10 @@ class DryRunExecutionAdapter:
         Validates local constraints (min size, min notional) and immediately
         fills the order at the requested price (or latest price) if successful.
         If validate_only is True, marks as 'validated' instead of 'filled'.
+
+        Like the live adapter, this bypasses minimum notional checks for
+        orders flagged as ``risk_reducing`` to simulate realistic closing
+        behavior for small positions.
         """
         payload: Dict[str, Any] = build_order_payload(order, self.config, pair_metadata)
         order.raw_request = payload
