@@ -104,7 +104,7 @@ execution:
   retry_backoff_factor: 2.0       # exponential backoff multiplier
 
   max_concurrent_orders: 10       # limit concurrency to avoid overload
-  min_order_notional_usd: 20.0    # enforce reasonable minimum order size
+  min_order_notional_usd: 20.0    # enforce reasonable minimum order size (risk-increasing BUYs only)
 
 Defaults if missing:
 	•	mode = "paper" (safe default for dev).
