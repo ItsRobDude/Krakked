@@ -236,7 +236,7 @@ def test_adapter_min_notional_risk_reducing_bypass(pair_metadata):
         plan_id="p1",
         strategy_id="s1",
         pair="XBTUSD",
-        side="sell",
+        side="buy",
         order_type="market",
         requested_base_size=0.0002,
         risk_reducing=True,  # Key flag
@@ -248,6 +248,39 @@ def test_adapter_min_notional_risk_reducing_bypass(pair_metadata):
     assert result_order.status == "validated"  # validated for paper
     assert result_order.last_error is None
     # Verify add_order WAS called
+    client.add_order.assert_called_once()
+
+
+def test_submit_order_sell_risk_increasing_ignores_min_notional(pair_metadata):
+    """Test that risk-increasing SELL orders bypass min notional check."""
+    client = MagicMock()
+    client.add_order.return_value = {"txid": ["TESTID"], "error": []}
+
+    config = ExecutionConfig(
+        mode="paper",
+        min_order_notional_usd=1000.0,  # High min notional
+        validate_only=True,
+    )
+
+    adapter = KrakenExecutionAdapter(client=client, config=config)
+
+    order = LocalOrder(
+        local_id="test_sell_bypass",
+        plan_id="p1",
+        strategy_id="s1",
+        pair="XBTUSD",
+        side="sell",
+        order_type="market",
+        requested_price=None,
+        requested_base_size=0.0002,
+        risk_reducing=False,  # Increasing risk (Short Open)
+    )
+
+    # We pass None for price, which would fail if notional check was enforced
+    result_order = adapter.submit_order(order, pair_metadata, latest_price=None)
+
+    assert result_order.status == "validated"
+    assert result_order.last_error is None
     client.add_order.assert_called_once()
 
 

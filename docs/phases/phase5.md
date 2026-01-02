@@ -104,7 +104,7 @@ execution:
   retry_backoff_factor: 2.0       # exponential backoff multiplier
 
   max_concurrent_orders: 10       # limit concurrency to avoid overload
-  min_order_notional_usd: 20.0    # enforce reasonable minimum order size
+  min_order_notional_usd: 20.0    # enforce reasonable minimum order size (risk-increasing BUYs only)
 
 Defaults if missing:
 	•	mode = "paper" (safe default for dev).
@@ -209,6 +209,7 @@ Adapter is responsible for:
 	•	Enforcing ExecutionConfig.min_order_notional_usd by comparing:
 	•	volume * price vs min_order_notional_usd (for limit), or
 	•	Using MarketDataAPI.get_latest_price as fallback for market orders.
+	•	Note: This constraint is ONLY enforced for risk-increasing BUY orders. Sells are never blocked by this threshold.
 
 If a LocalOrder violates these constraints:
 	•	Mark it as status="error".
