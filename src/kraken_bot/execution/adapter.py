@@ -147,8 +147,12 @@ class KrakenExecutionAdapter:
             payload.get("price") or latest_price or order.requested_price
         )
 
-        # Notional checks: Only enforce if NOT risk reducing
-        if self.config.min_order_notional_usd > 0 and not order.risk_reducing:
+        # Notional checks: Only enforce min_order_notional_usd for risk-increasing BUY orders (side=='buy' and not risk_reducing)
+        if (
+            self.config.min_order_notional_usd > 0
+            and order.side == "buy"
+            and not order.risk_reducing
+        ):
             if price_for_notional is None:
                 order.status = "rejected"
                 order.last_error = (
@@ -476,8 +480,12 @@ class DryRunExecutionAdapter:
             payload.get("price") or latest_price or order.requested_price
         )
 
-        # Notional checks: Only enforce if NOT risk reducing
-        if self.config.min_order_notional_usd > 0 and not order.risk_reducing:
+        # Notional checks: Only enforce min_order_notional_usd for risk-increasing BUY orders (side=='buy' and not risk_reducing)
+        if (
+            self.config.min_order_notional_usd > 0
+            and order.side == "buy"
+            and not order.risk_reducing
+        ):
             if price_for_notional is None:
                 order.status = "rejected"
                 order.last_error = (

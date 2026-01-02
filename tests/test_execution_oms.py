@@ -15,9 +15,14 @@ class RecordingAdapter:
     submitted: list[LocalOrder]
     exception: Exception | None
 
-    def __init__(self, exception: Exception | None = None):
+    def __init__(
+        self,
+        exception: Exception | None = None,
+        config: ExecutionConfig | None = None,
+    ):
         self.submitted = []
         self.exception = exception
+        self.config = config or ExecutionConfig()
 
     def submit_order(
         self,
@@ -212,3 +217,95 @@ def test_execute_plan_treats_routing_failure_as_error(inactive_risk_status):
     assert result.warnings
     assert result.errors
     assert "Invalid bid/ask data" in result.errors[0]
+
+
+def test_execute_plan_fetches_price_for_buy_only(inactive_risk_status):
+    """Verify that only risk-increasing BUY orders trigger a price fetch when notional checks are active."""
+    config = ExecutionConfig(
+        min_order_notional_usd=20.0, validate_only=True, mode="paper"
+    )
+    adapter = RecordingAdapter(config=config)
+    market_data = _market_data_mock()
+    market_data.get_latest_price.return_value = 123.0
+
+    service = ExecutionService(
+        adapter=adapter,
+        config=config,
+        market_data=market_data,
+        risk_status_provider=inactive_risk_status,
+    )
+
+    market_metadata = {"order_type": "market"}
+
+    # BUY Case: Risk increasing, price fetch expected
+    buy_plan = make_plan(
+        [
+            make_action(
+                target=2.0, current=1.0, action_type="open"
+            )  # delta +1, risk-increasing
+        ],
+        market_metadata,
+    )
+    service.execute_plan(buy_plan)
+
+    market_data.get_latest_price.assert_called_once()
+    assert len(adapter.submitted) == 1
+
+    # Reset mock for SELL case
+    market_data.get_latest_price.reset_mock()
+
+    # SELL Case: Risk increasing (short open), price fetch NOT expected
+    sell_plan = make_plan(
+        [
+            make_action(
+                target=0.0, current=1.0, action_type="open"
+            )  # delta -1, risk-increasing
+        ],
+        market_metadata,
+    )
+    service.execute_plan(sell_plan)
+
+    market_data.get_latest_price.assert_not_called()
+    assert len(adapter.submitted) == 2  # Total submitted (1 buy + 1 sell)
+
+
+def test_execute_plan_live_mode_fail_closed_logic(inactive_risk_status):
+    """Verify that live mode fails closed on missing price ONLY for risk-increasing BUYs."""
+    config = ExecutionConfig(
+        mode="live", min_order_notional_usd=20.0, validate_only=True
+    )
+    adapter = RecordingAdapter(config=config)
+    market_data = _market_data_mock()
+    market_data.get_latest_price.side_effect = Exception("boom")
+
+    service = ExecutionService(
+        adapter=adapter,
+        config=config,
+        market_data=market_data,
+        risk_status_provider=inactive_risk_status,
+    )
+
+    market_metadata = {"order_type": "market"}
+
+    # BUY Case: Risk increasing, fails closed due to price error
+    buy_plan = make_plan(
+        [make_action(target=2.0, current=1.0, action_type="open")], market_metadata
+    )
+    result_buy = service.execute_plan(buy_plan)
+
+    assert not result_buy.success
+    assert len(adapter.submitted) == 0
+    assert "Latest price unavailable in live mode" in str(result_buy.errors)
+
+    # Reset mock (though side_effect remains)
+    market_data.get_latest_price.reset_mock()
+
+    # SELL Case: Risk increasing, proceeds despite missing price (never calls fetch)
+    sell_plan = make_plan(
+        [make_action(target=0.0, current=1.0, action_type="open")], market_metadata
+    )
+    result_sell = service.execute_plan(sell_plan)
+
+    assert result_sell.success
+    assert len(adapter.submitted) == 1
+    market_data.get_latest_price.assert_not_called()

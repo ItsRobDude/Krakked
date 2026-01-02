@@ -154,7 +154,7 @@ The bot uses two configuration files stored in your OS-specific user configurati
       retry_backoff_seconds: 2        # Initial retry delay
       retry_backoff_factor: 2.0       # Exponential backoff multiplier
       max_concurrent_orders: 10       # Concurrency guardrail
-      min_order_notional_usd: 20.0    # Floor to avoid dust orders
+      min_order_notional_usd: 20.0    # Floor to avoid dust orders (risk-increasing BUYs only)
     ```
 
 2.  **`secrets.enc`** (Encrypted Credentials):
