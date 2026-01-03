@@ -961,7 +961,19 @@ class ExecutionService:
         projected_total_exposure: float,
         metadata: Dict[str, Any],
     ) -> Optional[str]:
-        """Apply lightweight notional guardrails before attempting submission."""
+        """
+        Apply lightweight notional guardrails before attempting submission.
+
+        Evaluates the proposed order against configured limits (max pair notional,
+        max total portfolio exposure) to prevent unintended risk accumulation.
+
+        :param action: The specific action being evaluated.
+        :param order_notional: The USD value of this specific order.
+        :param pair_target_notional: Cumulative target exposure for each pair (including this order).
+        :param projected_total_exposure: Total portfolio exposure (active orders + passive holdings).
+        :param metadata: Plan metadata containing context like current risk status.
+        :return: A string describing the rejection reason if a guardrail is breached, or None if valid.
+        """
 
         config = getattr(self.adapter, "config", None)
         if not config:
