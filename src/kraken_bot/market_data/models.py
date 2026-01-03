@@ -36,7 +36,7 @@ class PairMetadata:
     liquidity_24h_usd: float | None = None
 
 
-@dataclass
+@dataclass(frozen=True)
 class OHLCBar:
     timestamp: int
     open: float
