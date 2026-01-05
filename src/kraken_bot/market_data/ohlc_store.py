@@ -167,9 +167,18 @@ class FileOHLCStore:
             sorted_df = df.sort_index()
             tail_df = sorted_df.tail(self._cache_size)
             records = tail_df.reset_index().to_dict("records")
-            for row in records:
-                row["timestamp"] = int(row["timestamp"])
-            self._bar_cache[(pair, timeframe)] = [OHLCBar(**row) for row in records]
+            # Explicit construction for performance
+            self._bar_cache[(pair, timeframe)] = [
+                OHLCBar(
+                    timestamp=int(row["timestamp"]),
+                    open=row["open"],
+                    high=row["high"],
+                    low=row["low"],
+                    close=row["close"],
+                    volume=row["volume"],
+                )
+                for row in records
+            ]
             return True
         except Exception as e:
             logger.error(f"Failed to update cache for {pair} {timeframe}: {e}")
@@ -198,7 +207,12 @@ class FileOHLCStore:
                 cached_bars = self._bar_cache[key]
                 if len(cached_bars) >= lookback:
                     # Return copies to prevent caller mutation affecting cache
-                    return [OHLCBar(**b.__dict__) for b in cached_bars[-lookback:]]
+                    return [
+                        OHLCBar(
+                            b.timestamp, b.open, b.high, b.low, b.close, b.volume
+                        )
+                        for b in cached_bars[-lookback:]
+                    ]
 
             file_path = self._get_file_path(pair, timeframe)
             if not file_path.exists():
@@ -215,15 +229,26 @@ class FileOHLCStore:
                 if success and lookback <= self._cache_size:
                     # Return copies to prevent caller mutation affecting cache
                     return [
-                        OHLCBar(**b.__dict__) for b in self._bar_cache[key][-lookback:]
+                        OHLCBar(
+                            b.timestamp, b.open, b.high, b.low, b.close, b.volume
+                        )
+                        for b in self._bar_cache[key][-lookback:]
                     ]
 
                 # Fallback for large lookbacks or cache update failures
                 df = df.tail(lookback)
                 records = df.reset_index().to_dict("records")
-                for row in records:
-                    row["timestamp"] = int(row["timestamp"])
-                return [OHLCBar(**row) for row in records]
+                return [
+                    OHLCBar(
+                        timestamp=int(row["timestamp"]),
+                        open=row["open"],
+                        high=row["high"],
+                        low=row["low"],
+                        close=row["close"],
+                        volume=row["volume"],
+                    )
+                    for row in records
+                ]
             except Exception as e:
                 logger.error(f"Error reading from {file_path}: {e}")
                 return []
@@ -237,7 +262,9 @@ class FileOHLCStore:
                 if cached_bars and cached_bars[0].timestamp <= since_ts:
                     # Return copies to prevent caller mutation affecting cache
                     return [
-                        OHLCBar(**b.__dict__)
+                        OHLCBar(
+                            b.timestamp, b.open, b.high, b.low, b.close, b.volume
+                        )
                         for b in cached_bars
                         if b.timestamp >= since_ts
                     ]
@@ -253,9 +280,17 @@ class FileOHLCStore:
 
                 df = df[df.index >= since_ts]
                 records = df.reset_index().to_dict("records")
-                for row in records:
-                    row["timestamp"] = int(row["timestamp"])
-                return [OHLCBar(**row) for row in records]
+                return [
+                    OHLCBar(
+                        timestamp=int(row["timestamp"]),
+                        open=row["open"],
+                        high=row["high"],
+                        low=row["low"],
+                        close=row["close"],
+                        volume=row["volume"],
+                    )
+                    for row in records
+                ]
             except Exception as e:
                 logger.error(f"Error reading from {file_path}: {e}")
                 return []
