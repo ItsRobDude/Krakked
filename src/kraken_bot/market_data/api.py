@@ -85,7 +85,23 @@ def validate_pairs_with_client(client: KrakenRESTClient, pairs: List[str]) -> Li
 
 class MarketDataAPI:
     """
-    The main public interface for the market data module.
+    Unified interface for accessing real-time and historical market data.
+
+    This class abstracts the complexity of managing both a REST client (for history/backfill)
+    and a WebSocket client (for live updates). It maintains an in-memory cache of the
+    most recent ticker and OHLC data, protecting downstream consumers from stale data
+    via configurable tolerance thresholds.
+
+    Lifecycle Management:
+        This class owns a background WebSocket thread. To ensure proper cleanup,
+        it should be used as a context manager or explicitly shut down:
+
+        >>> with MarketDataAPI(config) as market_data:
+        ...     market_data.initialize()
+        ...     price = market_data.get_latest_price("XBT/USD")
+
+        If manual instantiation is required, call ``shutdown()`` before the object
+        is discarded to prevent thread leakage.
     """
 
     def __enter__(self):
