@@ -131,7 +131,19 @@ def dump_runtime_overrides(
     profile_name = session_config.profile_name if session_config else None
 
     if profile_name:
-        path = config_dir / "profiles" / profile_name / RUNTIME_OVERRIDES_FILENAME
+        # Aegis: sanitize profile name to prevent path traversal
+        from kraken_bot.utils.io import sanitize_filename
+
+        try:
+            safe_profile = sanitize_filename(profile_name)
+            path = config_dir / "profiles" / safe_profile / RUNTIME_OVERRIDES_FILENAME
+        except ValueError:
+            logger.warning(
+                "Invalid profile name '%s' for runtime dump; aborting",
+                profile_name,
+                extra={"event": "config_dump_invalid_profile"},
+            )
+            return
     else:
         path = config_dir / RUNTIME_OVERRIDES_FILENAME
 
@@ -1044,7 +1056,10 @@ def load_config(
 
     config_path = config_path.expanduser()
     effective_env = _resolve_effective_env(env, str(config_path))
-    from kraken_bot.utils.io import deep_merge_dicts as _deep_merge_dicts
+    from kraken_bot.utils.io import (
+        deep_merge_dicts as _deep_merge_dicts,
+        sanitize_filename,
+    )
 
     # 1. Load Base Config
     raw_config = _load_yaml_mapping(config_path)
@@ -1077,9 +1092,19 @@ def load_config(
     # 4. Merge Runtime Overrides
     # If active profile, look for profiles/<profile>/config.runtime.yaml
     if active_profile:
-        overrides_path = (
-            config_dir / "profiles" / active_profile / RUNTIME_OVERRIDES_FILENAME
-        )
+        # Aegis: sanitize profile name to prevent path traversal
+        try:
+            safe_profile = sanitize_filename(active_profile)
+            overrides_path = (
+                config_dir / "profiles" / safe_profile / RUNTIME_OVERRIDES_FILENAME
+            )
+        except ValueError:
+            logger.warning(
+                "Invalid profile name '%s' in session config; ignoring runtime overrides",
+                active_profile,
+                extra={"event": "config_invalid_profile_name_traversal"},
+            )
+            overrides_path = config_dir / "profiles" / "_invalid_" / RUNTIME_OVERRIDES_FILENAME
     else:
         overrides_path = config_dir / RUNTIME_OVERRIDES_FILENAME
 
