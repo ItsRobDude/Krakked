@@ -545,6 +545,16 @@ class MarketDataAPI:
         return _get_val("c")
 
     def get_latest_price(self, pair: str) -> Optional[float]:
+        """
+        Get the latest mid-price for a pair.
+
+        Prioritizes real-time WebSocket data. Falls back to REST Ticker if WS is
+        unavailable but recent REST data exists.
+
+        :param pair: The pair symbol (e.g., "XBT/USD", "XXBTZUSD").
+        :return: The mid-price ((bid+ask)/2) or fallback trade price.
+        :raises DataStaleError: If neither WS nor REST data is fresh enough.
+        """
         canonical = self.normalize_pair(pair)
 
         # Special case: identity valuation
@@ -567,6 +577,12 @@ class MarketDataAPI:
         raise DataStaleError(canonical, stale_time, self._ws_stale_tolerance)
 
     def get_best_bid_ask(self, pair: str) -> Optional[Dict[str, float]]:
+        """
+        Get the current best bid and ask prices from the WebSocket cache.
+
+        :return: Dict with 'bid' and 'ask' keys, or None if client not connected.
+        :raises DataStaleError: If the cached ticker data is stale.
+        """
         canonical = self.normalize_pair(pair)
         self._check_ticker_staleness(canonical)
         if not self._ws_client:
@@ -577,6 +593,15 @@ class MarketDataAPI:
         return None
 
     def get_live_ohlc(self, pair: str, timeframe: str) -> Optional[OHLCBar]:
+        """
+        Get the currently forming candle for a pair/timeframe.
+
+        This returns the 'running' candle from the WebSocket stream, which updates
+        in real-time until it closes and rolls over.
+
+        :return: The current OHLCBar or None if not available.
+        :raises DataStaleError: If the OHLC stream is stale.
+        """
         canonical = self.normalize_pair(pair)
         self._check_ohlc_staleness(canonical, timeframe)
         assert self._ws_client is not None
@@ -593,6 +618,14 @@ class MarketDataAPI:
         return None
 
     def get_data_status(self) -> ConnectionStatus:
+        """
+        Aggregate connectivity metrics for REST and WebSocket interfaces.
+
+        Checks REST reachability, WebSocket connection state, and subscription
+        health for all universe pairs.
+
+        :return: A snapshot of the current connection health.
+        """
         from kraken_bot.config import ConnectionStatus
 
         # 1. Check REST API reachability
