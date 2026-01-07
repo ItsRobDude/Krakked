@@ -196,25 +196,7 @@ class PortfolioService:
                 trade_record: Dict[str, Any] = dict(trade_data)
                 trade_record["id"] = txid
 
-                # --- Strategy attribution ---
-                # TradesHistory does not reliably include order-level metadata like `userref`.
-                # If this trade belongs to an order we submitted/tracked locally, enrich the
-                # stored trade record with a strategy tag (and userref when available) so that
-                # PnL attribution works even when Kraken does not return `userref` on trades.
-                try:
-                    ordertxid = trade_record.get("ordertxid")
-                    local_order = (
-                        self.store.get_order_by_reference(kraken_order_id=ordertxid)
-                        if ordertxid
-                        else None
-                    )
-                except Exception:
-                    local_order = None
-
-                if local_order is not None:
-                    trade_record.setdefault("strategy_tag", local_order.strategy_id)
-                    if getattr(local_order, "userref", None) is not None:
-                        trade_record.setdefault("userref", local_order.userref)
+                self._enrich_trade_record(trade_record)
 
                 batch.append(trade_record)
 
@@ -467,6 +449,29 @@ class PortfolioService:
 
     def get_latest_snapshot(self) -> Optional[PortfolioSnapshot]:
         return self.portfolio.get_latest_snapshot()
+
+    def _enrich_trade_record(self, trade_record: Dict[str, Any]) -> None:
+        """
+        Enrich trade record with strategy tag and userref from local order store.
+
+        TradesHistory does not reliably include order-level metadata like `userref`.
+        If this trade belongs to an order we submitted/tracked locally, we link it
+        here so PnL attribution works correctly.
+        """
+        try:
+            ordertxid = trade_record.get("ordertxid")
+            local_order = (
+                self.store.get_order_by_reference(kraken_order_id=ordertxid)
+                if ordertxid
+                else None
+            )
+        except Exception:
+            local_order = None
+
+        if local_order is not None:
+            trade_record.setdefault("strategy_tag", local_order.strategy_id)
+            if getattr(local_order, "userref", None) is not None:
+                trade_record.setdefault("userref", local_order.userref)
 
     def _create_ledger_entry(self, lid: str, info: Dict[str, Any]) -> LedgerEntry:
         """Helper to instantiate LedgerEntry from raw API response."""
