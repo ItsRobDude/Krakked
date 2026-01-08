@@ -545,6 +545,24 @@ class MarketDataAPI:
         return _get_val("c")
 
     def get_latest_price(self, pair: str) -> Optional[float]:
+        """
+        Get the current price for a pair, prioritizing fresh WebSocket data.
+
+        This method implements a robust pricing strategy:
+        1. Checks for 'USD' identity (returns 1.0).
+        2. Checks the in-memory WebSocket cache for fresh data (returns mid-price).
+        3. Falls back to the REST Ticker API if WS data is stale/missing.
+        4. Raises DataStaleError if neither source is available/fresh.
+
+        Args:
+            pair: The trading pair symbol (e.g., 'XBTUSD', 'BTC/USD').
+
+        Returns:
+            The current mid-price as a float.
+
+        Raises:
+            DataStaleError: If both WebSocket and REST data are unavailable or stale.
+        """
         canonical = self.normalize_pair(pair)
 
         # Special case: identity valuation
@@ -567,6 +585,25 @@ class MarketDataAPI:
         raise DataStaleError(canonical, stale_time, self._ws_stale_tolerance)
 
     def get_best_bid_ask(self, pair: str) -> Optional[Dict[str, float]]:
+        """
+        Get the current best bid and ask prices from the WebSocket cache.
+
+        Strictly relies on real-time WebSocket data to ensure order pricing is
+        based on the current order book state. Unlike `get_latest_price`, this
+        method does NOT fallback to REST to prevent using potentially outdated
+        snapshots for limit order placement.
+
+        Args:
+            pair: The trading pair symbol.
+
+        Returns:
+            A dictionary with 'bid' and 'ask' floats, or None if the client
+            is not connected or the cache is empty.
+
+        Raises:
+            DataStaleError: If the WebSocket data exists but is older than the
+                           configured staleness tolerance.
+        """
         canonical = self.normalize_pair(pair)
         self._check_ticker_staleness(canonical)
         if not self._ws_client:
@@ -577,6 +614,22 @@ class MarketDataAPI:
         return None
 
     def get_live_ohlc(self, pair: str, timeframe: str) -> Optional[OHLCBar]:
+        """
+        Get the most recent 'running' candle from the WebSocket stream.
+
+        This represents the incomplete candle for the current interval, distinct
+        from the closed candles stored in the historical store.
+
+        Args:
+            pair: The trading pair symbol.
+            timeframe: The candle timeframe (e.g., '1m', '1h').
+
+        Returns:
+            The current OHLCBar or None if no data is available.
+
+        Raises:
+            DataStaleError: If the OHLC data is stale.
+        """
         canonical = self.normalize_pair(pair)
         self._check_ohlc_staleness(canonical, timeframe)
         assert self._ws_client is not None
@@ -593,6 +646,16 @@ class MarketDataAPI:
         return None
 
     def get_data_status(self) -> ConnectionStatus:
+        """
+        Diagnose the connectivity and health of all data sources.
+
+        Performs a lightweight REST check and analyzes WebSocket subscription
+        states to provide a granular status report. This is used by the
+        dead-man switch and health monitoring systems.
+
+        Returns:
+            ConnectionStatus object containing reachability flags and error counts.
+        """
         from kraken_bot.config import ConnectionStatus
 
         # 1. Check REST API reachability
