@@ -137,3 +137,56 @@ def test_instance_isolation(market_data_api):
 
     assert info1.misses == 0  # Cleared
     assert info2.misses == 1  # Not cleared
+
+
+def test_normalize_asset_correctness(market_data_api):
+    """Test that the cached method returns correct values for assets."""
+    market_data_api._asset_map = {"XXBT": "XBT", "ZUSD": "USD"}
+
+    assert market_data_api.normalize_asset("XXBT") == "XBT"
+    assert market_data_api.normalize_asset("  zusd  ") == "USD"
+    # Fallback
+    assert market_data_api.normalize_asset("UNKNOWN") == "UNKNOWN"
+
+
+def test_normalize_asset_caching(market_data_api):
+    """Test that normalize_asset uses the cache."""
+    market_data_api._asset_map = {"XXBT": "XBT"}
+
+    cache_info = market_data_api._normalize_asset_cached.cache_info()
+    assert cache_info.hits == 0
+    assert cache_info.misses == 0
+
+    # First call - Miss
+    market_data_api.normalize_asset("XXBT")
+    cache_info = market_data_api._normalize_asset_cached.cache_info()
+    assert cache_info.hits == 0
+    assert cache_info.misses == 1
+
+    # Second call - Hit
+    market_data_api.normalize_asset("XXBT")
+    cache_info = market_data_api._normalize_asset_cached.cache_info()
+    assert cache_info.hits == 1
+    assert cache_info.misses == 1
+
+    # Different whitespace - Miss (raw key is different)
+    market_data_api.normalize_asset(" XXBT ")
+    cache_info = market_data_api._normalize_asset_cached.cache_info()
+    assert cache_info.hits == 1
+    assert cache_info.misses == 2
+
+
+def test_normalize_asset_cache_clear(market_data_api):
+    """Test that refresh_universe clears the asset cache."""
+    market_data_api._asset_map = {"XXBT": "XBT"}
+    market_data_api.normalize_asset("XXBT")
+
+    assert market_data_api._normalize_asset_cached.cache_info().misses == 1
+
+    with patch("kraken_bot.market_data.api.build_universe", return_value=[]):
+        market_data_api.refresh_universe()
+
+    cache_info = market_data_api._normalize_asset_cached.cache_info()
+    assert cache_info.hits == 0
+    assert cache_info.misses == 0
+    assert cache_info.currsize == 0

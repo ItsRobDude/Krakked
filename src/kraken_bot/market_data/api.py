@@ -138,6 +138,10 @@ class MarketDataAPI:
             self._normalize_pair_logic
         )
 
+        self._normalize_asset_cached = lru_cache(maxsize=2048)(
+            self._normalize_asset_logic
+        )
+
     def initialize(self, backfill: bool = True):
         """
         Initializes the market data service: builds the universe, starts the WebSocket
@@ -209,6 +213,7 @@ class MarketDataAPI:
         """Re-fetches the asset pairs and rebuilds the universe."""
         # Clear the cache to prevent stale mappings persist across universe updates
         self._normalize_pair_cached.cache_clear()
+        self._normalize_asset_cached.cache_clear()
 
         assert self._rest_client is not None
         self._universe = build_universe(
@@ -384,17 +389,20 @@ class MarketDataAPI:
         Normalize an asset code (e.g., 'XXBT', 'ZUSD') to its canonical human-readable form (e.g., 'XBT', 'USD').
         Uses the universe-derived mapping to avoid unsafe string stripping.
         """
-        asset = asset.strip().upper()
+        return self._normalize_asset_cached(asset)
+
+    def _normalize_asset_logic(self, asset: str) -> str:
+        asset_clean = asset.strip().upper()
         # Direct map lookup
-        if asset in self._asset_map:
-            return self._asset_map[asset]
+        if asset_clean in self._asset_map:
+            return self._asset_map[asset_clean]
 
         # Note: We intentionally do NOT use ASSET_ALIASES here to avoid flip-flopping
         # (e.g. DOGE <-> XDG). Asset normalization should settle on one stable
         # representation derived from the universe.
 
         # Fallback: return as-is (better than guessing incorrectly)
-        return asset
+        return asset_clean
 
     def get_valuation_pair(self, asset: str) -> Optional[str]:
         """
