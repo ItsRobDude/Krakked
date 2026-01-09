@@ -12,6 +12,24 @@ from kraken_bot.ui.logging import build_request_log_extra
 logger = logging.getLogger(__name__)
 
 
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """
+    Middleware that adds security hardening headers to all responses.
+
+    Headers added:
+    - X-Frame-Options: DENY (Prevents clickjacking)
+    - X-Content-Type-Options: nosniff (Prevents MIME sniffing)
+    - Referrer-Policy: same-origin (Reduces information leakage)
+    """
+
+    async def dispatch(self, request: Request, call_next: Callable):
+        response = await call_next(request)
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Referrer-Policy"] = "same-origin"
+        return response
+
+
 class LifecycleMiddleware(BaseHTTPMiddleware):
     """
     Middleware that enforces access control based on the application lifecycle state.

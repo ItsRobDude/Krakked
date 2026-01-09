@@ -15,7 +15,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from kraken_bot.ui.context import AppContext
 from kraken_bot.ui.logging import build_request_log_extra
-from kraken_bot.ui.middleware import LifecycleMiddleware
+from kraken_bot.ui.middleware import LifecycleMiddleware, SecurityHeadersMiddleware
 from kraken_bot.ui.routes import (
     config_router,
     execution_router,
@@ -68,6 +68,7 @@ def create_api(context: AppContext) -> FastAPI:
     base_path = context.config.ui.base_path.rstrip("/") or ""
 
     middleware = [
+        Middleware(SecurityHeadersMiddleware),
         Middleware(LifecycleMiddleware, base_path=base_path),
     ]
     auth_config = context.config.ui.auth
