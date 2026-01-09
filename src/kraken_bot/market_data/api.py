@@ -423,6 +423,10 @@ class MarketDataAPI:
         return self._universe
 
     def get_pair_metadata(self, pair: str) -> PairMetadata:
+        # Fast path: check if pair is already canonical
+        if pair in self._universe_map:
+            return self._universe_map[pair]
+
         canonical = self.normalize_pair(pair)
         if canonical not in self._universe_map:
             raise PairNotFoundError(pair)
@@ -442,13 +446,21 @@ class MarketDataAPI:
         return metadata
 
     def get_ohlc(self, pair: str, timeframe: str, lookback: int) -> List[OHLCBar]:
-        canonical = self.normalize_pair(pair)
+        if pair in self._universe_map:
+            canonical = pair
+        else:
+            canonical = self.normalize_pair(pair)
+
         if canonical not in self._universe_map:
             raise PairNotFoundError(pair)
         return self._ohlc_store.get_bars(canonical, timeframe, lookback)
 
     def get_ohlc_since(self, pair: str, timeframe: str, since_ts: int) -> List[OHLCBar]:
-        canonical = self.normalize_pair(pair)
+        if pair in self._universe_map:
+            canonical = pair
+        else:
+            canonical = self.normalize_pair(pair)
+
         if canonical not in self._universe_map:
             raise PairNotFoundError(pair)
         return self._ohlc_store.get_bars_since(canonical, timeframe, since_ts)
@@ -545,7 +557,10 @@ class MarketDataAPI:
         return _get_val("c")
 
     def get_latest_price(self, pair: str) -> Optional[float]:
-        canonical = self.normalize_pair(pair)
+        if pair in self._universe_map:
+            canonical = pair
+        else:
+            canonical = self.normalize_pair(pair)
 
         # Special case: identity valuation
         if canonical == "USD":
@@ -567,7 +582,11 @@ class MarketDataAPI:
         raise DataStaleError(canonical, stale_time, self._ws_stale_tolerance)
 
     def get_best_bid_ask(self, pair: str) -> Optional[Dict[str, float]]:
-        canonical = self.normalize_pair(pair)
+        if pair in self._universe_map:
+            canonical = pair
+        else:
+            canonical = self.normalize_pair(pair)
+
         self._check_ticker_staleness(canonical)
         if not self._ws_client:
             return None
@@ -577,7 +596,11 @@ class MarketDataAPI:
         return None
 
     def get_live_ohlc(self, pair: str, timeframe: str) -> Optional[OHLCBar]:
-        canonical = self.normalize_pair(pair)
+        if pair in self._universe_map:
+            canonical = pair
+        else:
+            canonical = self.normalize_pair(pair)
+
         self._check_ohlc_staleness(canonical, timeframe)
         assert self._ws_client is not None
         ohlc_data = self._ws_client.ohlc_cache.get(canonical, {}).get(timeframe)
