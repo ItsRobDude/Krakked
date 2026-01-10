@@ -225,7 +225,9 @@ class TestFileOHLCStoreCache:
         assert fetched_neg == []
 
     def test_cache_immutability(self, store_and_dir):
-        """Verify that mutating returned bars does not affect the cache."""
+        """Verify that mutating returned bars raises FrozenInstanceError."""
+        from dataclasses import FrozenInstanceError
+
         store, _ = store_and_dir
         pair = "XBTUSD"
         timeframe = "1m"
@@ -239,11 +241,6 @@ class TestFileOHLCStoreCache:
         fetched1 = store.get_bars(pair, timeframe, 1)
         assert fetched1[0].open == 100
 
-        # Mutate the returned object
-        fetched1[0].open = 9999
-        assert fetched1[0].open == 9999
-
-        # Fetch again - should be original value
-        fetched2 = store.get_bars(pair, timeframe, 1)
-        assert fetched2[0].open == 100
-        assert fetched2[0] is not fetched1[0]  # Should be different objects
+        # Attempt to mutate should raise FrozenInstanceError
+        with pytest.raises(FrozenInstanceError):
+            fetched1[0].open = 9999
