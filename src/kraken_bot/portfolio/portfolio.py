@@ -289,6 +289,34 @@ class Portfolio:
     # ------------------------------------------------------------------
     # Equity & reconciliation
     # ------------------------------------------------------------------
+    def _evaluate_drift(
+        self,
+        asset: str,
+        expected_qty: float,
+        actual_qty: float,
+        tolerance_base: float,
+    ) -> Optional[DriftMismatchedAsset]:
+        """Calculates value difference and returns a drift record if tolerance is exceeded."""
+        diff_qty = abs(actual_qty - expected_qty)
+        conversion = self._convert_to_base_currency(diff_qty, asset)
+        diff_val = conversion.value_base
+
+        if diff_val > tolerance_base:
+            return DriftMismatchedAsset(
+                asset=asset,
+                expected_quantity=expected_qty,
+                actual_quantity=actual_qty,
+                difference_base=diff_val,
+            )
+        elif conversion.status == "unvalued" and diff_qty > 1e-9:
+            return DriftMismatchedAsset(
+                asset=asset,
+                expected_quantity=expected_qty,
+                actual_quantity=actual_qty,
+                difference_base=0.0,
+            )
+        return None
+
     def reconcile(self, live_balances: Dict[str, str]) -> bool:
         """Reconcile live balances and flag drift based on the configured tolerance.
 
@@ -314,66 +342,23 @@ class Portfolio:
             live_assets.add(asset)
 
             live_qty = float(amount_str)
-
             # Local ledger balance
             local_bal = self.balances.get(
                 asset, AssetBalance(asset, 0.0, 0.0, 0.0)
             ).total
 
-            diff_qty = abs(live_qty - local_bal)
-            conversion = to_base(diff_qty, asset)
-            diff_val = conversion.value_base
-
-            # Drift if value > tolerance OR unvalued but non-zero quantity mismatch
-            if diff_val > tolerance_base:
+            drift = self._evaluate_drift(asset, local_bal, live_qty, tolerance_base)
+            if drift:
                 drift_detected = True
-                mismatched_assets.append(
-                    DriftMismatchedAsset(
-                        asset=asset,
-                        expected_quantity=local_bal,
-                        actual_quantity=live_qty,
-                        difference_base=diff_val,
-                    )
-                )
-            elif conversion.status == "unvalued" and diff_qty > 1e-9:
-                # Treat unvalued quantity mismatch as drift
-                drift_detected = True
-                mismatched_assets.append(
-                    DriftMismatchedAsset(
-                        asset=asset,
-                        expected_quantity=local_bal,
-                        actual_quantity=live_qty,
-                        difference_base=0.0,  # Cannot value it
-                    )
-                )
+                mismatched_assets.append(drift)
 
         # Check for assets in local but not in live (implying 0 live)
         for asset, bal in self.balances.items():
             if asset not in live_assets and bal.total > 0:
-                # Check value
-                conversion = to_base(bal.total, asset)
-                val = conversion.value_base
-
-                if val > tolerance_base:
+                drift = self._evaluate_drift(asset, bal.total, 0.0, tolerance_base)
+                if drift:
                     drift_detected = True
-                    mismatched_assets.append(
-                        DriftMismatchedAsset(
-                            asset=asset,
-                            expected_quantity=bal.total,
-                            actual_quantity=0.0,
-                            difference_base=val,
-                        )
-                    )
-                elif conversion.status == "unvalued" and bal.total > 1e-9:
-                    drift_detected = True
-                    mismatched_assets.append(
-                        DriftMismatchedAsset(
-                            asset=asset,
-                            expected_quantity=bal.total,
-                            actual_quantity=0.0,
-                            difference_base=0.0,
-                        )
-                    )
+                    mismatched_assets.append(drift)
 
         # 2. Compare Positions (Trades) vs Ledger Balances (self.balances)
         # This is the "internal consistency" check.
@@ -390,35 +375,17 @@ class Portfolio:
                 asset, AssetBalance(asset, 0.0, 0.0, 0.0)
             ).total
 
-            diff_qty = abs(pos_total - balance_total)
-            conversion = to_base(diff_qty, asset)
-            diff_value = conversion.value_base
-
             pos_val = to_base(pos_total, asset).value_base
             bal_val = to_base(balance_total, asset).value_base
             expected_position_value_base += pos_val
             actual_balance_value_base += bal_val
 
-            if diff_value > tolerance_base:
+            drift = self._evaluate_drift(
+                asset, pos_total, balance_total, tolerance_base
+            )
+            if drift:
                 drift_detected = True
-                mismatched_assets.append(
-                    DriftMismatchedAsset(
-                        asset=asset,
-                        expected_quantity=pos_total,
-                        actual_quantity=balance_total,
-                        difference_base=diff_value,
-                    )
-                )
-            elif conversion.status == "unvalued" and diff_qty > 1e-9:
-                drift_detected = True
-                mismatched_assets.append(
-                    DriftMismatchedAsset(
-                        asset=asset,
-                        expected_quantity=pos_total,
-                        actual_quantity=balance_total,
-                        difference_base=0.0,  # Unvalued
-                    )
-                )
+                mismatched_assets.append(drift)
 
         self.drift_flag = drift_detected
         self.drift_status = DriftStatus(
