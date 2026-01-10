@@ -41,6 +41,7 @@ The bot is organized into distinct modules:
 ### Prerequisites
 
 *   **Python 3.11+**: Ensure Python is installed and added to your PATH.
+*   **Node.js 20+**: Required for building the UI and running static analysis (Pyright).
 *   **Poetry**: The dependency manager used for this project.
 
 ### 🐧 Linux / macOS
