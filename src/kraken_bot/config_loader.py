@@ -242,40 +242,31 @@ def _validate_config_int(
     if value is None:
         return default
 
-    def _warn_invalid(provided: object) -> int:
-        logger.warning(
-            "%s is invalid; using default",
-            field_name,
-            extra={
-                "event": field_name,
-                "config_path": str(config_path),
-                "provided": repr(provided),
-                "provided_type": type(provided).__name__,
-            },
-        )
-        return default
+    # Fast path for valid integers (excluding bools which are technically ints)
+    if isinstance(value, int) and not isinstance(value, bool) and value >= min_value:
+        return value
 
-    if isinstance(value, bool):
-        return _warn_invalid(value)
-
-    if isinstance(value, int):
-        if value >= min_value:
-            return value
-        return _warn_invalid(value)
-
-    if isinstance(value, str):
-        stripped = value.strip()
-        if stripped == "":
-            return _warn_invalid(value)
+    # Try parsing strings
+    if isinstance(value, str) and value.strip():
         try:
-            parsed = int(stripped, 10)
+            parsed = int(value.strip(), 10)
+            if parsed >= min_value:
+                return parsed
         except ValueError:
-            return _warn_invalid(value)
-        if parsed >= min_value:
-            return parsed
-        return _warn_invalid(parsed)
+            pass
 
-    return _warn_invalid(value)
+    # Fallback with warning
+    logger.warning(
+        "%s is invalid; using default",
+        field_name,
+        extra={
+            "event": field_name,
+            "config_path": str(config_path),
+            "provided": repr(value),
+            "provided_type": type(value).__name__,
+        },
+    )
+    return default
 
 
 def _parse_ui_config(
