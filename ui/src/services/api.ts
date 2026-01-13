@@ -210,22 +210,25 @@ export type ProfileCreateResponse = {
 const API_BASE = import.meta.env.VITE_API_BASE || '/api';
 const API_TOKEN = import.meta.env.VITE_API_TOKEN;
 
-async function fetchJson<T>(path: string, options: RequestInit = {}): Promise<T | null> {
+// ✅ Internal helper to standardize headers and fetching
+async function baseFetch<T>(
+  path: string,
+  options: RequestInit,
+): Promise<{ response: Response; payload: ApiEnvelope<T> }> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (API_TOKEN) headers.Authorization = `Bearer ${API_TOKEN}`;
   if (options.headers) Object.assign(headers, options.headers as Record<string, string>);
 
+  const response = await fetch(`${API_BASE}${path}`, { ...options, headers });
+  const payload = (await response.json()) as ApiEnvelope<T>;
+  return { response, payload };
+}
+
+async function fetchJson<T>(path: string, options: RequestInit = {}): Promise<T | null> {
   try {
-    const response = await fetch(`${API_BASE}${path}`, { ...options, headers });
-    if (!response.ok) {
-      throw new Error(`Request failed: ${response.status}`);
-    }
-
-    const payload = (await response.json()) as ApiEnvelope<T>;
-    if (payload.error) {
-      throw new Error(payload.error);
-    }
-
+    const { response, payload } = await baseFetch<T>(path, options);
+    if (!response.ok) throw new Error(`Request failed: ${response.status}`);
+    if (payload.error) throw new Error(payload.error);
     return payload.data;
   } catch (error) {
     console.warn(`Falling back to placeholders for ${path}`, error);
@@ -234,24 +237,11 @@ async function fetchJson<T>(path: string, options: RequestInit = {}): Promise<T 
 }
 
 async function fetchJsonStrict<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  if (API_TOKEN) headers.Authorization = `Bearer ${API_TOKEN}`;
-  if (options.headers) Object.assign(headers, options.headers as Record<string, string>);
+  const { response, payload } = await baseFetch<T>(path, options);
 
-  const response = await fetch(`${API_BASE}${path}`, { ...options, headers });
-  const payload = (await response.json()) as ApiEnvelope<T>;
-
-  if (!response.ok) {
-    throw new Error(payload.error || `Request failed: ${response.status}`);
-  }
-
-  if (payload.error) {
-    throw new Error(payload.error);
-  }
-
-  if (payload.data === null) {
-    throw new Error('Empty response');
-  }
+  if (!response.ok) throw new Error(payload.error || `Request failed: ${response.status}`);
+  if (payload.error) throw new Error(payload.error);
+  if (payload.data === null) throw new Error('Empty response');
 
   return payload.data;
 }
