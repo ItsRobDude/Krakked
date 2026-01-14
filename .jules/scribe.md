@@ -1,1 +1,3 @@
 ## 2024-05-24 - Python Version Mismatch **Gap:** README.md stated "Python 3.10+" but `pyproject.toml` enforces ">=3.11,<4.0". This could cause installation failures for users following the README. **Fix:** Updated README.md to specify Python 3.11+.
+
+## 2026-01-14 - API Error Handling Pattern **Gap:** The `fetchJson` utility swallows errors and returns `null`, while `fetchJsonStrict` throws. This crucial distinction was implicit, forcing devs to read implementation details to understand why `fetchPortfolioSummary` returns `T | null`. **Fix:** Added JSDoc to `fetchJson` explicitly documenting the error-swallowing behavior and advising `fetchJsonStrict` for critical mutations.

@@ -210,6 +210,14 @@ export type ProfileCreateResponse = {
 const API_BASE = import.meta.env.VITE_API_BASE || '/api';
 const API_TOKEN = import.meta.env.VITE_API_TOKEN;
 
+/**
+ * Internal helper to fetch JSON with "soft" error handling.
+ *
+ * @remarks
+ * Swallows HTTP errors and returns `null` instead of throwing, allowing the UI
+ * to render partial states or placeholders without crashing the entire view.
+ * Use {@link fetchJsonStrict} for critical mutations that must succeed.
+ */
 async function fetchJson<T>(path: string, options: RequestInit = {}): Promise<T | null> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (API_TOKEN) headers.Authorization = `Bearer ${API_TOKEN}`;
@@ -256,6 +264,11 @@ async function fetchJsonStrict<T>(path: string, options: RequestInit = {}): Prom
   return payload.data;
 }
 
+/**
+ * Fetches the current portfolio snapshot including equity, PnL, and drift status.
+ *
+ * @returns Summary object or `null` if the backend is unreachable or data is unavailable.
+ */
 export async function fetchPortfolioSummary(): Promise<PortfolioSummary | null> {
   return fetchJson<PortfolioSummary>('/portfolio/summary');
 }
@@ -280,16 +293,34 @@ export async function fetchSystemMetrics(): Promise<SystemMetrics | null> {
   return fetchJson<SystemMetrics>('/system/metrics');
 }
 
+/**
+ * Retrieves the current session configuration and active status.
+ *
+ * @remarks
+ * The session determines the loop interval, execution mode (paper/live), and
+ * which profile is currently loaded.
+ */
 export async function fetchSessionState(): Promise<SessionStateResponse | null> {
   return fetchJson<SessionStateResponse>('/system/session');
 }
 
+/**
+ * Activates the trading session, initializing the scheduler and strategy engine.
+ *
+ * @returns Updated session state confirming the active status.
+ */
 export async function startSession(): Promise<SessionStateResponse | null> {
   return fetchJson<SessionStateResponse>('/system/session/start', {
     method: 'POST',
   });
 }
 
+/**
+ * Updates runtime session parameters like loop interval or execution mode.
+ *
+ * @param patch - Partial configuration object (e.g., `{ mode: 'live' }`).
+ * @returns Updated session state reflecting the changes.
+ */
 export async function updateSessionConfig(
   patch: Partial<SessionConfigRequest>,
 ): Promise<SessionStateResponse | null> {
