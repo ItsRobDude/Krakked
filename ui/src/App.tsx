@@ -27,13 +27,9 @@ import {
   applyRiskPreset,
   getRiskStatus,
   fetchSetupStatus,
-  ExposureBreakdown,
   PortfolioSummary,
-  PositionPayload,
   RiskConfig,
   RiskStatus,
-  RecentExecution,
-  RiskDecision,
   RiskPresetName,
   StrategyRiskProfile,
   StrategyPerformance,
@@ -58,27 +54,16 @@ import {
   updateSessionConfig,
 } from './services/api';
 import { RISK_PRESET_META, formatPresetSummary } from './constants/riskPresets';
+import { formatCurrency, formatTimestamp } from './utils/formatters';
+import {
+  transformPositions,
+  transformBalances,
+  transformLogs,
+  transformRiskDecisions,
+} from './utils/transformers';
 
 const DASHBOARD_REFRESH_MS = Number(import.meta.env.VITE_REFRESH_DASHBOARD_MS ?? 5000) || 5000;
 const ORDERS_REFRESH_MS = Number(import.meta.env.VITE_REFRESH_ORDERS_MS ?? 5000) || 5000;
-
-const formatCurrency = (value: number | null | undefined) => {
-  const formatter = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 });
-  if (typeof value !== 'number' || Number.isNaN(value)) return formatter.format(0);
-  return formatter.format(value);
-};
-
-const formatPercent = (value: number | null | undefined) => {
-  if (typeof value !== 'number' || Number.isNaN(value)) return '0.00%';
-  return `${value.toFixed(2)}%`;
-};
-
-const formatTimestamp = (timestamp: string | null) => {
-  if (!timestamp) return 'Unknown';
-  const parsed = new Date(timestamp);
-  if (Number.isNaN(parsed.getTime())) return 'Unknown';
-  return parsed.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
-};
 
 const isRiskProfile = (value: unknown): value is StrategyRiskProfile =>
   value === 'conservative' || value === 'balanced' || value === 'aggressive';
@@ -95,72 +80,6 @@ const buildKpis = (summary: PortfolioSummary) => [
   { label: 'Realized PnL', value: formatCurrency(summary.realized_pnl_usd), hint: 'Total' },
   { label: 'Unrealized PnL', value: formatCurrency(summary.unrealized_pnl_usd), hint: summary.drift_flag ? 'Rebalance suggested' : 'In bounds' },
 ];
-
-const transformPositions = (payload: PositionPayload[]): PositionRow[] =>
-  payload.map((position) => {
-    const side: PositionRow['side'] = position.base_size < 0 ? 'short' : 'long';
-    const size = `${Math.abs(position.base_size).toFixed(4)} ${position.base_asset}`;
-    const entry = position.avg_entry_price ? formatCurrency(position.avg_entry_price) : '—';
-    const mark = position.current_price ? formatCurrency(position.current_price) : '—';
-    const pnlValue = position.unrealized_pnl_usd ?? 0;
-    const pnl = pnlValue === 0 ? '$0.00' : formatCurrency(pnlValue);
-
-    let status = position.strategy_tag || 'Tracking';
-    if (position.is_dust) {
-      status = 'Dust';
-    }
-
-    return { pair: position.pair, side, size, entry, mark, pnl, status };
-  });
-
-const transformBalances = (exposure: ExposureBreakdown) =>
-  exposure.by_asset.map((asset) => ({
-    asset: asset.asset,
-    total: formatPercent(asset.pct_of_equity || 0),
-    available: '—',
-    valueUsd: formatCurrency(asset.value_usd || 0),
-  }));
-
-const transformLogs = (executions: RecentExecution[]) =>
-  executions.map((execution) => {
-    const source = execution.errors[0] || execution.warnings[0] || 'Execution summary';
-    const completedAt = execution.completed_at || execution.started_at;
-    const timestamp = formatTimestamp(completedAt);
-    const message = `${execution.plan_id} ${execution.success ? 'succeeded' : 'failed'} (${execution.orders.length} orders)`;
-    const level: LogEntry['level'] = execution.success ? 'info' : 'error';
-
-    return {
-      level,
-      message,
-      timestamp,
-      source,
-      sortKey: completedAt ? new Date(completedAt).getTime() : undefined,
-    };
-  });
-
-const transformRiskDecisions = (decisions: RiskDecision[]) =>
-  decisions
-    .filter((decision) => decision.blocked || decision.kill_switch_active)
-    .map((decision) => {
-      const timestamp = formatTimestamp(decision.decided_at);
-      const reasons = decision.block_reasons.length
-        ? decision.block_reasons.join(', ')
-        : decision.kill_switch_active
-          ? 'Kill switch active'
-          : '';
-      const message = `${decision.pair}: ${decision.blocked ? 'blocked' : 'allowed'} ${decision.action_type}${
-        reasons ? ` (${reasons})` : ''
-      }`;
-      const level: LogEntry['level'] = decision.blocked ? 'warning' : 'info';
-
-      return {
-        level,
-        message,
-        timestamp,
-        source: decision.strategy_id || 'Risk',
-        sortKey: new Date(decision.decided_at).getTime(),
-      };
-    });
 
 function DashboardShell({ onLogout }: { onLogout: () => void }) {
   const [kpis, setKpis] = useState<Kpi[]>([]);
