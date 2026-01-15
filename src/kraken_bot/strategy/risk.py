@@ -52,6 +52,14 @@ def compute_atr(ohlc_df: pd.DataFrame, window: int) -> float:
 
 @dataclass
 class RiskContext:
+    """
+    A frozen snapshot of portfolio state, exposure, and risk metrics used for decision making.
+
+    Captures the state of the portfolio at the beginning of a strategy cycle to ensure
+    consistent data across all risk checks. Includes equity, PnL, current exposures,
+    and flags for drift or drawdown events.
+    """
+
     equity_usd: float
     realized_pnl_usd: float
     unrealized_pnl_usd: float
@@ -78,6 +86,18 @@ class RiskContext:
 
 
 class RiskEngine:
+    """
+    The central authority for enforcing risk limits and safety constraints.
+
+    Responsibility:
+    1.  **Kill Switch Enforcement**: Blocks all new positions if drift, drawdown,
+        or manual kill switches are active.
+    2.  **Intent Filtering**: Converts raw StrategyIntent objects into RiskAdjustedAction
+        objects, applying sizing limits.
+    3.  **Exposure Capping**: Enforces per-strategy, per-asset, and total portfolio
+        exposure limits defined in RiskConfig.
+    """
+
     def __init__(
         self,
         config: RiskConfig,
@@ -295,6 +315,20 @@ class RiskEngine:
         weights: StrategyWeights | None = None,
         pending_orders: Optional[List[LocalOrder]] = None,
     ) -> List[RiskAdjustedAction]:
+        """
+        Process a batch of strategy intents against the current risk context.
+
+        Applies the following pipeline:
+        1.  Builds a fresh :class:`RiskContext` snapshot.
+        2.  Checks for Kill Switch triggers (Manual, Drift, Drawdown).
+        3.  If Kill Switch is active, converts all intents to 'reduce'/'close' or 'none'.
+        4.  If healthy, aggregates intents by pair and routes them through exposure limits.
+
+        :param intents: List of raw intents from strategies.
+        :param weights: Optional dynamic weights for strategy allocation.
+        :param pending_orders: Pending orders to include in exposure calculations to prevent double-spending.
+        :return: List of sanctioned :class:`RiskAdjustedAction` objects.
+        """
         ctx = self.build_risk_context(pending_orders=pending_orders)
 
         per_strategy_caps = self._build_effective_caps(weights)
@@ -747,6 +781,18 @@ class RiskEngine:
         ctx: RiskContext,
         per_strategy_caps: Dict[str, float],
     ) -> tuple[Dict[str, float], List[str]]:
+        """
+        Enforce hierarchical exposure limits on target allocations.
+
+        Hierarchy of Checks:
+        1.  **Strategy Cap**: Limits each strategy's total exposure based on `max_per_strategy_pct`.
+        2.  **Asset Cap**: Limits total exposure to this specific asset across all strategies
+            based on `max_per_asset_pct`.
+        3.  **Portfolio Cap**: Limits total portfolio exposure based on `max_portfolio_risk_pct`.
+        4.  **Position Count**: Prevents opening new positions if `max_open_positions` is reached.
+
+        :return: Tuple of (adjusted_targets, list_of_rejection_reasons).
+        """
         blocked_reasons: List[str] = []
 
         def clamp_total(
