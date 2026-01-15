@@ -4,15 +4,9 @@ import type {
   StrategyState,
 } from '../services/api';
 import { STRATEGY_TAGS } from '../constants/strategies';
+import { formatTimestamp } from '../utils/formatters';
 
 const riskProfiles: StrategyRiskProfile[] = ['conservative', 'balanced', 'aggressive'];
-
-const formatTimestamp = (timestamp: string | null) => {
-  if (!timestamp) return 'Unknown';
-  const parsed = new Date(timestamp);
-  if (Number.isNaN(parsed.getTime())) return 'Unknown';
-  return parsed.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
-};
 
 export type StrategiesPanelProps = {
   strategies: StrategyState[];

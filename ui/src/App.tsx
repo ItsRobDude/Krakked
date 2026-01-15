@@ -58,27 +58,10 @@ import {
   updateSessionConfig,
 } from './services/api';
 import { RISK_PRESET_META, formatPresetSummary } from './constants/riskPresets';
+import { formatCurrency, formatPercent, formatTimestamp } from './utils/formatters';
 
 const DASHBOARD_REFRESH_MS = Number(import.meta.env.VITE_REFRESH_DASHBOARD_MS ?? 5000) || 5000;
 const ORDERS_REFRESH_MS = Number(import.meta.env.VITE_REFRESH_ORDERS_MS ?? 5000) || 5000;
-
-const formatCurrency = (value: number | null | undefined) => {
-  const formatter = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 });
-  if (typeof value !== 'number' || Number.isNaN(value)) return formatter.format(0);
-  return formatter.format(value);
-};
-
-const formatPercent = (value: number | null | undefined) => {
-  if (typeof value !== 'number' || Number.isNaN(value)) return '0.00%';
-  return `${value.toFixed(2)}%`;
-};
-
-const formatTimestamp = (timestamp: string | null) => {
-  if (!timestamp) return 'Unknown';
-  const parsed = new Date(timestamp);
-  if (Number.isNaN(parsed.getTime())) return 'Unknown';
-  return parsed.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
-};
 
 const isRiskProfile = (value: unknown): value is StrategyRiskProfile =>
   value === 'conservative' || value === 'balanced' || value === 'aggressive';
