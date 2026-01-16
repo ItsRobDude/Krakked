@@ -210,6 +210,16 @@ export type ProfileCreateResponse = {
 const API_BASE = import.meta.env.VITE_API_BASE || '/api';
 const API_TOKEN = import.meta.env.VITE_API_TOKEN;
 
+/**
+ * Performs a JSON fetch that swallows errors and returns `null` on failure.
+ *
+ * This safe fetcher is intended for polling and read-only data where a failure should
+ * degrade gracefully (e.g., render a loading state or partial UI) rather than crashing the app.
+ *
+ * @param path - The API endpoint path (relative to `API_BASE`)
+ * @param options - `fetch` options (method, headers, body)
+ * @returns The parsed data `T` on success, or `null` on network error, non-200 status, or API error.
+ */
 async function fetchJson<T>(path: string, options: RequestInit = {}): Promise<T | null> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (API_TOKEN) headers.Authorization = `Bearer ${API_TOKEN}`;
@@ -233,6 +243,17 @@ async function fetchJson<T>(path: string, options: RequestInit = {}): Promise<T 
   }
 }
 
+/**
+ * Performs a JSON fetch that throws explicit errors on failure.
+ *
+ * This strict fetcher is intended for mutating actions (POST/PATCH) or critical setup steps
+ * where failure must be bubbled up to the UI (e.g., via toast notifications or error boundaries).
+ *
+ * @param path - The API endpoint path (relative to `API_BASE`)
+ * @param options - `fetch` options (method, headers, body)
+ * @returns The parsed data `T`.
+ * @throws Error if network fails, status is non-200, API returns an error, or data is null.
+ */
 async function fetchJsonStrict<T>(path: string, options: RequestInit = {}): Promise<T> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (API_TOKEN) headers.Authorization = `Bearer ${API_TOKEN}`;
@@ -401,6 +422,17 @@ export type ExecutionResultPayload = {
   orders: unknown[];
 };
 
+/**
+ * Triggers an immediate "Panic Cancel" that flattens all open positions.
+ *
+ * This calls `POST /execution/flatten_all`, which:
+ * 1. Cancels all open orders
+ * 2. Issues market sells for all positions (if liquid)
+ * 3. Updates the system state to `emergency_flatten=True`
+ *
+ * @returns The result payload containing order details and success status.
+ * @throws Error if the API request fails or returns null.
+ */
 export async function flattenAllPositions(): Promise<ExecutionResultPayload> {
   const result = await fetchJson<ExecutionResultPayload>('/execution/flatten_all', {
     method: 'POST',
