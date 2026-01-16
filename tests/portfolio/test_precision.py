@@ -1,6 +1,24 @@
 from unittest.mock import MagicMock
 
-from kraken_bot.portfolio.portfolio import Portfolio
+from kraken_bot.portfolio.portfolio import Portfolio, _get_quantizer
+
+
+def test_quantizer_caching():
+    """Verify that _get_quantizer caches its results."""
+    # Clear cache to ensure clean state
+    _get_quantizer.cache_clear()
+
+    # First call
+    q1 = _get_quantizer(8)
+    assert _get_quantizer.cache_info().misses == 1
+    assert _get_quantizer.cache_info().hits == 0
+
+    # Second call
+    q2 = _get_quantizer(8)
+    assert _get_quantizer.cache_info().misses == 1
+    assert _get_quantizer.cache_info().hits == 1
+
+    assert q1 is q2
 
 
 def test_portfolio_rounding_handles_dust_and_flooring():
