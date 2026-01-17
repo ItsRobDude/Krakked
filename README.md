@@ -41,6 +41,7 @@ The bot is organized into distinct modules:
 ### Prerequisites
 
 *   **Python 3.11+**: Ensure Python is installed and added to your PATH.
+*   **Node.js 20+**: Required to build the web UI (optional if running headless).
 *   **Poetry**: The dependency manager used for this project.
 
 ### 🐧 Linux / macOS
@@ -55,6 +56,15 @@ The bot is organized into distinct modules:
     git clone <repo-url>
     cd kraken-bot
     poetry install
+    ```
+
+3.  **Build Web UI (Optional)**:
+    To use the React dashboard, you must build the frontend assets:
+    ```bash
+    cd ui
+    npm ci
+    npm run build
+    cd ..
     ```
 
 ### 🪟 Windows 10 / 11
@@ -74,6 +84,15 @@ The bot is organized into distinct modules:
     git clone <repo-url>
     cd kraken-bot
     poetry install
+    ```
+
+4.  **Build Web UI (Optional)**:
+    To use the React dashboard, you must build the frontend assets:
+    ```powershell
+    cd ui
+    npm ci
+    npm run build
+    cd ..
     ```
 
 ### 🎛️ Optional: Textual TUI dashboard
