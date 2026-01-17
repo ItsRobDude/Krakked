@@ -210,13 +210,19 @@ export type ProfileCreateResponse = {
 const API_BASE = import.meta.env.VITE_API_BASE || '/api';
 const API_TOKEN = import.meta.env.VITE_API_TOKEN;
 
-async function fetchJson<T>(path: string, options: RequestInit = {}): Promise<T | null> {
+function getHeaders(options: RequestInit = {}): Record<string, string> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (API_TOKEN) headers.Authorization = `Bearer ${API_TOKEN}`;
   if (options.headers) Object.assign(headers, options.headers as Record<string, string>);
+  return headers;
+}
 
+async function fetchJson<T>(path: string, options: RequestInit = {}): Promise<T | null> {
   try {
-    const response = await fetch(`${API_BASE}${path}`, { ...options, headers });
+    const response = await fetch(`${API_BASE}${path}`, {
+      ...options,
+      headers: getHeaders(options),
+    });
     if (!response.ok) {
       throw new Error(`Request failed: ${response.status}`);
     }
@@ -234,11 +240,10 @@ async function fetchJson<T>(path: string, options: RequestInit = {}): Promise<T 
 }
 
 async function fetchJsonStrict<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  if (API_TOKEN) headers.Authorization = `Bearer ${API_TOKEN}`;
-  if (options.headers) Object.assign(headers, options.headers as Record<string, string>);
-
-  const response = await fetch(`${API_BASE}${path}`, { ...options, headers });
+  const response = await fetch(`${API_BASE}${path}`, {
+    ...options,
+    headers: getHeaders(options),
+  });
   const payload = (await response.json()) as ApiEnvelope<T>;
 
   if (!response.ok) {
