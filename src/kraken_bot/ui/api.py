@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hmac
 import logging
 from pathlib import Path
 from typing import Callable
@@ -48,7 +49,8 @@ class AuthMiddleware(BaseHTTPMiddleware):
         if path.startswith(self._protected_prefix) and path not in self._health_paths:
             auth_header = request.headers.get("Authorization") or ""
             expected = f"Bearer {self._token}" if self._token else ""
-            if auth_header != expected:
+            # Aegis: Prevent timing attacks using constant-time comparison
+            if not hmac.compare_digest(auth_header.encode(), expected.encode()):
                 logger.warning(
                     "Unauthorized UI API request",
                     extra=build_request_log_extra(
