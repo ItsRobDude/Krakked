@@ -119,6 +119,31 @@ class FileOHLCStore:
             self._worker_thread.join(timeout=5.0)
         logger.info("OHLC Store shutdown complete.")
 
+    def _df_to_bars(self, df: pd.DataFrame) -> List[OHLCBar]:
+        """
+        Optimized conversion of DataFrame to List[OHLCBar].
+        Avoids slow to_dict("records") and iterates using zip.
+        Assumes df index is the timestamp.
+        """
+        if df.empty:
+            return []
+
+        # Extract numpy arrays for speed
+        timestamps = df.index.values
+        opens = df["open"].values
+        highs = df["high"].values
+        lows = df["low"].values
+        closes = df["close"].values
+        volumes = df["volume"].values
+
+        # Explicit casting to ensure JSON compatibility and exact types
+        return [
+            OHLCBar(int(ts), float(op), float(hi), float(lo), float(cl), float(vol))
+            for ts, op, hi, lo, cl, vol in zip(
+                timestamps, opens, highs, lows, closes, volumes
+            )
+        ]
+
     def _persist_bars(self, pair: str, timeframe: str, bars: List[OHLCBar]) -> None:
         """Internal synchronous method to write bars to disk."""
         if not bars:
@@ -166,10 +191,7 @@ class FileOHLCStore:
             # Sort again to be defensive, though callers should have done it
             sorted_df = df.sort_index()
             tail_df = sorted_df.tail(self._cache_size)
-            records = tail_df.reset_index().to_dict("records")
-            for row in records:
-                row["timestamp"] = int(row["timestamp"])
-            self._bar_cache[(pair, timeframe)] = [OHLCBar(**row) for row in records]
+            self._bar_cache[(pair, timeframe)] = self._df_to_bars(tail_df)
             return True
         except Exception as e:
             logger.error(f"Failed to update cache for {pair} {timeframe}: {e}")
@@ -220,10 +242,7 @@ class FileOHLCStore:
 
                 # Fallback for large lookbacks or cache update failures
                 df = df.tail(lookback)
-                records = df.reset_index().to_dict("records")
-                for row in records:
-                    row["timestamp"] = int(row["timestamp"])
-                return [OHLCBar(**row) for row in records]
+                return self._df_to_bars(df)
             except Exception as e:
                 logger.error(f"Error reading from {file_path}: {e}")
                 return []
@@ -252,10 +271,7 @@ class FileOHLCStore:
                 self._update_cache(pair, timeframe, df)
 
                 df = df[df.index >= since_ts]
-                records = df.reset_index().to_dict("records")
-                for row in records:
-                    row["timestamp"] = int(row["timestamp"])
-                return [OHLCBar(**row) for row in records]
+                return self._df_to_bars(df)
             except Exception as e:
                 logger.error(f"Error reading from {file_path}: {e}")
                 return []
