@@ -13,6 +13,15 @@ from kraken_bot.market_data.api import MarketDataAPI
 
 
 class MarketRegime(str, Enum):
+    """
+    Classifies the high-level state of a market pair.
+
+    - TRENDING: Directional movement with moderate volatility (default state).
+    - MEAN_REVERTING: Range-bound price action, often with strong negative autocorrelation.
+    - CHOPPY: Extremely low volatility with no clear direction (stagnation).
+    - PANIC: Extreme volatility indicating stress or crash conditions (highest risk).
+    """
+
     TRENDING = "trending"
     MEAN_REVERTING = "mean_reverting"
     CHOPPY = "choppy"
@@ -26,14 +35,18 @@ class RegimeSnapshot:
 
 
 def _classify_pair(autocorr: float, volatility: float) -> MarketRegime:
-    # Classify a pair based on simple statistical features of returns.
-    #
-    # Heuristics tuned for our synthetic tests:
-    # * very high volatility -> PANIC
-    # * strongly negative autocorrelation with moderate volatility -> MEAN_REVERTING
-    # * extremely low volatility -> CHOPPY
-    # * everything else -> TRENDING.
+    """Classifies market conditions based on statistical heuristics.
 
+    The thresholds are tuned for synthetic test environments and define the
+    four discrete regimes:
+    - PANIC: Volatility > 7% (Extreme stress)
+    - CHOPPY: Volatility < 0.05% (Stagnation)
+    - MEAN_REVERTING: Strong negative autocorrelation (<-0.7)
+    - TRENDING: The default state (directional drift)
+
+    @param autocorr - 1-lag autocorrelation of returns
+    @param volatility - Standard deviation of returns (ddof=0)
+    """
     # Elevated volatility generally indicates stressed conditions regardless of direction.
     if volatility > 0.07:
         return MarketRegime.PANIC
@@ -51,8 +64,20 @@ def _classify_pair(autocorr: float, volatility: float) -> MarketRegime:
 
 
 def infer_regime(market_data: MarketDataAPI, pairs: list[str]) -> RegimeSnapshot:
-    """Infer a coarse market regime for each pair using recent OHLC data."""
+    """Infer a coarse market regime for each pair using recent OHLC data.
 
+    This function calculates a baseline regime (TRENDING, MEAN_REVERTING, CHOPPY, PANIC)
+    for every pair in the universe.
+
+    CRITICAL IMPLEMENTATION DETAIL:
+    Regime inference currently relies on a fixed '1h' timeframe with a 200-period lookback,
+    regardless of the strategy's operating timeframe. This provides a standardized
+    macro-view of market conditions but may lag shorter-term price action.
+
+    @param market_data - API instance to fetch OHLC data
+    @param pairs - List of canonical pair strings to classify
+    @returns Snapshot containing the regime enum for each pair
+    """
     regimes: Dict[str, MarketRegime] = {}
     for pair in pairs:
         try:

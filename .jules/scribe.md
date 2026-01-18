@@ -1,1 +1,2 @@
 ## 2024-05-24 - Python Version Mismatch **Gap:** README.md stated "Python 3.10+" but `pyproject.toml` enforces ">=3.11,<4.0". This could cause installation failures for users following the README. **Fix:** Updated README.md to specify Python 3.11+.
+## 2024-05-27 - Hardcoded Regime Timeframes **Gap:** `infer_regime` enforces a fixed '1h' timeframe and 200-bar lookback for all strategies, which is not obvious to developers working on different timeframes. **Fix:** Documented this behavior as a "Critical Implementation Detail" in the function docstring.
