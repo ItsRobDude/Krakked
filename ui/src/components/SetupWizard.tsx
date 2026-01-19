@@ -32,7 +32,7 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
 
     try {
       await performSetupConfig(region);
-      await performSetupCredentials(apiKey, apiSecret, password, region);
+      await performSetupCredentials({ apiKey, apiSecret, password, region });
       await performUnlock(password);
 
       // Give the backend time to re-bootstrap after unlock.
