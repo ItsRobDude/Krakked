@@ -41,6 +41,11 @@ class KrakenWSClientV2:
         self._main_task: Optional[asyncio.Task] = None
         self._websocket: Optional[WebSocketClientProtocol] = None
 
+        # Optimization: Map ws_symbol -> canonical for O(1) lookup
+        self._ws_symbol_to_canonical: Dict[str, str] = {
+            p.ws_symbol: p.canonical for p in self._pairs
+        }
+
         # In-memory cache
         self.last_ticker_update_ts: Dict[str, float] = defaultdict(float)
         self.last_ohlc_update_ts: Dict[str, Dict[str, float]] = defaultdict(dict)
@@ -84,10 +89,7 @@ class KrakenWSClientV2:
         logger.info("WebSocket client stopped.")
 
     def _get_canonical_from_ws_symbol(self, ws_symbol: str) -> Optional[str]:
-        for p in self._pairs:
-            if p.ws_symbol == ws_symbol:
-                return p.canonical
-        return None
+        return self._ws_symbol_to_canonical.get(ws_symbol)
 
     async def _subscribe(self):
         """Subscribes to ticker and OHLC channels for all pairs."""
