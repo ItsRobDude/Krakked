@@ -1,29 +1,62 @@
+/**
+ * Standard API envelope for UI responses.
+ * @template T - The type of the data payload.
+ */
 export type ApiEnvelope<T> = {
+  /** The success payload, or null if an error occurred. */
   data: T | null;
+  /** Error message if the request failed, or null on success. */
   error: string | null;
 };
 
+/**
+ * High-level portfolio accounting state.
+ */
 export type PortfolioSummary = {
+  /** Total equity in USD (cash + asset value). */
   equity_usd: number | null;
+  /** Available cash balance in USD. */
   cash_usd: number | null;
+  /** Total realized PnL in USD. */
   realized_pnl_usd: number | null;
+  /** Unrealized PnL from open positions in USD. */
   unrealized_pnl_usd: number | null;
+  /** Whether portfolio drift (ledger vs live) is detected. */
   drift_flag: boolean | null;
+  /**
+   * Timestamp of the last snapshot.
+   * @remarks Currently returns a Unix timestamp in seconds (number) from the backend, despite the type definition saying string.
+   */
   last_snapshot_ts: string | null;
 };
 
+/**
+ * Detailed view of an open position or asset holding.
+ */
 export type PositionPayload = {
+  /** The trading pair or asset symbol (e.g., "XXBTZUSD"). */
   pair: string;
+  /** The base asset symbol (e.g., "XXBT"). */
   base_asset: string;
+  /** The size of the position in base units (negative for short). */
   base_size: number;
+  /** Weighted average entry price, or null if not applicable. */
   avg_entry_price: number | null;
+  /** Current market price (mark), or null if unavailable. */
   current_price: number | null;
+  /** Current position value in USD. */
   value_usd: number | null;
+  /** Unrealized Profit/Loss in USD. */
   unrealized_pnl_usd: number | null;
+  /** Tag identifying the strategy managing this position. */
   strategy_tag?: string | null;
+  /** Whether this position is considered "dust" (below min order size). */
   is_dust: boolean;
+  /** Minimum order size for this pair, if known. */
   min_order_size?: number | null;
+  /** The quantity needed to close this position (rounded). */
   rounded_close_size?: number | null;
+  /** Explanation if the position is classified as dust. */
   dust_reason?: string | null;
 };
 
@@ -32,13 +65,23 @@ export type ExposureBreakdown = {
   by_strategy: Array<{ strategy_id: string; value_usd: number | null; pct_of_equity: number | null }>;
 };
 
+/**
+ * Snapshot of current risk metrics and limits status.
+ */
 export type RiskStatus = {
+  /** Whether the global kill switch is active, halting new orders. */
   kill_switch_active: boolean;
+  /** Current daily drawdown as a percentage (0-100). */
   daily_drawdown_pct: number;
+  /** Whether a reconciliation drift (ledger vs live) is detected. */
   drift_flag: boolean;
+  /** Total portfolio exposure as a percentage of equity. */
   total_exposure_pct: number;
+  /** Exposure from manual trades as a percentage of equity. */
   manual_exposure_pct: number;
+  /** Exposure percentage by asset symbol (e.g., "BTC": 20.5). */
   per_asset_exposure_pct: Record<string, number>;
+  /** Exposure percentage by strategy ID. */
   per_strategy_exposure_pct: Record<string, number>;
 };
 

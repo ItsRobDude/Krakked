@@ -1,1 +1,3 @@
 ## 2024-05-24 - Python Version Mismatch **Gap:** README.md stated "Python 3.10+" but `pyproject.toml` enforces ">=3.11,<4.0". This could cause installation failures for users following the README. **Fix:** Updated README.md to specify Python 3.11+.
+
+## 2024-05-27 - Portfolio Snapshot Timestamp Mismatch **Gap:** The UI expects `PortfolioSummary.last_snapshot_ts` to be a string or millisecond timestamp (implied by `new Date()` usage), but the backend sends a Unix timestamp in seconds (from `time.time()`), causing "1970" dates in the dashboard. **Fix:** Documented the discrepancy; requires code fix to either send milliseconds from backend or multiply by 1000 in frontend.
