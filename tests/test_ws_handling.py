@@ -62,7 +62,8 @@ def test_handle_ticker_message(ws_client: KrakenWSClientV2):
     asyncio.run(ws_client._handle_message(json.dumps(message)))
 
     assert "XBTUSD" in ws_client.ticker_cache
-    assert ws_client.ticker_cache["XBTUSD"]["bid"] == "59999.0"
+    assert ws_client.ticker_cache["XBTUSD"]["bid"] == 59999.0
+    assert ws_client.ticker_cache["XBTUSD"]["mid"] == 59999.5
     assert "XBTUSD" in ws_client.last_ticker_update_ts
 
 
