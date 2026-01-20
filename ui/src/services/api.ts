@@ -3,27 +3,57 @@ export type ApiEnvelope<T> = {
   error: string | null;
 };
 
+/**
+ * Summary of portfolio performance and current state.
+ */
 export type PortfolioSummary = {
+  /** Total equity in USD (cash + unrealized position value). */
   equity_usd: number | null;
+  /** Available cash balance in USD. */
   cash_usd: number | null;
+  /** Total realized PnL in USD for the session/history. */
   realized_pnl_usd: number | null;
+  /** Total unrealized PnL in USD across all open positions. */
   unrealized_pnl_usd: number | null;
+  /**
+   * True if portfolio composition has drifted significantly from targets.
+   * Triggers rebalancing or kill switch depending on config.
+   */
   drift_flag: boolean | null;
+  /**
+   * Timestamp of the last portfolio snapshot.
+   * @todo Backend returns Unix timestamp (number), but frontend expects string.
+   */
   last_snapshot_ts: string | null;
 };
 
+/**
+ * Detailed view of a single open position.
+ */
 export type PositionPayload = {
+  /** Trading pair (e.g., "XXBTZUSD"). */
   pair: string;
+  /** Base asset symbol (e.g., "XXBT"). */
   base_asset: string;
+  /** Current position size in base units. */
   base_size: number;
+  /** Average entry price of the position. */
   avg_entry_price: number | null;
+  /** Current market price of the pair. */
   current_price: number | null;
+  /** Current value of the position in USD. */
   value_usd: number | null;
+  /** Unrealized PnL in USD. */
   unrealized_pnl_usd: number | null;
+  /** Tag identifying the strategy that owns this position. */
   strategy_tag?: string | null;
+  /** True if the position size is below the minimum order size (dust). */
   is_dust: boolean;
+  /** Minimum order size for this pair (if known). */
   min_order_size?: number | null;
+  /** Size rounded to the nearest lot step (for closing). */
   rounded_close_size?: number | null;
+  /** Reason why the position is considered dust. */
   dust_reason?: string | null;
 };
 
@@ -32,13 +62,23 @@ export type ExposureBreakdown = {
   by_strategy: Array<{ strategy_id: string; value_usd: number | null; pct_of_equity: number | null }>;
 };
 
+/**
+ * Current status of the risk engine.
+ */
 export type RiskStatus = {
+  /** True if the global kill switch is active (trading halted). */
   kill_switch_active: boolean;
+  /** Current daily drawdown percentage. */
   daily_drawdown_pct: number;
+  /** True if portfolio drift is detected. */
   drift_flag: boolean;
+  /** Total exposure as a percentage of equity. */
   total_exposure_pct: number;
+  /** Manual exposure as a percentage of equity. */
   manual_exposure_pct: number;
+  /** Per-asset exposure percentages. */
   per_asset_exposure_pct: Record<string, number>;
+  /** Per-strategy exposure percentages. */
   per_strategy_exposure_pct: Record<string, number>;
 };
 
@@ -53,6 +93,9 @@ export type RiskDecision = {
   kill_switch_active: boolean;
 };
 
+/**
+ * Configuration parameters for the risk engine.
+ */
 export type RiskConfig = {
   max_risk_per_trade_pct: number;
   max_portfolio_risk_pct: number;
@@ -88,6 +131,9 @@ export type RecentExecution = {
   orders_count?: number; // Optional derived field
 };
 
+/**
+ * Comprehensive system health status.
+ */
 export type SystemHealth = {
   app_version?: string | null;
   execution_mode?: string | null;
@@ -210,6 +256,14 @@ export type ProfileCreateResponse = {
 const API_BASE = import.meta.env.VITE_API_BASE || '/api';
 const API_TOKEN = import.meta.env.VITE_API_TOKEN;
 
+/**
+ * Fetches JSON from the API, swallowing errors and returning null on failure.
+ * Use this for polling or non-critical data fetches where partial UI rendering is acceptable.
+ *
+ * @param path - API endpoint path (relative to base)
+ * @param options - Fetch options
+ * @returns The data payload or null if an error occurred.
+ */
 async function fetchJson<T>(path: string, options: RequestInit = {}): Promise<T | null> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (API_TOKEN) headers.Authorization = `Bearer ${API_TOKEN}`;
@@ -233,6 +287,15 @@ async function fetchJson<T>(path: string, options: RequestInit = {}): Promise<T 
   }
 }
 
+/**
+ * Fetches JSON from the API, throwing errors on failure.
+ * Use this for mutations or critical data where failure should bubble up to the caller.
+ *
+ * @param path - API endpoint path
+ * @param options - Fetch options
+ * @returns The data payload.
+ * @throws Error if the request fails, the API returns an error, or the data is null.
+ */
 async function fetchJsonStrict<T>(path: string, options: RequestInit = {}): Promise<T> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (API_TOKEN) headers.Authorization = `Bearer ${API_TOKEN}`;
@@ -256,14 +319,23 @@ async function fetchJsonStrict<T>(path: string, options: RequestInit = {}): Prom
   return payload.data;
 }
 
+/**
+ * Fetches the current portfolio summary (equity, cash, PnL).
+ */
 export async function fetchPortfolioSummary(): Promise<PortfolioSummary | null> {
   return fetchJson<PortfolioSummary>('/portfolio/summary');
 }
 
+/**
+ * Fetches all open positions with their current value and PnL.
+ */
 export async function fetchPositions(): Promise<PositionPayload[] | null> {
   return fetchJson<PositionPayload[]>('/portfolio/positions');
 }
 
+/**
+ * Fetches current exposure breakdown by asset and strategy.
+ */
 export async function fetchExposure(): Promise<ExposureBreakdown | null> {
   return fetchJson<ExposureBreakdown>('/portfolio/exposure');
 }
@@ -272,6 +344,9 @@ export async function fetchRecentExecutions(): Promise<RecentExecution[] | null>
   return fetchJson<RecentExecution[]>('/execution/recent_executions');
 }
 
+/**
+ * Fetches system health indicators (connectivity, market data status, etc.).
+ */
 export async function fetchSystemHealth(): Promise<SystemHealth | null> {
   return fetchJson<SystemHealth>('/system/health');
 }
