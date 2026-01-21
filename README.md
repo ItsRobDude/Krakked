@@ -316,6 +316,30 @@ The CI workflow is the source of truth for what must pass before packaging/deplo
 * **Static typing**: `poetry run mypy src tests` and `poetry run pyright src ui` (run `npm ci` in `ui/` first so Pyright picks up the built UI types, as in CI).【F:.github/workflows/ci.yml†L60-L95】
 * **Packaging sanity**: `poetry build` if you need to mirror the release artifact validation done in CI.
 
+### 🖥️ UI Development
+
+The React-based dashboard lives in the `ui/` directory. It is not required for the core bot but provides a visual interface.
+
+*   **Setup**:
+    ```bash
+    cd ui
+    npm ci
+    ```
+*   **Dev Server**: Starts the Vite dev server with hot reload.
+    ```bash
+    npm run dev
+    ```
+*   **Build**: Compiles the UI to `ui/dist/`.
+    ```bash
+    npm run build
+    ```
+*   **Lint**: Runs ESLint on the frontend code.
+    ```bash
+    npm run lint
+    ```
+
+Note: The Python backend does not serve the UI in dev mode; you must run the Vite server separately. In production/Docker, the backend serves the built artifacts from `ui/dist` if present.
+
 ## 🐳 Docker
 
 Build and run the containerized bot when you need an isolated runtime or a deployable image:
