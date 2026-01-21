@@ -210,9 +210,16 @@ export type ProfileCreateResponse = {
 const API_BASE = import.meta.env.VITE_API_BASE || '/api';
 const API_TOKEN = import.meta.env.VITE_API_TOKEN;
 
+function getAuthHeaders(): Record<string, string> {
+  return API_TOKEN ? { Authorization: `Bearer ${API_TOKEN}` } : {};
+}
+
 async function fetchJson<T>(path: string, options: RequestInit = {}): Promise<T | null> {
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  if (API_TOKEN) headers.Authorization = `Bearer ${API_TOKEN}`;
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...getAuthHeaders(),
+  };
+
   if (options.headers) Object.assign(headers, options.headers as Record<string, string>);
 
   try {
@@ -234,8 +241,11 @@ async function fetchJson<T>(path: string, options: RequestInit = {}): Promise<T 
 }
 
 async function fetchJsonStrict<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  if (API_TOKEN) headers.Authorization = `Bearer ${API_TOKEN}`;
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...getAuthHeaders(),
+  };
+
   if (options.headers) Object.assign(headers, options.headers as Record<string, string>);
 
   const response = await fetch(`${API_BASE}${path}`, { ...options, headers });
@@ -414,8 +424,7 @@ export async function flattenAllPositions(): Promise<ExecutionResultPayload> {
 }
 
 export async function downloadRuntimeConfig(): Promise<Blob | null> {
-  const headers: Record<string, string> = {};
-  if (API_TOKEN) headers.Authorization = `Bearer ${API_TOKEN}`;
+  const headers: Record<string, string> = { ...getAuthHeaders() };
 
   const response = await fetch(`${API_BASE}/config/runtime`, {
     method: 'GET',
