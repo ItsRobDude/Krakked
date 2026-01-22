@@ -4,7 +4,7 @@ import logging
 import queue
 import threading
 from pathlib import Path
-from typing import Dict, List, Protocol, Tuple
+from typing import Any, Dict, List, Protocol, Tuple, cast
 
 import pandas as pd
 
@@ -164,12 +164,13 @@ class FileOHLCStore:
         """Optimized conversion of DataFrame to List[OHLCBar]."""
         # Ensure we're working with the right types
         # Using index as timestamp (assuming int/int64 index)
-        timestamps = df.index.astype(int).tolist()
-        opens = df["open"].tolist()
-        highs = df["high"].tolist()
-        lows = df["low"].tolist()
-        closes = df["close"].tolist()
-        volumes = df["volume"].tolist()
+        # Type hints for pandas are strict, so we cast to Any or specific types
+        timestamps = cast(Any, df.index).astype(int).tolist()
+        opens = cast(Any, df["open"]).tolist()
+        highs = cast(Any, df["high"]).tolist()
+        lows = cast(Any, df["low"]).tolist()
+        closes = cast(Any, df["close"]).tolist()
+        volumes = cast(Any, df["volume"]).tolist()
 
         return [
             OHLCBar(ts, o, h, l, c, v)
