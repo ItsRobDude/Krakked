@@ -9,6 +9,7 @@ export type PortfolioSummary = {
   realized_pnl_usd: number | null;
   unrealized_pnl_usd: number | null;
   drift_flag: boolean | null;
+  /** Unix timestamp in seconds (not milliseconds). Returned as a string to preserve precision. */
   last_snapshot_ts: string | null;
 };
 
@@ -210,6 +211,14 @@ export type ProfileCreateResponse = {
 const API_BASE = import.meta.env.VITE_API_BASE || '/api';
 const API_TOKEN = import.meta.env.VITE_API_TOKEN;
 
+/**
+ * Fetches JSON from the API, swallowing errors and returning null on failure.
+ * Use this for non-critical UI data where partial rendering is acceptable.
+ *
+ * @param path - API endpoint path (e.g., '/system/health')
+ * @param options - Fetch options
+ * @returns The data payload or null if the request failed
+ */
 async function fetchJson<T>(path: string, options: RequestInit = {}): Promise<T | null> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (API_TOKEN) headers.Authorization = `Bearer ${API_TOKEN}`;
@@ -233,6 +242,15 @@ async function fetchJson<T>(path: string, options: RequestInit = {}): Promise<T 
   }
 }
 
+/**
+ * Fetches JSON from the API, throwing errors for any failure or empty response.
+ * Use this for critical mutations (POST/PATCH) or essential setup data.
+ *
+ * @param path - API endpoint path
+ * @param options - Fetch options
+ * @returns The data payload
+ * @throws Error if the request fails, returns an API error, or returns null data
+ */
 async function fetchJsonStrict<T>(path: string, options: RequestInit = {}): Promise<T> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (API_TOKEN) headers.Authorization = `Bearer ${API_TOKEN}`;
@@ -383,6 +401,13 @@ export async function setKillSwitch(active: boolean): Promise<RiskStatus | null>
   });
 }
 
+/**
+ * Updates the system execution mode.
+ *
+ * @param mode - Target mode ('paper' or 'live')
+ * @param password - Required when switching to 'live' mode
+ * @param confirmation - Confirmation text (e.g., "I UNDERSTAND") for live mode
+ */
 export async function setExecutionMode(
   mode: ExecutionMode,
   password?: string,
@@ -401,6 +426,13 @@ export type ExecutionResultPayload = {
   orders: unknown[];
 };
 
+/**
+ * Emergency function to close all open positions immediately.
+ * Uses `fetchJson` but manually throws if the result is null to prevent silent failure during emergencies.
+ *
+ * @returns Result of the flattening operation
+ * @throws Error if the API request fails completely
+ */
 export async function flattenAllPositions(): Promise<ExecutionResultPayload> {
   const result = await fetchJson<ExecutionResultPayload>('/execution/flatten_all', {
     method: 'POST',
