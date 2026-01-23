@@ -1,3 +1,7 @@
+/**
+ * Standard API response wrapper.
+ * All backend endpoints return this structure to ensure consistent error handling.
+ */
 export type ApiEnvelope<T> = {
   data: T | null;
   error: string | null;
@@ -256,10 +260,18 @@ async function fetchJsonStrict<T>(path: string, options: RequestInit = {}): Prom
   return payload.data;
 }
 
+/**
+ * Retrieves the high-level portfolio state (equity, cash, PnL).
+ * @returns The portfolio summary or null if the request fails (swallowed).
+ */
 export async function fetchPortfolioSummary(): Promise<PortfolioSummary | null> {
   return fetchJson<PortfolioSummary>('/portfolio/summary');
 }
 
+/**
+ * Retrieves all open positions, including both active trades and dust.
+ * @returns List of positions or null if the request fails.
+ */
 export async function fetchPositions(): Promise<PositionPayload[] | null> {
   return fetchJson<PositionPayload[]>('/portfolio/positions');
 }
@@ -272,6 +284,11 @@ export async function fetchRecentExecutions(): Promise<RecentExecution[] | null>
   return fetchJson<RecentExecution[]>('/execution/recent_executions');
 }
 
+/**
+ * Polling endpoint for the "Heartbeat" of the system.
+ * Checks connection status, execution modes, and market data freshness.
+ * @returns System health status or null if unreachable.
+ */
 export async function fetchSystemHealth(): Promise<SystemHealth | null> {
   return fetchJson<SystemHealth>('/system/health');
 }
@@ -376,6 +393,11 @@ export async function getRiskStatus(): Promise<RiskStatus | null> {
   return fetchJson<RiskStatus>('/risk/status');
 }
 
+/**
+ * Toggles the global kill switch.
+ * When active, all new orders are blocked, but existing positions are NOT automatically closed.
+ * @param active - True to engage the kill switch (stop trading), False to resume.
+ */
 export async function setKillSwitch(active: boolean): Promise<RiskStatus | null> {
   return fetchJson<RiskStatus>('/risk/kill_switch', {
     method: 'POST',
@@ -383,6 +405,13 @@ export async function setKillSwitch(active: boolean): Promise<RiskStatus | null>
   });
 }
 
+/**
+ * Updates the bot's execution mode (Paper vs Live).
+ * @param mode - The target mode ('paper' or 'live').
+ * @param password - Required when switching to 'live' mode.
+ * @param confirmation - Must match the specific confirmation phrase for critical actions.
+ * @throws Error if the transition is rejected or credentials are invalid.
+ */
 export async function setExecutionMode(
   mode: ExecutionMode,
   password?: string,
@@ -401,6 +430,12 @@ export type ExecutionResultPayload = {
   orders: unknown[];
 };
 
+/**
+ * 🚨 EMERGENCY: Attempts to close ALL open positions immediately.
+ * Submits market orders to exit everything. Use with caution.
+ * @returns The result of the batch order submission.
+ * @throws Error if the request fails completely.
+ */
 export async function flattenAllPositions(): Promise<ExecutionResultPayload> {
   const result = await fetchJson<ExecutionResultPayload>('/execution/flatten_all', {
     method: 'POST',
