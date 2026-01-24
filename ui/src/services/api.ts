@@ -210,6 +210,16 @@ export type ProfileCreateResponse = {
 const API_BASE = import.meta.env.VITE_API_BASE || '/api';
 const API_TOKEN = import.meta.env.VITE_API_TOKEN;
 
+/**
+ * Performs a "soft" fetch that swallows errors and returns null.
+ *
+ * Use this for non-critical data fetching (e.g., dashboard widgets) where
+ * the UI should render partially rather than crashing or showing a global error.
+ *
+ * @param path - API endpoint path (e.g. '/system/health')
+ * @param options - RequestInit options
+ * @returns The data payload on success, or null on any error.
+ */
 async function fetchJson<T>(path: string, options: RequestInit = {}): Promise<T | null> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (API_TOKEN) headers.Authorization = `Bearer ${API_TOKEN}`;
@@ -233,6 +243,17 @@ async function fetchJson<T>(path: string, options: RequestInit = {}): Promise<T 
   }
 }
 
+/**
+ * Performs a "strict" fetch that throws errors on failure.
+ *
+ * Use this for mutations (POST/PATCH) or critical reads where the operation
+ * cannot proceed without success. Throws if the HTTP status is bad, if the
+ * API envelope contains an error, or if the data payload is null.
+ *
+ * @param path - API endpoint path (e.g. '/system/mode')
+ * @param options - RequestInit options
+ * @returns The data payload (guaranteed non-null).
+ */
 async function fetchJsonStrict<T>(path: string, options: RequestInit = {}): Promise<T> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (API_TOKEN) headers.Authorization = `Bearer ${API_TOKEN}`;
