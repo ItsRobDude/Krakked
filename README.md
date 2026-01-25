@@ -13,7 +13,7 @@ This repository includes working, test-covered implementations for the early pha
 | **Phase 3: Portfolio** | ✅ Implemented | Portfolio service with SQLite persistence, weighted-average cost PnL, fee tracking, and cashflow detection. |
 | **Phase 4: Strategy & Risk** | ✅ Implemented with known follow-ups | Strategy loader with multi-timeframe scheduling, per-strategy/portfolio caps, liquidity gating, and staleness handling; order tagging/OMS wiring will land in Phase 5. |
 | **Phase 5: Execution** | ✅ Implemented | OMS with market-data-driven routing, retries/backoff, dead-man switch hooks, panic cancel, and SQLite persistence; paper/validate-only defaults with explicit allow_live_trading gate for live submission. |
-| **Phase 6: UI/Control** | ✅ Implemented | CLI/web interface for monitoring and manual control. See [status/TODO](docs/phase6.md#status--todo) for remaining punchlist items. |
+| **Phase 6: UI/Control** | ✅ Implemented | CLI/web interface for monitoring and manual control. See [status/TODO](docs/phases/phase6.md#status--todo) for remaining punchlist items. |
 
 Phase 6 is underway with the following milestones queued:
 
@@ -21,9 +21,9 @@ Phase 6 is underway with the following milestones queued:
 * **6B**: TUI HTTP wiring and safety controls.
 * **6C**: React dashboard data and controls.
 
-Credential validation semantics (required fields, bearer token enforcement, and the Kraken probe used) are described in the [Phase 6 contract](docs/phase6.md#credential-validation-rules).
+Credential validation semantics (required fields, bearer token enforcement, and the Kraken probe used) are described in the [Phase 6 contract](docs/phases/phase6.md#credential-validation-rules).
 
-See [`docs/phase6.md`](docs/phase6.md) for the full contract and details.
+See [`docs/phases/phase6.md`](docs/phases/phase6.md) for the full contract and details.
 
 See the consolidated phase contract in [`docs/contract.md`](docs/contract.md) for the full design scope across Phases 1–7. Individual phase files remain available for historical reference.
 
@@ -314,6 +314,7 @@ The CI workflow is the source of truth for what must pass before packaging/deplo
 * **Tests**: `poetry run pytest` from the repo root; set `KRAKEN_LIVE_TESTS=1` to opt into Kraken-backed integration tests (requires valid credentials).
 * **Lint**: `poetry run flake8 src tests` (same scope as CI).
 * **Static typing**: `poetry run mypy src tests` and `poetry run pyright src ui` (run `npm ci` in `ui/` first so Pyright picks up the built UI types, as in CI).【F:.github/workflows/ci.yml†L60-L95】
+* **Frontend Development**: See [`ui/README.md`](ui/README.md) for instructions on running the React dashboard locally (`npm run dev`).
 * **Packaging sanity**: `poetry build` if you need to mirror the release artifact validation done in CI.
 
 ## 🐳 Docker
