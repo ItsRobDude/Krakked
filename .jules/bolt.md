@@ -14,3 +14,7 @@ Benchmark (100k trades):
 - Improvement: ~6-8% (~100ms per 100k trades)
 
 The cache is unbounded but effectively limited by the size of the trading universe (typically < 100 pairs), so memory impact is negligible.
+
+## 2025-02-18 - Avoid to_dict("records") for OHLC conversion
+**Learning:** `DataFrame.to_dict("records")` followed by list comprehension is significantly slower (10x-50x) than zipped list comprehension of columns for creating dataclass instances.
+**Action:** Use `zip(df[col].tolist(), ...)` or similar vectorized extraction when converting large DataFrames to object lists.
