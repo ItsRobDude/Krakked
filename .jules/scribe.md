@@ -1,1 +1,3 @@
 ## 2024-05-24 - Python Version Mismatch **Gap:** README.md stated "Python 3.10+" but `pyproject.toml` enforces ">=3.11,<4.0". This could cause installation failures for users following the README. **Fix:** Updated README.md to specify Python 3.11+.
+
+## 2025-05-24 - ExecutionConfig Modes Undocumented **Gap:** `ExecutionConfig.mode` options ("live", "paper", "dry_run", "simulation") and critical safety gates (`allow_live_trading`) were undocumented in the code, existing only as "tribal knowledge" or in external docs. **Fix:** Added comprehensive docstrings to `ExecutionConfig` explaining all modes and safety flags.

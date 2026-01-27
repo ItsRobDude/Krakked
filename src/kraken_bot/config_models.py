@@ -36,22 +36,64 @@ class MarketDataConfig:
 
 @dataclass
 class ExecutionConfig:
+    """Configuration for the Order Management System (OMS) and execution routing.
+
+    Controls how orders are built, validated, and routed to Kraken.
+    """
+
+    # Execution mode:
+    # - "paper": Real orders with validate=True (safe, no fills).
+    # - "live": Real orders with validate=False (REAL MONEY).
+    # - "dry_run": Offline simulation, no API calls.
+    # - "simulation": Integration test mode with callbacks.
     mode: str = "paper"
+
+    # Default order type (limit/market). Most strategies override this.
     default_order_type: str = "limit"
+
+    # Max slippage in basis points (1 bp = 0.01%) for limit price calculation.
     max_slippage_bps: int = 50
+
+    # Time in Force (GTC, IOC, FOK).
     time_in_force: str = "GTC"
+
+    # If True, orders are maker-only (post-only).
     post_only: bool = False
+
+    # If True, sets the `validate=True` flag on Kraken orders.
+    # Forced to True in "paper" mode. Must be explicitly False for live trading.
     validate_only: bool = True
+
+    # Final safety gate. Must be True to allow any live order submission.
     allow_live_trading: bool = False
+
+    # Internal safety flag required to be True before live trading is allowed.
     paper_tests_completed: bool = False
+
+    # If > 0, sets a cancel-all-after timer (in seconds) on every order.
     dead_man_switch_seconds: int = 600
+
+    # Max retries for transient API errors (rate limits, timeouts).
     max_retries: int = 3
+
+    # Initial delay (seconds) before retrying.
     retry_backoff_seconds: int = 2
+
+    # Multiplier for exponential backoff.
     retry_backoff_factor: float = 2.0
+
+    # Hard limit on concurrent open orders to prevent spamming.
     max_concurrent_orders: int = 10
+
+    # Minimum order size in USD to avoid dust errors (risk-increasing BUYS only).
     min_order_notional_usd: float = 20.0
+
+    # Optional cap on total notional (USD) for a single pair's active orders.
     max_pair_notional_usd: Optional[float] = None
+
+    # Optional cap on total notional (USD) for all active orders combined.
     max_total_notional_usd: Optional[float] = None
+
     # Maximum allowed age for a plan at execution time. Plans older than this
     # are rejected before any orders are built or submitted.
     max_plan_age_seconds: int = 60
