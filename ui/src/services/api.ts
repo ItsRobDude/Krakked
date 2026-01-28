@@ -210,6 +210,10 @@ export type ProfileCreateResponse = {
 const API_BASE = import.meta.env.VITE_API_BASE || '/api';
 const API_TOKEN = import.meta.env.VITE_API_TOKEN;
 
+/**
+ * Generic fetch wrapper that swallows errors and returns null.
+ * Use for non-critical reads where the UI can gracefully render partial state.
+ */
 async function fetchJson<T>(path: string, options: RequestInit = {}): Promise<T | null> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (API_TOKEN) headers.Authorization = `Bearer ${API_TOKEN}`;
@@ -233,6 +237,10 @@ async function fetchJson<T>(path: string, options: RequestInit = {}): Promise<T 
   }
 }
 
+/**
+ * Strict fetch wrapper that throws errors for failed requests or API errors.
+ * Use for critical mutations (POST/PATCH) or required initial data loading.
+ */
 async function fetchJsonStrict<T>(path: string, options: RequestInit = {}): Promise<T> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (API_TOKEN) headers.Authorization = `Bearer ${API_TOKEN}`;
@@ -256,6 +264,10 @@ async function fetchJsonStrict<T>(path: string, options: RequestInit = {}): Prom
   return payload.data;
 }
 
+/**
+ * Fetches the current portfolio summary (equity, PnL, cash).
+ * @returns Summary object or null if request fails.
+ */
 export async function fetchPortfolioSummary(): Promise<PortfolioSummary | null> {
   return fetchJson<PortfolioSummary>('/portfolio/summary');
 }
@@ -376,6 +388,11 @@ export async function getRiskStatus(): Promise<RiskStatus | null> {
   return fetchJson<RiskStatus>('/risk/status');
 }
 
+/**
+ * Manually engages or disengages the kill switch.
+ * @param active - True to block all new risk; false to clear manual block.
+ * @returns Updated risk status or null on failure.
+ */
 export async function setKillSwitch(active: boolean): Promise<RiskStatus | null> {
   return fetchJson<RiskStatus>('/risk/kill_switch', {
     method: 'POST',
@@ -401,6 +418,12 @@ export type ExecutionResultPayload = {
   orders: unknown[];
 };
 
+/**
+ * Emergency: Flattens all open positions immediately.
+ * Uses a special "emergency flatten" plan in the risk engine.
+ * @returns Execution result payload.
+ * @throws Error if the API request fails (critical action).
+ */
 export async function flattenAllPositions(): Promise<ExecutionResultPayload> {
   const result = await fetchJson<ExecutionResultPayload>('/execution/flatten_all', {
     method: 'POST',
