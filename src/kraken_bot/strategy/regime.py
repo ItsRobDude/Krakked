@@ -51,7 +51,12 @@ def _classify_pair(autocorr: float, volatility: float) -> MarketRegime:
 
 
 def infer_regime(market_data: MarketDataAPI, pairs: list[str]) -> RegimeSnapshot:
-    """Infer a coarse market regime for each pair using recent OHLC data."""
+    """Infer a coarse market regime for each pair using recent OHLC data.
+
+    This function relies on '1h' timeframe candles and requests a 200-bar lookback
+    to compute volatility and autocorrelation. Returns CHOPPY if data is insufficient
+    (less than 20 bars).
+    """
 
     regimes: Dict[str, MarketRegime] = {}
     for pair in pairs:
