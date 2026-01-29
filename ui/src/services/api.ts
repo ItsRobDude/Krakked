@@ -210,36 +210,19 @@ export type ProfileCreateResponse = {
 const API_BASE = import.meta.env.VITE_API_BASE || '/api';
 const API_TOKEN = import.meta.env.VITE_API_TOKEN;
 
-async function fetchJson<T>(path: string, options: RequestInit = {}): Promise<T | null> {
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  if (API_TOKEN) headers.Authorization = `Bearer ${API_TOKEN}`;
-  if (options.headers) Object.assign(headers, options.headers as Record<string, string>);
-
-  try {
-    const response = await fetch(`${API_BASE}${path}`, { ...options, headers });
-    if (!response.ok) {
-      throw new Error(`Request failed: ${response.status}`);
-    }
-
-    const payload = (await response.json()) as ApiEnvelope<T>;
-    if (payload.error) {
-      throw new Error(payload.error);
-    }
-
-    return payload.data;
-  } catch (error) {
-    console.warn(`Falling back to placeholders for ${path}`, error);
-    return null;
-  }
-}
-
-async function fetchJsonStrict<T>(path: string, options: RequestInit = {}): Promise<T> {
+async function request<T>(path: string, options: RequestInit = {}): Promise<ApiEnvelope<T>> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (API_TOKEN) headers.Authorization = `Bearer ${API_TOKEN}`;
   if (options.headers) Object.assign(headers, options.headers as Record<string, string>);
 
   const response = await fetch(`${API_BASE}${path}`, { ...options, headers });
-  const payload = (await response.json()) as ApiEnvelope<T>;
+
+  let payload: ApiEnvelope<T>;
+  try {
+    payload = (await response.json()) as ApiEnvelope<T>;
+  } catch {
+    throw new Error(`Request failed: ${response.status}`);
+  }
 
   if (!response.ok) {
     throw new Error(payload.error || `Request failed: ${response.status}`);
@@ -248,6 +231,22 @@ async function fetchJsonStrict<T>(path: string, options: RequestInit = {}): Prom
   if (payload.error) {
     throw new Error(payload.error);
   }
+
+  return payload;
+}
+
+async function fetchJson<T>(path: string, options: RequestInit = {}): Promise<T | null> {
+  try {
+    const payload = await request<T>(path, options);
+    return payload.data;
+  } catch (error) {
+    console.warn(`Falling back to placeholders for ${path}`, error);
+    return null;
+  }
+}
+
+async function fetchJsonStrict<T>(path: string, options: RequestInit = {}): Promise<T> {
+  const payload = await request<T>(path, options);
 
   if (payload.data === null) {
     throw new Error('Empty response');
