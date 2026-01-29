@@ -1,8 +1,8 @@
-
 import unittest
 from decimal import Decimal
-from unittest.mock import MagicMock
+
 from kraken_bot.portfolio.portfolio import Portfolio
+
 
 class TestQuantizerCache(unittest.TestCase):
     def test_get_quantizer_returns_correct_decimal(self):
@@ -43,5 +43,6 @@ class TestQuantizerCache(unittest.TestCase):
         self.assertEqual(info.misses, 1)
         self.assertEqual(info.hits, 1)
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     unittest.main()
