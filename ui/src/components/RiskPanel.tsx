@@ -53,15 +53,23 @@ export function RiskPanel({
   );
   const driftGuard = Boolean(status?.drift_flag);
   const isResume = Boolean(status?.kill_switch_active);
-  const disableReason = !status
-    ? 'Awaiting latest risk status.'
-    : readOnly
-      ? 'Backend read-only: changes are simulated only.'
-      : isResume && drawdownGuard
-        ? `Daily drawdown ${status.daily_drawdown_pct.toFixed(1)}% exceeds limit.`
-        : isResume && driftGuard
-          ? 'Price drift detected. Risk controls locked.'
-          : undefined;
+  const getDisableReason = () => {
+    if (!status) return 'Awaiting latest risk status.';
+    if (readOnly) return 'Backend read-only: changes are simulated only.';
+
+    if (isResume) {
+      if (drawdownGuard) {
+        return `Daily drawdown ${status.daily_drawdown_pct.toFixed(1)}% exceeds limit.`;
+      }
+      if (driftGuard) {
+        return 'Price drift detected. Risk controls locked.';
+      }
+    }
+
+    return undefined;
+  };
+
+  const disableReason = getDisableReason();
   const buttonDisabled = busy || readOnly || !status || (isResume && (drawdownGuard || driftGuard));
   const hotStrategies = status
     ? Object.entries(status.per_strategy_exposure_pct)
