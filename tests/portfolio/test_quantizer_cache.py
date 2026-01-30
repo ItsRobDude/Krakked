@@ -1,8 +1,8 @@
-
-import pytest
-from unittest.mock import MagicMock
 from decimal import Decimal
+from unittest.mock import MagicMock
+
 from kraken_bot.portfolio.portfolio import Portfolio
+
 
 def test_quantizer_caching():
     """Verify that _get_quantizer properly caches Decimal objects."""
@@ -28,6 +28,7 @@ def test_quantizer_caching():
     info = Portfolio._get_quantizer.cache_info()
     assert info.hits == 1
     assert info.misses == 2
+
 
 def test_round_vol_correctness():
     """Verify _round_vol behaves correctly with the cached quantizer."""
@@ -60,6 +61,7 @@ def test_round_vol_correctness():
     vol_small = 0.00009
     rounded_small = portfolio._round_vol("XBTUSD", vol_small)
     assert rounded_small == 0.0
+
 
 def test_round_price_correctness():
     """Verify _round_price behaves correctly with the cached quantizer."""
