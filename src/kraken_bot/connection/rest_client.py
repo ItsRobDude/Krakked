@@ -183,35 +183,107 @@ class KrakenRESTClient:
         return self._request(endpoint, params=params, private=True)
 
     def add_order(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Place a new order on the exchange.
+
+        Endpoint: AddOrder
+
+        Args:
+            params: A dictionary of order parameters. Common keys include:
+                - pair (str): Asset pair ID (e.g., 'XXBTZUSD').
+                - type (str): Type of order (buy/sell).
+                - ordertype (str): Order type (market/limit/stop-loss/etc.).
+                - price (str/float): Price (optional, dependent on ordertype).
+                - volume (str/float): Order volume in terms of the base asset.
+                - userref (int): User reference id.
+                - validate (bool): Validate inputs only. Do not submit order.
+
+        Returns:
+            Dict[str, Any]: The API response result (e.g., {'txid': ['...'], 'descr': '...'}).
+        """
         return self.get_private("AddOrder", params=params)
 
     def cancel_order(self, txid: str) -> Dict[str, Any]:
+        """
+        Cancel a specific order.
+
+        Endpoint: CancelOrder
+
+        Args:
+            txid: The transaction ID of the order to cancel.
+
+        Returns:
+            Dict[str, Any]: The API response result (e.g., {'count': 1}).
+        """
         return self.get_private("CancelOrder", {"txid": txid})
 
     def cancel_all_orders(self) -> Dict[str, Any]:
+        """
+        Cancel all open orders.
+
+        Endpoint: CancelAll
+
+        Returns:
+            Dict[str, Any]: The API response result (e.g., {'count': 2}).
+        """
         return self.get_private("CancelAll")
 
     def cancel_all_orders_after(self, timeout_seconds: int) -> Dict[str, Any]:
+        """
+        Set a "Dead Man's Switch" to cancel all orders after a timeout.
+
+        Endpoint: CancelAllOrdersAfter
+
+        Args:
+            timeout_seconds: Timeout in seconds. Set to 0 to disable.
+
+        Returns:
+            Dict[str, Any]: The API response result (e.g., {'currentTime': ..., 'triggerTime': ...}).
+        """
         return self.get_private("CancelAllOrdersAfter", {"timeout": timeout_seconds})
 
     def get_ledgers(self, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
-        Retrieves information about ledger entries.
+        Retrieve information about ledger entries.
+
         Endpoint: Ledgers
+
+        Args:
+            params: Optional dictionary of query parameters (e.g., 'asset', 'type', 'start', 'end').
+
+        Returns:
+            Dict[str, Any]: The ledger entries data.
         """
         return self.get_private("Ledgers", params=params)
 
     def get_open_orders(
         self, params: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
-        """Retrieves currently open orders. Endpoint: OpenOrders"""
+        """
+        Retrieve currently open orders.
+
+        Endpoint: OpenOrders
+
+        Args:
+            params: Optional dictionary of query parameters (e.g., 'trades', 'userref').
+
+        Returns:
+            Dict[str, Any]: The open orders data, keyed by txid.
+        """
         return self.get_private("OpenOrders", params=params)
 
     def get_closed_orders(
         self, params: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """
-        Retrieves information about closed orders.
+        Retrieve information about closed orders.
+
         Endpoint: ClosedOrders
+
+        Args:
+            params: Optional dictionary of query parameters (e.g., 'trades', 'userref', 'start', 'end').
+
+        Returns:
+            Dict[str, Any]: The closed orders data, including count and list of orders.
         """
         return self.get_private("ClosedOrders", params=params)
