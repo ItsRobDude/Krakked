@@ -102,6 +102,31 @@ If you are working outside Poetry, you can still get an editable install from th
 pip install -e .[tui]
 ```
 
+### 🎨 UI Development
+
+The bot includes a React-based frontend in the `ui/` directory.
+
+**Prerequisites**: Node.js v18+ and `npm`.
+
+1.  **Install Dependencies**:
+    ```bash
+    cd ui
+    npm ci
+    ```
+
+2.  **Build for Production**:
+    The Python backend (`krakked run`) serves the built frontend from `ui/dist`. You must rebuild this whenever UI code changes.
+    ```bash
+    npm run build
+    ```
+
+3.  **Development Mode (Hot Reloading)**:
+    Run the Vite development server for instant feedback.
+    ```bash
+    npm run dev
+    ```
+    *Note*: This runs on a separate port (default `5173`).
+
 ### 🔄 Pre-commit hooks
 
 Consistent formatting and linting are enforced by `pre-commit`. The CI workflow runs `poetry run pre-commit run --all-files` and will fail if hooks are not clean, so install them locally to avoid churn:

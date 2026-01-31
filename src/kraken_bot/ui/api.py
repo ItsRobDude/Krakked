@@ -1,4 +1,8 @@
-"""FastAPI application factory for the UI control plane."""
+"""FastAPI application factory for the UI control plane.
+
+This module initializes the FastAPI app, mounts API routers, and serves the
+production frontend build from `ui/dist` if it exists.
+"""
 
 from __future__ import annotations
 
