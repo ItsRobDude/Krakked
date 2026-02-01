@@ -183,7 +183,7 @@ class FileOHLCStore:
             return []
 
         # Use cast(Any, ...) because type checkers often fail to resolve .tolist() on Series
-        timestamps = cast(Any, df.index.astype(int)).tolist()
+        timestamps = cast(Any, df.index).astype(int).tolist()
         opens = cast(Any, df["open"]).tolist()
         highs = cast(Any, df["high"]).tolist()
         lows = cast(Any, df["low"]).tolist()
