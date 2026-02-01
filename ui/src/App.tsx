@@ -143,11 +143,12 @@ const transformRiskDecisions = (decisions: RiskDecision[]) =>
     .filter((decision) => decision.blocked || decision.kill_switch_active)
     .map((decision) => {
       const timestamp = formatTimestamp(decision.decided_at);
-      const reasons = decision.block_reasons.length
-        ? decision.block_reasons.join(', ')
-        : decision.kill_switch_active
-          ? 'Kill switch active'
-          : '';
+      let reasons = '';
+      if (decision.block_reasons.length) {
+        reasons = decision.block_reasons.join(', ');
+      } else if (decision.kill_switch_active) {
+        reasons = 'Kill switch active';
+      }
       const message = `${decision.pair}: ${decision.blocked ? 'blocked' : 'allowed'} ${decision.action_type}${
         reasons ? ` (${reasons})` : ''
       }`;
@@ -1065,6 +1066,21 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
     );
   }
 
+  const getBotStatus = (active: boolean | null | undefined) => {
+    if (active === true) return { label: 'Bot stopped', className: 'pill pill--danger' };
+    if (active === false) return { label: 'Bot running', className: 'pill pill--success' };
+    return { label: 'Bot status pending', className: 'pill pill--muted' };
+  };
+
+  const getBotButtonLabel = () => {
+    if (riskBusy) return 'Updating…';
+    if (risk?.kill_switch_active) return 'Start bot';
+    return 'Stop bot';
+  };
+
+  const botStatus = getBotStatus(risk?.kill_switch_active);
+  const botButtonLabel = getBotButtonLabel();
+
   return (
     <Layout
       title="Trading Overview"
@@ -1075,20 +1091,8 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
             {session?.mode === 'live' ? 'Live' : 'Paper'}
           </span>
 
-          <span
-            className={
-              risk?.kill_switch_active === true
-                ? 'pill pill--danger'
-                : risk?.kill_switch_active === false
-                  ? 'pill pill--success'
-                  : 'pill pill--muted'
-            }
-          >
-            {risk?.kill_switch_active === true
-              ? 'Bot stopped'
-              : risk?.kill_switch_active === false
-                ? 'Bot running'
-                : 'Bot status pending'}
+          <span className={botStatus.className}>
+            {botStatus.label}
           </span>
 
           {currentPreset && (
@@ -1126,11 +1130,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
             aria-busy={riskBusy}
             onClick={handleToggleKillSwitch}
           >
-            {riskBusy
-              ? 'Updating…'
-              : risk?.kill_switch_active
-                ? 'Start bot'
-                : 'Stop bot'}
+            {botButtonLabel}
           </button>
           <button
             type="button"
