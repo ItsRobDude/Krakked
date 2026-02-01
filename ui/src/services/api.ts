@@ -9,6 +9,10 @@ export type PortfolioSummary = {
   realized_pnl_usd: number | null;
   unrealized_pnl_usd: number | null;
   drift_flag: boolean | null;
+  /**
+   * Unix timestamp of the last snapshot in seconds.
+   * @remarks The API currently returns a number, though this type defines it as string.
+   */
   last_snapshot_ts: string | null;
 };
 
@@ -376,6 +380,14 @@ export async function getRiskStatus(): Promise<RiskStatus | null> {
   return fetchJson<RiskStatus>('/risk/status');
 }
 
+/**
+ * Enables or disables the global kill switch.
+ *
+ * When active, this prevents *new* orders from being generated but does NOT
+ * close existing positions. Use {@link flattenAllPositions} for emergency closures.
+ *
+ * @param active - true to stop the bot, false to resume.
+ */
 export async function setKillSwitch(active: boolean): Promise<RiskStatus | null> {
   return fetchJson<RiskStatus>('/risk/kill_switch', {
     method: 'POST',
@@ -383,6 +395,13 @@ export async function setKillSwitch(active: boolean): Promise<RiskStatus | null>
   });
 }
 
+/**
+ * Updates the execution mode (e.g., 'paper' vs 'live').
+ *
+ * @param mode - The target mode.
+ * @param password - Required when switching to strict modes (like 'live').
+ * @param confirmation - Explicit confirmation string required for live mode.
+ */
 export async function setExecutionMode(
   mode: ExecutionMode,
   password?: string,
@@ -401,6 +420,12 @@ export type ExecutionResultPayload = {
   orders: unknown[];
 };
 
+/**
+ * Panic function: attempts to close ALL open positions immediately.
+ *
+ * This ignores standard risk checks to ensure rapid exit.
+ * @returns Result summary of the flatten operation.
+ */
 export async function flattenAllPositions(): Promise<ExecutionResultPayload> {
   const result = await fetchJson<ExecutionResultPayload>('/execution/flatten_all', {
     method: 'POST',
