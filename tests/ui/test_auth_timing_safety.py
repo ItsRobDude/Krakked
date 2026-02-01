@@ -1,8 +1,11 @@
 import secrets
 from unittest.mock import patch
+
 from starlette.testclient import TestClient
+
 from kraken_bot.ui.api import create_api
 from tests.ui.conftest import build_test_context
+
 
 def test_auth_middleware_uses_constant_time_compare():
     """
@@ -17,11 +20,12 @@ def test_auth_middleware_uses_constant_time_compare():
 
     # We spy on secrets.compare_digest to ensure it is used.
     # We use side_effect=secrets.compare_digest so it actually runs the comparison logic if called.
-    with patch("secrets.compare_digest", side_effect=secrets.compare_digest) as mock_compare:
+    with patch(
+        "secrets.compare_digest", side_effect=secrets.compare_digest
+    ) as mock_compare:
         # Send an invalid token
         response = client.get(
-            "/api/portfolio/summary",
-            headers={"Authorization": "Bearer wrong"}
+            "/api/portfolio/summary", headers={"Authorization": "Bearer wrong"}
         )
         assert response.status_code == 401
 
