@@ -1,4 +1,5 @@
 from starlette.testclient import TestClient
+
 from kraken_bot.ui.api import create_api
 from tests.ui.conftest import build_test_context
 
@@ -22,7 +23,9 @@ def test_auth_middleware_compare_digest_compatibility(monkeypatch):
 
     # 1. Valid Token
     resp = client.get(endpoint, headers={"Authorization": "Bearer supersecret"})
-    assert resp.status_code == 200, f"Valid token should be accepted. Got {resp.status_code} {resp.text}"
+    assert (
+        resp.status_code == 200
+    ), f"Valid token should be accepted. Got {resp.status_code} {resp.text}"
 
     # 2. Invalid Token
     resp = client.get(endpoint, headers={"Authorization": "Bearer wrong"})
@@ -45,9 +48,7 @@ def test_auth_middleware_empty_token_config():
     """
     Verifies behavior when the configured token is empty (middleware skipped).
     """
-    context = build_test_context(
-        auth_enabled=True, auth_token="", read_only=False
-    )
+    context = build_test_context(auth_enabled=True, auth_token="", read_only=False)
     context.is_setup_mode = False
 
     app = create_api(context)
