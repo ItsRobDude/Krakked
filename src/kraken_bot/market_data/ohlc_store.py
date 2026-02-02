@@ -170,7 +170,7 @@ class FileOHLCStore:
 
         # Vectorized extraction
         # casting to Any to avoid static analysis issues with pandas dynamic attributes
-        timestamps = cast(Any, df.index.astype(int)).tolist()
+        timestamps = cast(Any, df.index).astype(int).tolist()
         opens = cast(Any, df["open"]).tolist()
         highs = cast(Any, df["high"]).tolist()
         lows = cast(Any, df["low"]).tolist()
