@@ -210,10 +210,16 @@ export type ProfileCreateResponse = {
 const API_BASE = import.meta.env.VITE_API_BASE || '/api';
 const API_TOKEN = import.meta.env.VITE_API_TOKEN;
 
-async function fetchJson<T>(path: string, options: RequestInit = {}): Promise<T | null> {
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+function getHeaders(extraHeaders?: HeadersInit, json = true): Record<string, string> {
+  const headers: Record<string, string> = {};
+  if (json) headers['Content-Type'] = 'application/json';
   if (API_TOKEN) headers.Authorization = `Bearer ${API_TOKEN}`;
-  if (options.headers) Object.assign(headers, options.headers as Record<string, string>);
+  if (extraHeaders) Object.assign(headers, extraHeaders as Record<string, string>);
+  return headers;
+}
+
+async function fetchJson<T>(path: string, options: RequestInit = {}): Promise<T | null> {
+  const headers = getHeaders(options.headers);
 
   try {
     const response = await fetch(`${API_BASE}${path}`, { ...options, headers });
@@ -234,9 +240,7 @@ async function fetchJson<T>(path: string, options: RequestInit = {}): Promise<T 
 }
 
 async function fetchJsonStrict<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  if (API_TOKEN) headers.Authorization = `Bearer ${API_TOKEN}`;
-  if (options.headers) Object.assign(headers, options.headers as Record<string, string>);
+  const headers = getHeaders(options.headers);
 
   const response = await fetch(`${API_BASE}${path}`, { ...options, headers });
   const payload = (await response.json()) as ApiEnvelope<T>;
@@ -414,8 +418,7 @@ export async function flattenAllPositions(): Promise<ExecutionResultPayload> {
 }
 
 export async function downloadRuntimeConfig(): Promise<Blob | null> {
-  const headers: Record<string, string> = {};
-  if (API_TOKEN) headers.Authorization = `Bearer ${API_TOKEN}`;
+  const headers = getHeaders(undefined, false);
 
   const response = await fetch(`${API_BASE}/config/runtime`, {
     method: 'GET',
