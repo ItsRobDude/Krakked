@@ -1,1 +1,3 @@
 ## 2024-05-24 - Python Version Mismatch **Gap:** README.md stated "Python 3.10+" but `pyproject.toml` enforces ">=3.11,<4.0". This could cause installation failures for users following the README. **Fix:** Updated README.md to specify Python 3.11+.
+
+## 2026-02-03 - Risk Engine Precedence Gap **Gap:** The `process_intents` method in `RiskEngine` contains complex precedence logic (Kill Switch > Liquidity > Strategy Caps > Portfolio Limits > Dust) that is not documented, forcing developers to read the implementation to understand why an order might be blocked or clamped. **Fix:** Added comprehensive docstring to `RiskEngine.process_intents` outlining the risk evaluation pipeline and precedence rules.
