@@ -1,5 +1,6 @@
 import timeit
 from unittest.mock import MagicMock
+
 from kraken_bot.portfolio.portfolio import Portfolio
 
 
