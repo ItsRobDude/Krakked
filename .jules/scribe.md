@@ -1,1 +1,2 @@
 ## 2024-05-24 - Python Version Mismatch **Gap:** README.md stated "Python 3.10+" but `pyproject.toml` enforces ">=3.11,<4.0". This could cause installation failures for users following the README. **Fix:** Updated README.md to specify Python 3.11+.
+## 2026-02-04 - Missing UI Build Instructions **Gap:** README.md implies the orchestrator runs the UI but omits instructions to build the frontend assets (requiring Node.js), causing the UI to fail silently or log warnings. **Fix:** Added Node.js prerequisite and explicit "Building the Web UI" instructions to README.md.

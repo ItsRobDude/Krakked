@@ -42,6 +42,7 @@ The bot is organized into distinct modules:
 
 *   **Python 3.11+**: Ensure Python is installed and added to your PATH.
 *   **Poetry**: The dependency manager used for this project.
+*   **Node.js 20+**: Required to build the web UI dashboard (optional if using CLI only).
 
 ### 🐧 Linux / macOS
 
@@ -75,6 +76,22 @@ The bot is organized into distinct modules:
     cd kraken-bot
     poetry install
     ```
+
+### 💻 Building the Web UI
+
+The web dashboard is a React application that must be built before the Python backend can serve it.
+
+1.  **Enter the UI directory**:
+    ```bash
+    cd ui
+    ```
+
+2.  **Install dependencies and build**:
+    ```bash
+    npm install
+    npm run build
+    ```
+    This creates the static assets in `ui/dist/`. Return to the root directory (`cd ..`) to run the bot.
 
 ### 🎛️ Optional: Textual TUI dashboard
 
@@ -221,6 +238,8 @@ poetry run krakked run-once
 Execution defaults stay conservative until you explicitly opt-in: `mode="paper"`, `validate_only=True`, and `allow_live_trading=False`, keeping all `krakked` entry points in paper/validate-only mode out of the box.【F:src/kraken_bot/config.py†L29-L36】
 
 To start the full orchestrator (market data WebSocket loop, portfolio sync scheduler, strategy cycles with execution, and the FastAPI UI in the same process):
+
+> **Note**: The web UI requires the frontend to be built first. See [Building the Web UI](#building-the-web-ui).
 
 ```bash
 poetry run krakked run
