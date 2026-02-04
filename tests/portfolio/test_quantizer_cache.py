@@ -1,7 +1,8 @@
-import pytest
 from decimal import Decimal
 from unittest.mock import MagicMock
+
 from kraken_bot.portfolio.portfolio import Portfolio
+
 
 def test_quantizer_caching():
     """Verify that _get_quantizer correctly creates and caches Decimal quantizers."""
@@ -35,6 +36,7 @@ def test_quantizer_caching():
     Portfolio._get_quantizer(4)
     info_after_3 = Portfolio._get_quantizer.cache_info()
     assert info_after_3.misses == info_after_2.misses + 1
+
 
 def test_rounding_uses_cache():
     """Verify that rounding methods utilize the cached quantizer."""
