@@ -8,6 +8,7 @@ without duplicating logic.
 
 from __future__ import annotations
 
+import functools
 import time
 from collections import defaultdict
 from dataclasses import dataclass
@@ -85,12 +86,17 @@ class Portfolio:
         # Cache for trade pair resolution: raw_pair -> (canonical, base, quote)
         self._trade_pair_cache: Dict[str, Tuple[str, str, str]] = {}
 
+    @staticmethod
+    @functools.lru_cache(maxsize=128)
+    def _get_quantizer(decimals: int) -> Decimal:
+        return Decimal("1." + "0" * decimals)
+
     def _round_vol(self, pair: str, vol: float) -> float:
         """Round volume to the pair's configured lot decimals using ROUND_FLOOR."""
         try:
             meta = self.market_data.get_pair_metadata(pair)
             d_vol = Decimal(str(vol))
-            quantizer = Decimal("1." + "0" * meta.volume_decimals)
+            quantizer = self._get_quantizer(meta.volume_decimals)
             return float(d_vol.quantize(quantizer, rounding=ROUND_FLOOR))
         except Exception:
             # Fallback for missing metadata:
@@ -104,7 +110,7 @@ class Portfolio:
         try:
             meta = self.market_data.get_pair_metadata(pair)
             d_price = Decimal(str(price))
-            quantizer = Decimal("1." + "0" * meta.price_decimals)
+            quantizer = self._get_quantizer(meta.price_decimals)
             return float(d_price.quantize(quantizer, rounding=ROUND_HALF_UP))
         except Exception:
             return price
