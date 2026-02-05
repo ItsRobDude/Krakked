@@ -295,6 +295,40 @@ class RiskEngine:
         weights: StrategyWeights | None = None,
         pending_orders: Optional[List[LocalOrder]] = None,
     ) -> List[RiskAdjustedAction]:
+        """
+        Process strategy intents and convert them into risk-adjusted actions.
+
+        This is the core safety gateway of the bot. It enforces a strict hierarchy of
+        checks to ensure the portfolio remains within defined risk limits.
+
+        Precedence Order:
+        1. Global Kill Switches:
+           - Manual kill switch (API triggered).
+           - Portfolio drift (if `kill_switch_on_drift` is enabled).
+           - Max daily drawdown exceeded.
+           If active, ONLY reduce-only or close actions are allowed; new opens are blocked.
+
+        2. Liquidity Gates:
+           - Blocks new exposure if 24h volume < `min_liquidity_24h_usd`.
+
+        3. Strategy & Portfolio Limits:
+           - Per-strategy capital allocation caps.
+           - Max exposure per asset.
+           - Max total portfolio risk (leverage control).
+           - Max open positions count.
+
+        4. Dust Checks:
+           - Filters out intents that result in untradeable "dust" sizes based on
+             pair metadata (min order size).
+
+        Args:
+            intents: List of desired actions from strategies.
+            weights: Optional dynamic weights to adjust strategy allocations.
+            pending_orders: Currently active open orders (used to calculate "virtual" exposure).
+
+        Returns:
+            List of RiskAdjustedAction objects, each marked as 'allowed', 'clamped', or 'blocked'.
+        """
         ctx = self.build_risk_context(pending_orders=pending_orders)
 
         per_strategy_caps = self._build_effective_caps(weights)
