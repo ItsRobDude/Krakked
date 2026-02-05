@@ -29,6 +29,7 @@ from kraken_bot.config_models import (
 )
 from kraken_bot.logging_config import get_log_environment, structured_log_extra
 from kraken_bot.strategy.catalog import CANONICAL_STRATEGIES
+from kraken_bot.utils.io import sanitize_filename
 
 RUNTIME_OVERRIDES_FILENAME = "config.runtime.yaml"
 
@@ -131,7 +132,17 @@ def dump_runtime_overrides(
     profile_name = session_config.profile_name if session_config else None
 
     if profile_name:
-        path = config_dir / "profiles" / profile_name / RUNTIME_OVERRIDES_FILENAME
+        try:
+            # Aegis: prevent path traversal by strictly sanitizing profile name
+            safe_name = sanitize_filename(profile_name)
+            path = config_dir / "profiles" / safe_name / RUNTIME_OVERRIDES_FILENAME
+        except ValueError:
+            logger.error(
+                "Invalid profile name '%s' in dump_runtime_overrides; skipping save to avoid unsafe path",
+                profile_name,
+                extra={"event": "config_dump_invalid_profile"},
+            )
+            return
     else:
         path = config_dir / RUNTIME_OVERRIDES_FILENAME
 
