@@ -1,4 +1,5 @@
 from decimal import Decimal
+
 from kraken_bot.portfolio.portfolio import Portfolio
 
 
