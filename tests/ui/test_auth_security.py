@@ -1,6 +1,8 @@
-from unittest.mock import patch
 import secrets
+from unittest.mock import patch
+
 from starlette.testclient import TestClient
+
 from kraken_bot.ui.api import create_api
 from tests.ui.conftest import build_test_context
 
@@ -15,16 +17,14 @@ def test_auth_middleware_basic_functionality():
 
     # invalid token
     response = client.get(
-        "/api/portfolio/summary",
-        headers={"Authorization": "Bearer wrong-token"}
+        "/api/portfolio/summary", headers={"Authorization": "Bearer wrong-token"}
     )
     assert response.status_code == 401
     assert response.json() == {"data": None, "error": "Unauthorized"}
 
     # valid token
     response = client.get(
-        "/api/portfolio/summary",
-        headers={"Authorization": "Bearer secret-token"}
+        "/api/portfolio/summary", headers={"Authorization": "Bearer secret-token"}
     )
     assert response.status_code == 200
 
@@ -38,14 +38,15 @@ def test_auth_middleware_uses_compare_digest():
     # We need to spy on secrets.compare_digest inside kraken_bot.ui.api
     # Since it is imported as 'import secrets', we patch 'kraken_bot.ui.api.secrets.compare_digest'
 
-    with patch("kraken_bot.ui.api.secrets.compare_digest", side_effect=secrets.compare_digest) as mock_compare:
+    with patch(
+        "kraken_bot.ui.api.secrets.compare_digest", side_effect=secrets.compare_digest
+    ) as mock_compare:
         app = create_api(context)
         client = TestClient(app)
 
         # Make a request with invalid token
         client.get(
-            "/api/portfolio/summary",
-            headers={"Authorization": "Bearer wrong-token"}
+            "/api/portfolio/summary", headers={"Authorization": "Bearer wrong-token"}
         )
 
         assert mock_compare.called
