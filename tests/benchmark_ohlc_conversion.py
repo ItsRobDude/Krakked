@@ -1,8 +1,10 @@
 import time
-import pandas as pd
+from typing import Any, List, cast
+
 import numpy as np
+import pandas as pd
+
 from kraken_bot.market_data.models import OHLCBar
-from typing import List, Any, cast
 
 
 def _df_to_bars_legacy(df: pd.DataFrame) -> List[OHLCBar]:
@@ -35,13 +37,16 @@ def _df_to_bars_optimized(df: pd.DataFrame) -> List[OHLCBar]:
 def run_benchmark():
     # Setup
     N = 100_000
-    df = pd.DataFrame({
-        "open": np.random.rand(N),
-        "high": np.random.rand(N),
-        "low": np.random.rand(N),
-        "close": np.random.rand(N),
-        "volume": np.random.rand(N),
-    }, index=pd.Index(np.arange(N), name="timestamp"))
+    df = pd.DataFrame(
+        {
+            "open": np.random.rand(N),
+            "high": np.random.rand(N),
+            "low": np.random.rand(N),
+            "close": np.random.rand(N),
+            "volume": np.random.rand(N),
+        },
+        index=pd.Index(np.arange(N), name="timestamp"),
+    )
 
     # Warmup
     _df_to_bars_legacy(df.head(100))
