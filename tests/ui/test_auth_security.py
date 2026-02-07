@@ -1,6 +1,6 @@
-
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+
 from kraken_bot.ui.api import AuthMiddleware
 
 
@@ -24,7 +24,9 @@ def test_auth_middleware_blocks_unauthorized():
     assert response.status_code == 401
 
     # Correct header
-    response = client.get("/api/protected", headers={"Authorization": "Bearer secret-token"})
+    response = client.get(
+        "/api/protected", headers={"Authorization": "Bearer secret-token"}
+    )
     assert response.status_code == 200
     assert response.json() == {"message": "secret"}
 
