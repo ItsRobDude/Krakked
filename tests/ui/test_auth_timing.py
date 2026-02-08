@@ -1,5 +1,7 @@
 from unittest.mock import patch
+
 from starlette.testclient import TestClient
+
 from kraken_bot.ui.api import create_api
 from tests.ui.conftest import build_test_context
 
@@ -22,7 +24,9 @@ def test_auth_middleware_uses_constant_time_compare():
         # Make a request to a protected endpoint
         # We pass the correct token so that even the non-secure comparison would pass (if it were used).
         # But we care about WHICH comparison function is used.
-        response = client.get("/api/risk/status", headers={"Authorization": f"Bearer {token}"})
+        response = client.get(
+            "/api/risk/status", headers={"Authorization": f"Bearer {token}"}
+        )
 
         # Verify the request succeeded (200 OK) - this ensures we hit the auth logic
         assert response.status_code == 200, "Request should succeed with valid token"
