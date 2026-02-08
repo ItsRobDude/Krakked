@@ -176,7 +176,9 @@ class FileOHLCStore:
 
         return [
             OHLCBar(ts, o, h, l, c, v)
-            for ts, o, h, l, c, v in zip(timestamps, opens, highs, lows, closes, volumes)
+            for ts, o, h, l, c, v in zip(
+                timestamps, opens, highs, lows, closes, volumes
+            )
         ]
 
     def _update_cache(self, pair: str, timeframe: str, df: pd.DataFrame) -> bool:

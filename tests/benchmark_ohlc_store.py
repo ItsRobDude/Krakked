@@ -1,4 +1,3 @@
-
 import shutil
 import tempfile
 import time
@@ -17,7 +16,7 @@ def create_dummy_bars(count: int, start_ts: int = 1600000000) -> List[OHLCBar]:
             high=101.0 + i * 0.1,
             low=99.0 + i * 0.1,
             close=100.5 + i * 0.1,
-            volume=1000.0 + i
+            volume=1000.0 + i,
         )
         for i in range(count)
     ]

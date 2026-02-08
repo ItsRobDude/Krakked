@@ -1,4 +1,3 @@
-
 import time
 from dataclasses import dataclass
 from typing import Any, List, cast
@@ -45,13 +44,16 @@ def optimized_conversion(df: pd.DataFrame) -> List[OHLCBar]:
 def run_benchmark():
     # Setup: Create a large DataFrame
     N = 100_000
-    df = pd.DataFrame({
-        "open": np.random.rand(N),
-        "high": np.random.rand(N),
-        "low": np.random.rand(N),
-        "close": np.random.rand(N),
-        "volume": np.random.rand(N)
-    }, index=pd.Index(np.arange(N), name="timestamp"))
+    df = pd.DataFrame(
+        {
+            "open": np.random.rand(N),
+            "high": np.random.rand(N),
+            "low": np.random.rand(N),
+            "close": np.random.rand(N),
+            "volume": np.random.rand(N),
+        },
+        index=pd.Index(np.arange(N), name="timestamp"),
+    )
 
     print(f"Benchmarking conversion of {N} rows...")
 
