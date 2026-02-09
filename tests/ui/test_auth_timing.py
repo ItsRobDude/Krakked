@@ -1,6 +1,7 @@
 import pytest
 from starlette.testclient import TestClient
 
+
 @pytest.mark.parametrize("ui_auth_enabled", [True], indirect=True)
 @pytest.mark.parametrize("ui_auth_token", ["s3cr3t"], indirect=True)
 def test_auth_enforcement(client: TestClient):
@@ -19,7 +20,9 @@ def test_auth_enforcement(client: TestClient):
     assert resp.status_code == 401, "Should reject malformed auth header"
 
     # 3. Wrong token -> 401
-    resp = client.get("/api/config/runtime", headers={"Authorization": "Bearer wrong-token"})
+    resp = client.get(
+        "/api/config/runtime", headers={"Authorization": "Bearer wrong-token"}
+    )
     assert resp.status_code == 401, "Should reject incorrect token"
 
     # 4. Partial token (prefix) -> 401
