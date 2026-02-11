@@ -1,8 +1,10 @@
 from decimal import Decimal
-import pytest
 from unittest.mock import MagicMock
-from kraken_bot.portfolio.portfolio import Portfolio
+
+import pytest
+
 from kraken_bot.config import PortfolioConfig
+from kraken_bot.portfolio.portfolio import Portfolio
 
 
 @pytest.fixture
