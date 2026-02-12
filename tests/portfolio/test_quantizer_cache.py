@@ -1,7 +1,9 @@
-import pytest
 from unittest.mock import MagicMock
-from kraken_bot.portfolio.portfolio import Portfolio
+
+import pytest
+
 from kraken_bot.market_data.models import PairMetadata
+from kraken_bot.portfolio.portfolio import Portfolio
 
 
 @pytest.fixture
@@ -19,7 +21,7 @@ def mock_market_data():
         volume_decimals=8,
         lot_size=1.0,
         min_order_size=0.0001,
-        status="online"
+        status="online",
     )
     return md
 

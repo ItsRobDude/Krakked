@@ -1,6 +1,6 @@
 import time
-from decimal import Decimal, ROUND_FLOOR
 from dataclasses import dataclass
+from decimal import ROUND_FLOOR, Decimal
 from functools import lru_cache
 
 
