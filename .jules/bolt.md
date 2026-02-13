@@ -14,3 +14,7 @@ Benchmark (100k trades):
 - Improvement: ~6-8% (~100ms per 100k trades)
 
 The cache is unbounded but effectively limited by the size of the trading universe (typically < 100 pairs), so memory impact is negligible.
+
+## 2026-02-13 - Vectorized DataFrame to Object Conversion
+**Learning:** `df.to_dict("records")` followed by iteration is significantly slower (~40-50%) than extracting columns to lists and zipping them when converting Pandas DataFrames to dataclasses or objects.
+**Action:** Prefer `zip(df[col].tolist(), ...)` for high-performance object instantiation from DataFrames, especially in hot paths like `OHLCStore`.
