@@ -4,7 +4,7 @@ import logging
 import queue
 import threading
 from pathlib import Path
-from typing import Dict, List, Protocol, Tuple
+from typing import Any, Dict, List, Protocol, Tuple, cast
 
 import pandas as pd
 
@@ -165,12 +165,13 @@ class FileOHLCStore:
         if df.empty:
             return []
 
-        timestamps = df.index.astype(int).tolist()
-        opens = df["open"].tolist()
-        highs = df["high"].tolist()
-        lows = df["low"].tolist()
-        closes = df["close"].tolist()
-        volumes = df["volume"].tolist()
+        # Cast to Any to satisfy static typing (Index/Series method resolution issues)
+        timestamps = cast(Any, df.index).astype(int).tolist()
+        opens = cast(Any, df["open"]).tolist()
+        highs = cast(Any, df["high"]).tolist()
+        lows = cast(Any, df["low"]).tolist()
+        closes = cast(Any, df["close"]).tolist()
+        volumes = cast(Any, df["volume"]).tolist()
 
         return [
             OHLCBar(timestamp=ts, open=o, high=h, low=l, close=c, volume=v)

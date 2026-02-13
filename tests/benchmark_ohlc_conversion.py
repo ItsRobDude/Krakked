@@ -1,6 +1,6 @@
 import time
 from dataclasses import dataclass
-from typing import List
+from typing import Any, List, cast
 
 import numpy as np
 import pandas as pd
@@ -40,12 +40,13 @@ def original_conversion(df: pd.DataFrame) -> List[OHLCBar]:
 
 def optimized_conversion(df: pd.DataFrame) -> List[OHLCBar]:
     # Vectorized approach: extract columns to lists and zip
-    timestamps = df.index.astype(int).tolist()
-    opens = df["open"].tolist()
-    highs = df["high"].tolist()
-    lows = df["low"].tolist()
-    closes = df["close"].tolist()
-    volumes = df["volume"].tolist()
+    # Cast to Any to satisfy static typing (Index/Series method resolution issues)
+    timestamps = cast(Any, df.index).astype(int).tolist()
+    opens = cast(Any, df["open"]).tolist()
+    highs = cast(Any, df["high"]).tolist()
+    lows = cast(Any, df["low"]).tolist()
+    closes = cast(Any, df["close"]).tolist()
+    volumes = cast(Any, df["volume"]).tolist()
 
     return [
         OHLCBar(timestamp=ts, open=o, high=h, low=l, close=c, volume=v)
