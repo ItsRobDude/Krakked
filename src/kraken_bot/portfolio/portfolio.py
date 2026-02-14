@@ -26,6 +26,7 @@ from typing import (
 
 from kraken_bot.config import PortfolioConfig
 from kraken_bot.market_data.api import MarketDataAPI
+from kraken_bot.market_data.models import PairMetadata
 from kraken_bot.portfolio.models import (
     AssetBalance,
     AssetExposure,
@@ -38,7 +39,6 @@ from kraken_bot.portfolio.models import (
     RealizedPnLRecord,
     SpotPosition,
 )
-from kraken_bot.market_data.models import PairMetadata
 from kraken_bot.portfolio.store import PortfolioStore
 
 
