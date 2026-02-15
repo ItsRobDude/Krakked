@@ -1,8 +1,10 @@
-from starlette.testclient import TestClient
-from kraken_bot.ui.api import AuthMiddleware
-from fastapi import FastAPI
 import secrets
 from unittest.mock import patch
+
+from fastapi import FastAPI
+from starlette.testclient import TestClient
+
+from kraken_bot.ui.api import AuthMiddleware
 
 
 def test_auth_middleware_uses_compare_digest_with_client():
@@ -20,8 +22,12 @@ def test_auth_middleware_uses_compare_digest_with_client():
     # as long as the implementation uses `secrets.compare_digest`.
     # Let's assume `import secrets` usage.
 
-    with patch("secrets.compare_digest", side_effect=secrets.compare_digest) as mock_compare:
-        response = client.get("/api/protected", headers={"Authorization": "Bearer secret-token"})
+    with patch(
+        "secrets.compare_digest", side_effect=secrets.compare_digest
+    ) as mock_compare:
+        response = client.get(
+            "/api/protected", headers={"Authorization": "Bearer secret-token"}
+        )
         assert response.status_code == 200
         # This assertion should fail before the fix
         mock_compare.assert_called()
