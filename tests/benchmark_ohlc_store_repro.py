@@ -1,11 +1,12 @@
-import time
 import shutil
 import tempfile
-import pandas as pd
+import time
+
 import numpy as np
-from pathlib import Path
-from kraken_bot.config import MarketDataConfig
+import pandas as pd
+
 from kraken_bot.market_data.ohlc_store import FileOHLCStore
+
 
 def benchmark():
     temp_dir = tempfile.mkdtemp()
@@ -24,14 +25,16 @@ def benchmark():
 
         # Generate 100k rows
         n_rows = 100000
-        df = pd.DataFrame({
-            "timestamp": np.arange(1000000000, 1000000000 + n_rows * 60, 60),
-            "open": np.random.rand(n_rows) * 1000,
-            "high": np.random.rand(n_rows) * 1000,
-            "low": np.random.rand(n_rows) * 1000,
-            "close": np.random.rand(n_rows) * 1000,
-            "volume": np.random.rand(n_rows) * 10
-        })
+        df = pd.DataFrame(
+            {
+                "timestamp": np.arange(1000000000, 1000000000 + n_rows * 60, 60),
+                "open": np.random.rand(n_rows) * 1000,
+                "high": np.random.rand(n_rows) * 1000,
+                "low": np.random.rand(n_rows) * 1000,
+                "close": np.random.rand(n_rows) * 1000,
+                "volume": np.random.rand(n_rows) * 10,
+            }
+        )
         df = df.set_index("timestamp")
 
         # Write directly to parquet to simulate existing data
@@ -56,6 +59,7 @@ def benchmark():
 
     finally:
         shutil.rmtree(temp_dir)
+
 
 if __name__ == "__main__":
     benchmark()
