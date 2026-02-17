@@ -4,7 +4,7 @@ import logging
 import queue
 import threading
 from pathlib import Path
-from typing import Dict, List, Protocol, Tuple
+from typing import Any, Dict, List, Protocol, Tuple, cast
 
 import pandas as pd
 
@@ -166,12 +166,14 @@ class FileOHLCStore:
             return []
 
         # Vectorized extraction is significantly faster than to_dict("records")
-        timestamps = df.index.astype(int).tolist()
-        opens = df["open"].tolist()
-        highs = df["high"].tolist()
-        lows = df["low"].tolist()
-        closes = df["close"].tolist()
-        volumes = df["volume"].tolist()
+        # Explicit casts are required to satisfy strict type checkers (mypy/pyright)
+        # which struggle to infer dynamic pandas attributes like .tolist() on Series/Index.
+        timestamps = cast(Any, df.index).astype(int).tolist()
+        opens = cast(Any, df["open"]).tolist()
+        highs = cast(Any, df["high"]).tolist()
+        lows = cast(Any, df["low"]).tolist()
+        closes = cast(Any, df["close"]).tolist()
+        volumes = cast(Any, df["volume"]).tolist()
 
         return [
             OHLCBar(timestamp=ts, open=o, high=h, low=l, close=c, volume=v)
