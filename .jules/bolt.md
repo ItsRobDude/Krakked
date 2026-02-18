@@ -14,3 +14,7 @@ Benchmark (100k trades):
 - Improvement: ~6-8% (~100ms per 100k trades)
 
 The cache is unbounded but effectively limited by the size of the trading universe (typically < 100 pairs), so memory impact is negligible.
+
+## 2025-02-18 - Optimize Pandas DataFrame to Object conversion
+**Learning:** The method `df.to_dict('records')` is extremely slow for converting Pandas DataFrames to lists of objects (like `OHLCBar`) because it iterates row-by-row in Python. Vectorized column extraction with `tolist()` and `zip` is 2-3x faster for large datasets.
+**Action:** When converting DataFrames to objects in performance-critical paths (e.g., market data ingestion, backtesting), use vectorized list extraction instead of row-wise iteration.
