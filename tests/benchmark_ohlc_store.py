@@ -1,6 +1,6 @@
 import time
 from dataclasses import dataclass
-from typing import List
+from typing import Any, List, cast
 
 import numpy as np
 import pandas as pd
@@ -25,12 +25,12 @@ def current_implementation(df: pd.DataFrame) -> List[OHLCBar]:
 
 def optimized_implementation(df: pd.DataFrame) -> List[OHLCBar]:
     df_reset = df.reset_index()
-    timestamps = df_reset["timestamp"].astype(int).tolist()
-    opens = df_reset["open"].tolist()
-    highs = df_reset["high"].tolist()
-    lows = df_reset["low"].tolist()
-    closes = df_reset["close"].tolist()
-    volumes = df_reset["volume"].tolist()
+    timestamps = cast(Any, df_reset["timestamp"]).astype(int).tolist()
+    opens = cast(Any, df_reset["open"]).tolist()
+    highs = cast(Any, df_reset["high"]).tolist()
+    lows = cast(Any, df_reset["low"]).tolist()
+    closes = cast(Any, df_reset["close"]).tolist()
+    volumes = cast(Any, df_reset["volume"]).tolist()
 
     return [
         OHLCBar(ts, o, h, l, c, v)
