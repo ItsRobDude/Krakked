@@ -1,7 +1,6 @@
-
 import time
 from dataclasses import dataclass
-from typing import List
+from typing import Any, List, cast
 
 import numpy as np
 import pandas as pd
@@ -29,12 +28,13 @@ def optimized_implementation(df: pd.DataFrame) -> List[OHLCBar]:
     df_reset = df.reset_index()
 
     # Extract columns to python lists
-    timestamps = df_reset["timestamp"].astype(int).tolist()
-    opens = df_reset["open"].tolist()
-    highs = df_reset["high"].tolist()
-    lows = df_reset["low"].tolist()
-    closes = df_reset["close"].tolist()
-    volumes = df_reset["volume"].tolist()
+    # We cast to Any because mypy often struggles with pandas Series methods like tolist()
+    timestamps = cast(Any, df_reset["timestamp"]).astype(int).tolist()
+    opens = cast(Any, df_reset["open"]).tolist()
+    highs = cast(Any, df_reset["high"]).tolist()
+    lows = cast(Any, df_reset["low"]).tolist()
+    closes = cast(Any, df_reset["close"]).tolist()
+    volumes = cast(Any, df_reset["volume"]).tolist()
 
     # Zip and list comprehension
     return [
@@ -43,17 +43,19 @@ def optimized_implementation(df: pd.DataFrame) -> List[OHLCBar]:
     ]
 
 
-def main():
+def main() -> None:
     # Setup - Create a large DataFrame
     n_rows = 100000
-    df = pd.DataFrame({
-        "timestamp": np.arange(n_rows),
-        "open": np.random.rand(n_rows),
-        "high": np.random.rand(n_rows),
-        "low": np.random.rand(n_rows),
-        "close": np.random.rand(n_rows),
-        "volume": np.random.rand(n_rows)
-    })
+    df = pd.DataFrame(
+        {
+            "timestamp": np.arange(n_rows),
+            "open": np.random.rand(n_rows),
+            "high": np.random.rand(n_rows),
+            "low": np.random.rand(n_rows),
+            "close": np.random.rand(n_rows),
+            "volume": np.random.rand(n_rows),
+        }
+    )
     df = df.set_index("timestamp")
 
     print(f"Benchmarking with {n_rows} rows...")
