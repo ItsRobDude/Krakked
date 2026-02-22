@@ -4,7 +4,7 @@ import logging
 import queue
 import threading
 from pathlib import Path
-from typing import Dict, List, Protocol, Tuple
+from typing import Any, Dict, List, Protocol, Tuple, cast
 
 import pandas as pd
 
@@ -170,6 +170,10 @@ class FileOHLCStore:
         # Reset index to make timestamp a column, but avoid modifying the input df
         df_reset = df.reset_index()
 
+        # Cast to Any to allow .tolist() and other dynamic attributes without static type errors
+        # (pandas type stubs can be ambiguous about __getitem__ return types)
+        df_any = cast(Any, df_reset)
+
         # Vectorized list construction is significantly faster than to_dict("records")
         # Explicit casting ensures we match OHLCBar types even if numpy types differ
         # Optimization: Measured ~38% speedup (1.01s -> 0.63s for 200k rows) by avoiding to_dict("records").
@@ -183,12 +187,12 @@ class FileOHLCStore:
                 volume=float(vol),
             )
             for ts, op, hi, lo, cl, vol in zip(
-                df_reset["timestamp"],
-                df_reset["open"],
-                df_reset["high"],
-                df_reset["low"],
-                df_reset["close"],
-                df_reset["volume"],
+                df_any["timestamp"].tolist(),
+                df_any["open"].tolist(),
+                df_any["high"].tolist(),
+                df_any["low"].tolist(),
+                df_any["close"].tolist(),
+                df_any["volume"].tolist(),
             )
         ]
 
