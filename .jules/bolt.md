@@ -14,3 +14,7 @@ Benchmark (100k trades):
 - Improvement: ~6-8% (~100ms per 100k trades)
 
 The cache is unbounded but effectively limited by the size of the trading universe (typically < 100 pairs), so memory impact is negligible.
+
+## 2026-02-23 - Memoized Decimal Quantizers
+**Learning:** `Decimal("1." + "0" * n)` construction is expensive in hot loops (rounding).
+**Action:** Use a static `@lru_cache` method to memoize these quantizers.
