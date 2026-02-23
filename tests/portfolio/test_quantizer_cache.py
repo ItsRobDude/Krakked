@@ -40,6 +40,7 @@ def test_get_quantizer_caching():
     assert info3.hits == 1
     assert info3.currsize == 2
 
+
 def test_round_vol_uses_quantizer():
     """Verify _round_vol uses the cached quantizer correctly."""
     mock_config = MagicMock()
@@ -65,6 +66,7 @@ def test_round_vol_uses_quantizer():
     # Check that cache was populated
     assert Portfolio._get_quantizer.cache_info().misses >= 1
     assert Portfolio._get_quantizer.cache_info().currsize >= 1
+
 
 def test_round_price_uses_quantizer():
     """Verify _round_price uses the cached quantizer correctly."""
