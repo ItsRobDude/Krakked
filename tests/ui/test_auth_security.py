@@ -1,28 +1,38 @@
 import secrets
 from unittest.mock import patch
+
 from starlette.testclient import TestClient
+
 from kraken_bot.ui.api import create_api
 from tests.ui.conftest import build_test_context
 
 
 def test_auth_middleware_uses_secrets_compare_digest():
     """Verify that AuthMiddleware uses constant-time comparison."""
-    context = build_test_context(auth_enabled=True, auth_token="secret-token", read_only=False)
+    context = build_test_context(
+        auth_enabled=True, auth_token="secret-token", read_only=False
+    )
     app = create_api(context)
     client = TestClient(app)
 
     # We patch secrets.compare_digest to ensure it is called.
     # Use a protected endpoint: /api/config/runtime
     with patch("secrets.compare_digest", wraps=secrets.compare_digest) as mock_digest:
-        response = client.get("/api/config/runtime", headers={"Authorization": "Bearer secret-token"})
+        response = client.get(
+            "/api/config/runtime", headers={"Authorization": "Bearer secret-token"}
+        )
         # 200 OK means authorized
         assert response.status_code == 200
-        assert mock_digest.called, "AuthMiddleware should use secrets.compare_digest for timing safety"
+        assert (
+            mock_digest.called
+        ), "AuthMiddleware should use secrets.compare_digest for timing safety"
 
 
 def test_auth_middleware_handles_non_ascii_safely():
     """Verify that non-ASCII headers are handled without crashing."""
-    context = build_test_context(auth_enabled=True, auth_token="secret-token", read_only=False)
+    context = build_test_context(
+        auth_enabled=True, auth_token="secret-token", read_only=False
+    )
     app = create_api(context)
     client = TestClient(app)
 
