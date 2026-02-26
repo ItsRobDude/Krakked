@@ -1,6 +1,8 @@
 from unittest.mock import patch
+
 import pytest
 from starlette.testclient import TestClient
+
 from kraken_bot.ui.api import create_api
 from tests.ui.conftest import build_test_context
 
@@ -18,14 +20,18 @@ def auth_client():
 def test_auth_middleware_rejects_invalid_token(auth_client):
     client, token = auth_client
     # Use /api/config/runtime which is protected
-    response = client.get("/api/config/runtime", headers={"Authorization": "Bearer wrong-token"})
+    response = client.get(
+        "/api/config/runtime", headers={"Authorization": "Bearer wrong-token"}
+    )
     assert response.status_code == 401
     assert response.json() == {"data": None, "error": "Unauthorized"}
 
 
 def test_auth_middleware_accepts_valid_token(auth_client):
     client, token = auth_client
-    response = client.get("/api/config/runtime", headers={"Authorization": f"Bearer {token}"})
+    response = client.get(
+        "/api/config/runtime", headers={"Authorization": f"Bearer {token}"}
+    )
     # Should not be 401. Likely 200 or 500 depending on mock state, but definitely passed auth.
     assert response.status_code != 401
 
@@ -42,7 +48,9 @@ def test_auth_middleware_uses_compare_digest(mock_compare, auth_client):
     client, token = auth_client
 
     # Make a request with the correct token
-    response = client.get("/api/config/runtime", headers={"Authorization": f"Bearer {token}"})
+    response = client.get(
+        "/api/config/runtime", headers={"Authorization": f"Bearer {token}"}
+    )
 
     # Should be 401 because we mocked compare_digest to return False
     assert response.status_code == 401
