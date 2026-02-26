@@ -90,7 +90,8 @@ class FileOHLCStore:
         # Bottleneck evidence: to_dict("records") iterates rows and creates dicts,
         # which is slow for large datasets (e.g., 200k rows takes ~0.97s).
         # Optimization: Vectorized extraction via tolist() + zip is ~3.2x faster.
-        timestamps = cast(Any, df.index.astype(int)).tolist()
+        # Cast index to Any to silence mypy/pyright error about 'Index' not having 'astype'
+        timestamps = cast(Any, df.index).astype(int).tolist()
         opens = cast(Any, df["open"]).tolist()
         highs = cast(Any, df["high"]).tolist()
         lows = cast(Any, df["low"]).tolist()
