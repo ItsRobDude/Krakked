@@ -1,6 +1,5 @@
-
-import pytest
 from kraken_bot.execution.userref import resolve_userref
+
 
 def test_resolve_userref_caches_results() -> None:
     # Clear cache to ensure clean state
@@ -28,6 +27,7 @@ def test_resolve_userref_caches_results() -> None:
     assert info3.hits == 1
     assert info3.misses == 2
     assert info3.currsize == 2
+
 
 def test_resolve_userref_cache_clear() -> None:
     resolve_userref.cache_clear()
