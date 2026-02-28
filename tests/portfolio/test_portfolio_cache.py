@@ -53,37 +53,23 @@ def test_process_trade_cache_optimization():
         "comment": None,
     }
 
-    # 1. First call: Should trigger MD lookups
+    # 1. First call: Should trigger exactly 1 MD lookup
     portfolio._process_trade(trade)
 
-    # Note: _process_trade ALSO calls _round_vol and _round_price which call get_pair_metadata
-    # We expect:
-    # 1x from caching logic
-    # 1x from _round_vol
-    # 1x from _round_price
-    # Total = 3 calls
-
-    assert mock_market_data.get_pair_metadata.call_count >= 1
+    # We now pass the cached PairMetadata object down to _round_vol and _round_price.
+    # So we expect exactly 1 call to get_pair_metadata.
+    assert mock_market_data.get_pair_metadata.call_count == 1
     initial_count = mock_market_data.get_pair_metadata.call_count
 
     # normalize_asset called twice (base + quote) in cache logic
     assert mock_market_data.normalize_asset.call_count == 2
 
-    # 2. Second call with SAME pair: Should use cache for the MAIN resolution
-    # However, _round_vol and _round_price inside _process_trade currently do NOT use this cache
-    # They call get_pair_metadata directly.
-    # So we expect call_count to increase by 2 (vol + price), but NOT 3 (cache hit).
-
+    # 2. Second call with SAME pair: Should use cache for everything
     portfolio._process_trade(trade)
-
-    # If cache works, we save 1 call.
-    # Logic:
-    # Without cache: 1(resolve) + 1(round_vol) + 1(round_price) = +3 calls
-    # With cache:    0(hit)     + 1(round_vol) + 1(round_price) = +2 calls
 
     new_count = mock_market_data.get_pair_metadata.call_count
     diff = new_count - initial_count
-    assert diff == 2, f"Expected 2 additional calls (vol+price rounding), got {diff}"
+    assert diff == 0, f"Expected 0 additional calls due to caching, got {diff}"
 
     # Normalize asset should NOT increase
     assert mock_market_data.normalize_asset.call_count == 2
@@ -120,14 +106,28 @@ def test_process_trade_cache_optimization():
 
     portfolio._process_trade(trade_eth)
 
-    # Should trigger cache miss + roundings
-    # +1 cache miss
-    # +1 round vol
-    # +1 round price
-    # Total +3
-
+    # Should trigger exactly 1 cache miss/lookup for the new pair
     final_count = mock_market_data.get_pair_metadata.call_count
-    assert final_count == new_count + 3
+    assert final_count == new_count + 1
 
     # Normalize asset should increase by 2
     assert mock_market_data.normalize_asset.call_count == 4
+
+
+def test_quantizer_cache():
+    """
+    Verify that `_get_quantizer` properly memoizes Decimal instances.
+    """
+    q1 = Portfolio._get_quantizer(8)
+    q2 = Portfolio._get_quantizer(8)
+    q3 = Portfolio._get_quantizer(2)
+
+    # Must return the same reference
+    assert q1 is q2
+
+    # Different inputs return different refs
+    assert q1 is not q3
+
+    # Value assertions
+    assert str(q1) == "1.00000000"
+    assert str(q3) == "1.00"
