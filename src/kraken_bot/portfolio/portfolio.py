@@ -26,6 +26,7 @@ from typing import (
 
 from kraken_bot.config import PortfolioConfig
 from kraken_bot.market_data.api import MarketDataAPI
+from kraken_bot.market_data.models import PairMetadata
 from kraken_bot.portfolio.models import (
     AssetBalance,
     AssetExposure,
@@ -82,13 +83,16 @@ class Portfolio:
         )
         self._last_snapshot_ts: int = 0
 
-        # Cache for trade pair resolution: raw_pair -> (canonical, base, quote)
-        self._trade_pair_cache: Dict[str, Tuple[str, str, str]] = {}
+        # Cache for trade pair resolution: raw_pair -> (PairMetadata, base, quote)
+        self._trade_pair_cache: Dict[str, Tuple[PairMetadata, str, str]] = {}
 
-    def _round_vol(self, pair: str, vol: float) -> float:
+    def _round_vol(
+        self, pair: str, vol: float, meta: Optional[PairMetadata] = None
+    ) -> float:
         """Round volume to the pair's configured lot decimals using ROUND_FLOOR."""
         try:
-            meta = self.market_data.get_pair_metadata(pair)
+            if not meta:
+                meta = self.market_data.get_pair_metadata(pair)
             d_vol = Decimal(str(vol))
             quantizer = Decimal("1." + "0" * meta.volume_decimals)
             return float(d_vol.quantize(quantizer, rounding=ROUND_FLOOR))
@@ -99,10 +103,13 @@ class Portfolio:
                 return 0.0
             return vol
 
-    def _round_price(self, pair: str, price: float) -> float:
+    def _round_price(
+        self, pair: str, price: float, meta: Optional[PairMetadata] = None
+    ) -> float:
         """Round price to the pair's configured price decimals using ROUND_HALF_UP."""
         try:
-            meta = self.market_data.get_pair_metadata(pair)
+            if not meta:
+                meta = self.market_data.get_pair_metadata(pair)
             d_price = Decimal(str(price))
             quantizer = Decimal("1." + "0" * meta.price_decimals)
             return float(d_price.quantize(quantizer, rounding=ROUND_HALF_UP))
@@ -162,14 +169,15 @@ class Portfolio:
         pair_input = trade["pair"]
         cached = self._trade_pair_cache.get(pair_input)
         if cached:
-            pair, base_asset, quote_asset = cached
+            pair_meta, base_asset, quote_asset = cached
         else:
             pair_meta = self.market_data.get_pair_metadata(pair_input)
-            pair = pair_meta.canonical
             # Normalize assets to ensure positions are keyed by the canonical symbol (e.g. DOGE not XDG)
             base_asset = self.market_data.normalize_asset(pair_meta.base)
             quote_asset = self.market_data.normalize_asset(pair_meta.quote)
-            self._trade_pair_cache[pair_input] = (pair, base_asset, quote_asset)
+            self._trade_pair_cache[pair_input] = (pair_meta, base_asset, quote_asset)
+
+        pair = pair_meta.canonical
 
         side = trade["type"]
         price = float(trade["price"])
@@ -202,9 +210,11 @@ class Portfolio:
 
         if side == "buy":
             previous_cost = position.base_size * position.avg_entry_price
-            new_total_qty = self._round_vol(pair, position.base_size + vol)
+            new_total_qty = self._round_vol(pair, position.base_size + vol, pair_meta)
             position.avg_entry_price = (
-                self._round_price(pair, (previous_cost + cost) / new_total_qty)
+                self._round_price(
+                    pair, (previous_cost + cost) / new_total_qty, pair_meta
+                )
                 if new_total_qty
                 else 0.0
             )
@@ -243,7 +253,7 @@ class Portfolio:
 
             # Use max(0.0, ...) combined with _round_vol to safely close positions
             raw_new_size = max(0.0, position.base_size - vol)
-            position.base_size = self._round_vol(pair, raw_new_size)
+            position.base_size = self._round_vol(pair, raw_new_size, pair_meta)
 
             self.realized_pnl_history.append(
                 RealizedPnLRecord(
