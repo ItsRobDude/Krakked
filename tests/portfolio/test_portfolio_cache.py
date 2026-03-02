@@ -83,7 +83,7 @@ def test_process_trade_cache_optimization():
 
     new_count = mock_market_data.get_pair_metadata.call_count
     diff = new_count - initial_count
-    assert diff == 2, f"Expected 2 additional calls (vol+price rounding), got {diff}"
+    assert diff == 0, f"Expected 0 additional calls due to caching, got {diff}"
 
     # Normalize asset should NOT increase
     assert mock_market_data.normalize_asset.call_count == 2
@@ -122,12 +122,11 @@ def test_process_trade_cache_optimization():
 
     # Should trigger cache miss + roundings
     # +1 cache miss
-    # +1 round vol
-    # +1 round price
-    # Total +3
+    # Since we use cached meta for rounding, it should just be +1 call overall.
+    # Total +1
 
     final_count = mock_market_data.get_pair_metadata.call_count
-    assert final_count == new_count + 3
+    assert final_count == new_count + 1
 
     # Normalize asset should increase by 2
     assert mock_market_data.normalize_asset.call_count == 4
