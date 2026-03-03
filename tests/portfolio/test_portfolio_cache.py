@@ -70,20 +70,20 @@ def test_process_trade_cache_optimization():
     assert mock_market_data.normalize_asset.call_count == 2
 
     # 2. Second call with SAME pair: Should use cache for the MAIN resolution
-    # However, _round_vol and _round_price inside _process_trade currently do NOT use this cache
-    # They call get_pair_metadata directly.
-    # So we expect call_count to increase by 2 (vol + price), but NOT 3 (cache hit).
+    # And since we pass PairMetadata directly to _round_vol and _round_price,
+    # they shouldn't call get_pair_metadata either.
+    # So we expect call_count to increase by 0.
 
     portfolio._process_trade(trade)
 
-    # If cache works, we save 1 call.
+    # If cache works, we save all 3 calls.
     # Logic:
     # Without cache: 1(resolve) + 1(round_vol) + 1(round_price) = +3 calls
-    # With cache:    0(hit)     + 1(round_vol) + 1(round_price) = +2 calls
+    # With cache:    0(hit)     + 0(round_vol) + 0(round_price) = +0 calls
 
     new_count = mock_market_data.get_pair_metadata.call_count
     diff = new_count - initial_count
-    assert diff == 2, f"Expected 2 additional calls (vol+price rounding), got {diff}"
+    assert diff == 0, f"Expected 0 additional calls (cache fully hit), got {diff}"
 
     # Normalize asset should NOT increase
     assert mock_market_data.normalize_asset.call_count == 2
@@ -121,13 +121,11 @@ def test_process_trade_cache_optimization():
     portfolio._process_trade(trade_eth)
 
     # Should trigger cache miss + roundings
-    # +1 cache miss
-    # +1 round vol
-    # +1 round price
-    # Total +3
+    # +1 cache miss (then meta is passed around)
+    # Total +1
 
     final_count = mock_market_data.get_pair_metadata.call_count
-    assert final_count == new_count + 3
+    assert final_count == new_count + 1
 
     # Normalize asset should increase by 2
     assert mock_market_data.normalize_asset.call_count == 4
