@@ -1410,7 +1410,11 @@ async def set_execution_mode(
                 p_path = Path(profiles_entry.config_path)
                 if not p_path.is_absolute():
                     p_path = config_dir / p_path
-                if p_path.exists():
+                # Aegis: Unrestricted profile config path -> bounded to config directory (no exploit details)
+                if (
+                    p_path.resolve().is_relative_to(config_dir.resolve())
+                    and p_path.exists()
+                ):
                     target_path = p_path
 
         if not target_path:
@@ -1449,7 +1453,11 @@ async def set_execution_mode(
             p_path = Path(profiles_entry.config_path)
             if not p_path.is_absolute():
                 p_path = config_dir / p_path
-            if p_path.exists():
+            # Aegis: Unrestricted profile config path -> bounded to config directory (no exploit details)
+            if (
+                p_path.resolve().is_relative_to(config_dir.resolve())
+                and p_path.exists()
+            ):
                 target_path = p_path
     if not target_path:
         target_path = config_dir / "config.yaml"

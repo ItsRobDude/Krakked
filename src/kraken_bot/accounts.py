@@ -136,4 +136,10 @@ def resolve_secrets_path(config_dir: Path | None, account_id: str) -> Path:
     if not path.is_absolute():
         path = config_dir / path
 
+    # Aegis: Unrestricted file path resolution -> bounded to config directory (no exploit details)
+    if not path.resolve().is_relative_to(config_dir.resolve()):
+        raise ValueError(
+            f"Account {account_id} secrets path is outside the config directory"
+        )
+
     return path
