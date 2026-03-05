@@ -1,0 +1,4 @@
+## 2024-05-24 - Timing attack on UI API authentication token validation
+**Vulnerability:** The authentication check in `AuthMiddleware.dispatch` (`src/kraken_bot/ui/api.py`) used a non-constant time string inequality operator (`!=`) to validate the `Authorization` header against the expected Bearer token. This allows an attacker to measure response times and potentially leak the token character-by-character.
+**Learning:** String comparison operators (`==` and `!=`) exit early upon finding the first mismatch, making them unsuitable for cryptographic tokens or authentication secrets comparisons.
+**Prevention:** Always use `secrets.compare_digest(a, b)` (standard library) for checking auth tokens, passwords, or HMAC signatures. Ensure inputs are converted to bytes using `.encode('utf-8')` to avoid `TypeError` on non-ASCII characters.
