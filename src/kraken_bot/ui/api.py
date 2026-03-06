@@ -51,7 +51,9 @@ class AuthMiddleware(BaseHTTPMiddleware):
             expected = f"Bearer {self._token}" if self._token else ""
 
             # Aegis: Timing attack on string comparison -> Constant-time byte comparison (no exploit details)
-            if not std_secrets.compare_digest(auth_header.encode("utf-8"), expected.encode("utf-8")):
+            if not std_secrets.compare_digest(
+                auth_header.encode("utf-8"), expected.encode("utf-8")
+            ):
 
                 logger.warning(
                     "Unauthorized UI API request",
