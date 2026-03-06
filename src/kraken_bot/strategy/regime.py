@@ -66,7 +66,9 @@ def infer_regime(market_data: MarketDataAPI, pairs: list[str]) -> RegimeSnapshot
             continue
 
         # Optimized: Vectorized list extraction avoids DataFrame dict conversion overhead (~2.5x faster)
-        closes = pd.Series([bar.close for bar in ohlc], dtype=float)
+        from typing import Any, cast
+
+        closes = cast(Any, pd).Series([bar.close for bar in ohlc], dtype=float)
         returns = closes.pct_change().dropna()
 
         if returns.empty:
