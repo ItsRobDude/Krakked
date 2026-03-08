@@ -900,7 +900,20 @@ class RiskEngine:
             )
             return 0.0
 
-        df = pd.DataFrame([asdict(b) for b in ohlc])
+        df = pd.DataFrame(
+            [
+                (
+                    getattr(b, "timestamp", 0),
+                    getattr(b, "open", 0.0),
+                    getattr(b, "high", 0.0),
+                    getattr(b, "low", 0.0),
+                    getattr(b, "close", 0.0),
+                    getattr(b, "volume", 0.0),
+                )
+                for b in ohlc
+            ],
+            columns=["timestamp", "open", "high", "low", "close", "volume"],
+        )
         atr = compute_atr(df, self.config.volatility_lookback_bars)
         if atr <= 0:
             logger.warning(
