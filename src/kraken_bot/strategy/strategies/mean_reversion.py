@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import List
 
-import pandas as pd
 from pandas import Series  # type: ignore[attr-defined]
 
 from kraken_bot.config import StrategyConfig
