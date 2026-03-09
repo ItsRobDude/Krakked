@@ -65,7 +65,7 @@ class MeanReversionStrategy(Strategy):
 
             # ⚡ Bolt: Constructing Series via list comprehension avoids ~16x overhead of building
             # a full DataFrame from `asdict` dictionaries when only 'close' is needed.
-            close_series: Series = pd.Series([bar.close for bar in ohlc]).tail(
+            close_series: Series = Series([bar.close for bar in ohlc]).tail(
                 self.params.lookback_bars
             )
 
