@@ -64,7 +64,7 @@ class MeanReversionStrategy(Strategy):
                 continue
 
             # ⚡ Bolt: Vectorized property extraction is ~19x faster than building full DataFrames via asdict
-            close_series: Series = pd.Series([b.close for b in ohlc]).tail(
+            close_series: Series = pd.Series([b.close for b in ohlc]).tail(  # type: ignore[attr-defined]
                 self.params.lookback_bars
             )
 
