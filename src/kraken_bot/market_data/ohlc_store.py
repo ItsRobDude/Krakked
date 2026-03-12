@@ -4,7 +4,7 @@ import logging
 import queue
 import threading
 from pathlib import Path
-from typing import Dict, List, Protocol, Tuple
+from typing import Any, Dict, List, Protocol, Tuple, cast
 
 import pandas as pd
 
@@ -162,14 +162,14 @@ class FileOHLCStore:
 
     def _df_to_bars(self, df: pd.DataFrame) -> List[OHLCBar]:
         """Efficiently convert a DataFrame to a list of OHLCBars, avoiding to_dict("records")."""
-        idx = df.index.values.tolist()
-        op = df["open"].values.tolist()
-        hi = df["high"].values.tolist()
-        lo = df["low"].values.tolist()
-        cl = df["close"].values.tolist()
-        vo = df["volume"].values.tolist()
+        idx = cast(Any, df.index).values.tolist()
+        op = cast(Any, df["open"]).values.tolist()
+        hi = cast(Any, df["high"]).values.tolist()
+        lo = cast(Any, df["low"]).values.tolist()
+        cl = cast(Any, df["close"]).values.tolist()
+        vo = cast(Any, df["volume"]).values.tolist()
         return [
-            OHLCBar(int(t), o_, h_, l_, c_, v_)
+            OHLCBar(timestamp=int(t), open=o_, high=h_, low=l_, close=c_, volume=v_)
             for t, o_, h_, l_, c_, v_ in zip(idx, op, hi, lo, cl, vo)
         ]
 
