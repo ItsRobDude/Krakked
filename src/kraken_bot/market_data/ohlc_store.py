@@ -160,16 +160,28 @@ class FileOHLCStore:
                 except Exception as e:
                     logger.error(f"Error creating {file_path}: {e}")
 
+    def _df_to_bars(self, df: pd.DataFrame) -> List[OHLCBar]:
+        """Efficiently convert a DataFrame to a list of OHLCBars, avoiding to_dict("records")."""
+        idx = df.index.values.tolist()
+        op = df["open"].values.tolist()
+        hi = df["high"].values.tolist()
+        lo = df["low"].values.tolist()
+        cl = df["close"].values.tolist()
+        vo = df["volume"].values.tolist()
+        return [
+            OHLCBar(int(t), o_, h_, l_, c_, v_)
+            for t, o_, h_, l_, c_, v_ in zip(idx, op, hi, lo, cl, vo)
+        ]
+
     def _update_cache(self, pair: str, timeframe: str, df: pd.DataFrame) -> bool:
         """Updates the internal cache with the tail of the dataframe. Returns success."""
         try:
             # Sort again to be defensive, though callers should have done it
             sorted_df = df.sort_index()
             tail_df = sorted_df.tail(self._cache_size)
-            records = tail_df.reset_index().to_dict("records")
-            for row in records:
-                row["timestamp"] = int(row["timestamp"])
-            self._bar_cache[(pair, timeframe)] = [OHLCBar(**row) for row in records]
+
+            # ⚡ Bolt: Replace slow to_dict("records") with vectorized list extraction for object instantiation
+            self._bar_cache[(pair, timeframe)] = self._df_to_bars(tail_df)
             return True
         except Exception as e:
             logger.error(f"Failed to update cache for {pair} {timeframe}: {e}")
@@ -220,10 +232,8 @@ class FileOHLCStore:
 
                 # Fallback for large lookbacks or cache update failures
                 df = df.tail(lookback)
-                records = df.reset_index().to_dict("records")
-                for row in records:
-                    row["timestamp"] = int(row["timestamp"])
-                return [OHLCBar(**row) for row in records]
+                # ⚡ Bolt: Replace slow to_dict("records") with vectorized list extraction for object instantiation
+                return self._df_to_bars(df)
             except Exception as e:
                 logger.error(f"Error reading from {file_path}: {e}")
                 return []
@@ -252,10 +262,8 @@ class FileOHLCStore:
                 self._update_cache(pair, timeframe, df)
 
                 df = df[df.index >= since_ts]
-                records = df.reset_index().to_dict("records")
-                for row in records:
-                    row["timestamp"] = int(row["timestamp"])
-                return [OHLCBar(**row) for row in records]
+                # ⚡ Bolt: Replace slow to_dict("records") with vectorized list extraction for object instantiation
+                return self._df_to_bars(df)
             except Exception as e:
                 logger.error(f"Error reading from {file_path}: {e}")
                 return []
