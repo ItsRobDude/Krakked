@@ -168,12 +168,12 @@ class FileOHLCStore:
         Why it helps: Avoids expensive per-row dict instantiation in Pandas.
         """
         df = df.reset_index()
-        timestamps = df["timestamp"].astype(int).tolist()
-        opens = df["open"].astype(float).tolist()
-        highs = df["high"].astype(float).tolist()
-        lows = df["low"].astype(float).tolist()
-        closes = df["close"].astype(float).tolist()
-        volumes = df["volume"].astype(float).tolist()
+        timestamps = df["timestamp"].astype(int).tolist()  # type: ignore[attr-defined]
+        opens = df["open"].astype(float).tolist()  # type: ignore[attr-defined]
+        highs = df["high"].astype(float).tolist()  # type: ignore[attr-defined]
+        lows = df["low"].astype(float).tolist()  # type: ignore[attr-defined]
+        closes = df["close"].astype(float).tolist()  # type: ignore[attr-defined]
+        volumes = df["volume"].astype(float).tolist()  # type: ignore[attr-defined]
 
         return [
             OHLCBar(t, o, h, l, c, v)

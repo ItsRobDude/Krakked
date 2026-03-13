@@ -47,7 +47,7 @@ def run_benchmark() -> None:
             },
             index=timestamps,
         )
-        df.index.name = "timestamp"
+        df.index.name = "timestamp"  # type: ignore[attr-defined]
 
         pair = "XXBTZUSD"
         tf = "1m"
