@@ -53,8 +53,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
             # Use constant-time comparison on utf-8 encoded bytes to prevent timing attacks
             # and avoid TypeError from non-ASCII characters in compare_digest.
             if not std_secrets.compare_digest(
-                auth_header.encode("utf-8"),
-                expected.encode("utf-8")
+                auth_header.encode("utf-8"), expected.encode("utf-8")
             ):
                 # Aegis: Timing attack risk on auth header -> Used constant-time comparison on bytes (no exploit details)
                 logger.warning(
