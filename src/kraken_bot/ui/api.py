@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import secrets as std_secrets
 from pathlib import Path
 from typing import Callable
 from uuid import uuid4
@@ -48,7 +49,14 @@ class AuthMiddleware(BaseHTTPMiddleware):
         if path.startswith(self._protected_prefix) and path not in self._health_paths:
             auth_header = request.headers.get("Authorization") or ""
             expected = f"Bearer {self._token}" if self._token else ""
-            if auth_header != expected:
+
+            # Use constant-time comparison on utf-8 encoded bytes to prevent timing attacks
+            # and avoid TypeError from non-ASCII characters in compare_digest.
+            if not std_secrets.compare_digest(
+                auth_header.encode("utf-8"),
+                expected.encode("utf-8")
+            ):
+                # Aegis: Timing attack risk on auth header -> Used constant-time comparison on bytes (no exploit details)
                 logger.warning(
                     "Unauthorized UI API request",
                     extra=build_request_log_extra(
