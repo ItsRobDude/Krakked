@@ -14,6 +14,7 @@ Otherwise, we derive a stable int32 from a SHA-256 hash.
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import re
 from typing import Optional, Union
@@ -35,8 +36,13 @@ _NUMERIC_RE = re.compile(r"^[+-]?\d+$")
 _DERIVED_SEEN: dict[int, str] = {}
 
 
+@functools.lru_cache(maxsize=1024)
 def resolve_userref(value: Optional[Union[str, int]]) -> Optional[int]:
     """Convert a possibly-string user reference into a valid Kraken int32.
+
+    Performance Note: This function caches results via LRU. It avoids repeated
+    SHA-256 hashing for the same strategy tags, drastically reducing overhead
+    when generating identical orders frequently.
 
     Rules:
       - None -> None
