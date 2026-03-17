@@ -73,6 +73,9 @@ def test_engine_cycle():
         close: float
         high: float = 0
         low: float = 0
+        timestamp: int = 0
+        open: float = 0
+        volume: float = 0
 
     # Provide enough data for MA(20)
     # Slow MA = 20. Need > 20 bars.
@@ -80,7 +83,8 @@ def test_engine_cycle():
     # Increasing price pattern.
     prices = [100 + i for i in range(30)]
     market.get_ohlc.return_value = [
-        MockBar(close=p, high=p + 1, low=p - 1) for p in prices
+        MockBar(close=p, high=p + 1, low=p - 1, timestamp=i, open=p, volume=100)
+        for i, p in enumerate(prices)
     ]
     market.get_latest_price.return_value = 130.0
 
