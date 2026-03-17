@@ -63,8 +63,13 @@ def test_risk_engine_sizing():
         high: float
         low: float
         close: float
+        timestamp: int = 0
+        open: float = 0
+        volume: float = 0
 
-    market.get_ohlc.return_value = [MockBar(105, 95, 100) for _ in range(15)]
+    market.get_ohlc.return_value = [
+        MockBar(105, 95, 100, timestamp=i, open=100, volume=100) for i in range(15)
+    ]
 
     portfolio.get_equity.return_value = EquityView(
         equity_base=10000.0,
