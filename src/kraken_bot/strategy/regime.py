@@ -65,8 +65,8 @@ def infer_regime(market_data: MarketDataAPI, pairs: list[str]) -> RegimeSnapshot
             regimes[pair] = MarketRegime.CHOPPY
             continue
 
-        df = pd.DataFrame([bar.__dict__ for bar in ohlc])
-        closes = df["close"].astype(float)
+        # Bolt: Avoid overhead of full DataFrame construction when only 'close' is needed
+        closes = pd.Series([bar.close for bar in ohlc], dtype=float)  # type: ignore[call-overload]
         returns = closes.pct_change().dropna()
 
         if returns.empty:
