@@ -46,9 +46,14 @@ class AuthMiddleware(BaseHTTPMiddleware):
         path = request.url.path
 
         if path.startswith(self._protected_prefix) and path not in self._health_paths:
+            import secrets as std_secrets
+
             auth_header = request.headers.get("Authorization") or ""
             expected = f"Bearer {self._token}" if self._token else ""
-            if auth_header != expected:
+            # Aegis: timing attack on auth token -> use constant-time compare_digest (no exploit details)
+            if not std_secrets.compare_digest(
+                auth_header.encode("utf-8"), expected.encode("utf-8")
+            ):
                 logger.warning(
                     "Unauthorized UI API request",
                     extra=build_request_log_extra(
