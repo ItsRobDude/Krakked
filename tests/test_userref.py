@@ -31,3 +31,28 @@ def test_resolve_userref_derives_stable_int_for_tags() -> None:
     # Derived refs should be positive and safely within int32 range.
     assert first > 0
     assert first <= 2_147_483_647
+
+
+def test_resolve_userref_cache_behavior() -> None:
+    # Clear the cache before testing to ensure a clean state
+    resolve_userref.cache_clear()
+
+    # First call - should be a miss
+    result1 = resolve_userref("cache_test_tag")
+    info = resolve_userref.cache_info()
+    assert info.hits == 0
+    assert info.misses == 1
+
+    # Second call - should be a hit
+    result2 = resolve_userref("cache_test_tag")
+    info = resolve_userref.cache_info()
+    assert info.hits == 1
+    assert info.misses == 1
+    assert result1 == result2
+
+    # Call with a different tag - should be a miss
+    result3 = resolve_userref("another_cache_test_tag")
+    info = resolve_userref.cache_info()
+    assert info.hits == 1
+    assert info.misses == 2
+    assert result3 != result1
