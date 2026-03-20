@@ -70,7 +70,10 @@ def test_engine_cycle():
 
     @dataclass
     class MockBar:
+        timestamp: int
+        open: float
         close: float
+        volume: float
         high: float = 0
         low: float = 0
 
@@ -80,7 +83,10 @@ def test_engine_cycle():
     # Increasing price pattern.
     prices = [100 + i for i in range(30)]
     market.get_ohlc.return_value = [
-        MockBar(close=p, high=p + 1, low=p - 1) for p in prices
+        MockBar(
+            timestamp=1234567890, open=p, close=p, volume=10.0, high=p + 1, low=p - 1
+        )
+        for p in prices
     ]
     market.get_latest_price.return_value = 130.0
 
