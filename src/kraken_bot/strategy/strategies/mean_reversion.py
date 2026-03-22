@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from typing import List
 
 import pandas as pd
@@ -63,7 +63,16 @@ class MeanReversionStrategy(Strategy):
             if not ohlc or len(ohlc) < self.params.lookback_bars:
                 continue
 
-            df = pd.DataFrame([asdict(bar) for bar in ohlc])
+            df = pd.DataFrame(
+                {
+                    "timestamp": [bar.timestamp for bar in ohlc],
+                    "open": [bar.open for bar in ohlc],
+                    "high": [bar.high for bar in ohlc],
+                    "low": [bar.low for bar in ohlc],
+                    "close": [bar.close for bar in ohlc],
+                    "volume": [bar.volume for bar in ohlc],
+                }
+            )
             close_series: Series = df["close"].tail(self.params.lookback_bars)
 
             ma = float(close_series.mean())
