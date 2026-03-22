@@ -1,6 +1,6 @@
 """Volatility breakout strategy implementation."""
 
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from typing import cast
 
 import pandas as pd
@@ -50,7 +50,16 @@ class VolBreakoutStrategy(Strategy):
             if not ohlc or len(ohlc) < self.params.lookback_bars:
                 continue
 
-            df: pd.DataFrame = pd.DataFrame([asdict(b) for b in ohlc])
+            df: pd.DataFrame = pd.DataFrame(
+                {
+                    "timestamp": [b.timestamp for b in ohlc],
+                    "open": [b.open for b in ohlc],
+                    "high": [b.high for b in ohlc],
+                    "low": [b.low for b in ohlc],
+                    "close": [b.close for b in ohlc],
+                    "volume": [b.volume for b in ohlc],
+                }
+            )
             atr = compute_atr(df, window=self.params.lookback_bars)
             if atr <= 0:
                 continue
