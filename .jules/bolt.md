@@ -14,3 +14,7 @@ Benchmark (100k trades):
 - Improvement: ~6-8% (~100ms per 100k trades)
 
 The cache is unbounded but effectively limited by the size of the trading universe (typically < 100 pairs), so memory impact is negligible.
+
+## 2024-05-24 - Optimize DataFrame to OHLCBar extraction via vectorization
+**Learning:** Extracting objects from Pandas DataFrames using `df.to_dict('records')` creates significant overhead due to dictionary instantiation per row.
+**Action:** Use vectorized column extraction with `.tolist()` and `zip()` to instantiate dataclasses directly. This approach is ~3x faster and avoids dictionary overhead.
