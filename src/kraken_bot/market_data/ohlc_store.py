@@ -165,16 +165,14 @@ class FileOHLCStore:
         Optimized by vectorizing list extraction instead of to_dict('records') ~3x faster.
         """
         return [
-            OHLCBar(
-                timestamp=t, open=o, high=h, low=l, close=c, volume=v
-            )
+            OHLCBar(timestamp=t, open=o, high=h, low=l, close=c, volume=v)
             for t, o, h, l, c, v in zip(
                 df.index.astype(int).tolist(),  # type: ignore[attr-defined]
-                df["open"].tolist(),            # type: ignore[attr-defined]
-                df["high"].tolist(),            # type: ignore[attr-defined]
-                df["low"].tolist(),             # type: ignore[attr-defined]
-                df["close"].tolist(),           # type: ignore[attr-defined]
-                df["volume"].tolist(),          # type: ignore[attr-defined]
+                df["open"].tolist(),  # type: ignore[attr-defined]
+                df["high"].tolist(),  # type: ignore[attr-defined]
+                df["low"].tolist(),  # type: ignore[attr-defined]
+                df["close"].tolist(),  # type: ignore[attr-defined]
+                df["volume"].tolist(),  # type: ignore[attr-defined]
             )
         ]
 
