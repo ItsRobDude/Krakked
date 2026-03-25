@@ -73,6 +73,9 @@ def test_engine_cycle():
         close: float
         high: float = 0
         low: float = 0
+        timestamp: int = 0
+        open: float = 0.0
+        volume: float = 0.0
 
     # Provide enough data for MA(20)
     # Slow MA = 20. Need > 20 bars.
