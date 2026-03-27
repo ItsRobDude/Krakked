@@ -165,12 +165,12 @@ class FileOHLCStore:
         # Vectorized list extraction avoids df.to_dict('records') overhead,
         # yielding a ~4x speedup (e.g., 1.87s to 0.46s per 200k rows)
         df_reset = df.reset_index()
-        timestamps = df_reset["timestamp"].astype(int).tolist()
-        opens = df_reset["open"].astype(float).tolist()
-        highs = df_reset["high"].astype(float).tolist()
-        lows = df_reset["low"].astype(float).tolist()
-        closes = df_reset["close"].astype(float).tolist()
-        volumes = df_reset["volume"].astype(float).tolist()
+        timestamps = df_reset["timestamp"].astype(int).tolist()  # type: ignore
+        opens = df_reset["open"].astype(float).tolist()  # type: ignore
+        highs = df_reset["high"].astype(float).tolist()  # type: ignore
+        lows = df_reset["low"].astype(float).tolist()  # type: ignore
+        closes = df_reset["close"].astype(float).tolist()  # type: ignore
+        volumes = df_reset["volume"].astype(float).tolist()  # type: ignore
         return [
             OHLCBar(ts, o, h, l, c, v)
             for ts, o, h, l, c, v in zip(
