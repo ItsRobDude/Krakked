@@ -70,9 +70,12 @@ def test_engine_cycle():
 
     @dataclass
     class MockBar:
-        close: float
-        high: float = 0
-        low: float = 0
+        timestamp: float = 0.0
+        open: float = 0.0
+        high: float = 0.0
+        low: float = 0.0
+        close: float = 0.0
+        volume: float = 0.0
 
     # Provide enough data for MA(20)
     # Slow MA = 20. Need > 20 bars.
