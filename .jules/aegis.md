@@ -1,0 +1,4 @@
+## 2023-10-24 - [AuthMiddleware String Comparison Timing Attack Mitigation]
+**Vulnerability:** [REDACTED DESCRIPTION: UI token authentication uses a naïve equality check (`!=`) on attacker-controlled bearer tokens against the expected secret, allowing byte-by-byte timing attacks.]
+**Learning:** [The repository contains a custom local module `src/kraken_bot/secrets.py`, which shadowed the standard library `secrets` module, preventing developers from easily importing `secrets.compare_digest` in `src/kraken_bot/ui/api.py` without experiencing import conflicts.]
+**Prevention:** [Always import the standard library `secrets` as an alias (e.g., `import secrets as std_secrets`) to ensure constant-time string comparisons can be implemented without conflicting with the repository's custom secrets management module.]
