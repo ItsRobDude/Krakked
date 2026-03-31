@@ -64,7 +64,7 @@ class MeanReversionStrategy(Strategy):
                 continue
 
             # Bolt: Avoid ~19x slower DataFrame/Series instantiation by using vectorized list comprehension
-            close_series: Series = pd.Series([bar.close for bar in ohlc]).tail(
+            close_series: Series = pd.Series([bar.close for bar in ohlc]).tail(  # type: ignore[attr-defined, call-overload]
                 self.params.lookback_bars
             )
 
