@@ -9,6 +9,8 @@ from uuid import uuid4
 
 from fastapi import APIRouter, FastAPI, Request
 from fastapi.middleware import Middleware
+import secrets as std_secrets
+
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -48,7 +50,8 @@ class AuthMiddleware(BaseHTTPMiddleware):
         if path.startswith(self._protected_prefix) and path not in self._health_paths:
             auth_header = request.headers.get("Authorization") or ""
             expected = f"Bearer {self._token}" if self._token else ""
-            if auth_header != expected:
+            # Aegis: timing attack on auth token -> constant time compare (no exploit details)
+            if not std_secrets.compare_digest(auth_header.encode("utf-8"), expected.encode("utf-8")):
                 logger.warning(
                     "Unauthorized UI API request",
                     extra=build_request_log_extra(
