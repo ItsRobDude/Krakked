@@ -65,7 +65,10 @@ class MeanReversionStrategy(Strategy):
 
             # Bolt: Replace asdict with tuple comprehension for ~5x speedup during DataFrame creation
             df = pd.DataFrame(
-                [(bar.timestamp, bar.open, bar.high, bar.low, bar.close, bar.volume) for bar in ohlc],
+                [
+                    (bar.timestamp, bar.open, bar.high, bar.low, bar.close, bar.volume)
+                    for bar in ohlc
+                ],
                 columns=["timestamp", "open", "high", "low", "close", "volume"],
             )
             close_series: Series = df["close"].tail(self.params.lookback_bars)
