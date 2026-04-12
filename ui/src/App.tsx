@@ -187,6 +187,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
   const [strategyBusy, setStrategyBusy] = useState<Set<string>>(new Set());
   const [strategyFeedback, setStrategyFeedback] = useState<string | null>(null);
   const [systemMessage, setSystemMessage] = useState<{ tone: 'info' | 'error' | 'success'; message: string } | null>(null);
+  const [refreshIssues, setRefreshIssues] = useState<Record<string, string>>({});
   const [modeBusy, setModeBusy] = useState(false);
   const [session, setSession] = useState<SessionStateResponse | null>(null);
   const [sessionLoading, setSessionLoading] = useState(true);
@@ -213,6 +214,20 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
     { keys: 'G', description: 'Refresh balances and positions' },
   ];
 
+  const updateRefreshIssue = (key: string, message: string | null) => {
+    setRefreshIssues((current) => {
+      const next = { ...current };
+      if (message) {
+        next[key] = message;
+      } else {
+        delete next[key];
+      }
+      return next;
+    });
+  };
+
+  const refreshIssueMessages = Object.values(refreshIssues);
+
   const loadSession = async () => {
     const [sessionState, profileSummaries, systemHealth] = await Promise.all([
       fetchSessionState(),
@@ -229,6 +244,13 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
       setHealth(systemHealth);
       const healthy = systemHealth.market_data_ok && systemHealth.execution_ok;
       setConnectionState(healthy ? 'connected' : 'degraded');
+      updateRefreshIssue('session-health', null);
+    } else {
+      setConnectionState('degraded');
+      updateRefreshIssue(
+        'session-health',
+        'System health is unavailable. Showing the last successful status where possible.',
+      );
     }
 
     setProfiles(profileSummaries);
@@ -265,23 +287,43 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
       ]);
       if (cancelled) return;
 
+      const failures: string[] = [];
+
       if (portfolioSummary) {
         setSummary(portfolioSummary);
         setKpis(buildKpis(portfolioSummary));
+      } else {
+        failures.push('portfolio summary');
       }
 
       if (systemHealth) {
         setHealth(systemHealth);
         const healthy = systemHealth.market_data_ok && systemHealth.execution_ok;
         setConnectionState(healthy ? 'connected' : 'degraded');
+      } else {
+        failures.push('system health');
+        setConnectionState('degraded');
       }
 
       if (riskStatus) {
         setRisk(riskStatus);
+      } else {
+        failures.push('risk status');
       }
 
       if (exposure) {
         setBalances(transformBalances(exposure));
+      } else {
+        failures.push('exposure');
+      }
+
+      if (failures.length > 0) {
+        updateRefreshIssue(
+          'dashboard',
+          `Dashboard refresh degraded: ${failures.join(', ')} unavailable. Showing the last successful data where possible.`,
+        );
+      } else {
+        updateRefreshIssue('dashboard', null);
       }
     };
 
@@ -322,7 +364,15 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
     const loadRiskConfig = async () => {
       const config = await fetchRiskConfig();
       if (cancelled) return;
-      if (config) setRiskConfig(config);
+      if (config) {
+        setRiskConfig(config);
+        updateRefreshIssue('risk-config', null);
+      } else {
+        updateRefreshIssue(
+          'risk-config',
+          'Risk configuration refresh failed. Edits may be working against stale values.',
+        );
+      }
     };
 
     loadRiskConfig();
@@ -345,6 +395,12 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
          const dust = data.filter(p => p.is_dust);
          setActivePositions(transformPositions(active));
          setDustPositions(transformPositions(dust));
+         updateRefreshIssue('positions', null);
+      } else {
+         updateRefreshIssue(
+           'positions',
+           'Positions refresh failed. Position tables may be showing the last successful snapshot.',
+         );
       }
     };
 
@@ -395,6 +451,12 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
           });
           return next;
         });
+        updateRefreshIssue('strategies', null);
+      } else {
+        updateRefreshIssue(
+          'strategies',
+          'Strategy refresh failed. Strategy toggles and weights may be showing stale data.',
+        );
       }
 
       if (perf) {
@@ -403,6 +465,12 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
           byId[entry.strategy_id] = entry;
         });
         setStrategyPerformance(byId);
+        updateRefreshIssue('strategy-performance', null);
+      } else {
+        updateRefreshIssue(
+          'strategy-performance',
+          'Strategy performance refresh failed. Performance metrics may be stale.',
+        );
       }
     };
 
@@ -437,7 +505,11 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       const latest = await fetchSystemHealth();
-      if (latest && resolveExecutionMode(latest) === target) {
+      if (
+        latest &&
+        resolveExecutionMode(latest) === target &&
+        (target !== 'live' || Boolean(latest.execution_ok))
+      ) {
         return latest;
       }
       await sleep(500);
@@ -465,17 +537,22 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
     }
   };
 
-  const performModeSwitch = async (mode: ExecutionMode, password?: string) => {
+  const performModeSwitch = async (
+    mode: ExecutionMode,
+    password?: string,
+    certifyPaperTestsCompleted = false,
+  ) => {
     setModeBusy(true);
     try {
       const confirmation = mode === 'live' ? 'ENABLE LIVE TRADING' : undefined;
-      await setExecutionMode(mode, password, confirmation);
+      await setExecutionMode(mode, password, confirmation, certifyPaperTestsCompleted);
 
       const latest = await waitForExecutionMode(mode);
       if (latest) {
         setHealth(latest);
         const healthy = latest.market_data_ok && latest.execution_ok;
         setConnectionState(healthy ? 'connected' : 'degraded');
+        updateRefreshIssue('session-health', null);
         return;
       }
 
@@ -484,6 +561,13 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
         setHealth(fallback);
         const healthy = fallback.market_data_ok && fallback.execution_ok;
         setConnectionState(healthy ? 'connected' : 'degraded');
+        updateRefreshIssue('session-health', null);
+      } else {
+        setConnectionState('degraded');
+        updateRefreshIssue(
+          'session-health',
+          'Execution mode changed, but fresh health data is unavailable. Please verify backend status before continuing.',
+        );
       }
     } finally {
       setModeBusy(false);
@@ -521,13 +605,16 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
     await applyStartedSession(next);
   };
 
-  const handleConfirmLiveStart = async (password: string) => {
+  const handleConfirmLiveStart = async (
+    password: string,
+    certifyPaperTestsCompleted: boolean,
+  ) => {
     if (!pendingLiveStart) {
       setShowLiveModal(false);
       return;
     }
 
-    await performModeSwitch('live', password);
+    await performModeSwitch('live', password, certifyPaperTestsCompleted);
     const updated = await updateSessionConfig(pendingLiveStart);
     if (!updated) {
       throw new Error('Unable to configure session.');
@@ -1253,6 +1340,11 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
           </button>
         </div>
         {systemMessage ? <div className={`feedback feedback--${systemMessage.tone}`}>{systemMessage.message}</div> : null}
+        {refreshIssueMessages.length > 0 ? (
+          <div className="feedback feedback--error">
+            {refreshIssueMessages.join(' ')}
+          </div>
+        ) : null}
         <ul className="placeholder-list">
           <li>KPIs and balances poll the portfolio endpoints.</li>
           <li>Recent executions stream into the log panel.</li>

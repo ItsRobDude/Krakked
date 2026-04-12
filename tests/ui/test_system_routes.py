@@ -90,6 +90,26 @@ def test_root_health_alias_available_when_base_path_is_set():
     assert response.json()["data"]["status"] == "ok"
 
 
+def test_root_api_alias_respects_auth_when_base_path_is_set():
+    context = build_test_context(
+        auth_enabled=True, auth_token="secret", read_only=False
+    )
+    context.config.ui.base_path = "/krakked"
+
+    app = create_api(context)
+    client = TestClient(app)
+
+    unauthorized = client.get("/api/portfolio/summary")
+    assert unauthorized.status_code == 401
+
+    authorized = client.get(
+        "/api/portfolio/summary",
+        headers={"Authorization": "Bearer secret"},
+    )
+    assert authorized.status_code == 200
+    assert authorized.json()["error"] is None
+
+
 def test_system_health_enveloped(client, system_context):
     system_context.market_data.get_data_status.return_value = SimpleNamespace(
         rest_api_reachable=True,
@@ -154,6 +174,29 @@ def test_system_health_reports_config_and_risk_flags(client, system_context):
     assert isinstance(payload["stale_pairs"], int)
     assert isinstance(payload["subscription_errors"], int)
     assert isinstance(payload["drift_detected"], bool)
+
+
+def test_system_health_reports_execution_not_ok_when_live_is_blocked(
+    client, system_context
+):
+    system_context.config.execution.mode = "live"
+    system_context.config.execution.validate_only = False
+    system_context.config.execution.allow_live_trading = True
+    system_context.config.execution.paper_tests_completed = False
+    system_context.market_data.get_data_status.return_value = SimpleNamespace(
+        rest_api_reachable=True,
+        websocket_connected=True,
+        streaming_pairs=5,
+        stale_pairs=0,
+        subscription_errors=0,
+    )
+
+    response = client.get("/api/system/health")
+
+    assert response.status_code == 200
+    payload = response.json()["data"]
+    assert payload["current_mode"] == "live"
+    assert payload["execution_ok"] is False
 
 
 def test_system_health_prefers_metrics_snapshot_even_when_false(client, system_context):
@@ -407,6 +450,83 @@ def test_mode_change_to_live_requires_paper_tests_completed(client, system_conte
     payload = response.json()
     assert payload["data"] is None
     assert "paper_tests_completed" in payload["error"]
+
+
+def test_mode_change_to_live_can_certify_paper_tests_completed(
+    monkeypatch, client, system_context, temp_config_dir
+):
+    system_context.config.execution.allow_live_trading = False
+    system_context.config.execution.paper_tests_completed = False
+
+    monkeypatch.setattr("krakked.ui.routes.system.resolve_secrets_path", MagicMock())
+    monkeypatch.setattr("krakked.ui.routes.system.unlock_secrets", MagicMock())
+    remember_password = MagicMock()
+    monkeypatch.setattr(
+        "krakked.ui.routes.system.set_session_master_password",
+        remember_password,
+    )
+    monkeypatch.setattr(
+        "krakked.ui.routes.system.get_config_dir", lambda: temp_config_dir
+    )
+
+    response = client.post(
+        "/api/system/mode",
+        json={
+            "mode": "live",
+            "password": "secret",
+            "confirmation": "ENABLE LIVE TRADING",
+            "certify_paper_tests_completed": True,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["error"] is None
+    assert payload["data"]["mode"] == "live"
+    assert payload["data"]["paper_tests_completed"] is True
+    assert system_context.config.execution.paper_tests_completed is True
+    assert system_context.execution_service.adapter.config.paper_tests_completed is True
+    remember_password.assert_called_once_with("default", "secret")
+
+
+def test_mode_change_does_not_cache_password_if_persist_fails(
+    monkeypatch, client, system_context, temp_config_dir
+):
+    system_context.config.execution.allow_live_trading = False
+    system_context.config.execution.paper_tests_completed = False
+
+    monkeypatch.setattr("krakked.ui.routes.system.resolve_secrets_path", MagicMock())
+    monkeypatch.setattr("krakked.ui.routes.system.unlock_secrets", MagicMock())
+    remember_password = MagicMock()
+    monkeypatch.setattr(
+        "krakked.ui.routes.system.set_session_master_password",
+        remember_password,
+    )
+    monkeypatch.setattr(
+        "krakked.ui.routes.system.get_config_dir", lambda: temp_config_dir
+    )
+    monkeypatch.setattr(
+        "krakked.ui.routes.system.atomic_write",
+        MagicMock(side_effect=OSError("disk full")),
+    )
+
+    response = client.post(
+        "/api/system/mode",
+        json={
+            "mode": "live",
+            "password": "secret",
+            "confirmation": "ENABLE LIVE TRADING",
+            "certify_paper_tests_completed": True,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["data"] is None
+    assert "Failed to persist mode" in payload["error"]
+    remember_password.assert_not_called()
+    assert system_context.config.execution.mode == "paper"
+    assert system_context.config.execution.paper_tests_completed is False
 
 
 def test_start_session_live_mode_requires_paper_tests_completed(client, system_context):

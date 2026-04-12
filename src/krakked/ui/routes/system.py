@@ -109,6 +109,7 @@ class ModeChangePayload(BaseModel):
     # Optional guard fields for live mode transition
     password: Optional[str] = None
     confirmation: Optional[str] = None
+    certify_paper_tests_completed: bool = False
 
 
 class SessionConfigPayload(BaseModel):
@@ -192,6 +193,50 @@ class AccountUnlockPayload(BaseModel):
 
 def _context(request: Request):
     return request.app.state.context
+
+
+def _resolve_execution_config_path(ctx) -> Path:
+    """Resolve the persisted config file that owns the active execution settings."""
+
+    config_dir = get_config_dir()
+    profile_name = ctx.session.profile_name
+    if profile_name:
+        profiles_entry = ctx.config.profiles.get(profile_name)
+        if profiles_entry:
+            profile_path = Path(profiles_entry.config_path)
+            if not profile_path.is_absolute():
+                profile_path = config_dir / profile_path
+            if profile_path.exists():
+                return profile_path
+    return config_dir / "config.yaml"
+
+
+def _persist_execution_settings(
+    target_path: Path,
+    *,
+    new_mode: Literal["paper", "live"],
+    allow_live_trading: Optional[bool] = None,
+    paper_tests_completed: Optional[bool] = None,
+) -> None:
+    """Persist an execution mode change in a single config write."""
+
+    with open(target_path, "r") as f:
+        data = yaml.safe_load(f) or {}
+
+    exec_sec = data.get("execution", {})
+    exec_sec["mode"] = new_mode
+    exec_sec["validate_only"] = new_mode != "live"
+
+    if allow_live_trading is not None:
+        exec_sec["allow_live_trading"] = allow_live_trading
+
+    if paper_tests_completed is not None:
+        exec_sec["paper_tests_completed"] = paper_tests_completed
+
+    data["execution"] = exec_sec
+
+    backup_file(target_path)
+    atomic_write(target_path, data, dump_func=yaml.safe_dump)
 
 
 def _redacted_config(config) -> dict:
@@ -918,8 +963,9 @@ async def system_health(request: Request) -> ApiEnvelope[SystemHealthPayload]:
         if not market_data_ok:
             market_data_status = "stale" if market_data_stale else "unavailable"
 
-        execution_ok = execution_config.mode != "live" or bool(
-            getattr(execution_config, "allow_live_trading", False)
+        execution_ok = (
+            execution_config.mode != "live"
+            or get_live_trading_block_reason(execution_config) is None
         )
         risk_status = ctx.strategy_engine.get_risk_status()
         health_payload = SystemHealthPayload(
@@ -1358,8 +1404,19 @@ async def set_execution_mode(
     new_mode = payload.mode
     execution_config = ctx.config.execution
     current_mode = execution_config.mode
+    current_allow_live = bool(getattr(execution_config, "allow_live_trading", False))
+    current_paper_tests_completed = bool(
+        getattr(execution_config, "paper_tests_completed", False)
+    )
+    repairing_live_state = new_mode == "live" and (
+        (not current_allow_live and bool(payload.password or payload.confirmation))
+        or (
+            not current_paper_tests_completed
+            and payload.certify_paper_tests_completed
+        )
+    )
 
-    if new_mode == current_mode:
+    if new_mode == current_mode and not repairing_live_state:
         return ApiEnvelope(
             data={
                 "mode": current_mode,
@@ -1369,20 +1426,25 @@ async def set_execution_mode(
         )
 
     account_id = ctx.session.account_id
+    next_allow_live_trading = current_allow_live
+    next_paper_tests_completed = current_paper_tests_completed
+    session_password_to_cache: Optional[str] = None
 
     # GUARD: Switching TO live mode
     if new_mode == "live":
-        if not getattr(execution_config, "paper_tests_completed", False):
-            return ApiEnvelope(
-                data=None,
-                error=(
-                    "Live trading requires paper_tests_completed=True in the execution config before switching modes."
-                ),
-            )
+        if not next_paper_tests_completed:
+            if not payload.certify_paper_tests_completed:
+                return ApiEnvelope(
+                    data=None,
+                    error=(
+                        "Live trading requires acknowledging that paper tests are complete. Re-submit with certify_paper_tests_completed=true."
+                    ),
+                )
+            next_paper_tests_completed = True
 
         # Only require password + confirmation if we aren't already allowed to trade live.
         # This allows switching back and forth if already authenticated/unlocked.
-        if not execution_config.allow_live_trading:
+        if not next_allow_live_trading:
             # Check credentials and phrase
             if not payload.password or not payload.confirmation:
                 return ApiEnvelope(
@@ -1396,97 +1458,43 @@ async def set_execution_mode(
             try:
                 secrets_path = resolve_secrets_path(None, account_id)
                 unlock_secrets(payload.password, secrets_path=secrets_path)
-                # Ensure we persist this for reload
-                set_session_master_password(account_id, payload.password)
+                session_password_to_cache = payload.password
             except Exception:
                 logger.warning(
                     "Live mode auth failed",
                     extra=build_request_log_extra(request, event="live_auth_failed"),
                 )
                 return ApiEnvelope(data=None, error="Invalid password")
+            next_allow_live_trading = True
 
-        # Persist this permission so reload picks it up?
-        # Yes, we need to update the config.
-        # But wait, config updates should happen via /config/apply or profile?
-        # Here we do a localized update to execution config.
-        # Ideally we use atomic write here too.
-        # Let's piggyback on config logic or duplicate simple update.
-        # We need to update 'execution.allow_live_trading' in the config file.
-
-        config_dir = get_config_dir()
-        profile_name = ctx.session.profile_name
-        target_path = None
-
-        if profile_name:
-            profiles_entry = ctx.config.profiles.get(profile_name)
-            if profiles_entry:
-                p_path = Path(profiles_entry.config_path)
-                if not p_path.is_absolute():
-                    p_path = config_dir / p_path
-                if p_path.exists():
-                    target_path = p_path
-
-        if not target_path:
-            target_path = config_dir / "config.yaml"
-
-        # Load, update, save
-        try:
-            with open(target_path, "r") as f:
-                data = yaml.safe_load(f) or {}
-
-            exec_sec = data.get("execution", {})
-            exec_sec["mode"] = "live"
-            exec_sec["validate_only"] = False
-            exec_sec["allow_live_trading"] = True
-            # NOTE: We DO NOT set paper_tests_completed=True automatically anymore.
-
-            data["execution"] = exec_sec
-
-            backup_file(target_path)
-            atomic_write(target_path, data, dump_func=yaml.safe_dump)
-
-        except Exception as e:
-            return ApiEnvelope(
-                data=None, error=f"Failed to persist live mode settings: {e}"
-            )
-
-    # For other modes, we might just update runtime state or config too?
-    # Usually mode change persists.
-    # NOTE: Re-implementing generic persistence for mode change:
-    config_dir = get_config_dir()
-    profile_name = ctx.session.profile_name
-    target_path = None
-    if profile_name:
-        profiles_entry = ctx.config.profiles.get(profile_name)
-        if profiles_entry:
-            p_path = Path(profiles_entry.config_path)
-            if not p_path.is_absolute():
-                p_path = config_dir / p_path
-            if p_path.exists():
-                target_path = p_path
-    if not target_path:
-        target_path = config_dir / "config.yaml"
+    target_path = _resolve_execution_config_path(ctx)
 
     try:
-        with open(target_path, "r") as f:
-            data = yaml.safe_load(f) or {}
-        exec_sec = data.get("execution", {})
-        exec_sec["mode"] = new_mode
-        exec_sec["validate_only"] = new_mode != "live"
-        if new_mode == "live":
-            exec_sec["allow_live_trading"] = True
-        data["execution"] = exec_sec
-        backup_file(target_path)
-        atomic_write(target_path, data, dump_func=yaml.safe_dump)
+        _persist_execution_settings(
+            target_path,
+            new_mode=new_mode,
+            allow_live_trading=(
+                next_allow_live_trading if new_mode == "live" else None
+            ),
+            paper_tests_completed=(
+                next_paper_tests_completed
+                if new_mode == "live" or next_paper_tests_completed != current_paper_tests_completed
+                else None
+            ),
+        )
     except Exception as e:
         return ApiEnvelope(data=None, error=f"Failed to persist mode: {e}")
+
+    if session_password_to_cache:
+        set_session_master_password(account_id, session_password_to_cache)
 
     # Update in-memory state so subsequent calls reflect the change immediately
     # We do this AFTER successful persistence to avoid split-brain if write fails.
     execution_config.mode = new_mode
     execution_config.validate_only = new_mode != "live"
     if new_mode == "live":
-        execution_config.allow_live_trading = True
+        execution_config.allow_live_trading = next_allow_live_trading
+        execution_config.paper_tests_completed = next_paper_tests_completed
 
     ctx.session.mode = new_mode
     if hasattr(ctx.config, "session"):
@@ -1499,7 +1507,8 @@ async def set_execution_mode(
             adapter_conf.mode = new_mode
             adapter_conf.validate_only = new_mode != "live"
             if new_mode == "live":
-                adapter_conf.allow_live_trading = True
+                adapter_conf.allow_live_trading = next_allow_live_trading
+                adapter_conf.paper_tests_completed = next_paper_tests_completed
 
     # Trigger reload
     ctx.reinitialize_event.set()
@@ -1518,6 +1527,7 @@ async def set_execution_mode(
         data={
             "mode": new_mode,
             "validate_only": execution_config.validate_only,
+            "paper_tests_completed": execution_config.paper_tests_completed,
             "reloading": True,
         },
         error=None,

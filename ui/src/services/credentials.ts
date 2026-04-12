@@ -9,7 +9,8 @@ export type CredentialResponse = {
   error: string | null;
 };
 
-const defaultEndpoint = '/api/system/credentials/validate';
+const apiBase = (import.meta.env.VITE_API_BASE || '/api').replace(/\/$/, '');
+const defaultEndpoint = `${apiBase}/system/credentials/validate`;
 const API_TOKEN = import.meta.env.VITE_API_TOKEN;
 
 export async function validateCredentials(payload: CredentialPayload): Promise<CredentialResponse> {

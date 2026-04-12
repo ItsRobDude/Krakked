@@ -49,18 +49,28 @@ class AuthMiddleware(BaseHTTPMiddleware):
         super().__init__(app)
         self._token = token
         normalized_base = base_path.rstrip("/") or ""
-        self._protected_prefix = f"{normalized_base}/api" or "/api"
+        self._protected_prefixes = {"/api"}
+        if normalized_base:
+            self._protected_prefixes.add(f"{normalized_base}/api")
         self._health_paths = {
             "/api/health",
             "/api/system/health",
-            f"{self._protected_prefix}/health",
-            f"{self._protected_prefix}/system/health",
         }
+        if normalized_base:
+            self._health_paths.update(
+                {
+                    f"{normalized_base}/api/health",
+                    f"{normalized_base}/api/system/health",
+                }
+            )
 
     async def dispatch(self, request: Request, call_next: Callable):  # type: ignore[override]
         path = request.url.path
 
-        if path.startswith(self._protected_prefix) and path not in self._health_paths:
+        if (
+            any(path.startswith(prefix) for prefix in self._protected_prefixes)
+            and path not in self._health_paths
+        ):
             auth_header = request.headers.get("Authorization") or ""
             expected = f"Bearer {self._token}" if self._token else ""
             if auth_header != expected:
@@ -94,13 +104,18 @@ def create_api(context: AppContext) -> FastAPI:
     app = FastAPI(middleware=middleware)
     app.state.context = context
 
-    app.include_router(portfolio_router, prefix=f"{base_path}/api/portfolio")
-    app.include_router(risk_router, prefix=f"{base_path}/api/risk")
-    app.include_router(strategies_router, prefix=f"{base_path}/api/strategies")
-    app.include_router(execution_router, prefix=f"{base_path}/api/execution")
-    app.include_router(system_router, prefix=f"{base_path}/api/system")
-    app.include_router(config_router, prefix=f"{base_path}/api/config")
-    app.include_router(presets_router, prefix=f"{base_path}/api/presets")
+    api_prefixes = [""]
+    if base_path:
+        api_prefixes.insert(0, base_path)
+
+    for api_prefix in dict.fromkeys(api_prefixes):
+        app.include_router(portfolio_router, prefix=f"{api_prefix}/api/portfolio")
+        app.include_router(risk_router, prefix=f"{api_prefix}/api/risk")
+        app.include_router(strategies_router, prefix=f"{api_prefix}/api/strategies")
+        app.include_router(execution_router, prefix=f"{api_prefix}/api/execution")
+        app.include_router(system_router, prefix=f"{api_prefix}/api/system")
+        app.include_router(config_router, prefix=f"{api_prefix}/api/config")
+        app.include_router(presets_router, prefix=f"{api_prefix}/api/presets")
 
     @app.middleware("http")
     async def inject_request_id(request: Request, call_next):
@@ -113,15 +128,14 @@ def create_api(context: AppContext) -> FastAPI:
         return {"data": {"status": "ok"}, "error": None}
 
     health_router = APIRouter()
-    health_router.add_api_route(
-        f"{base_path}/api/health", healthcheck, methods=["GET"], name="healthcheck"
-    )
-    if base_path:
+    for api_prefix in dict.fromkeys(api_prefixes):
+        route_path = f"{api_prefix}/api/health" if api_prefix else "/api/health"
+        route_name = "healthcheck" if not api_prefix else f"healthcheck-{api_prefix}"
         health_router.add_api_route(
-            "/api/health",
+            route_path,
             healthcheck,
             methods=["GET"],
-            name="healthcheck-root-alias",
+            name=route_name,
         )
 
     app.include_router(health_router)
@@ -131,6 +145,8 @@ def create_api(context: AppContext) -> FastAPI:
 
     # IMPORTANT: StaticFiles mount MUST remain the final route registration; do not add routers after this.
     if ui_dir.exists() and (ui_dir / "index.html").exists():
+        if base_path:
+            app.mount(base_path, StaticFiles(directory=str(ui_dir), html=True), name="ui-base-path")
         app.mount("/", StaticFiles(directory=str(ui_dir), html=True), name="ui")
     else:
         logger.warning(

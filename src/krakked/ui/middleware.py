@@ -28,25 +28,44 @@ class LifecycleMiddleware(BaseHTTPMiddleware):
         # Exact match allowed paths (method-agnostic in set, but checked specifically)
         # We store them without method here, logic will check method+path
         self._allowed_paths_exact = {
-            f"{normalized_base}/api/system/session",
-            f"{normalized_base}/api/system/health",
-            f"{normalized_base}/api/system/profiles",
-            f"{normalized_base}/api/health",
-            f"{normalized_base}/api/config/runtime",
+            "/api/system/session",
+            "/api/system/health",
+            "/api/system/profiles",
+            "/api/health",
+            "/api/config/runtime",
         }
+        if normalized_base:
+            self._allowed_paths_exact.update(
+                {
+                    f"{normalized_base}/api/system/session",
+                    f"{normalized_base}/api/system/health",
+                    f"{normalized_base}/api/system/profiles",
+                    f"{normalized_base}/api/health",
+                    f"{normalized_base}/api/config/runtime",
+                }
+            )
 
         # POST-only exact matches
-        self._allowed_post_exact = {
-            f"{normalized_base}/api/system/reset",
-        }
+        self._allowed_post_exact = {"/api/system/reset"}
+        if normalized_base:
+            self._allowed_post_exact.add(f"{normalized_base}/api/system/reset")
 
         # Prefix allowed paths
-        self._allowed_prefixes = (
-            f"{normalized_base}/api/system/setup/",
-            f"{normalized_base}/api/system/accounts/",
-        )
+        self._allowed_prefixes = [
+            "/api/system/setup/",
+            "/api/system/accounts/",
+        ]
+        if normalized_base:
+            self._allowed_prefixes.extend(
+                [
+                    f"{normalized_base}/api/system/setup/",
+                    f"{normalized_base}/api/system/accounts/",
+                ]
+            )
 
-        self._api_prefix = f"{normalized_base}/api"
+        self._api_prefixes = ["/api"]
+        if normalized_base:
+            self._api_prefixes.append(f"{normalized_base}/api")
 
     async def dispatch(self, request: Request, call_next: Callable):
         try:
@@ -82,7 +101,7 @@ class LifecycleMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         # If it's an API call but not allowed -> Block
-        if path.startswith(self._api_prefix):
+        if any(path.startswith(prefix) for prefix in self._api_prefixes):
             logger.warning(
                 "Request blocked: System is in setup mode",
                 extra=build_request_log_extra(request, event="setup_mode_block"),

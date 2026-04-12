@@ -202,6 +202,7 @@ export type ExecutionModeUpdate = {
   mode: ExecutionMode;
   reloading?: boolean;
   validate_only?: boolean;
+  paper_tests_completed?: boolean;
 };
 
 export type ProfileCreateResponse = {
@@ -209,7 +210,7 @@ export type ProfileCreateResponse = {
   path: string;
 };
 
-const API_BASE = import.meta.env.VITE_API_BASE || '/api';
+const API_BASE = (import.meta.env.VITE_API_BASE || '/api').replace(/\/$/, '');
 const API_TOKEN = import.meta.env.VITE_API_TOKEN;
 
 async function fetchJson<T>(path: string, options: RequestInit = {}): Promise<T | null> {
@@ -389,10 +390,16 @@ export async function setExecutionMode(
   mode: ExecutionMode,
   password?: string,
   confirmation?: string,
+  certifyPaperTestsCompleted = false,
 ): Promise<ExecutionModeUpdate> {
   return fetchJsonStrict<ExecutionModeUpdate>('/system/mode', {
     method: 'POST',
-    body: JSON.stringify({ mode, password, confirmation }),
+    body: JSON.stringify({
+      mode,
+      password,
+      confirmation,
+      certify_paper_tests_completed: certifyPaperTestsCompleted,
+    }),
   });
 }
 

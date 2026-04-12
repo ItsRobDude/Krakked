@@ -1,16 +1,27 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 type LiveModeModalProps = {
   isOpen: boolean;
   onClose: () => void;
-  onConfirm: (password: string) => Promise<void>;
+  onConfirm: (password: string, certifyPaperTestsCompleted: boolean) => Promise<void>;
 };
 
 export function LiveModeModal({ isOpen, onClose, onConfirm }: LiveModeModalProps) {
   const [password, setPassword] = useState('');
   const [confirmRisk, setConfirmRisk] = useState(false);
+  const [confirmPaperTests, setConfirmPaperTests] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!isOpen) {
+      setPassword('');
+      setConfirmRisk(false);
+      setConfirmPaperTests(false);
+      setBusy(false);
+      setError(null);
+    }
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
@@ -19,6 +30,11 @@ export function LiveModeModal({ isOpen, onClose, onConfirm }: LiveModeModalProps
 
     if (!confirmRisk) {
       setError('You must acknowledge the risk checkbox.');
+      return;
+    }
+
+    if (!confirmPaperTests) {
+      setError('You must confirm that paper trading checks are complete.');
       return;
     }
 
@@ -31,7 +47,7 @@ export function LiveModeModal({ isOpen, onClose, onConfirm }: LiveModeModalProps
     setError(null);
 
     try {
-      await onConfirm(password);
+      await onConfirm(password, true);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Authentication failed');
       setBusy(false);
@@ -47,6 +63,10 @@ export function LiveModeModal({ isOpen, onClose, onConfirm }: LiveModeModalProps
         <p className="panel__description">
           You are about to switch to <strong>Live Money</strong> execution. The bot will have authority to place real
           orders on your Kraken account.
+        </p>
+        <p className="panel__description">
+          This step also certifies that you completed your paper-trading checks for this deployment. Krakked will record
+          that readiness flag before enabling live mode.
         </p>
 
         <form onSubmit={handleSubmit} className="form">
@@ -75,13 +95,29 @@ export function LiveModeModal({ isOpen, onClose, onConfirm }: LiveModeModalProps
             </label>
           </div>
 
+          <div className="field field--checkbox">
+            <label>
+              <input
+                type="checkbox"
+                checked={confirmPaperTests}
+                onChange={(e) => setConfirmPaperTests(e.target.checked)}
+                disabled={busy}
+              />
+              I completed paper-trading validation and want to mark this deployment ready for live orders.
+            </label>
+          </div>
+
           {error && <div className="feedback feedback--error">{error}</div>}
 
           <div className="modal-actions">
             <button type="button" className="ghost-button" onClick={onClose} disabled={busy}>
               Cancel
             </button>
-            <button type="submit" className="primary-button" disabled={busy || !confirmRisk}>
+            <button
+              type="submit"
+              className="primary-button"
+              disabled={busy || !confirmRisk || !confirmPaperTests}
+            >
               {busy ? 'Verifying…' : 'Activate Live Mode'}
             </button>
           </div>
