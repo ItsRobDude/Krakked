@@ -35,10 +35,23 @@ RUNTIME_OVERRIDES_FILENAME = "config.runtime.yaml"
 logger = logging.getLogger(__name__)
 
 
+def _get_path_override(*env_names: str) -> Path | None:
+    """Return the first non-empty path override from the provided env vars."""
+
+    for env_name in env_names:
+        value = os.environ.get(env_name, "").strip()
+        if value:
+            return Path(value).expanduser()
+    return None
+
+
 def get_config_dir() -> Path:
     """
     Returns the OS-specific configuration directory for the bot using appdirs.
     """
+    override = _get_path_override("KRAKKED_CONFIG_DIR", "KRAKEN_BOT_CONFIG_DIR")
+    if override is not None:
+        return override
     return Path(appdirs.user_config_dir("kraken_bot"))
 
 
@@ -47,7 +60,10 @@ def get_default_ohlc_store_config() -> Dict[str, str]:
     Provides a sensible default configuration for the OHLC store, pointing to
     a user-specific data directory with a Parquet backend.
     """
-    default_root = Path(appdirs.user_data_dir("kraken_bot")) / "ohlc"
+    data_dir = _get_path_override("KRAKKED_DATA_DIR", "KRAKEN_BOT_DATA_DIR")
+    if data_dir is None:
+        data_dir = Path(appdirs.user_data_dir("kraken_bot"))
+    default_root = data_dir / "ohlc"
     return {"root_dir": str(default_root), "backend": "parquet"}
 
 

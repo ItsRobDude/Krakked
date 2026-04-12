@@ -1,6 +1,6 @@
 # Krakked
 
-Krakked is a modular Kraken spot trading bot for CA/USA markets, built with a strong bias toward safety, testing, and clean architecture.
+Krakked is a modular Kraken trading system for California and broader U.S. use, built with a strong bias toward safety, testing, clean architecture, and an eventual path to live trading.
 
 ## 🚀 Current Status
 
@@ -27,6 +27,10 @@ See [`docs/phases/phase6.md`](docs/phases/phase6.md) for the full contract and d
 
 See the consolidated phase contract in [`docs/contract.md`](docs/contract.md) for the full design scope across Phases 1–7. Individual phase files remain available for historical reference.
 
+See [`docs/product-roadmap.md`](docs/product-roadmap.md) for the current product direction: Docker-first deployment, California/U.S. positioning, live-trading goals, strategy weighting, and ML roadmap.
+
+See [`docs/docker.md`](docs/docker.md) for the preferred self-hosted deployment flow.
+
 ## 🏗️ Architecture
 
 The bot is organized into distinct modules:
@@ -37,6 +41,21 @@ The bot is organized into distinct modules:
 *   **`strategy`**: Decision-making layer. Strategies emit intents that flow through the risk engine and into the OMS for execution or paper/validate-only routing.
 
 ## 📦 Installation & Setup
+
+### 🐳 Preferred: Docker Compose
+
+Krakked's primary deployment path is Docker-first, self-hosted operation. If you want the closest thing to the intended product shape, start with:
+
+```bash
+cp .env.example .env
+mkdir -p deploy/config deploy/data deploy/state
+cp config_examples/config.yaml deploy/config/config.yaml
+cp config_examples/config.paper.yaml deploy/config/config.paper.yaml
+cp config_examples/config.live.yaml deploy/config/config.live.yaml
+docker compose up --build
+```
+
+Before starting, merge the container path overrides from `config_examples/config.container.yaml` into `deploy/config/config.yaml` so the UI, DB, and market-data cache all write to persisted mounted paths. Full instructions live in [`docs/docker.md`](docs/docker.md).
 
 ### Prerequisites
 
@@ -320,7 +339,9 @@ The CI workflow is the source of truth for what must pass before packaging/deplo
 
 ## 🐳 Docker
 
-Build and run the containerized bot when you need an isolated runtime or a deployable image:
+The preferred Docker path is `docker compose`; see [`docs/docker.md`](docs/docker.md) for the complete setup flow with persistent config, data, and state directories.
+
+You can still build and run the image directly when you need an isolated runtime or a deployable image:
 
 ```bash
 docker build -t krakked .

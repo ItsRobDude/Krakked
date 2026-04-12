@@ -1,0 +1,32 @@
+services:
+  krakked:
+    build:
+      context: .
+    image: krakked:${KRAKKED_IMAGE_TAG:-local}
+    restart: unless-stopped
+    ports:
+      - "${KRAKKED_PORT:-8080}:8080"
+    environment:
+      KRAKEN_BOT_ENV: ${KRAKEN_BOT_ENV:-paper}
+      KRAKKED_CONFIG_DIR: /krakked/config
+      KRAKKED_DATA_DIR: /krakked/data
+      KRAKEN_BOT_SECRET_PW: ${KRAKEN_BOT_SECRET_PW:-}
+      KRAKEN_API_KEY: ${KRAKEN_API_KEY:-}
+      KRAKEN_API_SECRET: ${KRAKEN_API_SECRET:-}
+      UI_DIST_DIR: /app/ui-dist
+    volumes:
+      - ./deploy/config:/krakked/config
+      - ./deploy/data:/krakked/data
+      - ./deploy/state:/krakked/state
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/api/health', timeout=5).read()",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s

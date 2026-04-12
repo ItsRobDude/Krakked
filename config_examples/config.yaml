@@ -57,6 +57,10 @@ execution:
   max_concurrent_orders: 10
   min_order_notional_usd: 20.0
 
+# US_CA is currently configured as spot-only product scope for Krakked v1.
+# That is a product decision to keep the first sellable version simpler and safer,
+# not a claim that California categorically forbids every other Kraken offering.
+
 risk:
   max_risk_per_trade_pct: 1.0
   max_portfolio_risk_pct: 10.0

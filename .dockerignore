@@ -1,0 +1,12 @@
+.git
+.github
+.jules
+.mypy_cache
+.pytest_cache
+.venv
+build
+dist
+portfolio.db
+ui/dist
+ui/node_modules
+*.db

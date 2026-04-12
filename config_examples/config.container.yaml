@@ -1,0 +1,15 @@
+# Container-specific overrides for Docker deployments.
+# Merge these values into your real config.yaml when running Krakked via compose.
+
+market_data:
+  ohlc_store:
+    root_dir: "/krakked/data/ohlc"
+  metadata_path: "/krakked/data/metadata.json"
+
+portfolio:
+  db_path: "/krakked/state/portfolio.db"
+  auto_migrate_schema: false
+
+ui:
+  host: "0.0.0.0"
+  port: 8080

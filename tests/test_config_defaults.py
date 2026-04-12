@@ -1,10 +1,8 @@
-# tests/test_config_defaults.py
-
 from pathlib import Path
 
 import appdirs  # type: ignore[import-untyped]
 
-from kraken_bot.config import load_config
+from kraken_bot.config import get_config_dir, load_config
 
 
 def test_load_config_sets_default_ohlc_store(monkeypatch, tmp_path: Path):
@@ -56,3 +54,26 @@ region:
     expected_root = str(data_dir / "ohlc")
     assert app_config.market_data.ohlc_store["root_dir"] == expected_root
     assert app_config.market_data.ohlc_store["backend"] == "parquet"
+
+
+def test_get_config_dir_prefers_env_override(monkeypatch, tmp_path: Path):
+    config_dir = tmp_path / "compose-config"
+    monkeypatch.setenv("KRAKKED_CONFIG_DIR", str(config_dir))
+    monkeypatch.setattr(appdirs, "user_config_dir", lambda appname: tmp_path / "ignored")
+
+    assert get_config_dir() == config_dir
+
+
+def test_load_config_uses_data_dir_env_override_for_default_ohlc_store(
+    monkeypatch, tmp_path: Path
+):
+    config_dir = tmp_path / "config"
+    data_dir = tmp_path / "compose-data"
+
+    monkeypatch.setenv("KRAKKED_DATA_DIR", str(data_dir))
+    monkeypatch.setattr(appdirs, "user_config_dir", lambda appname: config_dir)
+    monkeypatch.setattr(appdirs, "user_data_dir", lambda appname: tmp_path / "ignored")
+
+    app_config = load_config()
+
+    assert app_config.market_data.ohlc_store["root_dir"] == str(data_dir / "ohlc")

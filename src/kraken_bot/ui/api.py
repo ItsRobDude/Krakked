@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 from typing import Callable
 from uuid import uuid4
@@ -27,6 +28,18 @@ from kraken_bot.ui.routes import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_ui_dist_dir() -> Path:
+    """Locate the built frontend assets for local dev and packaged runtimes."""
+
+    explicit_dir = os.environ.get("KRAKKED_UI_DIST_DIR") or os.environ.get("UI_DIST_DIR")
+    if explicit_dir:
+        return Path(explicit_dir).expanduser()
+
+    # We are in src/kraken_bot/ui/api.py. Repo root is 4 levels up.
+    repo_root = Path(__file__).resolve().parent.parent.parent.parent
+    return repo_root / "ui" / "dist"
 
 
 class AuthMiddleware(BaseHTTPMiddleware):
@@ -104,10 +117,8 @@ def create_api(context: AppContext) -> FastAPI:
 
     app.include_router(health_router)
 
-    # Mount UI static files
-    # We are in src/kraken_bot/ui/api.py. Repo root is 4 levels up.
-    repo_root = Path(__file__).resolve().parent.parent.parent.parent
-    ui_dir = repo_root / "ui" / "dist"
+    # Mount UI static files.
+    ui_dir = _resolve_ui_dist_dir()
 
     # IMPORTANT: StaticFiles mount MUST remain the final route registration; do not add routers after this.
     if ui_dir.exists() and (ui_dir / "index.html").exists():
