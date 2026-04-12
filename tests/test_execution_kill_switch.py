@@ -228,6 +228,67 @@ def test_risk_provider_follows_strategy_engine_kill_switch_state():
     assert all("kill_switch" in (order.last_error or "") for order in result.orders)
 
 
+def test_emergency_reduce_only_plan_bypasses_kill_switch():
+    adapter = FakeAdapter()
+    market_data = _market_data_mock()
+    market_data.get_best_bid_ask.return_value = {"bid": 100.0, "ask": 100.0}
+    service = ExecutionService(
+        adapter=adapter,
+        market_data=market_data,
+        risk_status_provider=_kill_switch_provider,
+    )
+
+    plan = ExecutionPlan(
+        plan_id="plan_flatten",
+        generated_at=datetime.now(UTC),
+        emergency_reduce_only=True,
+        metadata={"order_type": "market"},
+        actions=[
+            RiskAdjustedAction(
+                pair="XBTUSD",
+                strategy_id="test_strategy",
+                action_type="close",
+                target_base_size=0.0,
+                target_notional_usd=0.0,
+                current_base_size=1.0,
+                reason="flatten",
+                blocked=False,
+                blocked_reasons=[],
+                strategy_tag="test_strategy",
+                risk_limits_snapshot={},
+            )
+        ],
+    )
+
+    result = service.execute_plan(plan)
+
+    assert result.success
+    assert len(adapter.submit_order_calls) == 1
+    assert result.errors == []
+
+
+def test_emergency_reduce_only_plan_does_not_bypass_for_opening_actions():
+    adapter = FakeAdapter()
+    service = ExecutionService(
+        adapter=adapter,
+        market_data=_market_data_mock(),
+        risk_status_provider=_kill_switch_provider,
+    )
+
+    plan = ExecutionPlan(
+        plan_id="plan_invalid_bypass",
+        generated_at=datetime.now(UTC),
+        emergency_reduce_only=True,
+        actions=[_build_action("XBTUSD")],
+    )
+
+    result = service.execute_plan(plan)
+
+    assert not result.success
+    assert adapter.submit_order_calls == []
+    assert all("kill_switch" in (order.last_error or "") for order in result.orders)
+
+
 def test_live_mode_requires_risk_provider():
     adapter = FakeAdapter(config=ExecutionConfig(mode="live", allow_live_trading=True))
 

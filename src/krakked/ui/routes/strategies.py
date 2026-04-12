@@ -3,15 +3,16 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
 
 from fastapi import APIRouter, Request
+from pydantic import ValidationError
 
 from krakked.config import dump_runtime_overrides
 from krakked.strategy.risk_profiles import profile_to_definition
 from krakked.ui.logging import build_request_log_extra
 from krakked.ui.models import (
     ApiEnvelope,
+    StrategyConfigPatchPayload,
     StrategyPerformancePayload,
     StrategyStatePayload,
 )
@@ -130,7 +131,13 @@ async def update_strategy_config(
         return ApiEnvelope(data=None, error="UI is in read-only mode")
 
     try:
-        payload = await request.json()
+        raw_payload = await request.json()
+        if not isinstance(raw_payload, dict):
+            raise ValueError("Strategy config payload must be a JSON object")
+        payload = StrategyConfigPatchPayload.model_validate(raw_payload)
+    except ValidationError as exc:
+        messages = "; ".join(error["msg"] for error in exc.errors())
+        return ApiEnvelope(data=None, error=messages)
     except Exception:  # pragma: no cover - malformed body
         return ApiEnvelope(data=None, error="Invalid JSON payload")
 
@@ -139,34 +146,32 @@ async def update_strategy_config(
         if not strat_cfg:
             return ApiEnvelope(data=None, error="Strategy not found")
 
-        updated_fields: dict[str, Any] = {}
-        for field, value in payload.items():
-            if field == "params" and isinstance(value, dict):
-                strat_cfg.params.update(value)
-                updated_fields[field] = value
-                if strategy_id in ctx.strategy_engine.strategy_states:
-                    ctx.strategy_engine.strategy_states[strategy_id].params.update(
-                        value
-                    )
-            elif field == "strategy_weight":
-                if not isinstance(value, int) or not 1 <= value <= 100:
-                    return ApiEnvelope(
-                        data=None,
-                        error="'strategy_weight' must be an integer between 1 and 100",
-                    )
-                strat_cfg.strategy_weight = value
-                updated_fields[field] = value
-                if strategy_id in ctx.strategy_engine.strategy_states:
-                    ctx.strategy_engine.strategy_states[
-                        strategy_id
-                    ].configured_weight = value
-            elif hasattr(strat_cfg, field) and field not in {"name", "type"}:
-                setattr(strat_cfg, field, value)
-                updated_fields[field] = value
+        if not payload.model_fields_set:
+            return ApiEnvelope(data=None, error="No strategy config fields provided")
 
-        params = payload.get("params") or {}
-        profile = params.get("risk_profile")
+        updated_fields: dict[str, object] = {}
+
+        if "strategy_weight" in payload.model_fields_set:
+            if payload.strategy_weight is None:
+                return ApiEnvelope(data=None, error="'strategy_weight' cannot be null")
+            strat_cfg.strategy_weight = payload.strategy_weight
+            updated_fields["strategy_weight"] = payload.strategy_weight
+            if strategy_id in ctx.strategy_engine.strategy_states:
+                ctx.strategy_engine.strategy_states[
+                    strategy_id
+                ].configured_weight = payload.strategy_weight
+
+        if "params" in payload.model_fields_set and payload.params is None:
+            return ApiEnvelope(data=None, error="'params' cannot be null")
+
+        profile = payload.params.risk_profile if payload.params else None
         if profile:
+            strat_cfg.params["risk_profile"] = profile
+            updated_fields["params"] = {"risk_profile": profile}
+            if strategy_id in ctx.strategy_engine.strategy_states:
+                ctx.strategy_engine.strategy_states[strategy_id].params[
+                    "risk_profile"
+                ] = profile
             rp = profile_to_definition(profile)
             ctx.config.risk.max_per_strategy_pct[strategy_id] = rp.max_per_strategy_pct
             ctx.strategy_engine.risk_engine.config.max_per_strategy_pct = dict(

@@ -81,18 +81,60 @@ def test_update_strategy_config_mutates_config(client, strategy_context):
         params={"foo": "bar"},
         strategy_weight=70,
     )
+    strategy_context.strategy_engine.strategy_states["alpha"] = SimpleNamespace(
+        configured_weight=70,
+        params={"foo": "bar"},
+    )
 
     response = client.patch(
         "/api/strategies/alpha/config",
-        json={"enabled": False, "strategy_weight": 55, "params": {"baz": 1}},
+        json={"strategy_weight": 55, "params": {"risk_profile": "aggressive"}},
     )
 
     assert response.status_code == 200
     payload = response.json()
     assert payload["error"] is None
-    assert payload["data"]["enabled"] is False
     assert payload["data"]["strategy_weight"] == 55
-    assert payload["data"]["params"] == {"foo": "bar", "baz": 1}
+    assert payload["data"]["params"] == {"foo": "bar", "risk_profile": "aggressive"}
+    assert (
+        strategy_context.strategy_engine.strategy_states["alpha"].configured_weight == 55
+    )
+
+
+@pytest.mark.parametrize("ui_read_only", [False])
+def test_update_strategy_config_rejects_unknown_fields(client, strategy_context):
+    strategy_context.config.strategies.configs["alpha"] = StrategyConfig(
+        name="Alpha",
+        type="grid",
+        enabled=True,
+        params={},
+    )
+
+    response = client.patch("/api/strategies/alpha/config", json={"enabled": False})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["data"] is None
+    assert "Extra inputs are not permitted" in payload["error"]
+
+
+@pytest.mark.parametrize("ui_read_only", [False])
+def test_update_strategy_config_rejects_unknown_params(client, strategy_context):
+    strategy_context.config.strategies.configs["alpha"] = StrategyConfig(
+        name="Alpha",
+        type="grid",
+        enabled=True,
+        params={},
+    )
+
+    response = client.patch(
+        "/api/strategies/alpha/config", json={"params": {"baz": 1}}
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["data"] is None
+    assert "Extra inputs are not permitted" in payload["error"]
 
 
 @pytest.mark.parametrize("ui_read_only", [True])

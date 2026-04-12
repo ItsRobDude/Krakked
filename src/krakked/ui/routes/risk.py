@@ -8,12 +8,14 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List
 
 from fastapi import APIRouter, Request
+from pydantic import ValidationError
 
 from krakked.config import dump_runtime_overrides
 from krakked.ui.logging import build_request_log_extra
 from krakked.ui.models import (
     ApiEnvelope,
     KillSwitchPayload,
+    RiskConfigPatchPayload,
     RiskConfigPayload,
     RiskDecisionPayload,
     RiskStatusPayload,
@@ -131,6 +133,49 @@ def _serialize_decision(record) -> RiskDecisionPayload:
         block_reasons=block_reasons,
         kill_switch_active=record.kill_switch_active,
     )
+def _validate_risk_invariants(current_config, patch: RiskConfigPatchPayload) -> None:
+    for field in patch.model_fields_set:
+        if getattr(patch, field) is None:
+            raise ValueError(f"'{field}' cannot be null")
+
+    min_strategy_weight_pct = (
+        patch.min_strategy_weight_pct
+        if "min_strategy_weight_pct" in patch.model_fields_set
+        else current_config.min_strategy_weight_pct
+    )
+    max_strategy_weight_pct = (
+        patch.max_strategy_weight_pct
+        if "max_strategy_weight_pct" in patch.model_fields_set
+        else current_config.max_strategy_weight_pct
+    )
+
+    if min_strategy_weight_pct is None or max_strategy_weight_pct is None:
+        raise ValueError("Strategy weight bounds cannot be null")
+
+    if min_strategy_weight_pct > max_strategy_weight_pct:
+        raise ValueError(
+            "min_strategy_weight_pct cannot be greater than max_strategy_weight_pct"
+        )
+
+
+def _apply_risk_patch(ctx, patch: RiskConfigPatchPayload) -> dict[str, Any]:
+    updated_fields: dict[str, Any] = {}
+    for field in patch.model_fields_set:
+        value = getattr(patch, field)
+        setattr(ctx.config.risk, field, value)
+        setattr(ctx.strategy_engine.risk_engine.config, field, value)
+        updated_fields[field] = value
+
+    return updated_fields
+
+
+def _require_kill_switch_confirmation(payload: KillSwitchPayload) -> str | None:
+    if payload.active:
+        return None
+    confirmation = (payload.confirmation or "").strip()
+    if confirmation != "DISABLE KILL SWITCH":
+        return "Clearing the kill switch requires confirmation phrase 'DISABLE KILL SWITCH'"
+    return None
 
 
 @router.get("/status", response_model=ApiEnvelope[RiskStatusPayload])
@@ -190,18 +235,22 @@ async def update_risk_config(request: Request) -> ApiEnvelope[RiskConfigPayload]
         return ApiEnvelope(data=None, error="UI is in read-only mode")
 
     try:
-        payload = await request.json()
+        raw_payload = await request.json()
+        if not isinstance(raw_payload, dict):
+            raise ValueError("Risk config payload must be a JSON object")
+        payload = RiskConfigPatchPayload.model_validate(raw_payload)
+    except ValidationError as exc:
+        messages = "; ".join(error["msg"] for error in exc.errors())
+        return ApiEnvelope(data=None, error=messages)
     except Exception:  # pragma: no cover - malformed body
         return ApiEnvelope(data=None, error="Invalid JSON payload")
 
-    updated_fields = {}
     try:
-        for field, value in payload.items():
-            if hasattr(ctx.config.risk, field):
-                setattr(ctx.config.risk, field, value)
-                setattr(ctx.strategy_engine.risk_engine.config, field, value)
-                updated_fields[field] = value
+        if not payload.model_fields_set:
+            return ApiEnvelope(data=None, error="No risk config fields provided")
 
+        _validate_risk_invariants(ctx.config.risk, payload)
+        updated_fields = _apply_risk_patch(ctx, payload)
         if updated_fields:
             dump_runtime_overrides(ctx.config)
             logger.info(
@@ -308,11 +357,21 @@ async def set_kill_switch(request: Request) -> ApiEnvelope[RiskStatusPayload]:
         return ApiEnvelope(data=None, error="UI is in read-only mode")
 
     try:
-        payload = KillSwitchPayload(**await request.json())
+        raw_payload = await request.json()
+        if not isinstance(raw_payload, dict):
+            raise ValueError("Kill switch payload must be a JSON object")
+        payload = KillSwitchPayload.model_validate(raw_payload)
+    except ValidationError as exc:
+        messages = "; ".join(error["msg"] for error in exc.errors())
+        return ApiEnvelope(data=None, error=messages)
     except Exception:  # pragma: no cover - malformed body
         return ApiEnvelope(data=None, error="Invalid JSON payload")
 
     try:
+        confirmation_error = _require_kill_switch_confirmation(payload)
+        if confirmation_error:
+            return ApiEnvelope(data=None, error=confirmation_error)
+
         ctx.strategy_engine.set_manual_kill_switch(payload.active)
         status = ctx.strategy_engine.get_risk_status()
         logger.info(

@@ -1,3 +1,4 @@
+import logging
 from datetime import UTC, datetime
 from unittest.mock import patch
 
@@ -69,7 +70,9 @@ def test_get_recent_executions_enveloped(client, exec_context):
 
 @pytest.mark.parametrize("ui_read_only", [False])
 def test_cancel_all_triggers_service(client, exec_context):
-    response = client.post("/api/execution/cancel_all")
+    response = client.post(
+        "/api/execution/cancel_all", json={"confirmation": "CANCEL ALL"}
+    )
 
     assert response.status_code == 200
     payload = response.json()
@@ -77,9 +80,22 @@ def test_cancel_all_triggers_service(client, exec_context):
     assert payload == {"data": True, "error": None}
 
 
+@pytest.mark.parametrize("ui_read_only", [False])
+def test_cancel_all_requires_confirmation(client, exec_context):
+    response = client.post("/api/execution/cancel_all", json={})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["data"] is None
+    assert "Field required" in payload["error"]
+    exec_context.execution_service.cancel_all.assert_not_called()
+
+
 @pytest.mark.parametrize("ui_read_only", [True])
 def test_cancel_all_blocked_read_only(client, exec_context):
-    response = client.post("/api/execution/cancel_all")
+    response = client.post(
+        "/api/execution/cancel_all", json={"confirmation": "CANCEL ALL"}
+    )
 
     assert response.status_code == 200
     assert response.json() == {"data": None, "error": "UI is in read-only mode"}
@@ -129,6 +145,7 @@ def test_flatten_all_executes_plan(client, exec_context):
         plan_id="flatten_1",
         generated_at=datetime.now(UTC),
         actions=[action],
+        emergency_reduce_only=True,
     )
     exec_context.portfolio.get_positions.return_value = [
         SpotPosition(
@@ -152,7 +169,9 @@ def test_flatten_all_executes_plan(client, exec_context):
     exec_context.portfolio.last_sync_ok = True
 
     with patch("krakked.ui.routes.execution.dump_runtime_overrides") as mock_dump:
-        response = client.post("/api/execution/flatten_all")
+        response = client.post(
+            "/api/execution/flatten_all", json={"confirmation": "FLATTEN ALL"}
+        )
 
         assert response.status_code == 200
         payload = response.json()
@@ -167,7 +186,9 @@ def test_flatten_all_executes_plan(client, exec_context):
 
 @pytest.mark.parametrize("ui_read_only", [True])
 def test_flatten_all_blocked(client, exec_context):
-    response = client.post("/api/execution/flatten_all")
+    response = client.post(
+        "/api/execution/flatten_all", json={"confirmation": "FLATTEN ALL"}
+    )
 
     assert response.status_code == 200
     assert response.json() == {"data": None, "error": "UI is in read-only mode"}
@@ -183,7 +204,9 @@ def test_flatten_all_fails_if_cancel_fails(client, exec_context):
 
     # Mock dump_runtime_overrides to prevent file I/O
     with patch("krakked.ui.routes.execution.dump_runtime_overrides") as mock_dump:
-        response = client.post("/api/execution/flatten_all")
+        response = client.post(
+            "/api/execution/flatten_all", json={"confirmation": "FLATTEN ALL"}
+        )
         assert response.status_code == 200
         data = response.json()
 
@@ -205,7 +228,9 @@ def test_flatten_all_fails_if_open_orders_remain(client, exec_context):
     exec_context.execution_service.get_open_orders.return_value = [_sample_order("1")]
 
     with patch("krakked.ui.routes.execution.dump_runtime_overrides") as mock_dump:
-        response = client.post("/api/execution/flatten_all")
+        response = client.post(
+            "/api/execution/flatten_all", json={"confirmation": "FLATTEN ALL"}
+        )
         assert response.status_code == 200
         data = response.json()
 
@@ -226,6 +251,7 @@ def test_flatten_all_handles_dust_only(client, exec_context):
         plan_id="flatten_dust",
         generated_at=datetime.now(UTC),
         actions=[],
+        emergency_reduce_only=True,
         metadata={"dust_count_total": 5, "untradeable_count_total": 2},
     )
 
@@ -242,7 +268,9 @@ def test_flatten_all_handles_dust_only(client, exec_context):
     exec_context.session.emergency_flatten = False
 
     with patch("krakked.ui.routes.execution.dump_runtime_overrides") as mock_dump:
-        response = client.post("/api/execution/flatten_all")
+        response = client.post(
+            "/api/execution/flatten_all", json={"confirmation": "FLATTEN ALL"}
+        )
 
         assert response.status_code == 200
         data = response.json()
@@ -265,3 +293,38 @@ def test_flatten_all_handles_dust_only(client, exec_context):
         exec_context.execution_service.execute_plan.assert_not_called()
         assert exec_context.session.emergency_flatten is False
         mock_dump.assert_not_called()
+
+
+@pytest.mark.parametrize("ui_read_only", [False])
+def test_flatten_all_requires_confirmation(client, exec_context):
+    response = client.post("/api/execution/flatten_all", json={})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["data"] is None
+    assert "Field required" in payload["error"]
+    exec_context.execution_service.execute_plan.assert_not_called()
+
+
+@pytest.mark.parametrize("ui_read_only", [False])
+def test_cancel_all_logs_client_context(
+    client, exec_context, caplog: pytest.LogCaptureFixture
+):
+    caplog.set_level(logging.INFO, logger="krakked.ui.routes.execution")
+
+    response = client.post(
+        "/api/execution/cancel_all",
+        json={"confirmation": "CANCEL ALL"},
+        headers={"X-Forwarded-For": "203.0.113.5"},
+    )
+
+    assert response.status_code == 200
+    records = [
+        record
+        for record in caplog.records
+        if getattr(record, "event", None) == "cancel_all_triggered"
+    ]
+    assert records
+    assert any(getattr(record, "account_id", None) == "default" for record in records)
+    assert any(getattr(record, "client_ip", None) for record in records)
+    assert any(getattr(record, "forwarded_for", None) == "203.0.113.5" for record in records)

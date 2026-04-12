@@ -46,6 +46,7 @@ class ExecutionPlan:
     plan_id: str
     generated_at: datetime
     actions: List[RiskAdjustedAction]
+    emergency_reduce_only: bool = False
     metadata: Dict[str, Any] = field(
         default_factory=dict
     )  # e.g. equity snapshot, risk mode, etc.

@@ -7,11 +7,17 @@ from datetime import datetime, timezone
 from typing import List
 
 from fastapi import APIRouter, Request
+from pydantic import ValidationError
 
 from krakked.config_loader import dump_runtime_overrides
 from krakked.execution.models import ExecutionResult, LocalOrder
 from krakked.ui.logging import build_request_log_extra
-from krakked.ui.models import ApiEnvelope, ExecutionResultPayload, OpenOrderPayload
+from krakked.ui.models import (
+    ApiEnvelope,
+    ConfirmationPayload,
+    ExecutionResultPayload,
+    OpenOrderPayload,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +61,26 @@ def _serialize_execution_result(result: ExecutionResult) -> ExecutionResultPaylo
         errors=result.errors,
         warnings=result.warnings,
     )
+
+
+async def _require_confirmation(
+    request: Request, expected_phrase: str
+) -> tuple[ConfirmationPayload | None, str | None]:
+    try:
+        raw_payload = await request.json()
+        if not isinstance(raw_payload, dict):
+            raise ValueError("Confirmation payload must be a JSON object")
+        payload = ConfirmationPayload.model_validate(raw_payload)
+    except ValidationError as exc:
+        messages = "; ".join(error["msg"] for error in exc.errors())
+        return None, messages
+    except Exception:
+        return None, "Invalid JSON payload"
+
+    if payload.confirmation.strip() != expected_phrase:
+        return None, f"Confirmation phrase must be '{expected_phrase}'"
+
+    return payload, None
 
 
 @router.get("/open_orders", response_model=ApiEnvelope[List[OpenOrderPayload]])
@@ -103,6 +129,10 @@ async def cancel_all_orders(request: Request) -> ApiEnvelope[bool]:
             extra=build_request_log_extra(request, event="cancel_all_blocked"),
         )
         return ApiEnvelope(data=None, error="UI is in read-only mode")
+
+    _, confirmation_error = await _require_confirmation(request, "CANCEL ALL")
+    if confirmation_error:
+        return ApiEnvelope(data=None, error=confirmation_error)
 
     try:
         ctx.execution_service.cancel_all()
@@ -172,6 +202,10 @@ async def flatten_all_positions(
             extra=build_request_log_extra(request, event="flatten_all_blocked"),
         )
         return ApiEnvelope(data=None, error="UI is in read-only mode")
+
+    _, confirmation_error = await _require_confirmation(request, "FLATTEN ALL")
+    if confirmation_error:
+        return ApiEnvelope(data=None, error=confirmation_error)
 
     cancel_ok = True
     try:

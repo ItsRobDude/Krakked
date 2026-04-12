@@ -258,6 +258,30 @@ def test_update_risk_config_mutates_context(client, risk_context):
     assert payload["data"]["max_daily_drawdown_pct"] == 3.0
 
 
+@pytest.mark.parametrize("ui_read_only", [False])
+def test_update_risk_config_rejects_unknown_field(client, risk_context):
+    response = client.patch("/api/risk/config", json={"nope": 1})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["data"] is None
+    assert "Extra inputs are not permitted" in payload["error"]
+
+
+@pytest.mark.parametrize("ui_read_only", [False])
+def test_update_risk_config_rejects_invalid_invariants(client, risk_context):
+    response = client.patch(
+        "/api/risk/config",
+        json={"min_strategy_weight_pct": 60.0, "max_strategy_weight_pct": 20.0},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "data": None,
+        "error": "min_strategy_weight_pct cannot be greater than max_strategy_weight_pct",
+    }
+
+
 @pytest.mark.parametrize("ui_read_only", [True])
 def test_update_risk_config_blocked_in_read_only(client, risk_context):
     original = risk_context.config.risk.max_open_positions
@@ -290,6 +314,18 @@ def test_kill_switch_updates_mock(client, risk_context):
     risk_context.strategy_engine.set_manual_kill_switch.assert_called_once_with(True)
     assert payload["error"] is None
     assert payload["data"]["kill_switch_active"] is True
+
+
+@pytest.mark.parametrize("ui_read_only", [False])
+def test_kill_switch_clear_requires_confirmation(client, risk_context):
+    response = client.post("/api/risk/kill_switch", json={"active": False})
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "data": None,
+        "error": "Clearing the kill switch requires confirmation phrase 'DISABLE KILL SWITCH'",
+    }
+    risk_context.strategy_engine.set_manual_kill_switch.assert_not_called()
 
 
 @pytest.mark.parametrize("ui_read_only", [True])

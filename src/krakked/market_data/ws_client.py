@@ -187,7 +187,27 @@ class KrakenWSClientV2:
 
         if "channel" in data:
             channel = data["channel"]
-            ws_symbol = data["symbol"]
+            ws_symbol = data.get("symbol")
+            payload = data.get("data")
+
+            if not isinstance(ws_symbol, str) or not ws_symbol:
+                logger.debug(
+                    "Ignoring channel message without symbol",
+                    extra={"event": "ws_channel_missing_symbol", "channel": channel},
+                )
+                return
+
+            if not isinstance(payload, list) or not payload:
+                logger.debug(
+                    "Ignoring channel message without data payload",
+                    extra={
+                        "event": "ws_channel_missing_data",
+                        "channel": channel,
+                        "symbol": ws_symbol,
+                    },
+                )
+                return
+
             canonical_pair = self._get_canonical_from_ws_symbol(ws_symbol)
 
             if not canonical_pair:
@@ -195,7 +215,16 @@ class KrakenWSClientV2:
                 return
 
             if channel == "ticker":
-                self.ticker_cache[canonical_pair] = data["data"][0]
+                if not isinstance(payload[0], dict):
+                    logger.debug(
+                        "Ignoring malformed ticker payload",
+                        extra={
+                            "event": "ws_ticker_payload_invalid",
+                            "symbol": ws_symbol,
+                        },
+                    )
+                    return
+                self.ticker_cache[canonical_pair] = payload[0]
                 self.last_ticker_update_ts[canonical_pair] = time.monotonic()
             elif channel == "ohlc":
                 interval = data.get("params", {}).get("interval")
@@ -206,7 +235,17 @@ class KrakenWSClientV2:
                     )
                     return
 
-                candle_data = data["data"][0]
+                if not isinstance(payload[0], dict):
+                    logger.debug(
+                        "Ignoring malformed OHLC payload",
+                        extra={
+                            "event": "ws_ohlc_payload_invalid",
+                            "symbol": ws_symbol,
+                        },
+                    )
+                    return
+
+                candle_data = payload[0]
 
                 # Check for candle rollover
                 # 'endtime' identifies the candle interval.

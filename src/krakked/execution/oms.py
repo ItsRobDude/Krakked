@@ -75,12 +75,21 @@ class ExecutionService:
         if mode == "live":
             self._emit_live_readiness_checklist()
 
-    def _kill_switch_active(self, plan_id: Optional[str] = None) -> bool:
+    def _kill_switch_active(self, plan: Optional[ExecutionPlan] = None) -> bool:
         """Return True when execution should be blocked by the kill switch."""
 
-        if isinstance(plan_id, str) and plan_id.startswith("flatten_"):
-            # Flatten is risk-reducing; allow even when kill switch is active.
-            return False
+        plan_id = plan.plan_id if plan is not None else None
+
+        if plan and plan.emergency_reduce_only:
+            if all(action.action_type in {"reduce", "close"} for action in plan.actions):
+                return False
+            logger.error(
+                "Emergency reduce-only plan contained non-reducing actions; refusing kill-switch bypass",
+                extra=structured_log_extra(
+                    event="invalid_emergency_reduce_only_plan",
+                    plan_id=plan.plan_id,
+                ),
+            )
 
         # Missing provider is always a hard block — tests rely on this and it's
         # safer than blindly executing with an unknown risk state.
@@ -254,7 +263,7 @@ class ExecutionService:
 
             eligible_actions.append(action)
 
-        if self._kill_switch_active(plan_id=plan.plan_id):
+        if self._kill_switch_active(plan=plan):
             blocked_reason = "Execution blocked by kill switch"
             logger.warning(
                 blocked_reason,

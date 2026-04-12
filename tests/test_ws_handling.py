@@ -144,3 +144,27 @@ def test_subscription_failure(ws_client: KrakenWSClientV2, caplog):
     assert status_record["status"] == "error"
     assert status_record["message"] == "Invalid pair"
     assert "failed: Invalid pair" in caplog.text
+
+
+def test_channel_message_without_symbol_is_ignored(ws_client: KrakenWSClientV2):
+    message = {
+        "channel": "ticker",
+        "data": [{"ask": "60000.0", "bid": "59999.0"}],
+        "type": "snapshot",
+    }
+
+    asyncio.run(ws_client._handle_message(json.dumps(message)))
+
+    assert ws_client.ticker_cache == {}
+
+
+def test_channel_message_without_data_is_ignored(ws_client: KrakenWSClientV2):
+    message = {
+        "channel": "ticker",
+        "symbol": "XBT/USD",
+        "type": "snapshot",
+    }
+
+    asyncio.run(ws_client._handle_message(json.dumps(message)))
+
+    assert ws_client.ticker_cache == {}

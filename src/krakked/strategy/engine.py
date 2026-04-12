@@ -698,6 +698,7 @@ class StrategyEngine:
             plan_id=f"flatten_{int(now.timestamp())}",
             generated_at=now,
             actions=actions,
+            emergency_reduce_only=True,
             metadata={
                 "order_type": "market",
                 "dust_positions": capped_dust,

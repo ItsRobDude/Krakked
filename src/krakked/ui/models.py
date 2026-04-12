@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Dict, Generic, List, Optional, TypeVar
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 T = TypeVar("T")
 
@@ -79,8 +79,50 @@ class RiskDecisionPayload(BaseModel):
     kill_switch_active: bool
 
 
+class ConfirmationPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    confirmation: str = Field(min_length=1)
+
+
 class KillSwitchPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     active: bool
+    confirmation: Optional[str] = None
+
+
+class RiskConfigPatchPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    max_risk_per_trade_pct: Optional[float] = Field(None, ge=0.0, le=100.0)
+    max_portfolio_risk_pct: Optional[float] = Field(None, ge=0.0, le=100.0)
+    max_open_positions: Optional[int] = Field(None, ge=1)
+    max_per_asset_pct: Optional[float] = Field(None, ge=0.0, le=100.0)
+    max_per_strategy_pct: Optional[Dict[str, float]] = None
+    max_daily_drawdown_pct: Optional[float] = Field(None, ge=0.0, le=100.0)
+    kill_switch_on_drift: Optional[bool] = None
+    include_manual_positions: Optional[bool] = None
+    volatility_lookback_bars: Optional[int] = Field(None, ge=1)
+    min_liquidity_24h_usd: Optional[float] = Field(None, ge=0.0)
+    dynamic_allocation_enabled: Optional[bool] = None
+    dynamic_allocation_lookback_hours: Optional[int] = Field(None, ge=1)
+    min_strategy_weight_pct: Optional[float] = Field(None, ge=0.0, le=100.0)
+    max_strategy_weight_pct: Optional[float] = Field(None, ge=0.0, le=100.0)
+
+    @field_validator("max_per_strategy_pct")
+    @classmethod
+    def _validate_max_per_strategy_pct(
+        cls, value: Optional[Dict[str, float]]
+    ) -> Optional[Dict[str, float]]:
+        if value is None:
+            return value
+        for strategy_id, pct in value.items():
+            if not 0.0 <= pct <= 100.0:
+                raise ValueError(
+                    f"max_per_strategy_pct['{strategy_id}'] must be between 0 and 100"
+                )
+        return value
 
 
 class RiskConfigPayload(BaseModel):
@@ -98,6 +140,19 @@ class RiskConfigPayload(BaseModel):
     dynamic_allocation_lookback_hours: int
     min_strategy_weight_pct: float
     max_strategy_weight_pct: float
+
+
+class StrategyConfigParamsPatchPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    risk_profile: Optional[str] = None
+
+
+class StrategyConfigPatchPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    strategy_weight: Optional[int] = Field(None, ge=1, le=100)
+    params: Optional[StrategyConfigParamsPatchPayload] = None
 
 
 class StrategyPosition(BaseModel):
