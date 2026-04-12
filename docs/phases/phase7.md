@@ -490,3 +490,26 @@ Status & TODO
 - [x] Metrics endpoint: Basic health/metrics HTTP surface for runtime checks and liveness probing.
 - [x] Schema guard: Enforce schema_version checks and migrations before the bot starts accepting work.
 - [x] CI pipeline: GitHub Actions runs tests, lint, pre-commit, mypy, pyright, packaging, and install smoke checks from `.github/workflows/ci.yml`.
+- [x] Release flow: Tag-driven GitHub Actions workflow publishes build artifacts and a versioned Docker image (`.github/workflows/release.yml`).
+- [x] Operator data safety docs: Backup, export/import, upgrade, and Docker deployment runbooks are documented in `docs/backup-restore.md`, `docs/upgrades.md`, and `docs/docker.md`.
+
+Current Repo State
+------------------
+
+Phase 7 should be treated as complete for the original engineering scope.
+
+The repo has moved beyond the original Phase 7 checklist and now includes several post-phase operational pieces:
+
+- versioned packaging and release automation
+- Docker-first install and upgrade documentation
+- backup/export/import tooling for self-hosted installs
+- product-roadmap docs that frame paper mode as staging and live trading as the end goal
+
+What remains is not missing Phase 7 architecture. The remaining work is mostly:
+
+- deployment proof on a real Docker host
+- operator UX polish
+- live-readiness drills and runbooks
+- commercial/distribution preparation
+
+In other words, the codebase is now in a productization phase rather than a core-platform phase.

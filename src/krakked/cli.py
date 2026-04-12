@@ -84,6 +84,12 @@ def _backup_sqlite_database(source_path: Path, destination_path: Path) -> None:
         source.close()
 
 
+def _make_timestamped_backup_path(path: Path) -> Path:
+    """Return a timestamped backup path next to ``path``."""
+
+    return path.with_name(f"{path.name}.{int(time.time())}.bak")
+
+
 def _iter_files_for_archive(base_dir: Path) -> list[Path]:
     """Return regular files under ``base_dir`` while skipping temp artefacts."""
 
@@ -110,22 +116,49 @@ def _restore_archive_bytes(
 ) -> None:
     """Write extracted archive bytes to disk, optionally backing up existing files."""
 
-    if target_path.exists():
-        if not overwrite:
-            raise FileExistsError(str(target_path))
-        backup_file(target_path)
-        for attempt in range(WINDOWS_FILE_RETRY_ATTEMPTS):
-            try:
-                target_path.unlink()
-                break
-            except PermissionError:
-                if attempt == WINDOWS_FILE_RETRY_ATTEMPTS - 1:
-                    raise
-                time.sleep(WINDOWS_FILE_RETRY_DELAY_SECONDS)
-
     target_path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = target_path.with_suffix(target_path.suffix + ".tmp")
     temp_path.write_bytes(payload)
+
+    if target_path.exists():
+        if not overwrite:
+            try:
+                temp_path.unlink()
+            except FileNotFoundError:
+                pass
+            raise FileExistsError(str(target_path))
+
+        try:
+            if target_path.suffix == ".db":
+                backup_path = _make_timestamped_backup_path(target_path)
+                _backup_sqlite_database(target_path, backup_path)
+
+                for attempt in range(WINDOWS_FILE_RETRY_ATTEMPTS):
+                    try:
+                        _backup_sqlite_database(temp_path, target_path)
+                        temp_path.unlink()
+                        return
+                    except (PermissionError, sqlite3.Error):
+                        if attempt == WINDOWS_FILE_RETRY_ATTEMPTS - 1:
+                            raise
+                        time.sleep(WINDOWS_FILE_RETRY_DELAY_SECONDS)
+            else:
+                backup_file(target_path)
+                for attempt in range(WINDOWS_FILE_RETRY_ATTEMPTS):
+                    try:
+                        target_path.unlink()
+                        break
+                    except PermissionError:
+                        if attempt == WINDOWS_FILE_RETRY_ATTEMPTS - 1:
+                            raise
+                        time.sleep(WINDOWS_FILE_RETRY_DELAY_SECONDS)
+        except Exception:
+            try:
+                temp_path.unlink()
+            except FileNotFoundError:
+                pass
+            raise
+
     for attempt in range(WINDOWS_FILE_RETRY_ATTEMPTS):
         try:
             temp_path.replace(target_path)

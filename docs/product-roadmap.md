@@ -52,6 +52,29 @@ This is a product and engineering constraint, not a claim that California law ca
    - Live mode must be operationally first-class, not treated as an afterthought.
    - Emergency controls, audits, and runtime safety checks must stay intact in live mode.
 
+## Current Repo State
+
+The codebase is past the original architecture-building phase.
+
+Implemented or substantially in place:
+
+- Phases 1-7 of the original engineering roadmap
+- Full internal `krakked` rename
+- Docker-oriented install and runtime docs
+- GitHub Actions CI plus a tag-driven release workflow
+- Strategy weighting support in the runtime
+- Crash-safe ML checkpoint/resume foundations
+- Backup, export, import, and upgrade-oriented operator tooling
+
+Still needing real-world validation or product work:
+
+- Docker smoke testing on an actual deployment host
+- More polished strategy-management and attribution UX
+- Simple/Advanced UI presentation split
+- ML operator controls beyond the checkpoint/resume foundation
+- Live-trading readiness drills and operator runbooks
+- Commercial packaging, licensing, and legal/business review
+
 ## UX Recommendation
 
 Krakked should ship with two views:
@@ -98,11 +121,26 @@ The recommended first commercial shape is licensed self-hosted software:
 
 This keeps custody and exchange credentials with the customer while making the product easier to trust and distribute.
 
-## Immediate Engineering Focus
+## Next Milestones
 
-The next major implementation track should be:
+The next milestones are product-facing rather than architecture-facing:
 
-1. Harden and validate Docker deployment.
-2. Design and implement strategy weighting in the runtime and UI.
-3. Formalize ML checkpoint/resume behavior.
-4. Finish the remaining post-rename cleanup and migration notes.
+1. Deployment Proof
+   - Run Krakked end-to-end on a real Docker host.
+   - Validate first boot, persistence, upgrades, backups, and restore.
+   - Confirm the published-image path works cleanly for a non-developer operator.
+
+2. Operator UX
+   - Improve strategy toggles, weights, and per-strategy attribution in the UI.
+   - Introduce a clearer Simple vs Advanced presentation model.
+   - Surface ML status and training/checkpoint information more directly.
+
+3. Live Trading Readiness
+   - Formalize operational runbooks and pre-live checklists.
+   - Tighten live-mode guidance, safety prompts, and emergency control flows.
+   - Practice rollback, restore, and upgrade drills on realistic deployments.
+
+4. Commercial Packaging
+   - Define the self-hosted licensing/update model.
+   - Produce customer-facing install and onboarding material.
+   - Get human legal/business review before broad sale or distribution.

@@ -4,7 +4,7 @@ Krakked is a modular Kraken trading system for California and broader U.S. use, 
 
 ## 🚀 Current Status
 
-This repository includes working, test-covered implementations across the core trading stack. Phase 1 connection and credential handling are implemented; Phase 4 runs multi-timeframe scheduling, per-strategy/portfolio caps, liquidity gating, and stale-data handling in the strategy/risk engine; Phase 5 adds an OMS with market-data-driven routing, retry/backoff, panic cancel, and SQLite persistence; Phases 6 and 7 add the UI/control plane, orchestrator, metrics, and CI/runtime guardrails while keeping live trading disabled by default.
+This repository includes working, test-covered implementations across the core trading stack. Phases 1-7 are substantially implemented: the repo has connection/auth, market data, portfolio accounting, strategy/risk, OMS execution, a FastAPI control plane, orchestrator/runtime guardrails, metrics, schema checks, CI, packaging, and a documented Docker-first deployment path. Recent work also added strategy weighting, crash-safe ML checkpoint/resume foundations, release automation, and export/import-style operator tooling.
 
 | Module | Status | Notes |
 | :--- | :--- | :--- |
@@ -14,20 +14,19 @@ This repository includes working, test-covered implementations across the core t
 | **Phase 4: Strategy & Risk** | ✅ Implemented with known follow-ups | Strategy loader with multi-timeframe scheduling, per-strategy/portfolio caps, liquidity gating, and staleness handling; order tagging/OMS wiring will land in Phase 5. |
 | **Phase 5: Execution** | ✅ Implemented | OMS with market-data-driven routing, retries/backoff, dead-man switch hooks, panic cancel, and SQLite persistence; paper/validate-only defaults with explicit allow_live_trading gate for live submission. |
 | **Phase 6: UI/Control** | ✅ Implemented | CLI/web interface for monitoring and manual control. See [Phase 6 contract](docs/phases/phase6.md#status--todo) for the completed scope and API details. |
+| **Phase 7: Ops & Runtime** | ✅ Implemented with follow-up validation | Orchestrator, structured logging, metrics, schema guard, CI, packaging, release workflow, backup/export/import, and Docker deployment docs are in place. |
+| **Current Product Track** | 🚧 In progress | The main remaining work is deployment proof on a real Docker host, richer strategy/ML UX, live-readiness hardening, and commercial/distribution polish. |
 
-Phase 6 is implemented and documented:
+The repo now has a strong engineering base and has moved past the original phase plan. The current work is less about building missing architecture and more about productization:
 
-* FastAPI endpoints cover read-only and mutating control-plane operations with auth/read-only guards.
-* The Textual TUI and React dashboard both talk to the backend API.
-* Credential validation semantics are documented and enforced in the system routes.
-
-Credential validation semantics (required fields, bearer token enforcement, and the Kraken probe used) are described in the [Phase 6 contract](docs/phases/phase6.md#credential-validation-rules).
-
-See [`docs/phases/phase6.md`](docs/phases/phase6.md) for the full contract and details.
+* Docker-first install, upgrade, backup, and release docs now exist.
+* GitHub Actions covers CI and tag-driven release publishing.
+* Strategy weighting and ML checkpoint/resume foundations are present in code.
+* The next milestone is operational validation and UX polish rather than another major subsystem.
 
 See the consolidated phase contract in [`docs/contract.md`](docs/contract.md) for the full design scope across Phases 1–7. Individual phase files remain available for historical reference.
 
-See [`docs/product-roadmap.md`](docs/product-roadmap.md) for the current product direction: Docker-first deployment, California/U.S. positioning, live-trading goals, strategy weighting, and ML roadmap.
+See [`docs/product-roadmap.md`](docs/product-roadmap.md) for the current product direction and post-phase milestones: Docker-first deployment, California/U.S. positioning, live-trading goals, strategy weighting, ML roadmap, and productization priorities.
 
 See [`docs/docker.md`](docs/docker.md) for the preferred self-hosted deployment flow.
 
