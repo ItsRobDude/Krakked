@@ -43,4 +43,5 @@ RUN pip install --no-cache-dir /tmp/krakked.whl \
     && rm /tmp/krakked.whl
 COPY --from=ui-builder /ui/dist ${UI_DIST_DIR}
 EXPOSE 8080
-CMD ["krakked", "run", "--allow-interactive-setup", "false"]
+ENTRYPOINT ["krakked"]
+CMD ["run", "--allow-interactive-setup", "false"]

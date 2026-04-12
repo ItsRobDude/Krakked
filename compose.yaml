@@ -1,8 +1,6 @@
 services:
   krakked:
-    build:
-      context: .
-    image: krakked:${KRAKKED_IMAGE_TAG:-local}
+    image: ${KRAKKED_IMAGE:-krakked}:${KRAKKED_IMAGE_TAG:-local}
     restart: unless-stopped
     ports:
       - "${KRAKKED_PORT:-8080}:8080"

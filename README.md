@@ -31,6 +31,8 @@ See [`docs/product-roadmap.md`](docs/product-roadmap.md) for the current product
 
 See [`docs/docker.md`](docs/docker.md) for the preferred self-hosted deployment flow.
 
+See [`docs/onboarding.md`](docs/onboarding.md) for a beginner-friendly first-run path, [`docs/releases.md`](docs/releases.md) for the Docker/image release flow, [`docs/upgrades.md`](docs/upgrades.md) for update steps, [`docs/backup-restore.md`](docs/backup-restore.md) for backup/export/import, and [`docs/distribution.md`](docs/distribution.md) for the current distribution/commercial recommendation.
+
 ## 🏗️ Architecture
 
 The bot is organized into distinct modules:
@@ -52,10 +54,10 @@ mkdir -p deploy/config deploy/data deploy/state
 cp config_examples/config.yaml deploy/config/config.yaml
 cp config_examples/config.paper.yaml deploy/config/config.paper.yaml
 cp config_examples/config.live.yaml deploy/config/config.live.yaml
-docker compose up --build
+docker compose -f compose.yaml -f compose.dev.yaml up --build
 ```
 
-Before starting, merge the container path overrides from `config_examples/config.container.yaml` into `deploy/config/config.yaml` so the UI, DB, and market-data cache all write to persisted mounted paths. Full instructions live in [`docs/docker.md`](docs/docker.md).
+Before starting, merge the container path overrides from `config_examples/config.container.yaml` into `deploy/config/config.yaml` so the UI, DB, and market-data cache all write to persisted mounted paths. Full instructions live in [`docs/docker.md`](docs/docker.md). If you are operating from a published image instead of a source checkout, use the base `compose.yaml` only and set `KRAKKED_IMAGE` / `KRAKKED_IMAGE_TAG` in `.env`.
 
 ### Prerequisites
 
@@ -278,8 +280,11 @@ Use the packaged console script for the common workflows:
 
 * `poetry run krakked run` — long-lived orchestrator with scheduler, OMS, and UI enabled.
 * `poetry run krakked run-once` — single paper/validate-only cycle for quick safety checks.
-* `poetry run krakked migrate-db --db-path <path>` — create or migrate the SQLite portfolio store (defaults to `portfolio.db`).
-* `poetry run krakked schema-version --db-path <path>` — inspect the current schema version recorded in the store.
+* `poetry run krakked migrate --db-path <path>` — create or migrate the SQLite portfolio store (defaults to `portfolio.db`).
+* `poetry run krakked db-schema-version --db-path <path>` — inspect the current schema version recorded in the store.
+* `poetry run krakked db-backup --db-path <path>` / `db-info` / `db-check` — backup and inspect the portfolio database before upgrades.
+* `poetry run krakked export-install --output <archive.zip> --include-data` — capture config, SQLite state, and optional cached data for migration or support bundles.
+* `poetry run krakked import-install --input <archive.zip> [--force]` — restore a previously exported install onto a new machine or deployment.
 * `poetry run krakked setup` / `poetry run krakked smoke-test` — interactive credential bootstrap and a basic authenticated probe.
 
 See the `--help` output of `poetry run krakked` for the full command list; all subcommands honor `--allow-interactive-setup` and `--db-path` where applicable.
@@ -348,12 +353,15 @@ docker build -t krakked .
 
 docker run --rm \
   -p 8080:8080 \
+  -e KRAKKED_CONFIG_DIR=/krakked/config \
+  -e KRAKKED_DATA_DIR=/krakked/data \
   -e KRAKEN_API_KEY=... \
   -e KRAKEN_API_SECRET=... \
   -e KRAKKED_SECRET_PW=... \
-  -v $(pwd)/config.yaml:/app/config.yaml \
-  -v $(pwd)/portfolio.db:/app/portfolio.db \
+  -v $(pwd)/deploy/config:/krakked/config \
+  -v $(pwd)/deploy/data:/krakked/data \
+  -v $(pwd)/deploy/state:/krakked/state \
   krakked
 ```
 
-The runtime image exposes the FastAPI/UI service on port `8080` by default and ships with the `krakked run --allow-interactive-setup false` entrypoint, so it will honor your mounted config/secrets and the default SQLite store path.
+The runtime image exposes the FastAPI/UI service on port `8080` by default and ships with a `krakked` entrypoint plus the default `run --allow-interactive-setup false` command, so you can also invoke operational helpers such as `docker compose run --rm krakked db-backup --db-path /krakked/state/portfolio.db` without building a second image.
