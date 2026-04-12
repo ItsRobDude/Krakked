@@ -1,4 +1,4 @@
-"""Command line interface for kraken_bot utilities."""
+"""Command line interface for Krakked utilities."""
 
 from __future__ import annotations
 
@@ -246,11 +246,13 @@ def _db_backup_command(args: argparse.Namespace) -> int:
         if temp_backup_path.exists():
             temp_backup_path.unlink()
 
-        with (
-            sqlite3.connect(db_path.as_posix()) as src,
-            sqlite3.connect(temp_backup_path.as_posix()) as dst,
-        ):
+        src = sqlite3.connect(db_path.as_posix())
+        dst = sqlite3.connect(temp_backup_path.as_posix())
+        try:
             src.backup(dst)
+        finally:
+            dst.close()
+            src.close()
 
         temp_backup_path.replace(backup_path)
     except Exception as exc:  # noqa: BLE001
@@ -384,7 +386,7 @@ def _db_check_command(args: argparse.Namespace) -> int:
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="krakked", description="Kraken bot utilities")
+    parser = argparse.ArgumentParser(prog="krakked", description="Krakked utilities")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     setup_parser = subparsers.add_parser("setup", help="Run interactive API key setup")

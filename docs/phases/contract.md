@@ -3909,4 +3909,4 @@ Status & TODO
 - [x] Centralized logging: Structured logging with consistent fields (plan_id, strategy_id, env) and startup diagnostics emitted at launch.
 - [x] Metrics endpoint: Basic health/metrics HTTP surface for runtime checks and liveness probing.
 - [x] Schema guard: Enforce schema_version checks and migrations before the bot starts accepting work.
-- [ ] CI pipeline: Wire lint, type checks, unit tests, and offline integration tests into a reproducible pipeline.
+- [x] CI pipeline: GitHub Actions runs tests, lint, pre-commit, mypy, pyright, packaging, and install smoke checks from `.github/workflows/ci.yml`.

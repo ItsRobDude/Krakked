@@ -1,7 +1,7 @@
 """Package initialization and shared metadata.
 
 This module exposes :data:`APP_VERSION`, which is resolved from installed
-package metadata when available (project name: ``kraken-trader``). When the
+package metadata when available (project name: ``krakked``). When the
 metadata cannot be found—such as when running directly from a source checkout—a
 development placeholder (``"0.0.0-dev"``) is used instead. Update the project
 version in ``pyproject.toml`` when publishing a new release so this value stays
@@ -15,7 +15,7 @@ def _determine_version() -> str:
     """Return the application version string without raising during import."""
 
     try:
-        return metadata.version("kraken-trader")
+        return metadata.version("krakked")
     except metadata.PackageNotFoundError:
         return "0.0.0-dev"
 

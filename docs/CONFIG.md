@@ -2,6 +2,8 @@
 
 The bot reads configuration files from the OS-specific user configuration directory returned by `appdirs.user_config_dir("kraken_bot")`:
 
+Krakked is the product and CLI name, but the internal Python package, config directory, and env-var namespace remain `kraken_bot` / `KRAKEN_BOT_*` for backward compatibility.
+
 | Platform | Path |
 | --- | --- |
 | Linux | `~/.config/kraken_bot/` |

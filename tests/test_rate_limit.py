@@ -1,5 +1,4 @@
-# tests/test_rate_limit.py
-
+import math
 import time
 
 import pytest
@@ -26,7 +25,10 @@ def test_rate_limiter_enforces_delay():
 
     # The total time should be at least 4 intervals (0.4s)
     # We use a small tolerance to account for timing inaccuracies.
-    assert duration >= 4 * 0.1 - 0.01
+    minimum_duration = 4 * 0.1 - 0.01
+    assert duration >= minimum_duration or math.isclose(
+        duration, minimum_duration, abs_tol=1e-6
+    )
 
 
 def test_rate_limiter_no_delay_for_slow_calls():

@@ -1,10 +1,10 @@
-# Kraken Trading Bot
+# Krakked
 
-A modular, robust Kraken trading bot designed for spot trading (CA/USA) with a focus on safety, testing, and clean architecture.
+Krakked is a modular Kraken spot trading bot for CA/USA markets, built with a strong bias toward safety, testing, and clean architecture.
 
 ## 🚀 Current Status
 
-This repository includes working, test-covered implementations for the early phases, and the execution layer is now wired for paper/validate-only usage. Phase 1 connection and credential handling are fully implemented; Phase 4 runs multi-timeframe scheduling, per-strategy/portfolio caps, liquidity gating, and stale-data handling in the strategy/risk engine; Phase 5 introduces an OMS with market-data-driven routing, retry/backoff, panic cancel, and SQLite persistence while keeping live trading disabled by default.
+This repository includes working, test-covered implementations across the core trading stack. Phase 1 connection and credential handling are implemented; Phase 4 runs multi-timeframe scheduling, per-strategy/portfolio caps, liquidity gating, and stale-data handling in the strategy/risk engine; Phase 5 adds an OMS with market-data-driven routing, retry/backoff, panic cancel, and SQLite persistence; Phases 6 and 7 add the UI/control plane, orchestrator, metrics, and CI/runtime guardrails while keeping live trading disabled by default.
 
 | Module | Status | Notes |
 | :--- | :--- | :--- |
@@ -13,17 +13,17 @@ This repository includes working, test-covered implementations for the early pha
 | **Phase 3: Portfolio** | ✅ Implemented | Portfolio service with SQLite persistence, weighted-average cost PnL, fee tracking, and cashflow detection. |
 | **Phase 4: Strategy & Risk** | ✅ Implemented with known follow-ups | Strategy loader with multi-timeframe scheduling, per-strategy/portfolio caps, liquidity gating, and staleness handling; order tagging/OMS wiring will land in Phase 5. |
 | **Phase 5: Execution** | ✅ Implemented | OMS with market-data-driven routing, retries/backoff, dead-man switch hooks, panic cancel, and SQLite persistence; paper/validate-only defaults with explicit allow_live_trading gate for live submission. |
-| **Phase 6: UI/Control** | ✅ Implemented | CLI/web interface for monitoring and manual control. See [status/TODO](docs/phase6.md#status--todo) for remaining punchlist items. |
+| **Phase 6: UI/Control** | ✅ Implemented | CLI/web interface for monitoring and manual control. See [Phase 6 contract](docs/phases/phase6.md#status--todo) for the completed scope and API details. |
 
-Phase 6 is underway with the following milestones queued:
+Phase 6 is implemented and documented:
 
-* **6A**: FastAPI endpoints (read-only + mutating with `read_only` guard and auth).
-* **6B**: TUI HTTP wiring and safety controls.
-* **6C**: React dashboard data and controls.
+* FastAPI endpoints cover read-only and mutating control-plane operations with auth/read-only guards.
+* The Textual TUI and React dashboard both talk to the backend API.
+* Credential validation semantics are documented and enforced in the system routes.
 
-Credential validation semantics (required fields, bearer token enforcement, and the Kraken probe used) are described in the [Phase 6 contract](docs/phase6.md#credential-validation-rules).
+Credential validation semantics (required fields, bearer token enforcement, and the Kraken probe used) are described in the [Phase 6 contract](docs/phases/phase6.md#credential-validation-rules).
 
-See [`docs/phase6.md`](docs/phase6.md) for the full contract and details.
+See [`docs/phases/phase6.md`](docs/phases/phase6.md) for the full contract and details.
 
 See the consolidated phase contract in [`docs/contract.md`](docs/contract.md) for the full design scope across Phases 1–7. Individual phase files remain available for historical reference.
 
@@ -34,7 +34,7 @@ The bot is organized into distinct modules:
 *   **`connection`**: Low-level API interaction (REST only today). Handles auth, signing, retries, and rate limits, plus encrypted credential setup.
 *   **`market_data`**: Abstracted data access. Builds the tradable universe, backfills OHLC, and exposes WebSocket v2 streaming caches with stale-data protection.
 *   **`portfolio`**: Accounting engine. Tracks balances, positions, WAC PnL, and cashflows in memory with SQLite persistence.
-*   **`strategy`**: Decision-making layer. Strategies emit intents that flow through the risk engine for limit enforcement; execution wiring remains TODO.
+*   **`strategy`**: Decision-making layer. Strategies emit intents that flow through the risk engine and into the OMS for execution or paper/validate-only routing.
 
 ## 📦 Installation & Setup
 
@@ -53,7 +53,7 @@ The bot is organized into distinct modules:
 2.  **Clone and Install**:
     ```bash
     git clone <repo-url>
-    cd kraken-bot
+    cd krakked
     poetry install
     ```
 
@@ -72,7 +72,7 @@ The bot is organized into distinct modules:
 3.  **Clone and Install**:
     ```powershell
     git clone <repo-url>
-    cd kraken-bot
+    cd krakked
     poetry install
     ```
 
@@ -121,6 +121,8 @@ poetry run pre-commit run --all-files
 
 The bot uses two configuration files stored in your OS-specific user configuration directory (handled via `appdirs`). Example files live in `config_examples/`, and the overlay/merging rules are documented in [`docs/CONFIG.md`](docs/CONFIG.md).
 
+User-facing branding is `Krakked`, but the internal Python package and config namespace remain `kraken_bot` / `KRAKEN_BOT_*` for compatibility.
+
 *   **Linux**: `~/.config/kraken_bot/`
 *   **macOS**: `~/Library/Application Support/kraken_bot/`
 *   **Windows**: `C:\Users\<User>\AppData\Local\kraken_bot\`
@@ -159,7 +161,7 @@ The bot uses two configuration files stored in your OS-specific user configurati
 
 2.  **`secrets.enc`** (Encrypted Credentials):
     *   Stores your Kraken API Key and Secret securely.
-    *   **Setup**: The bot includes a setup utility (CLI) to prompt for keys and create this file. (Usage instructions coming in Phase 6).
+    *   **Setup**: The bot includes a `krakked setup` utility to prompt for keys and create this file.
 
 ### Bootstrap helper
 

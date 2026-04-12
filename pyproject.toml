@@ -1,7 +1,7 @@
 [project]
-name = "kraken-trader"
+name = "krakked"
 version = "0.1.0"
-description = "A Kraken trading bot."
+description = "Krakked, a Kraken spot trading bot."
 authors = [{ name = "Rob" }]
 requires-python = ">=3.11,<4.0"
 

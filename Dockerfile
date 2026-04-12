@@ -26,7 +26,6 @@ RUN pip install --no-cache-dir "poetry==${POETRY_VERSION}"
 COPY pyproject.toml poetry.lock ./
 RUN poetry install --no-ansi --without dev --extras tui
 COPY src ./src
-COPY scripts ./scripts
 COPY README.md ./README.md
 RUN poetry build
 
@@ -40,9 +39,9 @@ ENV PYTHONUNBUFFERED=1 \
     KRAKEN_API_SECRET="" \
     UI_DIST_DIR="/app/ui-dist"
 WORKDIR /app
-COPY --from=python-builder /app/dist/*.whl /tmp/kraken-bot.whl
-RUN pip install --no-cache-dir /tmp/kraken-bot.whl \
-    && rm /tmp/kraken-bot.whl
+COPY --from=python-builder /app/dist/*.whl /tmp/krakked.whl
+RUN pip install --no-cache-dir /tmp/krakked.whl \
+    && rm /tmp/krakked.whl
 COPY --from=ui-builder /ui/dist ${UI_DIST_DIR}
 EXPOSE 8080
 CMD ["krakked", "run", "--allow-interactive-setup", "false"]
