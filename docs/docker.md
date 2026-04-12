@@ -120,3 +120,4 @@ docker compose run --rm krakked export-install \
 
 - `deploy/state` is the safest default destination for backups and exports because it is already mounted and persisted.
 - See [`docs/upgrades.md`](upgrades.md) before changing image tags and [`docs/backup-restore.md`](backup-restore.md) for recovery workflows.
+- If your target host is Unraid, see [`docs/unraid.md`](unraid.md) for a translated version of this flow using persistent share paths.

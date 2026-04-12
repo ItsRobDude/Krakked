@@ -523,7 +523,6 @@ def test_credential_validation_auth_and_missing_fields(
         "data": {"valid": False},
         "error": "Authentication failed. Please verify your API key/secret.",
     }
-    return api_error.json()
 
 
 @pytest.mark.parametrize("ui_auth_enabled", [True])

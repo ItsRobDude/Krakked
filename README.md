@@ -31,7 +31,7 @@ See [`docs/product-roadmap.md`](docs/product-roadmap.md) for the current product
 
 See [`docs/docker.md`](docs/docker.md) for the preferred self-hosted deployment flow.
 
-See [`docs/onboarding.md`](docs/onboarding.md) for a beginner-friendly first-run path, [`docs/releases.md`](docs/releases.md) for the Docker/image release flow, [`docs/upgrades.md`](docs/upgrades.md) for update steps, [`docs/backup-restore.md`](docs/backup-restore.md) for backup/export/import, and [`docs/distribution.md`](docs/distribution.md) for the current distribution/commercial recommendation.
+See [`docs/onboarding.md`](docs/onboarding.md) for a beginner-friendly first-run path, [`docs/releases.md`](docs/releases.md) for the Docker/image release flow, [`docs/upgrades.md`](docs/upgrades.md) for update steps, [`docs/backup-restore.md`](docs/backup-restore.md) for backup/export/import, [`docs/unraid.md`](docs/unraid.md) for an Unraid-oriented deployment sketch, and [`docs/distribution.md`](docs/distribution.md) for the current distribution/commercial recommendation.
 
 ## 🏗️ Architecture
 

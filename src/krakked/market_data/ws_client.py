@@ -8,8 +8,9 @@ import time
 from collections import defaultdict
 from typing import Any, Callable, Dict, List, Optional
 
+from websockets.asyncio.client import ClientConnection, connect
 from websockets.exceptions import ConnectionClosed
-from websockets.legacy.client import WebSocketClientProtocol, connect
+from websockets.protocol import State
 
 from krakked.config import PairMetadata
 
@@ -39,7 +40,7 @@ class KrakenWSClientV2:
         self._thread: Optional[threading.Thread] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._main_task: Optional[asyncio.Task] = None
-        self._websocket: Optional[WebSocketClientProtocol] = None
+        self._websocket: Optional[ClientConnection] = None
 
         # In-memory cache
         self.last_ticker_update_ts: Dict[str, float] = defaultdict(float)
@@ -59,7 +60,9 @@ class KrakenWSClientV2:
     @property
     def is_connected(self) -> bool:
         """Returns True if the WebSocket connection is open."""
-        return self._websocket is not None and self._websocket.open
+        return (
+            self._websocket is not None and self._websocket.state is State.OPEN
+        )
 
     def start(self):
         """Starts the WebSocket client in a separate thread."""
@@ -344,7 +347,7 @@ class KrakenWSClientV2:
                     backoff_delay * 2, max_backoff
                 )  # Exponential backoff up to max_backoff
         finally:
-            if self._websocket and not self._websocket.closed:
+            if self._websocket and self._websocket.state is not State.CLOSED:
                 await self._websocket.close()
 
         logger.info("WebSocket run loop terminated.")
@@ -352,5 +355,5 @@ class KrakenWSClientV2:
     def _request_shutdown(self):
         if self._main_task and not self._main_task.done():
             self._main_task.cancel()
-        if self._websocket and not self._websocket.closed:
+        if self._websocket and self._websocket.state is not State.CLOSED:
             asyncio.create_task(self._websocket.close())
