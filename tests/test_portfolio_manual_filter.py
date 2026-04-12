@@ -3,9 +3,9 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from kraken_bot.config import PortfolioConfig
-from kraken_bot.portfolio.portfolio import Portfolio
-from kraken_bot.portfolio.store import MAX_ML_TRAINING_EXAMPLES, PortfolioStore
+from krakked.config import PortfolioConfig
+from krakked.portfolio.portfolio import Portfolio
+from krakked.portfolio.store import MAX_ML_TRAINING_EXAMPLES, PortfolioStore
 
 
 class InMemoryStore(PortfolioStore):

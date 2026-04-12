@@ -4,8 +4,8 @@ from unittest.mock import MagicMock, call
 
 import pytest
 
-from kraken_bot.config import PairMetadata
-from kraken_bot.market_data.ohlc_fetcher import backfill_ohlc
+from krakked.config import PairMetadata
+from krakked.market_data.ohlc_fetcher import backfill_ohlc
 
 
 @pytest.fixture

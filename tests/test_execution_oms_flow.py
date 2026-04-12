@@ -5,12 +5,12 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from kraken_bot.config import ExecutionConfig
-from kraken_bot.execution.adapter import DryRunExecutionAdapter
-from kraken_bot.execution.models import LocalOrder
-from kraken_bot.execution.oms import ExecutionService
-from kraken_bot.market_data.models import PairMetadata
-from kraken_bot.strategy.models import ExecutionPlan, RiskAdjustedAction
+from krakked.config import ExecutionConfig
+from krakked.execution.adapter import DryRunExecutionAdapter
+from krakked.execution.models import LocalOrder
+from krakked.execution.oms import ExecutionService
+from krakked.market_data.models import PairMetadata
+from krakked.strategy.models import ExecutionPlan, RiskAdjustedAction
 
 
 def _action(**overrides) -> RiskAdjustedAction:

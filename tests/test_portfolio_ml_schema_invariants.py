@@ -1,7 +1,7 @@
 import sqlite3
 
-from kraken_bot.portfolio import migrations
-from kraken_bot.portfolio.store import CURRENT_SCHEMA_VERSION, SQLitePortfolioStore
+from krakked.portfolio import migrations
+from krakked.portfolio.store import CURRENT_SCHEMA_VERSION, SQLitePortfolioStore
 
 
 def test_sqlite_portfolio_store_not_abstract():
@@ -9,7 +9,7 @@ def test_sqlite_portfolio_store_not_abstract():
 
 
 def test_current_schema_version_is_latest():
-    assert CURRENT_SCHEMA_VERSION == 9
+    assert CURRENT_SCHEMA_VERSION == 10
 
 
 def test_run_migrations_reaches_latest_and_creates_ml_tables(tmp_path):
@@ -36,6 +36,11 @@ def test_run_migrations_reaches_latest_and_creates_ml_tables(tmp_path):
 
         cursor.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='ml_models'"
+        )
+        assert cursor.fetchone() is not None
+
+        cursor.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='ml_model_checkpoints'"
         )
         assert cursor.fetchone() is not None
     finally:

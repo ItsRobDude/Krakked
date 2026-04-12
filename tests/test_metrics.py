@@ -2,8 +2,8 @@ from typing import Any, Dict, cast
 
 import pytest
 
-from kraken_bot.metrics import SystemMetrics
-from kraken_bot.ui.models import SystemMetricsPayload
+from krakked.metrics import SystemMetrics
+from krakked.ui.models import SystemMetricsPayload
 
 
 @pytest.fixture

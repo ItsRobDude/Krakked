@@ -2,12 +2,13 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import cast
 
-from kraken_bot.config import AppConfig, RiskConfig
-from kraken_bot.portfolio.manager import PortfolioService
-from kraken_bot.strategy.allocator import StrategyWeights
-from kraken_bot.strategy.engine import StrategyEngine
-from kraken_bot.strategy.performance import StrategyPerformance
-from kraken_bot.strategy.regime import MarketRegime, RegimeSnapshot
+from krakked.config import AppConfig, RiskConfig
+from krakked.portfolio.manager import PortfolioService
+from krakked.strategy.allocator import StrategyWeights
+from krakked.strategy.models import StrategyState
+from krakked.strategy.engine import StrategyEngine
+from krakked.strategy.performance import StrategyPerformance
+from krakked.strategy.regime import MarketRegime, RegimeSnapshot
 
 
 def _build_engine(risk_config: RiskConfig, portfolio: object) -> StrategyEngine:
@@ -19,6 +20,17 @@ def _build_engine(risk_config: RiskConfig, portfolio: object) -> StrategyEngine:
 
     # Portfolio only needs get_strategy_performance; cast it for the type checker
     engine.portfolio = cast(PortfolioService, portfolio)
+    engine.strategy_states = {
+        "trend_following": StrategyState(
+            strategy_id="trend_following",
+            enabled=True,
+            last_intents_at=None,
+            last_actions_at=None,
+            current_positions=[],
+            pnl_summary={},
+            configured_weight=100,
+        )
+    }
 
     return engine
 
@@ -66,19 +78,19 @@ def test_compute_strategy_weights_uses_performance(monkeypatch):
     engine = _build_engine(risk_config, portfolio)
 
     monkeypatch.setattr(
-        "kraken_bot.strategy.engine.compute_weights", fake_compute_weights
+        "krakked.strategy.engine.compute_weights", fake_compute_weights
     )
 
     weights = engine._compute_strategy_weights(_regime())
 
-    assert weights.per_strategy_pct == {"trend_following": 42.0}
+    assert weights.per_strategy_pct == {"trend_following": 100.0}
     assert calls["window_hours"] == 48
     assert calls["perf"] is performance
     assert calls["config"] is risk_config
     assert isinstance(calls["regime"], RegimeSnapshot)
 
 
-def test_compute_strategy_weights_skips_when_disabled():
+def test_compute_strategy_weights_falls_back_to_manual_when_dynamic_disabled():
     portfolio = SimpleNamespace(
         get_strategy_performance=lambda _: (_ for _ in ()).throw(
             AssertionError("should not be called")
@@ -89,4 +101,5 @@ def test_compute_strategy_weights_skips_when_disabled():
 
     weights = engine._compute_strategy_weights(_regime())
 
-    assert weights is None
+    assert weights is not None
+    assert weights.per_strategy_pct == {"trend_following": 100.0}

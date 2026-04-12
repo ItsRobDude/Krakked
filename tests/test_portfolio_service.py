@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from kraken_bot.config import (
+from krakked.config import (
     AppConfig,
     MarketDataConfig,
     PortfolioConfig,
@@ -12,8 +12,8 @@ from kraken_bot.config import (
     RegionProfile,
     UniverseConfig,
 )
-from kraken_bot.portfolio.manager import PortfolioService
-from kraken_bot.portfolio.models import SpotPosition
+from krakked.portfolio.manager import PortfolioService
+from krakked.portfolio.models import SpotPosition
 
 
 @pytest.fixture
@@ -160,7 +160,7 @@ def test_reconciliation_drift(service):
     service.positions["XBTUSD"] = pos
 
     # Setup Ledger Balances (Source of Truth)
-    from kraken_bot.portfolio.models import AssetBalance
+    from krakked.portfolio.models import AssetBalance
 
     service.balances["XBT"] = AssetBalance("XBT", 1.0, 0.0, 1.0)
 
@@ -189,7 +189,7 @@ def test_reconciliation_drift(service):
 
 def test_get_equity(service):
     # Setup balances
-    from kraken_bot.portfolio.models import AssetBalance
+    from krakked.portfolio.models import AssetBalance
 
     service.balances = {
         "USD": AssetBalance("USD", 10000, 0, 10000),

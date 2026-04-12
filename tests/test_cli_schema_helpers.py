@@ -2,9 +2,9 @@ import sqlite3
 
 import pytest
 
-from kraken_bot.cli import print_schema_version, run_migrate_db
-from kraken_bot.portfolio.exceptions import PortfolioSchemaError
-from kraken_bot.portfolio.store import CURRENT_SCHEMA_VERSION
+from krakked.cli import print_schema_version, run_migrate_db
+from krakked.portfolio.exceptions import PortfolioSchemaError
+from krakked.portfolio.store import CURRENT_SCHEMA_VERSION
 
 
 def seed_schema_version(db_path: str, version: int) -> None:

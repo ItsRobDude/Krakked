@@ -2,12 +2,12 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from kraken_bot.config import ExecutionConfig
-from kraken_bot.execution.adapter import KrakenExecutionAdapter
-from kraken_bot.execution.exceptions import ExecutionError, OrderRejectedError
-from kraken_bot.execution.models import LocalOrder
-from kraken_bot.execution.router import build_order_payload
-from kraken_bot.market_data.models import PairMetadata
+from krakked.config import ExecutionConfig
+from krakked.execution.adapter import KrakenExecutionAdapter
+from krakked.execution.exceptions import ExecutionError, OrderRejectedError
+from krakked.execution.models import LocalOrder
+from krakked.execution.router import build_order_payload
+from krakked.market_data.models import PairMetadata
 
 
 @pytest.fixture

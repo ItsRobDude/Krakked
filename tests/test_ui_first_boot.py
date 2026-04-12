@@ -2,7 +2,7 @@
 
 import signal
 
-from kraken_bot.main import BotController
+from krakked.main import BotController
 
 
 def test_ui_first_boot_locked(monkeypatch, tmp_path):
@@ -11,18 +11,18 @@ def test_ui_first_boot_locked(monkeypatch, tmp_path):
     credentials or services.
     """
     # 1. Patch configuration directories to use tmp_path
-    monkeypatch.setattr("kraken_bot.config_loader.get_config_dir", lambda: tmp_path)
-    monkeypatch.setattr("kraken_bot.ui.routes.system.get_config_dir", lambda: tmp_path)
-    monkeypatch.setattr("kraken_bot.secrets.get_config_dir", lambda: tmp_path)
-    monkeypatch.setattr("kraken_bot.main.get_config_dir", lambda: tmp_path)
-    monkeypatch.setattr("kraken_bot.config.get_config_dir", lambda: tmp_path)
-    monkeypatch.setattr("kraken_bot.ui.routes.config.get_config_dir", lambda: tmp_path)
+    monkeypatch.setattr("krakked.config_loader.get_config_dir", lambda: tmp_path)
+    monkeypatch.setattr("krakked.ui.routes.system.get_config_dir", lambda: tmp_path)
+    monkeypatch.setattr("krakked.secrets.get_config_dir", lambda: tmp_path)
+    monkeypatch.setattr("krakked.main.get_config_dir", lambda: tmp_path)
+    monkeypatch.setattr("krakked.config.get_config_dir", lambda: tmp_path)
+    monkeypatch.setattr("krakked.ui.routes.config.get_config_dir", lambda: tmp_path)
 
     # 2. Patch bootstrap to ensure it is NOT called
     def mock_bootstrap(*args, **kwargs):
         raise RuntimeError("bootstrap() must NOT be called during locked boot!")
 
-    monkeypatch.setattr("kraken_bot.main.bootstrap", mock_bootstrap)
+    monkeypatch.setattr("krakked.main.bootstrap", mock_bootstrap)
 
     # 3. Patch start_ui to immediately stop execution (simulating loop exit)
     # This prevents uvicorn from actually starting and blocking the test

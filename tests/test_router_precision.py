@@ -1,7 +1,7 @@
 from unittest.mock import MagicMock
 
-from kraken_bot.execution.router import round_order_price, round_order_size
-from kraken_bot.market_data.models import PairMetadata
+from krakked.execution.router import round_order_price, round_order_size
+from krakked.market_data.models import PairMetadata
 
 
 def test_router_price_rounding_half_up():

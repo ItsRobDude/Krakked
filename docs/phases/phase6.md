@@ -32,7 +32,7 @@ Assumptions:
 2.1 Components
 
 Phase 6 adds two main components:
-	1.	Backend API server (kraken_bot.ui.api):
+	1.	Backend API server (krakked.ui.api):
 	•	A lightweight HTTP server in the same process as the bot core.
 	•	Exposes:
 	•	GET endpoints to read state (portfolio, risk, strategies, orders, decisions).
@@ -42,7 +42,7 @@ Phase 6 adds two main components:
 	•	StrategyRiskEngine (Phase 4),
 	•	ExecutionService/OMS (Phase 5),
 	•	MarketDataAPI (Phase 2).
-	2.	Web UI frontend (kraken_bot.ui.web or static files served by the API):
+	2.	Web UI frontend (krakked.ui.web or static files served by the API):
 	•	React/Vue or simple HTML+JS — implementation detail.
 	•	Consumes the backend API.
 	•	Provides:
@@ -56,7 +56,7 @@ Phase 6 adds two main components:
 
 Add a new package:
 
-src/kraken_bot/ui/
+src/krakked/ui/
   __init__.py
   api.py           # HTTP API server (FastAPI/Flask/etc)
   routes/
@@ -633,9 +633,9 @@ At that point, Krakked has a real control plane: you can see everything that mat
 
 Status & TODO
 
-- [x] API envelopes/models: Implemented in the shared response types and payload schemas (`src/kraken_bot/ui/models.py`).
-- [x] Read-only portfolio/risk/strategies/execution endpoints: GET routes are wired through FastAPI routers (`src/kraken_bot/ui/routes/portfolio.py`, `risk.py`, `strategies.py`, `execution.py`, `system.py`).
-- [x] Mutating endpoints with ui.read_only/auth: Auth middleware and read-only guards wrap POST/PATCH routes (`src/kraken_bot/ui/api.py`, `src/kraken_bot/ui/routes/*`).
+- [x] API envelopes/models: Implemented in the shared response types and payload schemas (`src/krakked/ui/models.py`).
+- [x] Read-only portfolio/risk/strategies/execution endpoints: GET routes are wired through FastAPI routers (`src/krakked/ui/routes/portfolio.py`, `risk.py`, `strategies.py`, `execution.py`, `system.py`).
+- [x] Mutating endpoints with ui.read_only/auth: Auth middleware and read-only guards wrap POST/PATCH routes (`src/krakked/ui/api.py`, `src/krakked/ui/routes/*`).
 - [x] Kill switch endpoint behavior: `/api/risk/kill_switch` documents manual activation/clear semantics, read-only behavior, and response shape.
 - [x] Credential validation rules: Documented below and enforced in `/api/system/credentials/validate`.
 - [x] TUI/React integration: Trading dashboard wired to the backend (`ui/tui_dashboard.py` and `ui/src/App.tsx`).

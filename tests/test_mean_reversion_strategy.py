@@ -1,12 +1,12 @@
 from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
-from kraken_bot.config import OHLCBar, StrategyConfig
-from kraken_bot.market_data.api import MarketDataAPI
-from kraken_bot.portfolio.manager import PortfolioService
-from kraken_bot.portfolio.models import SpotPosition
-from kraken_bot.strategy.base import StrategyContext
-from kraken_bot.strategy.strategies.mean_reversion import MeanReversionStrategy
+from krakked.config import OHLCBar, StrategyConfig
+from krakked.market_data.api import MarketDataAPI
+from krakked.portfolio.manager import PortfolioService
+from krakked.portfolio.models import SpotPosition
+from krakked.strategy.base import StrategyContext
+from krakked.strategy.strategies.mean_reversion import MeanReversionStrategy
 
 
 def _make_bar(ts: int, close: float) -> OHLCBar:

@@ -2,11 +2,11 @@ import io
 import json
 import logging
 
-from kraken_bot.logging_config import DEFAULT_ENV, JsonFormatter, structured_log_extra
+from krakked.logging_config import DEFAULT_ENV, JsonFormatter, structured_log_extra
 
 
 def _build_logger(stream: io.StringIO) -> logging.Logger:
-    logger = logging.getLogger("kraken_bot.test.logging")
+    logger = logging.getLogger("krakked.test.logging")
     logger.setLevel(logging.INFO)
     logger.propagate = False
 

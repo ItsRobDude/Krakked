@@ -157,6 +157,8 @@ export type StrategyState = {
   pnl_summary: { realized_pnl_usd?: number; exposure_pct?: number };
   last_intents?: StrategyIntentPreview[] | null;
   params?: StrategyParams;
+  configured_weight: number;
+  effective_weight_pct?: number | null;
 };
 
 export type StrategyPerformance = {

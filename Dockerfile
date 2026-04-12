@@ -32,9 +32,8 @@ RUN poetry build
 # Final runtime image with only the packaged artifacts
 FROM python:${PYTHON_VERSION}-slim AS runtime
 ENV PYTHONUNBUFFERED=1 \
-    KRAKEN_BOT_ENV=production \
-    KRAKEN_BOT_CONFIG="/app/config.yaml" \
-    KRAKEN_BOT_SECRET_PW="" \
+    KRAKKED_ENV=production \
+    KRAKKED_SECRET_PW="" \
     KRAKEN_API_KEY="" \
     KRAKEN_API_SECRET="" \
     UI_DIST_DIR="/app/ui-dist"

@@ -3,7 +3,7 @@ import time
 
 import pytest
 
-from kraken_bot.connection.rate_limiter import RateLimiter
+from krakked.connection.rate_limiter import RateLimiter
 
 
 def test_rate_limiter_enforces_delay():

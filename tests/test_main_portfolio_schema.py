@@ -1,5 +1,5 @@
-from kraken_bot import main
-from kraken_bot.portfolio.exceptions import PortfolioSchemaError
+from krakked import main
+from krakked.portfolio.exceptions import PortfolioSchemaError
 
 
 class _DummyConfig:

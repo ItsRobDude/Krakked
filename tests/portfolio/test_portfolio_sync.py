@@ -1,6 +1,6 @@
 from unittest.mock import Mock
 
-from kraken_bot.portfolio.manager import PortfolioService
+from krakked.portfolio.manager import PortfolioService
 
 
 def _build_service(store, portfolio, api_client):

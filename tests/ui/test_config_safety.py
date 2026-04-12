@@ -6,7 +6,7 @@ import pytest
 import yaml
 from fastapi.testclient import TestClient
 
-from kraken_bot.config import (
+from krakked.config import (
     AppConfig,
     ExecutionConfig,
     MarketDataConfig,
@@ -18,11 +18,11 @@ from kraken_bot.config import (
     UIConfig,
     UniverseConfig,
 )
-from kraken_bot.config_loader import RUNTIME_OVERRIDES_FILENAME, parse_app_config
-from kraken_bot.connection.exceptions import ServiceUnavailableError
-from kraken_bot.market_data.api import MarketDataAPI
-from kraken_bot.ui.api import create_api
-from kraken_bot.ui.context import AppContext
+from krakked.config_loader import RUNTIME_OVERRIDES_FILENAME, parse_app_config
+from krakked.connection.exceptions import ServiceUnavailableError
+from krakked.market_data.api import MarketDataAPI
+from krakked.ui.api import create_api
+from krakked.ui.context import AppContext
 
 
 @pytest.fixture
@@ -149,7 +149,7 @@ def test_config_apply_succeeds_on_valid_universe(client, safe_context, temp_conf
     safe_context.market_data.validate_pairs.return_value = []  # No invalid pairs
 
     with patch(
-        "kraken_bot.ui.routes.config.get_config_dir", return_value=temp_config_dir
+        "krakked.ui.routes.config.get_config_dir", return_value=temp_config_dir
     ):
         payload = {
             "config": {"universe": {"include_pairs": ["XBTUSD"]}},
@@ -168,7 +168,7 @@ def test_apply_config_restricted_keys_stripped_if_same(
     """Test that sending SAME restricted keys is allowed (stripped)."""
     # Mock get_config_dir to return our temp dir
     with patch(
-        "kraken_bot.ui.routes.config.get_config_dir", return_value=temp_config_dir
+        "krakked.ui.routes.config.get_config_dir", return_value=temp_config_dir
     ):
         payload = {
             "config": {
@@ -205,7 +205,7 @@ def test_profile_runtime_override_pruning_with_main_key(
 ):
     """Test that applying a main-config key (ui) also prunes it from PROFILE overrides."""
     with patch(
-        "kraken_bot.ui.routes.config.get_config_dir", return_value=temp_config_dir
+        "krakked.ui.routes.config.get_config_dir", return_value=temp_config_dir
     ):
         # Setup active profile
         safe_context.session.profile_name = "test_profile"
@@ -258,9 +258,9 @@ def test_dry_run_full_validation_failure(client, safe_context, temp_config_dir):
     """Test A: dry_run fails on invalid config (e.g., missing risk limits)."""
     # Simulate LIVE env to force strict checks
     with (
-        patch.dict(os.environ, {"KRAKEN_BOT_ENV": "live"}),
+        patch.dict(os.environ, {"KRAKKED_ENV": "live"}),
         patch(
-            "kraken_bot.ui.routes.config.get_config_dir", return_value=temp_config_dir
+            "krakked.ui.routes.config.get_config_dir", return_value=temp_config_dir
         ),
     ):
 
@@ -302,7 +302,7 @@ def test_dry_run_full_validation_failure(client, safe_context, temp_config_dir):
 def test_ui_refresh_intervals_profile_bound(client, safe_context, temp_config_dir):
     """Test B: UI refresh_intervals persist to Profile, others to Main."""
     with patch(
-        "kraken_bot.ui.routes.config.get_config_dir", return_value=temp_config_dir
+        "krakked.ui.routes.config.get_config_dir", return_value=temp_config_dir
     ):
 
         # Setup active profile
@@ -350,7 +350,7 @@ def test_ui_refresh_intervals_profile_bound(client, safe_context, temp_config_di
 def test_profile_create_rejects_invalid_ui_keys(client, safe_context, temp_config_dir):
     """Test C: Profile creation rejects invalid UI keys."""
     with patch(
-        "kraken_bot.ui.routes.system.get_config_dir", return_value=temp_config_dir
+        "krakked.ui.routes.system.get_config_dir", return_value=temp_config_dir
     ):
 
         payload = {
@@ -368,9 +368,9 @@ def test_profile_create_rejects_invalid_ui_keys(client, safe_context, temp_confi
 def test_atomic_failure_no_writes(client, safe_context, temp_config_dir):
     """Test D: Validation failure results in NO disk writes."""
     with (
-        patch.dict(os.environ, {"KRAKEN_BOT_ENV": "live"}),
+        patch.dict(os.environ, {"KRAKKED_ENV": "live"}),
         patch(
-            "kraken_bot.ui.routes.config.get_config_dir", return_value=temp_config_dir
+            "krakked.ui.routes.config.get_config_dir", return_value=temp_config_dir
         ),
     ):
 
@@ -418,7 +418,7 @@ def test_corrupted_yaml_triggers_validation_failure(
 ):
     """Test E: Corrupted YAML file triggers validation failure."""
     with patch(
-        "kraken_bot.ui.routes.config.get_config_dir", return_value=temp_config_dir
+        "krakked.ui.routes.config.get_config_dir", return_value=temp_config_dir
     ):
 
         # Corrupt the main config file
@@ -439,7 +439,7 @@ def test_apply_refresh_intervals_no_profile_fails(
 ):
     """Test F: Applying ui.refresh_intervals requires active profile."""
     with patch(
-        "kraken_bot.ui.routes.config.get_config_dir", return_value=temp_config_dir
+        "krakked.ui.routes.config.get_config_dir", return_value=temp_config_dir
     ):
 
         # Ensure NO profile active
@@ -467,7 +467,7 @@ def test_apply_refresh_intervals_no_profile_fails(
 def test_apply_ml_config_profile_bound(client, safe_context, temp_config_dir):
     """Test G: ML config changes require an active profile and persist to profile."""
     with patch(
-        "kraken_bot.ui.routes.config.get_config_dir", return_value=temp_config_dir
+        "krakked.ui.routes.config.get_config_dir", return_value=temp_config_dir
     ):
         # 1. Test without active profile
         safe_context.session.profile_name = None
@@ -504,7 +504,7 @@ def test_config_loader_gating_live_mode_safety(client, safe_context, temp_config
     Test H: In live env, if ml.enabled=False, ML strategies are disabled
     and removed from enabled list, bypassing the risk limit check.
     """
-    with patch.dict(os.environ, {"KRAKEN_BOT_ENV": "live"}):
+    with patch.dict(os.environ, {"KRAKKED_ENV": "live"}):
 
         # Valid base config
         base_config = {

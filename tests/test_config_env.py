@@ -5,7 +5,7 @@ from pathlib import Path
 import appdirs  # type: ignore[import-untyped]
 import pytest
 
-from kraken_bot.config import load_config
+from krakked.config import load_config
 
 
 @pytest.mark.parametrize("env_value", [None, "prod"])
@@ -44,9 +44,9 @@ execution:
     monkeypatch.setattr(appdirs, "user_data_dir", lambda appname: data_dir)
 
     if env_value is None:
-        monkeypatch.delenv("KRAKEN_BOT_ENV", raising=False)
+        monkeypatch.delenv("KRAKKED_ENV", raising=False)
     else:
-        monkeypatch.setenv("KRAKEN_BOT_ENV", env_value)
+        monkeypatch.setenv("KRAKKED_ENV", env_value)
 
     app_config = load_config()
 
@@ -93,7 +93,7 @@ execution:
 
     monkeypatch.setattr(appdirs, "user_config_dir", lambda appname: config_dir)
     monkeypatch.setattr(appdirs, "user_data_dir", lambda appname: data_dir)
-    monkeypatch.setenv("KRAKEN_BOT_ENV", "paper")
+    monkeypatch.setenv("KRAKKED_ENV", "paper")
 
     app_config = load_config()
 
@@ -123,7 +123,7 @@ execution:
 
     monkeypatch.setattr(appdirs, "user_config_dir", lambda appname: config_dir)
     monkeypatch.setattr(appdirs, "user_data_dir", lambda appname: data_dir)
-    monkeypatch.setenv("KRAKEN_BOT_ENV", "live")
+    monkeypatch.setenv("KRAKKED_ENV", "live")
 
     app_config = load_config()
 
@@ -154,7 +154,7 @@ execution:
 
     monkeypatch.setattr(appdirs, "user_config_dir", lambda appname: config_dir)
     monkeypatch.setattr(appdirs, "user_data_dir", lambda appname: data_dir)
-    monkeypatch.setenv("KRAKEN_BOT_ENV", "live")
+    monkeypatch.setenv("KRAKKED_ENV", "live")
 
     app_config = load_config()
 
@@ -172,11 +172,11 @@ def test_portfolio_auto_migrate_defaults_follow_env(monkeypatch, tmp_path: Path)
     monkeypatch.setattr(appdirs, "user_config_dir", lambda appname: config_dir)
     monkeypatch.setattr(appdirs, "user_data_dir", lambda appname: data_dir)
 
-    monkeypatch.setenv("KRAKEN_BOT_ENV", "live")
+    monkeypatch.setenv("KRAKKED_ENV", "live")
     live_config = load_config()
     assert live_config.portfolio.auto_migrate_schema is False
 
-    monkeypatch.setenv("KRAKEN_BOT_ENV", "paper")
+    monkeypatch.setenv("KRAKKED_ENV", "paper")
     paper_config = load_config()
     assert paper_config.portfolio.auto_migrate_schema is False
 
@@ -199,7 +199,7 @@ ui:
 
     monkeypatch.setattr(appdirs, "user_config_dir", lambda appname: config_dir)
     monkeypatch.setattr(appdirs, "user_data_dir", lambda appname: data_dir)
-    monkeypatch.setenv("KRAKEN_BOT_ENV", "live")
+    monkeypatch.setenv("KRAKKED_ENV", "live")
 
     with caplog.at_level("WARNING"):
         app_config = load_config()
@@ -232,7 +232,7 @@ ui:
 
     monkeypatch.setattr(appdirs, "user_config_dir", lambda appname: config_dir)
     monkeypatch.setattr(appdirs, "user_data_dir", lambda appname: data_dir)
-    monkeypatch.setenv("KRAKEN_BOT_ENV", "paper")
+    monkeypatch.setenv("KRAKKED_ENV", "paper")
 
     with caplog.at_level("WARNING"):
         app_config = load_config()
@@ -262,7 +262,7 @@ execution:
 
     monkeypatch.setattr(appdirs, "user_config_dir", lambda appname: config_dir)
     monkeypatch.setattr(appdirs, "user_data_dir", lambda appname: data_dir)
-    monkeypatch.setenv("KRAKEN_BOT_ENV", "paper")
+    monkeypatch.setenv("KRAKKED_ENV", "paper")
 
     app_config = load_config()
 
@@ -292,7 +292,7 @@ execution:
 
     monkeypatch.setattr(appdirs, "user_config_dir", lambda appname: config_dir)
     monkeypatch.setattr(appdirs, "user_data_dir", lambda appname: data_dir)
-    monkeypatch.setenv("KRAKEN_BOT_ENV", "live")
+    monkeypatch.setenv("KRAKKED_ENV", "live")
 
     with pytest.raises(ValueError):
         load_config()
@@ -320,7 +320,7 @@ risk:
 
     monkeypatch.setattr(appdirs, "user_config_dir", lambda appname: config_dir)
     monkeypatch.setattr(appdirs, "user_data_dir", lambda appname: data_dir)
-    monkeypatch.setenv("KRAKEN_BOT_ENV", "paper")
+    monkeypatch.setenv("KRAKKED_ENV", "paper")
 
     app_config = load_config()
 

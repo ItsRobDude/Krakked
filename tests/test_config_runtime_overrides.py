@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from kraken_bot import config_loader as cl
-from kraken_bot.config_models import (
+from krakked import config_loader as cl
+from krakked.config_models import (
     AppConfig,
     MarketDataConfig,
     PortfolioConfig,

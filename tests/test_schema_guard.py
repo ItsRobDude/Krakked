@@ -2,8 +2,8 @@ import sqlite3
 
 import pytest
 
-from kraken_bot.portfolio.exceptions import PortfolioSchemaError
-from kraken_bot.portfolio.store import CURRENT_SCHEMA_VERSION, assert_portfolio_schema
+from krakked.portfolio.exceptions import PortfolioSchemaError
+from krakked.portfolio.store import CURRENT_SCHEMA_VERSION, assert_portfolio_schema
 
 
 def _seed_schema_version(db_path: str, version: int) -> None:

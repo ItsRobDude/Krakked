@@ -1,11 +1,11 @@
 import logging
 
-import kraken_bot.bootstrap as bootstrap
-from kraken_bot.credentials import CredentialResult, CredentialStatus
+import krakked.bootstrap as bootstrap
+from krakked.credentials import CredentialResult, CredentialStatus
 
 
 def test_unvalidated_credentials_log_does_not_include_secrets(caplog):
-    caplog.set_level(logging.WARNING, logger="kraken_bot.bootstrap")
+    caplog.set_level(logging.WARNING, logger="krakked.bootstrap")
 
     fake_key = "FAKE_API_KEY_123"
     fake_secret = "FAKE_API_SECRET_456"

@@ -2,8 +2,8 @@ from unittest.mock import patch
 
 import pytest
 
-from kraken_bot.bootstrap import CredentialBootstrapError, bootstrap
-from kraken_bot.config import (
+from krakked.bootstrap import CredentialBootstrapError, bootstrap
+from krakked.config import (
     AppConfig,
     MarketDataConfig,
     PortfolioConfig,
@@ -13,7 +13,7 @@ from kraken_bot.config import (
     StrategiesConfig,
     UniverseConfig,
 )
-from kraken_bot.credentials import CredentialResult, CredentialStatus
+from krakked.credentials import CredentialResult, CredentialStatus
 
 
 def _sample_config() -> AppConfig:
@@ -35,17 +35,17 @@ def _sample_config() -> AppConfig:
 
 def test_bootstrap_returns_client_and_config():
     with (
-        patch("kraken_bot.bootstrap.load_config", return_value=_sample_config()),
+        patch("krakked.bootstrap.load_config", return_value=_sample_config()),
         patch(
-            "kraken_bot.bootstrap.load_api_keys",
+            "krakked.bootstrap.load_api_keys",
             return_value=CredentialResult(
                 "k", "s", CredentialStatus.LOADED, validated=True
             ),
         ) as mock_load_keys,
-        patch("kraken_bot.bootstrap.KrakenRESTClient") as mock_client,
-        patch("kraken_bot.bootstrap.ensure_default_account"),
+        patch("krakked.bootstrap.KrakenRESTClient") as mock_client,
+        patch("krakked.bootstrap.ensure_default_account"),
         patch(
-            "kraken_bot.bootstrap.resolve_secrets_path", return_value="path/to/secrets"
+            "krakked.bootstrap.resolve_secrets_path", return_value="path/to/secrets"
         ),
     ):
         client_instance = object()
@@ -68,15 +68,15 @@ def test_bootstrap_returns_client_and_config():
 
 def test_bootstrap_raises_on_missing_credentials():
     with (
-        patch("kraken_bot.bootstrap.load_config", return_value=_sample_config()),
+        patch("krakked.bootstrap.load_config", return_value=_sample_config()),
         patch(
-            "kraken_bot.bootstrap.load_api_keys",
+            "krakked.bootstrap.load_api_keys",
             return_value=CredentialResult(
                 None, None, CredentialStatus.NOT_FOUND, validation_error="missing"
             ),
         ),
-        patch("kraken_bot.bootstrap.ensure_default_account"),
-        patch("kraken_bot.bootstrap.resolve_secrets_path"),
+        patch("krakked.bootstrap.ensure_default_account"),
+        patch("krakked.bootstrap.resolve_secrets_path"),
     ):
         with pytest.raises(CredentialBootstrapError) as excinfo:
             bootstrap()
@@ -86,13 +86,13 @@ def test_bootstrap_raises_on_missing_credentials():
 
 def test_bootstrap_raises_when_keys_absent_despite_loaded_status():
     with (
-        patch("kraken_bot.bootstrap.load_config", return_value=_sample_config()),
+        patch("krakked.bootstrap.load_config", return_value=_sample_config()),
         patch(
-            "kraken_bot.bootstrap.load_api_keys",
+            "krakked.bootstrap.load_api_keys",
             return_value=CredentialResult("k", None, CredentialStatus.LOADED),
         ),
-        patch("kraken_bot.bootstrap.ensure_default_account"),
-        patch("kraken_bot.bootstrap.resolve_secrets_path"),
+        patch("krakked.bootstrap.ensure_default_account"),
+        patch("krakked.bootstrap.resolve_secrets_path"),
     ):
         with pytest.raises(CredentialBootstrapError) as excinfo:
             bootstrap()

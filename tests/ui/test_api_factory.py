@@ -2,7 +2,7 @@ from pathlib import Path
 
 from starlette.testclient import TestClient
 
-from kraken_bot.ui.api import create_api
+from krakked.ui.api import create_api
 
 
 def test_create_api_uses_ui_dist_dir_env_override(

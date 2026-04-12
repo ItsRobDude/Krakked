@@ -1,4 +1,4 @@
-# Paper-trading overlay. Loaded when KRAKEN_BOT_ENV=paper (default).
+# Paper-trading overlay. Loaded when KRAKKED_ENV=paper (default).
 execution:
   mode: "paper"
   validate_only: true

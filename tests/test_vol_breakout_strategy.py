@@ -1,11 +1,11 @@
 from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
-from kraken_bot.config import OHLCBar, StrategyConfig
-from kraken_bot.market_data.api import MarketDataAPI
-from kraken_bot.portfolio.manager import PortfolioService
-from kraken_bot.strategy.base import StrategyContext
-from kraken_bot.strategy.strategies.vol_breakout import VolBreakoutStrategy
+from krakked.config import OHLCBar, StrategyConfig
+from krakked.market_data.api import MarketDataAPI
+from krakked.portfolio.manager import PortfolioService
+from krakked.strategy.base import StrategyContext
+from krakked.strategy.strategies.vol_breakout import VolBreakoutStrategy
 
 
 def _make_bar(ts: int, close: float, high_offset: float, low_offset: float) -> OHLCBar:

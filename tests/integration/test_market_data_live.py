@@ -5,14 +5,14 @@ import time
 
 import pytest
 
-from kraken_bot.config import (
+from krakked.config import (
     AppConfig,
     MarketDataConfig,
     RegionCapabilities,
     RegionProfile,
     UniverseConfig,
 )
-from kraken_bot.market_data.api import MarketDataAPI
+from krakked.market_data.api import MarketDataAPI
 
 
 @pytest.mark.skipif(

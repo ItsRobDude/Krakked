@@ -3,10 +3,10 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-from kraken_bot.main import _refresh_metrics_state, _run_loop_iteration
-from kraken_bot.market_data.api import MarketDataStatus
-from kraken_bot.metrics import SystemMetrics
-from kraken_bot.portfolio.models import DriftMismatchedAsset, DriftStatus
+from krakked.main import _refresh_metrics_state, _run_loop_iteration
+from krakked.market_data.api import MarketDataStatus
+from krakked.metrics import SystemMetrics
+from krakked.portfolio.models import DriftMismatchedAsset, DriftStatus
 
 
 class StubMarketDataAPI:

@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 
 from fastapi.testclient import TestClient
 
-from kraken_bot.config import (
+from krakked.config import (
     AppConfig,
     ExecutionConfig,
     MarketDataConfig,
@@ -18,19 +18,19 @@ from kraken_bot.config import (
     UIConfig,
     UniverseConfig,
 )
-from kraken_bot.ui.api import create_api
-from kraken_bot.ui.context import AppContext, SessionState
-from kraken_bot.ui.routes import system
+from krakked.ui.api import create_api
+from krakked.ui.context import AppContext, SessionState
+from krakked.ui.routes import system
 
 
 def _mock_config_dirs(monkeypatch, tmp_path):
     """Apply config dir patches to all relevant modules."""
-    monkeypatch.setattr("kraken_bot.config_loader.get_config_dir", lambda: tmp_path)
-    monkeypatch.setattr("kraken_bot.ui.routes.system.get_config_dir", lambda: tmp_path)
-    monkeypatch.setattr("kraken_bot.secrets.get_config_dir", lambda: tmp_path)
-    monkeypatch.setattr("kraken_bot.config.get_config_dir", lambda: tmp_path)
-    monkeypatch.setattr("kraken_bot.ui.routes.config.get_config_dir", lambda: tmp_path)
-    monkeypatch.setattr("kraken_bot.accounts.get_config_dir", lambda: tmp_path)
+    monkeypatch.setattr("krakked.config_loader.get_config_dir", lambda: tmp_path)
+    monkeypatch.setattr("krakked.ui.routes.system.get_config_dir", lambda: tmp_path)
+    monkeypatch.setattr("krakked.secrets.get_config_dir", lambda: tmp_path)
+    monkeypatch.setattr("krakked.config.get_config_dir", lambda: tmp_path)
+    monkeypatch.setattr("krakked.ui.routes.config.get_config_dir", lambda: tmp_path)
+    monkeypatch.setattr("krakked.accounts.get_config_dir", lambda: tmp_path)
 
 
 def _create_locked_context(base_path="/krakked", auth_enabled=False, auth_token=None):
@@ -108,17 +108,17 @@ def test_lifecycle_middleware_allowlist(monkeypatch, tmp_path):
 
     # Mock accounts.py functions to prevent actual file I/O or crashes
     monkeypatch.setattr(
-        "kraken_bot.ui.routes.system.load_accounts", MagicMock(return_value={})
+        "krakked.ui.routes.system.load_accounts", MagicMock(return_value={})
     )
     monkeypatch.setattr(
-        "kraken_bot.ui.routes.system.ensure_default_account", MagicMock()
+        "krakked.ui.routes.system.ensure_default_account", MagicMock()
     )
     monkeypatch.setattr(
-        "kraken_bot.ui.routes.system.resolve_secrets_path",
+        "krakked.ui.routes.system.resolve_secrets_path",
         MagicMock(return_value=tmp_path / "dummy.enc"),
     )
     monkeypatch.setattr(
-        "kraken_bot.ui.routes.system.get_saved_master_password",
+        "krakked.ui.routes.system.get_saved_master_password",
         MagicMock(return_value=None),
     )
 

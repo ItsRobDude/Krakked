@@ -20,7 +20,7 @@ market_data:
   ws:
     url: "wss://ws.kraken.com/v2"
   ohlc_store:
-    root_dir: "~/.local/share/kraken_bot/ohlc"
+    root_dir: "~/.local/share/krakked/ohlc"
     backend: "parquet"
   backfill_timeframes:
     - "1h"
@@ -28,7 +28,7 @@ market_data:
   ws_timeframes:
     - "1m"
     - "5m"
-  metadata_path: "~/.local/share/kraken_bot/metadata.json"
+  metadata_path: "~/.local/share/krakked/metadata.json"
 
 portfolio:
   base_currency: "USD"

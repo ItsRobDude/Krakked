@@ -4,8 +4,8 @@ from types import SimpleNamespace
 import pytest
 from starlette.testclient import TestClient
 
-from kraken_bot.config import StrategyConfig
-from kraken_bot.strategy.models import StrategyState
+from krakked.config import StrategyConfig
+from krakked.strategy.models import StrategyState
 
 
 @pytest.fixture
@@ -32,6 +32,7 @@ def test_get_strategies_enveloped(client, strategy_context):
     payload = response.json()
     assert payload["error"] is None
     assert payload["data"][0]["strategy_id"] == "alpha"
+    assert payload["data"][0]["configured_weight"] == 100
 
 
 @pytest.mark.parametrize("ui_read_only", [False])
@@ -40,6 +41,13 @@ def test_set_strategy_enabled_updates_state(client, strategy_context):
         enabled=False
     )
     strategy_context.config.strategies.enabled = []
+
+    def _set_enabled(strategy_id: str, enabled: bool) -> None:
+        strategy_context.strategy_engine.strategy_states["alpha"].enabled = enabled
+        if enabled and strategy_id not in strategy_context.config.strategies.enabled:
+            strategy_context.config.strategies.enabled.append(strategy_id)
+
+    strategy_context.strategy_engine.set_strategy_enabled.side_effect = _set_enabled
 
     response = client.patch("/api/strategies/alpha/enabled", json={"enabled": True})
 
@@ -67,18 +75,23 @@ def test_set_strategy_enabled_blocked_read_only(client, strategy_context):
 @pytest.mark.parametrize("ui_read_only", [False])
 def test_update_strategy_config_mutates_config(client, strategy_context):
     strategy_context.config.strategies.configs["alpha"] = StrategyConfig(
-        name="Alpha", type="grid", enabled=True, params={"foo": "bar"}
+        name="Alpha",
+        type="grid",
+        enabled=True,
+        params={"foo": "bar"},
+        strategy_weight=70,
     )
 
     response = client.patch(
         "/api/strategies/alpha/config",
-        json={"enabled": False, "params": {"baz": 1}},
+        json={"enabled": False, "strategy_weight": 55, "params": {"baz": 1}},
     )
 
     assert response.status_code == 200
     payload = response.json()
     assert payload["error"] is None
     assert payload["data"]["enabled"] is False
+    assert payload["data"]["strategy_weight"] == 55
     assert payload["data"]["params"] == {"foo": "bar", "baz": 1}
 
 

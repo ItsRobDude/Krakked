@@ -1,7 +1,7 @@
 from unittest.mock import MagicMock
 
-from kraken_bot.portfolio.models import AssetBalance
-from kraken_bot.portfolio.portfolio import Portfolio
+from krakked.portfolio.models import AssetBalance
+from krakked.portfolio.portfolio import Portfolio
 
 
 def test_pnl_consistency_buy_fees():

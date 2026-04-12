@@ -1,6 +1,6 @@
 from unittest.mock import MagicMock
 
-from kraken_bot.portfolio.portfolio import Portfolio
+from krakked.portfolio.portfolio import Portfolio
 
 
 def test_process_trade_cache_optimization():

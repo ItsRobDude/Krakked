@@ -6,9 +6,9 @@ from unittest.mock import patch
 
 import pytest
 
-from kraken_bot.credentials import CredentialStatus
-from kraken_bot.password_store import get_saved_master_password, save_master_password
-from kraken_bot.secrets import (
+from krakked.credentials import CredentialStatus
+from krakked.password_store import get_saved_master_password, save_master_password
+from krakked.secrets import (
     SECRETS_FILE_NAME,
     SecretsDecryptionError,
     delete_secrets,
@@ -22,8 +22,8 @@ from kraken_bot.secrets import (
 @pytest.fixture
 def mock_config_dir(tmp_path):
     with (
-        patch("kraken_bot.secrets.get_config_dir", return_value=tmp_path),
-        patch("kraken_bot.config.get_config_dir", return_value=tmp_path),
+        patch("krakked.secrets.get_config_dir", return_value=tmp_path),
+        patch("krakked.config.get_config_dir", return_value=tmp_path),
     ):
         yield tmp_path
 
@@ -108,7 +108,7 @@ def test_load_api_keys_from_env(mock_config_dir):
 def test_load_api_keys_from_file_with_env_password(mock_config_dir):
     encrypt_secrets("file_key", "file_secret", "env_pw")
 
-    with patch.dict(os.environ, {"KRAKEN_BOT_SECRET_PW": "env_pw"}):
+    with patch.dict(os.environ, {"KRAKKED_SECRET_PW": "env_pw"}):
         result = load_api_keys()
         assert result.status == CredentialStatus.LOADED
         assert result.api_key == "file_key"
@@ -128,7 +128,7 @@ def test_persist_api_keys_with_validation_metadata(mock_config_dir):
     password = "pw"
     ts = datetime(2023, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
 
-    with patch("kraken_bot.secrets.datetime") as mock_dt:
+    with patch("krakked.secrets.datetime") as mock_dt:
         mock_dt.now.return_value = ts
         persist_api_keys(
             "k",
@@ -172,7 +172,7 @@ def test_load_api_keys_shadow_config_warning(mock_config_dir, caplog):
     """Ensure mixed env/file config results in discarding env vars."""
     encrypt_secrets("file_key", "file_secret", "pw")
     with patch.dict(
-        os.environ, {"KRAKEN_API_KEY": "env_key", "KRAKEN_BOT_SECRET_PW": "pw"}
+        os.environ, {"KRAKEN_API_KEY": "env_key", "KRAKKED_SECRET_PW": "pw"}
     ):
         # Missing KRAKEN_API_SECRET
         result = load_api_keys(allow_interactive_setup=False)

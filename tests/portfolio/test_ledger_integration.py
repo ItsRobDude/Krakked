@@ -3,9 +3,9 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from kraken_bot.config import AppConfig
-from kraken_bot.portfolio.manager import PortfolioService
-from kraken_bot.portfolio.models import AssetBalance, LedgerEntry
+from krakked.config import AppConfig
+from krakked.portfolio.manager import PortfolioService
+from krakked.portfolio.models import AssetBalance, LedgerEntry
 
 
 @pytest.fixture

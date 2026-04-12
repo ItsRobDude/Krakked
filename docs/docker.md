@@ -52,7 +52,7 @@ ui:
 5. Provide credentials using one of these approaches:
 
 - Put `KRAKEN_API_KEY` / `KRAKEN_API_SECRET` in `.env`
-- Or place `secrets.enc` in `deploy/config` and set `KRAKEN_BOT_SECRET_PW` in `.env`
+- Or place `secrets.enc` in `deploy/config` and set `KRAKKED_SECRET_PW` in `.env`
 
 6. Start Krakked:
 

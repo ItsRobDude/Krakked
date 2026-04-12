@@ -2,8 +2,8 @@ import sqlite3
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from kraken_bot import cli, main
-from kraken_bot.portfolio.store import CURRENT_SCHEMA_VERSION
+from krakked import cli, main
+from krakked.portfolio.store import CURRENT_SCHEMA_VERSION
 
 
 def test_live_mode_disallows_auto_migrate_schema(monkeypatch):
@@ -37,8 +37,8 @@ def test_portfolio_migrate_cli_calls_ensure_schema(tmp_path):
     db = tmp_path / "portfolio.db"
 
     with (
-        patch("kraken_bot.cli.ensure_portfolio_schema") as ensure_mock,
-        patch("kraken_bot.cli.ensure_portfolio_tables") as ensure_tables_mock,
+        patch("krakked.cli.ensure_portfolio_schema") as ensure_mock,
+        patch("krakked.cli.ensure_portfolio_tables") as ensure_tables_mock,
     ):
         ensure_mock.return_value = SimpleNamespace(
             version=CURRENT_SCHEMA_VERSION, migrated=True, initialized=False

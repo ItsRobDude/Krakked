@@ -37,11 +37,11 @@ Config directory
 
 Use an OS‑specific configuration directory:
 
-Linux: ~/.config/kraken_bot/
+Linux: ~/.config/krakked/
 
-macOS: ~/Library/Application Support/kraken_bot/
+macOS: ~/Library/Application Support/krakked/
 
-Windows: %APPDATA%\kraken_bot\
+Windows: %APPDATA%\krakked\
 
 All module‑owned files live under this directory.
 
@@ -272,7 +272,7 @@ pyproject.toml
 
 Declares dependencies and test tooling (pytest, crypto lib, HTTP client, etc.).
 
-src/kraken_bot/
+src/krakked/
 
 connection.py (or equivalent) – main REST + auth interface.
 
@@ -402,9 +402,9 @@ The Phase 2 module **reads but does not modify** the region profile. It uses:
 
 Phase 2 expects the global config file to live in the same config directory as Phase 1, e.g.:
 
-* Linux: `~/.config/kraken_bot/config.yaml`
-* macOS: `~/Library/Application Support/kraken_bot/config.yaml`
-* Windows: `%APPDATA%\kraken_bot\config.yaml`
+* Linux: `~/.config/krakked/config.yaml`
+* macOS: `~/Library/Application Support/krakked/config.yaml`
+* Windows: `%APPDATA%\krakked\config.yaml`
 
 Expected structure (example):
 
@@ -428,7 +428,7 @@ market_data:
 
   ohlc_store:
     backend: "parquet"           # or "csv" etc.
-    root_dir: "~/.local/share/kraken_bot/ohlc"
+    root_dir: "~/.local/share/krakked/ohlc"
 ```
 
 Phase 2 uses:
@@ -2291,7 +2291,7 @@ Phase 5 only talks to Kraken via KrakenRESTClient. It should not encode raw HTTP
 
 Create a new package:
 
-src/kraken_bot/execution/
+src/krakked/execution/
   __init__.py
   models.py          # ExecutionPlan mirror, LocalOrder, ExecutionResult, etc.
   oms.py             # Core Order Management System logic
@@ -2794,7 +2794,7 @@ Assumptions:
 2.1 Components
 
 Phase 6 adds two main components:
-	1.	Backend API server (kraken_bot.ui.api):
+	1.	Backend API server (krakked.ui.api):
 	•	A lightweight HTTP server in the same process as the bot core.
 	•	Exposes:
 	•	GET endpoints to read state (portfolio, risk, strategies, orders, decisions).
@@ -2804,7 +2804,7 @@ Phase 6 adds two main components:
 	•	StrategyRiskEngine (Phase 4),
 	•	ExecutionService/OMS (Phase 5),
 	•	MarketDataAPI (Phase 2).
-	2.	Web UI frontend (kraken_bot.ui.web or static files served by the API):
+	2.	Web UI frontend (krakked.ui.web or static files served by the API):
 	•	React/Vue or simple HTML+JS — implementation detail.
 	•	Consumes the backend API.
 	•	Provides:
@@ -2818,7 +2818,7 @@ Phase 6 adds two main components:
 
 Add a new package:
 
-src/kraken_bot/ui/
+src/krakked/ui/
   __init__.py
   api.py           # HTTP API server (FastAPI/Flask/etc)
   routes/
@@ -3395,9 +3395,9 @@ At that point, Krakked has a real control plane: you can see everything that mat
 
 Status & TODO
 
-- [x] API envelopes/models: Implemented in the shared response types and payload schemas (`src/kraken_bot/ui/models.py`).
-- [x] Read-only portfolio/risk/strategies/execution endpoints: GET routes are wired through FastAPI routers (`src/kraken_bot/ui/routes/portfolio.py`, `risk.py`, `strategies.py`, `execution.py`, `system.py`).
-- [x] Mutating endpoints with ui.read_only/auth: Auth middleware and read-only guards wrap POST/PATCH routes (`src/kraken_bot/ui/api.py`, `src/kraken_bot/ui/routes/*`).
+- [x] API envelopes/models: Implemented in the shared response types and payload schemas (`src/krakked/ui/models.py`).
+- [x] Read-only portfolio/risk/strategies/execution endpoints: GET routes are wired through FastAPI routers (`src/krakked/ui/routes/portfolio.py`, `risk.py`, `strategies.py`, `execution.py`, `system.py`).
+- [x] Mutating endpoints with ui.read_only/auth: Auth middleware and read-only guards wrap POST/PATCH routes (`src/krakked/ui/api.py`, `src/krakked/ui/routes/*`).
 - [x] Kill switch endpoint behavior: `/api/risk/kill_switch` documents manual activation/clear semantics, read-only behavior, and response shape.
 - [x] Credential validation rules: Documented below and enforced in `/api/system/credentials/validate`.
 - [x] TUI/React integration: Trading dashboard wired to the backend (`ui/tui_dashboard.py` and `ui/src/App.tsx`).
@@ -3496,7 +3496,7 @@ Phase 7 does not require full K8s, but we design the process so containerization
 
 3.1 Orchestrator responsibilities
 
-Introduce a single entrypoint (e.g. kraken_bot.main) that:
+Introduce a single entrypoint (e.g. krakked.main) that:
 	1.	Loads AppConfig (Phase 1) including:
 	•	Region,
 	•	MarketData,
@@ -3802,7 +3802,7 @@ If you want to ship containers:
 	•	Installs dependencies,
 	•	Copies the code,
 	•	Exposes the UI port,
-	•	Uses kraken_bot.main as the entrypoint.
+	•	Uses krakked.main as the entrypoint.
 
 Otherwise, a poetry build package is enough for pip‑style installs.
 
@@ -3867,7 +3867,7 @@ Should:
 11. Phase 7 Acceptance Checklist
 
 Phase 7 is complete when:
-	•	There is a single orchestrator entrypoint (kraken_bot.main) that:
+	•	There is a single orchestrator entrypoint (krakked.main) that:
 	•	Initializes all components (Phases 1–6),
 	•	Runs scheduled loops for portfolio sync & strategy cycles,
 	•	Integrates ExecutionService and UI server,
@@ -3905,7 +3905,7 @@ At that point, Krakked isn’t just “a fancy script” — it’s a deployable
 
 Status & TODO
 
-- [x] Orchestrator entrypoint: Single `kraken_bot.main` bootstrap initializes all services and coordinates scheduling/shutdown.
+- [x] Orchestrator entrypoint: Single `krakked.main` bootstrap initializes all services and coordinates scheduling/shutdown.
 - [x] Centralized logging: Structured logging with consistent fields (plan_id, strategy_id, env) and startup diagnostics emitted at launch.
 - [x] Metrics endpoint: Basic health/metrics HTTP surface for runtime checks and liveness probing.
 - [x] Schema guard: Enforce schema_version checks and migrations before the bot starts accepting work.

@@ -5,8 +5,8 @@ import json
 
 import pytest
 
-from kraken_bot.config import PairMetadata
-from kraken_bot.market_data.ws_client import KrakenWSClientV2
+from krakked.config import PairMetadata
+from krakked.market_data.ws_client import KrakenWSClientV2
 
 
 @pytest.fixture

@@ -2,7 +2,7 @@ from pathlib import Path
 
 import appdirs  # type: ignore[import-untyped]
 
-from kraken_bot.config import get_config_dir, load_config
+from krakked.config import get_config_dir, load_config
 
 
 def test_load_config_sets_default_ohlc_store(monkeypatch, tmp_path: Path):

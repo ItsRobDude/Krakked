@@ -3,8 +3,8 @@ from unittest.mock import patch
 import pytest
 import yaml
 
-from kraken_bot.config import ProfileConfig
-from kraken_bot.ui.routes.presets import ALLOWED_KINDS
+from krakked.config import ProfileConfig
+from krakked.ui.routes.presets import ALLOWED_KINDS
 
 
 @pytest.fixture
@@ -23,9 +23,9 @@ def test_client(client, tmp_path):
 
     # Patch get_config_dir in both modules
     with (
-        patch("kraken_bot.ui.routes.config.get_config_dir", return_value=config_dir),
-        patch("kraken_bot.ui.routes.presets.get_config_dir", return_value=config_dir),
-        patch("kraken_bot.config.get_config_dir", return_value=config_dir),
+        patch("krakked.ui.routes.config.get_config_dir", return_value=config_dir),
+        patch("krakked.ui.routes.presets.get_config_dir", return_value=config_dir),
+        patch("krakked.config.get_config_dir", return_value=config_dir),
     ):
         yield client
 

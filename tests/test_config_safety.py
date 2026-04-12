@@ -4,8 +4,8 @@ from unittest.mock import patch
 
 import yaml
 
-from kraken_bot.config_loader import dump_runtime_overrides, load_config
-from kraken_bot.config_models import (
+from krakked.config_loader import dump_runtime_overrides, load_config
+from krakked.config_models import (
     AppConfig,
     ExecutionConfig,
     MarketDataConfig,
@@ -46,7 +46,7 @@ def test_load_config_handles_null_account_id(tmp_path):
     with open(config_path, "w") as f:
         yaml.safe_dump(config_data, f)
 
-    with patch("kraken_bot.config_loader.get_config_dir", return_value=tmp_path):
+    with patch("krakked.config_loader.get_config_dir", return_value=tmp_path):
         config = load_config(config_path=config_path)
 
     assert config.session.account_id == "default"
@@ -57,7 +57,7 @@ def test_dump_runtime_overrides_handles_null_account_id(tmp_path):
     session = SessionConfig(account_id=None)
     config = _minimal_app_config(session)
 
-    with patch("kraken_bot.config_loader.get_config_dir", return_value=tmp_path):
+    with patch("krakked.config_loader.get_config_dir", return_value=tmp_path):
         dump_runtime_overrides(config, config_dir=tmp_path, session=session)
 
     runtime_path = tmp_path / "config.runtime.yaml"

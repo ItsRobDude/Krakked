@@ -1,11 +1,11 @@
 from decimal import Decimal
 
-from kraken_bot.portfolio.balance_engine import (
+from krakked.portfolio.balance_engine import (
     BalanceEngine,
     classify_cashflow,
     rebuild_balances,
 )
-from kraken_bot.portfolio.models import CashFlowCategory, LedgerEntry
+from krakked.portfolio.models import CashFlowCategory, LedgerEntry
 
 
 def test_balance_engine_apply_entry():

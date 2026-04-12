@@ -7,8 +7,8 @@ from typing import Iterator
 
 import pytest
 
-from kraken_bot import cli
-from kraken_bot.portfolio.store import CURRENT_SCHEMA_VERSION
+from krakked import cli
+from krakked.portfolio.store import CURRENT_SCHEMA_VERSION
 
 
 def _create_sample_db(db_path: Path) -> None:

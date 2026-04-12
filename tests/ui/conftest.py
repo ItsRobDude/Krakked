@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 import pytest
 from starlette.testclient import TestClient
 
-from kraken_bot.config import (
+from krakked.config import (
     AppConfig,
     ExecutionConfig,
     MarketDataConfig,
@@ -24,9 +24,9 @@ from kraken_bot.config import (
     UIRefreshConfig,
     UniverseConfig,
 )
-from kraken_bot.metrics import SystemMetrics
-from kraken_bot.ui.api import create_api
-from kraken_bot.ui.context import AppContext, SessionState
+from krakked.metrics import SystemMetrics
+from krakked.ui.api import create_api
+from krakked.ui.context import AppContext, SessionState
 
 
 def _build_app_config(

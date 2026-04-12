@@ -5,14 +5,14 @@ from unittest.mock import MagicMock, PropertyMock, patch
 
 import pytest
 
-from kraken_bot.config import (
+from krakked.config import (
     AppConfig,
     ConnectionStatus,
     MarketDataConfig,
     PortfolioConfig,
 )
-from kraken_bot.market_data.api import MarketDataAPI
-from kraken_bot.market_data.exceptions import DataStaleError
+from krakked.market_data.api import MarketDataAPI
+from krakked.market_data.exceptions import DataStaleError
 
 
 @pytest.fixture
@@ -31,9 +31,9 @@ def mock_config() -> AppConfig:
     )
 
 
-@patch("kraken_bot.market_data.api.build_universe")
-@patch("kraken_bot.market_data.api.KrakenWSClientV2")
-@patch("kraken_bot.market_data.api.FileOHLCStore")
+@patch("krakked.market_data.api.build_universe")
+@patch("krakked.market_data.api.KrakenWSClientV2")
+@patch("krakked.market_data.api.FileOHLCStore")
 def test_get_data_status(
     mock_store, mock_ws_client_class, mock_build_universe, mock_config
 ):
@@ -95,8 +95,8 @@ def test_get_data_status(
     assert status.subscription_errors == 1
 
 
-@patch("kraken_bot.market_data.api.build_universe")
-@patch("kraken_bot.market_data.api.PairMetadataStore")
+@patch("krakked.market_data.api.build_universe")
+@patch("krakked.market_data.api.PairMetadataStore")
 def test_get_universe_returns_canonical_pairs(
     mock_metadata_store, mock_build_universe, mock_config
 ):

@@ -5,17 +5,17 @@ from unittest.mock import MagicMock
 import pytest
 from starlette.testclient import TestClient
 
-import kraken_bot.connection.validation as validation_mod
-from kraken_bot.config import StrategyConfig
-from kraken_bot.connection.exceptions import (
+import krakked.connection.validation as validation_mod
+from krakked.config import StrategyConfig
+from krakked.connection.exceptions import (
     AuthError,
     KrakenAPIError,
     ServiceUnavailableError,
 )
-from kraken_bot.credentials import CredentialResult, CredentialStatus
-from kraken_bot.market_data.api import MarketDataStatus
-from kraken_bot.metrics import SystemMetrics
-from kraken_bot.ui.api import create_api
+from krakked.credentials import CredentialResult, CredentialStatus
+from krakked.market_data.api import MarketDataStatus
+from krakked.metrics import SystemMetrics
+from krakked.ui.api import create_api
 from tests.ui.conftest import build_test_context
 
 logger = logging.getLogger(__name__)
@@ -311,7 +311,7 @@ def test_config_loader_gating_prevents_risk_validation_failure(monkeypatch):
     Ensures that when ml.enabled=False, ML strategies are stripped from enabled list
     so that missing risk limits don't trigger validation errors in live mode.
     """
-    from kraken_bot.config_loader import parse_app_config
+    from krakked.config_loader import parse_app_config
 
     # Setup raw config
     raw_config = {
@@ -356,15 +356,15 @@ def test_mode_change_updates_configs(
     system_context.config.execution.allow_live_trading = True
 
     # Mock account functions to avoid file IO and keyring access
-    monkeypatch.setattr("kraken_bot.ui.routes.system.resolve_secrets_path", MagicMock())
-    monkeypatch.setattr("kraken_bot.ui.routes.system.unlock_secrets", MagicMock())
+    monkeypatch.setattr("krakked.ui.routes.system.resolve_secrets_path", MagicMock())
+    monkeypatch.setattr("krakked.ui.routes.system.unlock_secrets", MagicMock())
     monkeypatch.setattr(
-        "kraken_bot.ui.routes.system.set_session_master_password", MagicMock()
+        "krakked.ui.routes.system.set_session_master_password", MagicMock()
     )
 
     # Patch get_config_dir to use temp dir
     monkeypatch.setattr(
-        "kraken_bot.ui.routes.system.get_config_dir", lambda: temp_config_dir
+        "krakked.ui.routes.system.get_config_dir", lambda: temp_config_dir
     )
 
     response = client.post("/api/system/mode", json={"mode": "live"})
@@ -530,7 +530,7 @@ def test_credential_validation_auth_and_missing_fields(
 def test_ui_credential_validation_logs_do_not_include_secrets(
     monkeypatch, client, ui_auth_token, caplog
 ):
-    caplog.set_level(logging.WARNING, logger="kraken_bot.ui.routes.system")
+    caplog.set_level(logging.WARNING, logger="krakked.ui.routes.system")
 
     fake_key = "FAKE_API_KEY_123"
     fake_secret = "FAKE_API_SECRET_456"
@@ -574,7 +574,7 @@ def test_ui_credential_validation_logs_do_not_include_secrets(
 def test_setup_unlock_remember_failure_is_best_effort(
     monkeypatch, client, system_context
 ):
-    import kraken_bot.ui.routes.system as system_routes
+    import krakked.ui.routes.system as system_routes
 
     system_context.is_setup_mode = True
     system_context.reinitialize_event.clear()
@@ -607,7 +607,7 @@ def test_setup_unlock_remember_failure_is_best_effort(
 
 
 def test_setup_unlock_remember_success_sets_flag(monkeypatch, client, system_context):
-    import kraken_bot.ui.routes.system as system_routes
+    import krakked.ui.routes.system as system_routes
 
     system_context.is_setup_mode = True
     system_context.reinitialize_event.clear()
@@ -644,7 +644,7 @@ def test_setup_unlock_remember_success_sets_flag(monkeypatch, client, system_con
 
 def test_system_reset_aborts_on_resolve_failure(monkeypatch, client, system_context):
     """Ensure system_reset does not delete default secrets if resolution fails."""
-    import kraken_bot.ui.routes.system as system_routes
+    import krakked.ui.routes.system as system_routes
 
     # Setup context with non-default account
     system_context.session.account_id = "nondefault"

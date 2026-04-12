@@ -1,6 +1,6 @@
 """Safety status evaluation tests."""
 
-from kraken_bot.config import (
+from krakked.config import (
     AppConfig,
     ExecutionConfig,
     MarketDataConfig,
@@ -12,7 +12,7 @@ from kraken_bot.config import (
     UIConfig,
     UniverseConfig,
 )
-from kraken_bot.safety import SafetyStatus, check_safety
+from krakked.safety import SafetyStatus, check_safety
 
 
 def _make_config(execution: ExecutionConfig) -> AppConfig:

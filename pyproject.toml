@@ -25,15 +25,15 @@ dependencies = [
 tui = ["textual>=0.57,<3.0"]
 
 [project.scripts]
-krakked = "kraken_bot.cli:main"
+krakked = "krakked.cli:main"
 
 [tool.poetry]
 packages = [
-  { include = "kraken_bot", from = "src" }
+  { include = "krakked", from = "src" }
 ]
 
 [tool.poetry.scripts]
-krakked = "kraken_bot.cli:main"
+krakked = "krakked.cli:main"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.1.1"
@@ -78,7 +78,7 @@ line_length = 88
 src_paths = ["src", "tests"]
 
 # Your own code
-known_first_party = ["kraken_bot", "tests"]
+known_first_party = ["krakked", "tests"]
 
 # Third-party libs you actually use
 known_third_party = [

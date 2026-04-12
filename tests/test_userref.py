@@ -1,6 +1,6 @@
 import pytest
 
-from kraken_bot.execution.userref import resolve_userref
+from krakked.execution.userref import resolve_userref
 
 
 def test_resolve_userref_handles_none_and_whitespace() -> None:

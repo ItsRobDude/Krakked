@@ -76,7 +76,7 @@ Phase 7 does not require full K8s, but we design the process so containerization
 
 3.1 Orchestrator responsibilities
 
-Introduce a single entrypoint (e.g. kraken_bot.main) that:
+Introduce a single entrypoint (e.g. krakked.main) that:
 	1.	Loads AppConfig (Phase 1) including:
 	•	Region,
 	•	MarketData,
@@ -382,7 +382,7 @@ If you want to ship containers:
 	•	Installs dependencies,
 	•	Copies the code,
 	•	Exposes the UI port,
-	•	Uses kraken_bot.main as the entrypoint.
+	•	Uses krakked.main as the entrypoint.
 
 Otherwise, a poetry build package is enough for pip‑style installs.
 
@@ -447,7 +447,7 @@ Should:
 11. Phase 7 Acceptance Checklist
 
 Phase 7 is complete when:
-	•	There is a single orchestrator entrypoint (kraken_bot.main) that:
+	•	There is a single orchestrator entrypoint (krakked.main) that:
 	•	Initializes all components (Phases 1–6),
 	•	Runs scheduled loops for portfolio sync & strategy cycles,
 	•	Integrates ExecutionService and UI server,
@@ -485,7 +485,7 @@ At that point, Krakked isn’t just “a fancy script” — it’s a deployable
 
 Status & TODO
 
-- [x] Orchestrator entrypoint: Single `kraken_bot.main` bootstrap initializes all services and coordinates scheduling/shutdown.
+- [x] Orchestrator entrypoint: Single `krakked.main` bootstrap initializes all services and coordinates scheduling/shutdown.
 - [x] Centralized logging: Structured logging with consistent fields (plan_id, strategy_id, env) and startup diagnostics emitted at launch.
 - [x] Metrics endpoint: Basic health/metrics HTTP surface for runtime checks and liveness probing.
 - [x] Schema guard: Enforce schema_version checks and migrations before the bot starts accepting work.

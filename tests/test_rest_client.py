@@ -6,14 +6,14 @@ from unittest.mock import MagicMock, patch
 import pytest
 import requests
 
-from kraken_bot.connection.exceptions import (
+from krakked.connection.exceptions import (
     AuthError,
     KrakenAPIError,
     RateLimitError,
     ServiceUnavailableError,
 )
-from kraken_bot.connection.rate_limiter import RateLimiter
-from kraken_bot.connection.rest_client import KrakenRESTClient
+from krakked.connection.rate_limiter import RateLimiter
+from krakked.connection.rest_client import KrakenRESTClient
 
 
 @pytest.fixture

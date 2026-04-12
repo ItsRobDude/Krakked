@@ -30,11 +30,11 @@ Config directory
 
 Use an OS‑specific configuration directory:
 
-Linux: ~/.config/kraken_bot/
+Linux: ~/.config/krakked/
 
-macOS: ~/Library/Application Support/kraken_bot/
+macOS: ~/Library/Application Support/krakked/
 
-Windows: %APPDATA%\kraken_bot\
+Windows: %APPDATA%\krakked\
 
 All module‑owned files live under this directory.
 
@@ -265,7 +265,7 @@ pyproject.toml
 
 Declares dependencies and test tooling (pytest, crypto lib, HTTP client, etc.).
 
-src/kraken_bot/
+src/krakked/
 
 connection.py (or equivalent) – main REST + auth interface.
 

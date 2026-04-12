@@ -2,7 +2,7 @@
 
 import time
 
-from kraken_bot.connection.nonce import NonceGenerator
+from krakked.connection.nonce import NonceGenerator
 
 
 def test_nonce_monotonicity():

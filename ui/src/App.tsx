@@ -909,6 +909,57 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
     }
   };
 
+  const handleStrategyWeightChange = async (strategyId: string, weight: number) => {
+    if (health?.ui_read_only) {
+      setStrategyFeedback('Backend is read-only. Strategy controls are disabled.');
+      return;
+    }
+
+    setStrategyFeedback(null);
+    setStrategyBusyState(strategyId, true);
+
+    const previousWeight =
+      strategies.find((strategy) => strategy.strategy_id === strategyId)?.configured_weight ?? 100;
+
+    setStrategies((current) =>
+      current.map((strategy) =>
+        strategy.strategy_id === strategyId
+          ? { ...strategy, configured_weight: weight }
+          : strategy,
+      ),
+    );
+
+    try {
+      await patchStrategyConfig(strategyId, { strategy_weight: weight });
+      setStrategies((current) => {
+        const activeStrategies = current.map((strategy) =>
+          strategy.strategy_id === strategyId ? { ...strategy, configured_weight: weight } : strategy,
+        );
+        const enabled = activeStrategies.filter((strategy) => strategy.enabled);
+        const totalWeight = enabled.reduce((sum, strategy) => sum + (strategy.configured_weight || 100), 0);
+
+        return activeStrategies.map((strategy) => ({
+          ...strategy,
+          effective_weight_pct: strategy.enabled && totalWeight > 0
+            ? ((strategy.configured_weight || 100) / totalWeight) * 100
+            : null,
+        }));
+      });
+      setStrategyFeedback(`Updated ${strategyId} weight to ${weight}.`);
+    } catch (error) {
+      setStrategies((current) =>
+        current.map((strategy) =>
+          strategy.strategy_id === strategyId
+            ? { ...strategy, configured_weight: previousWeight }
+            : strategy,
+        ),
+      );
+      setStrategyFeedback(`Unable to update weight for ${strategyId}.`);
+    } finally {
+      setStrategyBusyState(strategyId, false);
+    }
+  };
+
   const handleLearningToggle = async (strategyId: string, enabled: boolean) => {
     if (health?.ui_read_only) {
       setStrategyFeedback('Backend is read-only. Strategy controls are disabled.');
@@ -1423,6 +1474,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
         readOnly={Boolean(health?.ui_read_only)}
         feedback={strategyFeedback}
         onToggle={handleStrategyToggle}
+        onWeightChange={handleStrategyWeightChange}
         onRiskProfileChange={handleRiskProfileChange}
         onLearningToggle={handleLearningToggle}
         mlEnabled={mlEnabled}

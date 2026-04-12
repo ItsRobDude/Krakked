@@ -7,10 +7,10 @@ services:
     ports:
       - "${KRAKKED_PORT:-8080}:8080"
     environment:
-      KRAKEN_BOT_ENV: ${KRAKEN_BOT_ENV:-paper}
+      KRAKKED_ENV: ${KRAKKED_ENV:-paper}
       KRAKKED_CONFIG_DIR: /krakked/config
       KRAKKED_DATA_DIR: /krakked/data
-      KRAKEN_BOT_SECRET_PW: ${KRAKEN_BOT_SECRET_PW:-}
+      KRAKKED_SECRET_PW: ${KRAKKED_SECRET_PW:-}
       KRAKEN_API_KEY: ${KRAKEN_API_KEY:-}
       KRAKEN_API_SECRET: ${KRAKEN_API_SECRET:-}
       UI_DIST_DIR: /app/ui-dist

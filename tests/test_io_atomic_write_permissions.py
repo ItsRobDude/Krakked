@@ -3,7 +3,7 @@ import stat
 
 import pytest
 
-from kraken_bot.utils.io import atomic_write
+from krakked.utils.io import atomic_write
 
 
 @pytest.mark.skipif(

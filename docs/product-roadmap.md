@@ -32,10 +32,10 @@ This is a product and engineering constraint, not a claim that California law ca
    - Include health checks, restart policies, and a documented upgrade path.
    - Support explicit config/data directory overrides so container layouts are predictable.
 
-2. Full internal rename to `krakked`
-   - Move package/module/config naming from `kraken_bot` to `krakked`.
-   - Preserve migration notes for existing installs.
-   - Treat this as a compatibility-breaking milestone and plan it deliberately.
+2. Consolidate the `krakked` namespace
+   - Keep package/module/config naming aligned on `krakked`.
+   - Preserve migration notes for existing installs and operational runbooks.
+   - Treat follow-up compatibility shims as deliberate, temporary decisions.
 
 3. Strategy management UX
    - Users can enable/disable strategies live in the UI.
@@ -105,4 +105,4 @@ The next major implementation track should be:
 1. Harden and validate Docker deployment.
 2. Design and implement strategy weighting in the runtime and UI.
 3. Formalize ML checkpoint/resume behavior.
-4. Plan the full internal rename from `kraken_bot` to `krakked`.
+4. Finish the remaining post-rename cleanup and migration notes.

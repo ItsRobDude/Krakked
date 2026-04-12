@@ -23,6 +23,7 @@ export type StrategiesPanelProps = {
   readOnly: boolean;
   feedback?: string | null;
   onToggle: (strategyId: string, enabled: boolean) => void;
+  onWeightChange: (strategyId: string, weight: number) => void;
   onRiskProfileChange: (strategyId: string, profile: StrategyRiskProfile) => void;
   onLearningToggle: (strategyId: string, enabled: boolean) => void;
   mlEnabled: boolean;
@@ -42,6 +43,7 @@ export function StrategiesPanel({
   readOnly,
   feedback,
   onToggle,
+  onWeightChange,
   onRiskProfileChange,
   onLearningToggle,
   mlEnabled,
@@ -76,7 +78,7 @@ export function StrategiesPanel({
       <div className="panel__header">
         <div>
           <h2>Strategies</h2>
-          <p className="panel__hint">Toggle live strategies and pick a risk posture</p>
+          <p className="panel__hint">Toggle strategies, set a 1-100 weight, and pick a risk posture</p>
         </div>
         <div className="strategy-ml-group">
           <label className="strategy-toggle__label" title={sessionActive ? "ML settings cannot be changed while session is active" : (hasActiveProfile ? "Toggle ML for active profile" : "Active profile required for ML settings")}>
@@ -95,13 +97,14 @@ export function StrategiesPanel({
         </div>
       </div>
       <p className="panel__description">
-        Enable or pause each strategy and set its risk profile. Changes respect backend read-only mode.
+        Enable or pause each strategy, choose a simple relative weight, and set its risk profile. Changes respect backend read-only mode.
       </p>
 
       <div className="table table--strategies" role="table" aria-label="Strategy controls">
         <div className="table__head" role="row">
           <span role="columnheader">Strategy</span>
           <span role="columnheader">Enabled</span>
+          <span role="columnheader">Weight</span>
           <span role="columnheader">Last action</span>
           <span role="columnheader">Exposure</span>
           <span role="columnheader">Realized PnL</span>
@@ -142,6 +145,28 @@ export function StrategiesPanel({
                     />
                     <span className="pill pill--info">{strategy.enabled ? 'On' : 'Off'}</span>
                   </label>
+                </span>
+                <span role="cell">
+                  <div className="strategy__meta" style={{ display: 'grid', gap: '0.35rem' }}>
+                    <input
+                      type="number"
+                      min={1}
+                      max={100}
+                      value={strategy.configured_weight ?? 100}
+                      disabled={readOnly || isBusy}
+                      onChange={(event) =>
+                        onWeightChange(
+                          strategy.strategy_id,
+                          Math.min(100, Math.max(1, Number(event.target.value) || 1)),
+                        )
+                      }
+                    />
+                    <span className="pill pill--muted">
+                      Share {typeof strategy.effective_weight_pct === 'number'
+                        ? `${strategy.effective_weight_pct.toFixed(1)}%`
+                        : '—'}
+                    </span>
+                  </div>
                 </span>
                 <span role="cell" className="strategy__meta">
                   {formatTimestamp(lastAction)}

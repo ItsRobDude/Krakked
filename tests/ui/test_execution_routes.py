@@ -4,9 +4,9 @@ from unittest.mock import patch
 import pytest
 from starlette.testclient import TestClient
 
-from kraken_bot.execution.models import ExecutionResult, LocalOrder
-from kraken_bot.portfolio.models import SpotPosition
-from kraken_bot.strategy.models import ExecutionPlan, RiskAdjustedAction
+from krakked.execution.models import ExecutionResult, LocalOrder
+from krakked.portfolio.models import SpotPosition
+from krakked.strategy.models import ExecutionPlan, RiskAdjustedAction
 
 
 @pytest.fixture
@@ -151,7 +151,7 @@ def test_flatten_all_executes_plan(client, exec_context):
     exec_context.execution_service.get_open_orders.return_value = []
     exec_context.portfolio.last_sync_ok = True
 
-    with patch("kraken_bot.ui.routes.execution.dump_runtime_overrides") as mock_dump:
+    with patch("krakked.ui.routes.execution.dump_runtime_overrides") as mock_dump:
         response = client.post("/api/execution/flatten_all")
 
         assert response.status_code == 200
@@ -182,7 +182,7 @@ def test_flatten_all_fails_if_cancel_fails(client, exec_context):
     )  # Even if empty list returned later
 
     # Mock dump_runtime_overrides to prevent file I/O
-    with patch("kraken_bot.ui.routes.execution.dump_runtime_overrides") as mock_dump:
+    with patch("krakked.ui.routes.execution.dump_runtime_overrides") as mock_dump:
         response = client.post("/api/execution/flatten_all")
         assert response.status_code == 200
         data = response.json()
@@ -204,7 +204,7 @@ def test_flatten_all_fails_if_open_orders_remain(client, exec_context):
     # Mock open orders remaining
     exec_context.execution_service.get_open_orders.return_value = [_sample_order("1")]
 
-    with patch("kraken_bot.ui.routes.execution.dump_runtime_overrides") as mock_dump:
+    with patch("krakked.ui.routes.execution.dump_runtime_overrides") as mock_dump:
         response = client.post("/api/execution/flatten_all")
         assert response.status_code == 200
         data = response.json()
@@ -241,7 +241,7 @@ def test_flatten_all_handles_dust_only(client, exec_context):
     # Ensure emergency flag starts False
     exec_context.session.emergency_flatten = False
 
-    with patch("kraken_bot.ui.routes.execution.dump_runtime_overrides") as mock_dump:
+    with patch("krakked.ui.routes.execution.dump_runtime_overrides") as mock_dump:
         response = client.post("/api/execution/flatten_all")
 
         assert response.status_code == 200

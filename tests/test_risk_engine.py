@@ -4,12 +4,12 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from kraken_bot.config import RiskConfig
-from kraken_bot.market_data.exceptions import DataStaleError
-from kraken_bot.portfolio.manager import PortfolioService
-from kraken_bot.portfolio.models import EquityView, SpotPosition
-from kraken_bot.strategy.models import StrategyIntent
-from kraken_bot.strategy.risk import RiskContext, RiskEngine
+from krakked.config import RiskConfig
+from krakked.market_data.exceptions import DataStaleError
+from krakked.portfolio.manager import PortfolioService
+from krakked.portfolio.models import EquityView, SpotPosition
+from krakked.strategy.models import StrategyIntent
+from krakked.strategy.risk import RiskContext, RiskEngine
 
 
 def _build_risk_context(open_positions=None):

@@ -2,12 +2,12 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-from kraken_bot.config import AppConfig, RiskConfig, StrategiesConfig, StrategyConfig
-from kraken_bot.market_data.api import MarketDataAPI
-from kraken_bot.portfolio.manager import PortfolioService
-from kraken_bot.strategy.base import Strategy
-from kraken_bot.strategy.engine import StrategyRiskEngine
-from kraken_bot.strategy.models import RiskAdjustedAction, RiskStatus, StrategyState
+from krakked.config import AppConfig, RiskConfig, StrategiesConfig, StrategyConfig
+from krakked.market_data.api import MarketDataAPI
+from krakked.portfolio.manager import PortfolioService
+from krakked.strategy.base import Strategy
+from krakked.strategy.engine import StrategyRiskEngine
+from krakked.strategy.models import RiskAdjustedAction, RiskStatus, StrategyState
 
 
 def test_strategy_engine_composite_id_resolution():

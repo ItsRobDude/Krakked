@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from kraken_bot.main import _run_loop_iteration
+from krakked.main import _run_loop_iteration
 
 
 def test_inactive_session_does_zero_work():
@@ -161,7 +161,7 @@ def test_emergency_flatten_clears_on_dust_only():
         account_id="default",
     )
 
-    with patch("kraken_bot.main.dump_runtime_overrides") as mock_dump:
+    with patch("krakked.main.dump_runtime_overrides") as mock_dump:
         updated_sync, updated_cycle = _run_loop_iteration(
             now=now,
             strategy_interval=strategy_interval,

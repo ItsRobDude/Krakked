@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 import pytest
 from starlette.testclient import TestClient
 
-from kraken_bot.portfolio.models import AssetExposure, EquityView, SpotPosition
+from krakked.portfolio.models import AssetExposure, EquityView, SpotPosition
 
 
 @pytest.fixture

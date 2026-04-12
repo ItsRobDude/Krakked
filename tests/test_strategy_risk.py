@@ -5,11 +5,11 @@ from unittest.mock import MagicMock
 
 import pandas as pd
 
-from kraken_bot.config import PortfolioConfig, RiskConfig
-from kraken_bot.market_data.api import MarketDataAPI
-from kraken_bot.market_data.models import PairMetadata
-from kraken_bot.portfolio.manager import PortfolioService
-from kraken_bot.portfolio.models import (
+from krakked.config import PortfolioConfig, RiskConfig
+from krakked.market_data.api import MarketDataAPI
+from krakked.market_data.models import PairMetadata
+from krakked.portfolio.manager import PortfolioService
+from krakked.portfolio.models import (
     AssetExposure,
     DriftMismatchedAsset,
     DriftStatus,
@@ -17,9 +17,9 @@ from kraken_bot.portfolio.models import (
     RealizedPnLRecord,
     SpotPosition,
 )
-from kraken_bot.portfolio.portfolio import Portfolio
-from kraken_bot.strategy.models import StrategyIntent
-from kraken_bot.strategy.risk import RiskEngine, compute_atr
+from krakked.portfolio.portfolio import Portfolio
+from krakked.strategy.models import StrategyIntent
+from krakked.strategy.risk import RiskEngine, compute_atr
 
 
 def test_compute_atr():

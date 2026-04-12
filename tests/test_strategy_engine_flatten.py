@@ -1,10 +1,10 @@
 from unittest.mock import MagicMock
 
-from kraken_bot.config import AppConfig
-from kraken_bot.market_data.api import MarketDataAPI
-from kraken_bot.portfolio.manager import PortfolioService
-from kraken_bot.portfolio.models import SpotPosition
-from kraken_bot.strategy.engine import StrategyEngine
+from krakked.config import AppConfig
+from krakked.market_data.api import MarketDataAPI
+from krakked.portfolio.manager import PortfolioService
+from krakked.portfolio.models import SpotPosition
+from krakked.strategy.engine import StrategyEngine
 
 
 def test_build_emergency_flatten_plan_skips_dust():

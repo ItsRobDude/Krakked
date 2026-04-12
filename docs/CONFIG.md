@@ -1,14 +1,14 @@
 # Configuration Guide
 
-The bot reads configuration files from the OS-specific user configuration directory returned by `appdirs.user_config_dir("kraken_bot")`:
+The bot reads configuration files from the OS-specific user configuration directory returned by `appdirs.user_config_dir("krakked")`:
 
-Krakked is the product and CLI name, but the internal Python package, config directory, and env-var namespace remain `kraken_bot` / `KRAKEN_BOT_*` for backward compatibility.
+Krakked now uses a single internal and external namespace: `krakked` / `KRAKKED_*`.
 
 | Platform | Path |
 | --- | --- |
-| Linux | `~/.config/kraken_bot/` |
-| macOS | `~/Library/Application Support/kraken_bot/` |
-| Windows | `C:\\Users\\<User>\\AppData\\Local\\kraken_bot\\` |
+| Linux | `~/.config/krakked/` |
+| macOS | `~/Library/Application Support/krakked/` |
+| Windows | `C:\\Users\\<User>\\AppData\\Local\\krakked\\` |
 
 Place your real configuration files in that directory:
 
@@ -22,19 +22,19 @@ Starter files live in `config_examples/` at the repository root. Copy them into 
 ```bash
 mkdir -p "$(python - <<'PY'
 import appdirs
-print(appdirs.user_config_dir('kraken_bot'))
+print(appdirs.user_config_dir('krakked'))
 PY)"
 cp config_examples/config.yaml "$(python - <<'PY'
 import appdirs
-print(appdirs.user_config_dir('kraken_bot'))
+print(appdirs.user_config_dir('krakked'))
 PY)"/
 cp config_examples/config.paper.yaml "$(python - <<'PY'
 import appdirs
-print(appdirs.user_config_dir('kraken_bot'))
+print(appdirs.user_config_dir('krakked'))
 PY)"/
 cp config_examples/config.live.yaml "$(python - <<'PY'
 import appdirs
-print(appdirs.user_config_dir('kraken_bot'))
+print(appdirs.user_config_dir('krakked'))
 PY)"/
 ```
 
@@ -42,10 +42,10 @@ You can keep all files side by side in the config directory; the loader will aut
 
 ## Environment selection
 
-Set `KRAKEN_BOT_ENV` to choose which overlay is applied:
+Set `KRAKKED_ENV` to choose which overlay is applied:
 
 * `dev`
 * `paper`
 * `live`
 
-If `KRAKEN_BOT_ENV` is missing or any other value, the bot defaults to the `paper` overlay. The loader always reads `config.yaml` first and then merges in `config.<env>.yaml` (if present) from the same directory, so per-environment tweaks stay isolated while shared settings live in the base file.
+If `KRAKKED_ENV` is missing or any other value, the bot defaults to the `paper` overlay. The loader always reads `config.yaml` first and then merges in `config.<env>.yaml` (if present) from the same directory, so per-environment tweaks stay isolated while shared settings live in the base file.

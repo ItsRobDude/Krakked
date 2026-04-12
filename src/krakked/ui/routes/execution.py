@@ -1,0 +1,287 @@
+"""Execution-related endpoints."""
+
+from __future__ import annotations
+
+import logging
+from datetime import datetime, timezone
+from typing import List
+
+from fastapi import APIRouter, Request
+
+from krakked.config_loader import dump_runtime_overrides
+from krakked.execution.models import ExecutionResult, LocalOrder
+from krakked.ui.logging import build_request_log_extra
+from krakked.ui.models import ApiEnvelope, ExecutionResultPayload, OpenOrderPayload
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter()
+
+
+def _context(request: Request):
+    return request.app.state.context
+
+
+def _serialize_order(order: LocalOrder) -> OpenOrderPayload:
+    return OpenOrderPayload(
+        local_id=order.local_id,
+        plan_id=order.plan_id,
+        strategy_id=order.strategy_id,
+        pair=order.pair,
+        side=order.side,
+        order_type=order.order_type,
+        kraken_order_id=order.kraken_order_id,
+        userref=order.userref,
+        requested_base_size=order.requested_base_size,
+        requested_price=order.requested_price,
+        status=order.status,
+        created_at=order.created_at,
+        updated_at=order.updated_at,
+        cumulative_base_filled=order.cumulative_base_filled,
+        avg_fill_price=order.avg_fill_price,
+        last_error=order.last_error,
+        raw_request=order.raw_request,
+        raw_response=order.raw_response,
+    )
+
+
+def _serialize_execution_result(result: ExecutionResult) -> ExecutionResultPayload:
+    return ExecutionResultPayload(
+        plan_id=result.plan_id,
+        started_at=result.started_at,
+        completed_at=result.completed_at,
+        success=result.success,
+        orders=[_serialize_order(order) for order in result.orders],
+        errors=result.errors,
+        warnings=result.warnings,
+    )
+
+
+@router.get("/open_orders", response_model=ApiEnvelope[List[OpenOrderPayload]])
+async def get_open_orders(request: Request) -> ApiEnvelope[List[OpenOrderPayload]]:
+    ctx = _context(request)
+    try:
+        open_orders = [
+            _serialize_order(order) for order in ctx.execution_service.get_open_orders()
+        ]
+        return ApiEnvelope(data=open_orders, error=None)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.exception(
+            "Failed to fetch open orders",
+            extra=build_request_log_extra(request, event="open_orders_failed"),
+        )
+        return ApiEnvelope(data=None, error=str(exc))
+
+
+@router.get(
+    "/recent_executions", response_model=ApiEnvelope[List[ExecutionResultPayload]]
+)
+async def get_recent_executions(
+    request: Request,
+) -> ApiEnvelope[List[ExecutionResultPayload]]:
+    ctx = _context(request)
+    try:
+        executions = [
+            _serialize_execution_result(result)
+            for result in ctx.execution_service.get_recent_executions()
+        ]
+        return ApiEnvelope(data=executions, error=None)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.exception(
+            "Failed to fetch recent executions",
+            extra=build_request_log_extra(request, event="recent_executions_failed"),
+        )
+        return ApiEnvelope(data=None, error=str(exc))
+
+
+@router.post("/cancel_all", response_model=ApiEnvelope[bool])
+async def cancel_all_orders(request: Request) -> ApiEnvelope[bool]:
+    ctx = _context(request)
+    if ctx.config.ui.read_only:
+        logger.warning(
+            "Cancel all blocked: UI read-only",
+            extra=build_request_log_extra(request, event="cancel_all_blocked"),
+        )
+        return ApiEnvelope(data=None, error="UI is in read-only mode")
+
+    try:
+        ctx.execution_service.cancel_all()
+        logger.info(
+            "All orders canceled via API",
+            extra=build_request_log_extra(request, event="cancel_all_triggered"),
+        )
+        return ApiEnvelope(data=True, error=None)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.exception(
+            "Failed to cancel all orders",
+            extra=build_request_log_extra(request, event="cancel_all_failed"),
+        )
+        return ApiEnvelope(data=None, error=str(exc))
+
+
+@router.post("/cancel/{local_id}", response_model=ApiEnvelope[bool])
+async def cancel_order(local_id: str, request: Request) -> ApiEnvelope[bool]:
+    ctx = _context(request)
+    if ctx.config.ui.read_only:
+        logger.warning(
+            "Cancel order blocked: UI read-only",
+            extra=build_request_log_extra(
+                request, event="cancel_order_blocked", local_id=local_id
+            ),
+        )
+        return ApiEnvelope(data=None, error="UI is in read-only mode")
+
+    order = ctx.execution_service.open_orders.get(local_id)
+    if not order:
+        return ApiEnvelope(data=None, error="Order not found")
+
+    try:
+        ctx.execution_service.cancel_order(order)
+        logger.info(
+            "Order canceled via API",
+            extra=build_request_log_extra(
+                request,
+                event="cancel_order_triggered",
+                local_id=local_id,
+                plan_id=order.plan_id,
+                strategy_id=order.strategy_id,
+            ),
+        )
+        return ApiEnvelope(data=True, error=None)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.exception(
+            "Failed to cancel order",
+            extra=build_request_log_extra(
+                request,
+                event="cancel_order_failed",
+                local_id=local_id,
+                plan_id=order.plan_id,
+            ),
+        )
+        return ApiEnvelope(data=None, error=str(exc))
+
+
+@router.post("/flatten_all", response_model=ApiEnvelope[ExecutionResultPayload])
+async def flatten_all_positions(
+    request: Request,
+) -> ApiEnvelope[ExecutionResultPayload]:
+    ctx = _context(request)
+    if ctx.config.ui.read_only:
+        logger.warning(
+            "Flatten all blocked: UI read-only",
+            extra=build_request_log_extra(request, event="flatten_all_blocked"),
+        )
+        return ApiEnvelope(data=None, error="UI is in read-only mode")
+
+    cancel_ok = True
+    try:
+        ctx.execution_service.cancel_all()
+    except Exception as cancel_exc:
+        logger.warning(
+            "Flatten-all preflight cancel_all failed",
+            extra=build_request_log_extra(
+                request, event="flatten_cancel_all_failed", error=str(cancel_exc)
+            ),
+        )
+        cancel_ok = False
+
+    try:
+        ctx.execution_service.refresh_open_orders()
+        ctx.execution_service.reconcile_orders()
+    except Exception as e:
+        logger.warning(f"Flatten-all preflight refresh/reconcile failed: {e}")
+
+    open_orders: List[LocalOrder] | None = None
+    try:
+        open_orders = ctx.execution_service.get_open_orders()
+    except Exception as e:
+        logger.warning(f"Failed to get open orders: {e}")
+        open_orders = None
+
+    # Try to sync portfolio immediately so emergency flatten uses the latest on-exchange state
+    sync_ok = False
+    try:
+        ctx.portfolio.sync()
+        sync_ok = getattr(ctx.portfolio, "last_sync_ok", True)
+    except Exception as sync_exc:
+        logger.warning(f"Portfolio sync before flatten failed: {sync_exc}")
+
+    # Check safe conditions:
+    # 1. cancel_all must have succeeded
+    # 2. open_orders must be successfully fetched AND empty
+    # 3. portfolio sync must have succeeded (to avoid stale position data)
+
+    if not cancel_ok or open_orders is None or open_orders or not sync_ok:
+        # Arm emergency mode
+        ctx.session.emergency_flatten = True
+        if hasattr(ctx.config, "session"):
+            ctx.config.session.emergency_flatten = True
+        dump_runtime_overrides(ctx.config, session=ctx.session, sections={"session"})
+
+        msg = "Flatten armed but waiting for open orders to clear; retry shortly"
+        if not cancel_ok:
+            msg += " (cancel_all failed)"
+        if open_orders:
+            msg += f" ({len(open_orders)} open orders remaining)"
+        if not sync_ok:
+            msg += " (portfolio sync failed)"
+
+        logger.warning(
+            msg,
+            extra=build_request_log_extra(request, event="flatten_all_armed_waiting"),
+        )
+
+        return ApiEnvelope(data=None, error=msg)
+
+    try:
+        positions = ctx.portfolio.get_positions()
+        plan = ctx.strategy_engine.build_emergency_flatten_plan(positions)
+
+        # If plan is empty, it means only dust/untradeable positions remain.
+        if not plan.actions:
+            dust_count = plan.metadata.get("dust_count_total", 0)
+            untradeable_count = plan.metadata.get("untradeable_count_total", 0)
+
+            result = ExecutionResult(
+                plan_id=plan.plan_id,
+                started_at=datetime.now(timezone.utc),
+                completed_at=datetime.now(timezone.utc),
+                success=True,
+                orders=[],
+                errors=[],
+                warnings=[
+                    f"No sellable positions. Dust/untradeable holdings remain (dust={dust_count}, untradeable={untradeable_count})."
+                ],
+            )
+            return ApiEnvelope(data=_serialize_execution_result(result), error=None)
+
+        # Set and persist emergency flag so the main loop picks it up and retries if we crash/restart
+        ctx.session.emergency_flatten = True
+        if hasattr(ctx.config, "session"):
+            ctx.config.session.emergency_flatten = True
+        dump_runtime_overrides(ctx.config, session=ctx.session, sections={"session"})
+
+        result = ctx.execution_service.execute_plan(plan)
+
+        logger.info(
+            "Flatten all triggered via API",
+            extra=build_request_log_extra(
+                request,
+                event="flatten_all_triggered",
+                plan_id=plan.plan_id,
+                actions=len(plan.actions),
+            ),
+        )
+        return ApiEnvelope(data=_serialize_execution_result(result), error=None)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.exception(
+            "Failed to flatten all positions",
+            extra=build_request_log_extra(
+                request,
+                event="flatten_all_failed",
+            ),
+        )
+        return ApiEnvelope(data=None, error=str(exc))
+
+
+# Note: /mode/live endpoint removed; logic consolidated into system.py POST /mode

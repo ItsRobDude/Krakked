@@ -62,9 +62,9 @@ The Phase 2 module **reads but does not modify** the region profile. It uses:
 
 Phase 2 expects the global config file to live in the same config directory as Phase 1, e.g.:
 
-* Linux: `~/.config/kraken_bot/config.yaml`
-* macOS: `~/Library/Application Support/kraken_bot/config.yaml`
-* Windows: `%APPDATA%\kraken_bot\config.yaml`
+* Linux: `~/.config/krakked/config.yaml`
+* macOS: `~/Library/Application Support/krakked/config.yaml`
+* Windows: `%APPDATA%\krakked\config.yaml`
 
 Expected structure (example):
 
@@ -88,7 +88,7 @@ market_data:
 
   ohlc_store:
     backend: "parquet"           # or "csv" etc.
-    root_dir: "~/.local/share/kraken_bot/ohlc"
+    root_dir: "~/.local/share/krakked/ohlc"
 ```
 
 Phase 2 uses:

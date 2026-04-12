@@ -5,8 +5,8 @@ from unittest.mock import MagicMock
 import pandas as pd
 import pytest
 
-from kraken_bot.config import MarketDataConfig, OHLCBar
-from kraken_bot.market_data.ohlc_store import FileOHLCStore
+from krakked.config import MarketDataConfig, OHLCBar
+from krakked.market_data.ohlc_store import FileOHLCStore
 
 
 class TestFileOHLCStoreCache:

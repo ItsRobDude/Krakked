@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from kraken_bot.config import (
+from krakked.config import (
     AppConfig,
     ExecutionConfig,
     MarketDataConfig,
@@ -18,8 +18,8 @@ from kraken_bot.config import (
     UIConfig,
     UniverseConfig,
 )
-from kraken_bot.ui.api import create_api
-from kraken_bot.ui.context import AppContext, SessionState
+from krakked.ui.api import create_api
+from krakked.ui.context import AppContext, SessionState
 
 # --- Fixtures & Helpers ---
 
@@ -31,13 +31,13 @@ def mock_config_dir(tmp_path):
     tests never touch the real user config directory.
     """
     with (
-        patch("kraken_bot.config_loader.get_config_dir", return_value=tmp_path),
-        patch("kraken_bot.ui.routes.system.get_config_dir", return_value=tmp_path),
-        patch("kraken_bot.secrets.get_config_dir", return_value=tmp_path),
-        patch("kraken_bot.config.get_config_dir", return_value=tmp_path),
-        patch("kraken_bot.ui.routes.config.get_config_dir", return_value=tmp_path),
-        patch("kraken_bot.accounts.get_config_dir", return_value=tmp_path),
-        patch("kraken_bot.main.get_config_dir", return_value=tmp_path),
+        patch("krakked.config_loader.get_config_dir", return_value=tmp_path),
+        patch("krakked.ui.routes.system.get_config_dir", return_value=tmp_path),
+        patch("krakked.secrets.get_config_dir", return_value=tmp_path),
+        patch("krakked.config.get_config_dir", return_value=tmp_path),
+        patch("krakked.ui.routes.config.get_config_dir", return_value=tmp_path),
+        patch("krakked.accounts.get_config_dir", return_value=tmp_path),
+        patch("krakked.main.get_config_dir", return_value=tmp_path),
     ):
         yield tmp_path
 
@@ -72,7 +72,7 @@ def mock_validation():
     result.validated = True
     result.status.name = "LOADED"
     with patch(
-        "kraken_bot.connection.validation.validate_credentials", return_value=result
+        "krakked.connection.validation.validate_credentials", return_value=result
     ):
         yield
 
@@ -248,7 +248,7 @@ def test_unlock_account_explicit_password(
 
     # Lock it (simulate fresh start)
     ctx.session.account_id = target_id
-    from kraken_bot.secrets import set_session_master_password
+    from krakked.secrets import set_session_master_password
 
     set_session_master_password(target_id, None)
 
@@ -289,7 +289,7 @@ def test_unlock_account_saved_password_success(
     client = TestClient(app)
 
     # Setup secrets file
-    from kraken_bot.secrets import persist_api_keys
+    from krakked.secrets import persist_api_keys
 
     persist_api_keys(
         "k", "s", "saved_pass", validated=True, force_save_unvalidated=True
@@ -353,7 +353,7 @@ def test_select_account_clears_old_password(
     client = TestClient(app)
 
     # 1. Set password for current account
-    from kraken_bot.secrets import (
+    from krakked.secrets import (
         get_session_master_password,
         set_session_master_password,
     )

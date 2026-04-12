@@ -4,13 +4,13 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from kraken_bot.config import ExecutionConfig
-from kraken_bot.execution import admin_cli
-from kraken_bot.execution.adapter import ExecutionAdapter
-from kraken_bot.execution.models import LocalOrder
-from kraken_bot.market_data.models import PairMetadata
-from kraken_bot.portfolio.store import PortfolioStore
-from kraken_bot.strategy.models import RiskStatus
+from krakked.config import ExecutionConfig
+from krakked.execution import admin_cli
+from krakked.execution.adapter import ExecutionAdapter
+from krakked.execution.models import LocalOrder
+from krakked.market_data.models import PairMetadata
+from krakked.portfolio.store import PortfolioStore
+from krakked.strategy.models import RiskStatus
 
 
 def test_panic_cli_triggers_cancel_all(

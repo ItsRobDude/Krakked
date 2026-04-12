@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 import pytest
 from starlette.testclient import TestClient
 
-from kraken_bot.config import (
+from krakked.config import (
     AppConfig,
     ExecutionConfig,
     MarketDataConfig,
@@ -21,13 +21,13 @@ from kraken_bot.config import (
     UIRefreshConfig,
     UniverseConfig,
 )
-from kraken_bot.execution.models import LocalOrder
-from kraken_bot.execution.oms import ExecutionService
-from kraken_bot.market_data.models import PairMetadata
-from kraken_bot.metrics import SystemMetrics
-from kraken_bot.strategy.models import DecisionRecord, ExecutionPlan, RiskAdjustedAction
-from kraken_bot.ui.api import create_api
-from kraken_bot.ui.context import AppContext
+from krakked.execution.models import LocalOrder
+from krakked.execution.oms import ExecutionService
+from krakked.market_data.models import PairMetadata
+from krakked.metrics import SystemMetrics
+from krakked.strategy.models import DecisionRecord, ExecutionPlan, RiskAdjustedAction
+from krakked.ui.api import create_api
+from krakked.ui.context import AppContext
 
 
 @pytest.fixture

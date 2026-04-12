@@ -2,7 +2,7 @@ from pathlib import Path
 
 import appdirs  # type: ignore[import-untyped]
 
-from kraken_bot.config import load_config
+from krakked.config import load_config
 
 
 def test_numeric_strings_are_accepted_for_int_fields(

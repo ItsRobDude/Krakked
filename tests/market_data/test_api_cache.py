@@ -2,8 +2,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from kraken_bot.config import AppConfig, MarketDataConfig, PortfolioConfig
-from kraken_bot.market_data.api import MarketDataAPI, PairMetadata
+from krakked.config import AppConfig, MarketDataConfig, PortfolioConfig
+from krakked.market_data.api import MarketDataAPI, PairMetadata
 
 
 @pytest.fixture
@@ -23,8 +23,8 @@ def market_data_api():
     rest_mock = MagicMock()
 
     with (
-        patch("kraken_bot.market_data.api.FileOHLCStore"),
-        patch("kraken_bot.market_data.api.PairMetadataStore"),
+        patch("krakked.market_data.api.FileOHLCStore"),
+        patch("krakked.market_data.api.PairMetadataStore"),
     ):
         md = MarketDataAPI(config=config, rest_client=rest_mock)
 
@@ -89,7 +89,7 @@ def test_normalize_pair_cache_clear(market_data_api):
     assert market_data_api._normalize_pair_cached.cache_info().misses == 1
 
     # Mock build_universe to return empty list so we don't need network
-    with patch("kraken_bot.market_data.api.build_universe", return_value=[]):
+    with patch("krakked.market_data.api.build_universe", return_value=[]):
         market_data_api.refresh_universe()
 
     cache_info = market_data_api._normalize_pair_cached.cache_info()
@@ -116,8 +116,8 @@ def test_instance_isolation(market_data_api):
     )
 
     with (
-        patch("kraken_bot.market_data.api.FileOHLCStore"),
-        patch("kraken_bot.market_data.api.PairMetadataStore"),
+        patch("krakked.market_data.api.FileOHLCStore"),
+        patch("krakked.market_data.api.PairMetadataStore"),
     ):
         md2 = MarketDataAPI(config=config, rest_client=MagicMock())
 

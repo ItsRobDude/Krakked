@@ -9,20 +9,20 @@ from unittest.mock import MagicMock
 import pytest
 from starlette.testclient import TestClient
 
-from kraken_bot.config import ExecutionConfig
-from kraken_bot.connection.rest_client import KrakenRESTClient
-from kraken_bot.execution.adapter import ExecutionAdapter
-from kraken_bot.execution.models import LocalOrder
-from kraken_bot.execution.oms import ExecutionService
-from kraken_bot.main import BotController, _run_loop_iteration
-from kraken_bot.market_data.api import MarketDataAPI
-from kraken_bot.market_data.models import PairMetadata
-from kraken_bot.metrics import SystemMetrics
-from kraken_bot.portfolio.exceptions import PortfolioSchemaError
-from kraken_bot.portfolio.manager import PortfolioService
-from kraken_bot.strategy.models import ExecutionPlan, RiskAdjustedAction
-from kraken_bot.ui.api import create_api
-from kraken_bot.ui.context import AppContext
+from krakked.config import ExecutionConfig
+from krakked.connection.rest_client import KrakenRESTClient
+from krakked.execution.adapter import ExecutionAdapter
+from krakked.execution.models import LocalOrder
+from krakked.execution.oms import ExecutionService
+from krakked.main import BotController, _run_loop_iteration
+from krakked.market_data.api import MarketDataAPI
+from krakked.market_data.models import PairMetadata
+from krakked.metrics import SystemMetrics
+from krakked.portfolio.exceptions import PortfolioSchemaError
+from krakked.portfolio.manager import PortfolioService
+from krakked.strategy.models import ExecutionPlan, RiskAdjustedAction
+from krakked.ui.api import create_api
+from krakked.ui.context import AppContext
 from tests.ui.conftest import build_test_context
 
 
@@ -87,7 +87,7 @@ def _market_data_mock():
 
 
 def test_kill_switch_block_logs_warning_with_event(caplog: pytest.LogCaptureFixture):
-    caplog.set_level(logging.WARNING, logger="kraken_bot.execution.oms")
+    caplog.set_level(logging.WARNING, logger="krakked.execution.oms")
 
     def _kill_switch_status() -> Any:
         return SimpleNamespace(kill_switch_active=True)
@@ -118,7 +118,7 @@ def test_kill_switch_block_logs_warning_with_event(caplog: pytest.LogCaptureFixt
 
 
 def test_market_data_warning_emits_structured_event(caplog: pytest.LogCaptureFixture):
-    caplog.set_level(logging.WARNING, logger="kraken_bot.main")
+    caplog.set_level(logging.WARNING, logger="krakked.main")
 
     market_data = SimpleNamespace(
         get_health_status=lambda: SimpleNamespace(
@@ -185,13 +185,13 @@ def test_schema_mismatch_logs_critical_event(monkeypatch, caplog):
     """
     Checks that the re-initialization loop logs a CRITICAL event on schema mismatch.
     """
-    caplog.set_level(logging.CRITICAL, logger="kraken_bot.main")
+    caplog.set_level(logging.CRITICAL, logger="krakked.main")
 
-    monkeypatch.setattr("kraken_bot.main.configure_logging", lambda *_, **__: None)
+    monkeypatch.setattr("krakked.main.configure_logging", lambda *_, **__: None)
 
     # Mock bootstrap to raise SchemaError
     monkeypatch.setattr(
-        "kraken_bot.main.bootstrap",
+        "krakked.main.bootstrap",
         lambda allow_interactive_setup: (_ for _ in ()).throw(
             PortfolioSchemaError(found=2, expected=3)
         ),
@@ -247,7 +247,7 @@ def test_schema_mismatch_logs_critical_event(monkeypatch, caplog):
 
 
 def test_shutdown_logs_include_event(caplog):
-    caplog.set_level(logging.INFO, logger="kraken_bot.main")
+    caplog.set_level(logging.INFO, logger="krakked.main")
 
     controller = BotController(allow_interactive_setup=False)
     controller.context = AppContext(
@@ -274,7 +274,7 @@ def test_shutdown_logs_include_event(caplog):
 
 
 def test_ui_route_logs_request_event(caplog):
-    caplog.set_level(logging.WARNING, logger="kraken_bot.ui.routes.execution")
+    caplog.set_level(logging.WARNING, logger="krakked.ui.routes.execution")
 
     context = build_test_context(auth_enabled=False, auth_token="token", read_only=True)
     app = create_api(context)

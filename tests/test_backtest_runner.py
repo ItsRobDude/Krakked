@@ -6,10 +6,10 @@ from typing import Any
 
 import pytest
 
-from kraken_bot.backtest import runner
-from kraken_bot.config import AppConfig, load_config
-from kraken_bot.execution.models import ExecutionResult
-from kraken_bot.strategy.models import ExecutionPlan
+from krakked.backtest import runner
+from krakked.config import AppConfig, load_config
+from krakked.execution.models import ExecutionResult
+from krakked.strategy.models import ExecutionPlan
 
 
 def test_run_backtest_wires_risk_provider(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -70,7 +70,7 @@ Phase 5 only talks to Kraken via KrakenRESTClient. It should not encode raw HTTP
 
 Create a new package:
 
-src/kraken_bot/execution/
+src/krakked/execution/
   __init__.py
   models.py          # ExecutionPlan mirror, LocalOrder, ExecutionResult, etc.
   oms.py             # Core Order Management System logic

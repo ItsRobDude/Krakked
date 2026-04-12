@@ -2,19 +2,19 @@ import pytest
 import yaml
 from fastapi.testclient import TestClient
 
-from kraken_bot.config_loader import (
+from krakked.config_loader import (
     RUNTIME_OVERRIDES_FILENAME,
     dump_runtime_overrides,
     load_config,
 )
-from kraken_bot.ui.api import create_api
-from kraken_bot.ui.context import AppContext, SessionState
+from krakked.ui.api import create_api
+from krakked.ui.context import AppContext, SessionState
 
 
 @pytest.fixture
 def config_dir(tmp_path):
     """Fixture providing a temporary config directory."""
-    return tmp_path / "kraken_bot_config"
+    return tmp_path / "krakked_config"
 
 
 @pytest.fixture
@@ -25,9 +25,9 @@ def mock_config_dirs(monkeypatch, config_dir):
     def _mock_get_config_dir():
         return config_dir
 
-    monkeypatch.setattr("kraken_bot.config_loader.get_config_dir", _mock_get_config_dir)
+    monkeypatch.setattr("krakked.config_loader.get_config_dir", _mock_get_config_dir)
     monkeypatch.setattr(
-        "kraken_bot.ui.routes.system.get_config_dir", _mock_get_config_dir
+        "krakked.ui.routes.system.get_config_dir", _mock_get_config_dir
     )
     return config_dir
 

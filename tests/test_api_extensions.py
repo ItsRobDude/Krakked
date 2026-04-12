@@ -4,15 +4,15 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from kraken_bot.config import (
+from krakked.config import (
     AppConfig,
     MarketDataConfig,
     OHLCBar,
     PairMetadata,
     PortfolioConfig,
 )
-from kraken_bot.market_data.api import MarketDataAPI
-from kraken_bot.market_data.exceptions import PairNotFoundError
+from krakked.market_data.api import MarketDataAPI
+from krakked.market_data.exceptions import PairNotFoundError
 
 
 @pytest.fixture
@@ -32,9 +32,9 @@ def mock_config() -> AppConfig:
 
 @pytest.fixture
 def api(mock_config):
-    with patch("kraken_bot.market_data.api.FileOHLCStore") as mock_store_cls:
+    with patch("krakked.market_data.api.FileOHLCStore") as mock_store_cls:
         # Mock universe building
-        with patch("kraken_bot.market_data.api.build_universe") as mock_build_universe:
+        with patch("krakked.market_data.api.build_universe") as mock_build_universe:
             pair_meta = PairMetadata(
                 canonical="XBTUSD",
                 base="XBT",
@@ -74,7 +74,7 @@ def test_get_ohlc_since_pair_not_found(api):
 
 
 def test_backfill_ohlc_delegation(api):
-    with patch("kraken_bot.market_data.api.backfill_ohlc") as mock_backfill_fn:
+    with patch("krakked.market_data.api.backfill_ohlc") as mock_backfill_fn:
         mock_backfill_fn.return_value = 100
 
         count = api.backfill_ohlc("XBTUSD", "1h", 50)

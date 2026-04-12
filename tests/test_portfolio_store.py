@@ -5,16 +5,16 @@ from datetime import datetime, timezone
 
 import pytest
 
-import kraken_bot.portfolio.store as store_module
-from kraken_bot.execution.models import ExecutionResult, LocalOrder
-from kraken_bot.portfolio.exceptions import PortfolioSchemaError
-from kraken_bot.portfolio.models import (
+import krakked.portfolio.store as store_module
+from krakked.execution.models import ExecutionResult, LocalOrder
+from krakked.portfolio.exceptions import PortfolioSchemaError
+from krakked.portfolio.models import (
     AssetValuation,
     CashFlowRecord,
     PortfolioSnapshot,
 )
-from kraken_bot.portfolio.store import CURRENT_SCHEMA_VERSION, SQLitePortfolioStore
-from kraken_bot.strategy.models import DecisionRecord, ExecutionPlan, RiskAdjustedAction
+from krakked.portfolio.store import CURRENT_SCHEMA_VERSION, SQLitePortfolioStore
+from krakked.strategy.models import DecisionRecord, ExecutionPlan, RiskAdjustedAction
 
 
 @pytest.fixture
@@ -30,7 +30,7 @@ def test_sqlite_store_is_concrete(tmp_path):
     store = SQLitePortfolioStore(str(db_path))
 
     # Sanity: it’s an instance of the ABC
-    from kraken_bot.portfolio.store import PortfolioStore
+    from krakked.portfolio.store import PortfolioStore
 
     assert isinstance(store, PortfolioStore)
     assert SQLitePortfolioStore.__abstractmethods__ == set()

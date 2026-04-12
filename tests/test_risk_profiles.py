@@ -1,4 +1,4 @@
-from kraken_bot.strategy.risk_profiles import RISK_PROFILES, profile_to_definition
+from krakked.strategy.risk_profiles import RISK_PROFILES, profile_to_definition
 
 
 def test_profile_to_definition_returns_expected_profile():

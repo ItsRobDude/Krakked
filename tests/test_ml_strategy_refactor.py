@@ -1,13 +1,16 @@
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
 
-from kraken_bot.config import StrategyConfig
-from kraken_bot.strategy.base import StrategyContext
-from kraken_bot.strategy.strategies.ml_regression_strategy import AIRegressionStrategy
-from kraken_bot.strategy.strategies.ml_strategy import AIPredictorStrategy
+from krakked.config import StrategyConfig
+from krakked.strategy.base import StrategyContext
+from krakked.strategy.ml_models import PassiveAggressiveClassifier
+from krakked.strategy.strategies.ml_alt_strategy import AIPredictorAltStrategy
+from krakked.strategy.strategies.ml_regression_strategy import AIRegressionStrategy
+from krakked.strategy.strategies.ml_strategy import AIPredictorStrategy
 
 
 @dataclass
@@ -81,6 +84,22 @@ def mock_ctx():
     ctx.portfolio = MagicMock()
     ctx.universe = ["XBT/USD"]
     return ctx
+
+
+class FakeCheckpointStore:
+    def __init__(self) -> None:
+        self.live_models: dict[tuple[str, str], tuple[object, datetime]] = {}
+        self.training_checkpoints: dict[
+            tuple[str, str, str], tuple[object, datetime, str, dict[str, Any]]
+        ] = {}
+
+    def load_ml_model(self, strategy_id: str, model_key: str):
+        return self.live_models.get((strategy_id, model_key))
+
+    def load_ml_model_checkpoint(
+        self, strategy_id: str, model_key: str, *, checkpoint_kind: str
+    ):
+        return self.training_checkpoints.get((strategy_id, model_key, checkpoint_kind))
 
 
 def test_extract_training_example(strategy, mock_ctx):
@@ -175,3 +194,70 @@ def test_regression_min_edge_pct(regression_strategy, mock_ctx):
     regression_strategy.model.predict.return_value = [0.06]
     intents = regression_strategy.generate_intents(mock_ctx)
     assert intents[0].side == "long"
+
+
+def test_classifier_bootstrap_prefers_newer_training_checkpoint(strategy, mock_ctx):
+    store = FakeCheckpointStore()
+    live_model = PassiveAggressiveClassifier(max_iter=1000, tol=1e-3)
+    live_model.partial_fit([[0.0, 0.0, 0.0]], [0], classes=[0, 1])
+    checkpoint_model = PassiveAggressiveClassifier(max_iter=1000, tol=1e-3)
+    checkpoint_model.partial_fit([[1.0, 1.0, 1.0]], [1], classes=[0, 1])
+
+    strategy_id = strategy.id
+    model_key = strategy._model_key("1h")
+    store.live_models[(strategy_id, model_key)] = (
+        live_model,
+        datetime.now(timezone.utc) - timedelta(minutes=5),
+    )
+    store.training_checkpoints[(strategy_id, model_key, "training")] = (
+        checkpoint_model,
+        datetime.now(timezone.utc),
+        "training",
+        {"model_initialized": True},
+    )
+
+    mock_ctx.portfolio.store = store
+    strategy._maybe_bootstrap_from_history(mock_ctx, "1h")
+
+    assert strategy.model_initialized is True
+    assert strategy.model.predict([[0.2, 0.1, 0.3]])[0] == 1
+
+
+def test_alt_strategy_restores_last_observation_from_checkpoint(mock_ctx):
+    cfg = StrategyConfig(
+        name="ai_alt_test",
+        type="ai_predictor_alt",
+        enabled=True,
+        params={
+            "pairs": ["XBT/USD"],
+            "timeframe": "1h",
+            "lookback_bars": 5,
+            "short_window": 2,
+            "long_window": 5,
+            "continuous_learning": True,
+        },
+    )
+    strategy = AIPredictorAltStrategy(cfg)
+    store = FakeCheckpointStore()
+    checkpoint_model = PassiveAggressiveClassifier(max_iter=1000, tol=1e-3)
+
+    model_key = strategy._model_key("XBT/USD", "1h")
+    store.training_checkpoints[(strategy.id, model_key, "training")] = (
+        checkpoint_model,
+        datetime.now(timezone.utc),
+        "ready",
+        {
+            "model_initialized": False,
+            "last_observation": {
+                "features": [0.1, -0.2, 0.3],
+                "price": 123.45,
+            },
+        },
+    )
+
+    mock_ctx.portfolio.store = store
+    key = ("XBT/USD", "1h")
+    strategy._maybe_bootstrap_from_history(mock_ctx, key, strategy._get_model(key))
+
+    assert strategy.model_initialized[key] is False
+    assert strategy._last_observation[key] == ([0.1, -0.2, 0.3], 123.45)

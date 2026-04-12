@@ -4,8 +4,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from kraken_bot.config import RegionCapabilities, RegionProfile, UniverseConfig
-from kraken_bot.market_data.universe import build_universe
+from krakked.config import RegionCapabilities, RegionProfile, UniverseConfig
+from krakked.market_data.universe import build_universe
 
 
 @pytest.fixture

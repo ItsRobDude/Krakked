@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from kraken_bot.config import (
+from krakked.config import (
     AppConfig,
     MarketDataConfig,
     PortfolioConfig,
@@ -12,8 +12,8 @@ from kraken_bot.config import (
     RegionProfile,
     UniverseConfig,
 )
-from kraken_bot.portfolio.manager import PortfolioService
-from kraken_bot.portfolio.models import PortfolioSnapshot
+from krakked.portfolio.manager import PortfolioService
+from krakked.portfolio.models import PortfolioSnapshot
 
 
 @pytest.fixture
@@ -131,7 +131,7 @@ def test_sync_pagination(service):
 
 def test_create_snapshot(service):
     # Setup some state
-    from kraken_bot.portfolio.models import AssetBalance
+    from krakked.portfolio.models import AssetBalance
 
     service.balances = {"XBT": AssetBalance("XBT", 1.0, 0, 1.0)}
 

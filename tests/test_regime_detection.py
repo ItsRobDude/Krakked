@@ -1,8 +1,8 @@
 from unittest.mock import MagicMock
 
-from kraken_bot.config import OHLCBar
-from kraken_bot.market_data.api import MarketDataAPI
-from kraken_bot.strategy.regime import MarketRegime, infer_regime
+from krakked.config import OHLCBar
+from krakked.market_data.api import MarketDataAPI
+from krakked.strategy.regime import MarketRegime, infer_regime
 
 
 def _bars_from_closes(closes: list[float]):

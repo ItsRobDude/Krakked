@@ -1,6 +1,6 @@
 from unittest.mock import MagicMock
 
-from kraken_bot.portfolio.portfolio import Portfolio
+from krakked.portfolio.portfolio import Portfolio
 
 
 def test_portfolio_rounding_handles_dust_and_flooring():

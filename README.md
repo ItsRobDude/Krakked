@@ -140,17 +140,17 @@ poetry run pre-commit run --all-files
 
 The bot uses two configuration files stored in your OS-specific user configuration directory (handled via `appdirs`). Example files live in `config_examples/`, and the overlay/merging rules are documented in [`docs/CONFIG.md`](docs/CONFIG.md).
 
-User-facing branding is `Krakked`, but the internal Python package and config namespace remain `kraken_bot` / `KRAKEN_BOT_*` for compatibility.
+The product, CLI, Python package, and config namespace now all use `krakked` / `KRAKKED_*`.
 
-*   **Linux**: `~/.config/kraken_bot/`
-*   **macOS**: `~/Library/Application Support/kraken_bot/`
-*   **Windows**: `C:\Users\<User>\AppData\Local\kraken_bot\`
+*   **Linux**: `~/.config/krakked/`
+*   **macOS**: `~/Library/Application Support/krakked/`
+*   **Windows**: `C:\Users\<User>\AppData\Local\krakked\`
 
 ### Files
 
 1.  **`config.yaml`** (User Config):
     *   Contains region settings, universe selection, strategy parameters, and risk limits.
-    *   *Example schema available in `src/kraken_bot/config.py`*.
+    *   *Example schema available in `src/krakked/config.py`*.
 
     Example with execution defaults:
 
@@ -187,22 +187,22 @@ User-facing branding is `Krakked`, but the internal Python package and config na
 Most modules can start with a ready REST client and parsed configuration using:
 
 ```python
-from kraken_bot.bootstrap import bootstrap
+from krakked.bootstrap import bootstrap
 
 client, app_config = bootstrap()
 ```
 
-The helper calls `load_config()` and `secrets.load_api_keys(allow_interactive_setup=True)`, raising a `CredentialBootstrapError` when credentials are missing, cannot be decrypted (e.g., wrong `KRAKEN_BOT_SECRET_PW`), or fail validation. Interactive setups are only triggered when keys are missing, so non-interactive environments should supply `KRAKEN_API_KEY`/`KRAKEN_API_SECRET` or the decryption password to avoid errors.
+The helper calls `load_config()` and `secrets.load_api_keys(allow_interactive_setup=True)`, raising a `CredentialBootstrapError` when credentials are missing, cannot be decrypted (e.g., wrong `KRAKKED_SECRET_PW`), or fail validation. Interactive setups are only triggered when keys are missing, so non-interactive environments should supply `KRAKEN_API_KEY`/`KRAKEN_API_SECRET` or the decryption password to avoid errors.
 
 ### Strategy & Risk essentials (Phase 4)
 
 To run the implemented Phase 4 features, set these keys in `config.yaml`:
 
-*   **Strategy scheduling**: Provide `strategies.enabled` plus per-strategy `timeframes` (or `timeframe`) arrays to run multi-timeframe cycles. 【F:src/kraken_bot/strategy/engine.py†L80-L119】
-*   **Per-strategy caps**: Configure `risk.max_per_strategy_pct` to clamp exposure across strategies and `strategies.configs.<name>.userref` if you need consistent attribution. 【F:src/kraken_bot/config.py†L48-L72】【F:src/kraken_bot/strategy/risk.py†L263-L349】
-*   **Portfolio caps**: Use `risk.max_portfolio_risk_pct`, `risk.max_open_positions`, and `risk.max_per_asset_pct` to enforce total exposure limits. 【F:src/kraken_bot/config.py†L40-L72】【F:src/kraken_bot/strategy/risk.py†L263-L349】
-*   **Liquidity gating**: Set `risk.min_liquidity_24h_usd` to block new exposure when recent volume is too low. 【F:src/kraken_bot/config.py†L60-L72】【F:src/kraken_bot/strategy/risk.py†L203-L249】
-*   **Staleness handling**: Market data staleness and connection checks are enforced before intent generation; strategies surface `DataStaleError` to skip a timeframe when needed. 【F:src/kraken_bot/strategy/engine.py†L33-L120】
+*   **Strategy scheduling**: Provide `strategies.enabled` plus per-strategy `timeframes` (or `timeframe`) arrays to run multi-timeframe cycles. 【F:src/krakked/strategy/engine.py†L80-L119】
+*   **Per-strategy caps**: Configure `risk.max_per_strategy_pct` to clamp exposure across strategies and `strategies.configs.<name>.userref` if you need consistent attribution. 【F:src/krakked/config.py†L48-L72】【F:src/krakked/strategy/risk.py†L263-L349】
+*   **Portfolio caps**: Use `risk.max_portfolio_risk_pct`, `risk.max_open_positions`, and `risk.max_per_asset_pct` to enforce total exposure limits. 【F:src/krakked/config.py†L40-L72】【F:src/krakked/strategy/risk.py†L263-L349】
+*   **Liquidity gating**: Set `risk.min_liquidity_24h_usd` to block new exposure when recent volume is too low. 【F:src/krakked/config.py†L60-L72】【F:src/krakked/strategy/risk.py†L203-L249】
+*   **Staleness handling**: Market data staleness and connection checks are enforced before intent generation; strategies surface `DataStaleError` to skip a timeframe when needed. 【F:src/krakked/strategy/engine.py†L33-L120】
 
 ### Phase 5 execution wiring
 
@@ -239,7 +239,7 @@ poetry run krakked run-once
 * **Non-interactive setup**: add `--allow-interactive-setup false` to block credential prompts in CI/servers while still booting the orchestrator.
 * **Execution knobs**: `execution.mode` selects `paper` vs. `live`, `execution.allow_live_trading` is the final gate for live submissions, and dead-man/kill switches remain available via the configured cancel-all hooks.
 
-Execution defaults stay conservative until you explicitly opt-in: `mode="paper"`, `validate_only=True`, and `allow_live_trading=False`, keeping all `krakked` entry points in paper/validate-only mode out of the box.【F:src/kraken_bot/config.py†L29-L36】
+Execution defaults stay conservative until you explicitly opt-in: `mode="paper"`, `validate_only=True`, and `allow_live_trading=False`, keeping all `krakked` entry points in paper/validate-only mode out of the box.【F:src/krakked/config.py†L29-L36】
 
 To start the full orchestrator (market data WebSocket loop, portfolio sync scheduler, strategy cycles with execution, and the FastAPI UI in the same process):
 
@@ -249,16 +249,16 @@ poetry run krakked run
 
 The runner bootstraps configuration/credentials, initializes market data + portfolio + strategy services, and hosts the UI on `config.ui.host:config.ui.port` when enabled. It listens for `SIGINT`/`SIGTERM` to stop scheduler loops, cancel any open orders, and shut down the WebSocket feed cleanly.
 
-CLI helpers default to the local `portfolio.db` SQLite file; pass `--db-path` to point at an alternate location when needed.【F:src/kraken_bot/cli.py†L20-L33】 After the run, inspect orders/results in the default SQLite store (`portfolio.db` unless overridden) or via the admin helper:
+CLI helpers default to the local `portfolio.db` SQLite file; pass `--db-path` to point at an alternate location when needed.【F:src/krakked/cli.py†L20-L33】 After the run, inspect orders/results in the default SQLite store (`portfolio.db` unless overridden) or via the admin helper:
 
 ```bash
 # Review open/pending orders and execution summaries
-poetry run python -m kraken_bot.execution.admin_cli list-open
-poetry run python -m kraken_bot.execution.admin_cli recent-executions
+poetry run python -m krakked.execution.admin_cli list-open
+poetry run python -m krakked.execution.admin_cli recent-executions
 
 # Targeted or global cancels (remains safe in paper/validate-only mode)
-poetry run python -m kraken_bot.execution.admin_cli cancel --plan-id <id>
-poetry run python -m kraken_bot.execution.admin_cli panic
+poetry run python -m krakked.execution.admin_cli cancel --plan-id <id>
+poetry run python -m krakked.execution.admin_cli panic
 ```
 
 To query SQLite directly:
@@ -317,7 +317,7 @@ The execution admin CLI exposes operational levers that work against the SQLite 
 * `cancel`: Cancel by plan, strategy, Kraken order id, local id, or `--all` (with optional filters) to target specific risk.
 * `panic`: Refresh/reconcile state, then cancel **all** open orders—useful for fast stop-the-bleed responses.
 
-Invoke via `poetry run python -m kraken_bot.execution.admin_cli <subcommand>`; pass `--db-path` to point at a non-default portfolio database or `--allow-interactive-setup` if credential prompts are acceptable.
+Invoke via `poetry run python -m krakked.execution.admin_cli <subcommand>`; pass `--db-path` to point at a non-default portfolio database or `--allow-interactive-setup` if credential prompts are acceptable.
 
 ### ✅ Live Readiness Checklist
 
@@ -350,7 +350,7 @@ docker run --rm \
   -p 8080:8080 \
   -e KRAKEN_API_KEY=... \
   -e KRAKEN_API_SECRET=... \
-  -e KRAKEN_BOT_SECRET_PW=... \
+  -e KRAKKED_SECRET_PW=... \
   -v $(pwd)/config.yaml:/app/config.yaml \
   -v $(pwd)/portfolio.db:/app/portfolio.db \
   krakked

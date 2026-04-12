@@ -204,12 +204,12 @@ jobs:
 
       - name: Install built wheel in clean environment
         run: |
-          python -m venv /tmp/kraken-bot-dist
-          /tmp/kraken-bot-dist/bin/pip install --upgrade pip
-          /tmp/kraken-bot-dist/bin/pip install dist/*.whl
+          python -m venv /tmp/krakked-dist
+          /tmp/krakked-dist/bin/pip install --upgrade pip
+          /tmp/krakked-dist/bin/pip install dist/*.whl
 
       - name: Verify CLI entry point
-        run: /tmp/kraken-bot-dist/bin/krakked --help
+        run: /tmp/krakked-dist/bin/krakked --help
 
   install-smoke-test:
     runs-on: ubuntu-latest
