@@ -17,6 +17,7 @@ from krakked.bootstrap import CredentialBootstrapError, bootstrap
 from krakked.config_loader import (
     dump_runtime_overrides,
     get_config_dir,
+    get_initial_ui_config,
     load_config,
     write_initial_config,
 )
@@ -469,6 +470,7 @@ class BotController:
         """
         config_dir = get_config_dir()
         config_path = config_dir / "config.yaml"
+        ui_defaults = get_initial_ui_config()
 
         if not config_path.exists():
             # Minimal safe defaults to boot the API/UI.
@@ -485,7 +487,7 @@ class BotController:
                         "validate_only": True,
                         "allow_live_trading": False,
                     },
-                    "ui": {"enabled": True, "host": "127.0.0.1", "port": 8000},
+                    "ui": ui_defaults,
                     "session": {
                         "mode": "paper",
                         "loop_interval_sec": 15.0,
@@ -632,6 +634,7 @@ class BotController:
             # Ensure a config file exists so the UI can come up on first run.
             config_dir = get_config_dir()
             config_path = config_dir / "config.yaml"
+            ui_defaults = get_initial_ui_config()
             if not config_path.exists():
                 # Minimal safe defaults to boot the API/UI.
                 write_initial_config(
@@ -647,7 +650,7 @@ class BotController:
                             "validate_only": True,
                             "allow_live_trading": False,
                         },
-                        "ui": {"enabled": True, "host": "0.0.0.0", "port": 8000},
+                        "ui": ui_defaults,
                         "session": {
                             "mode": "paper",
                             "loop_interval_sec": 15.0,
@@ -1005,6 +1008,8 @@ class BotController:
                     session_active=self.context.session.active,
                     session=self.context.session,
                 )
+                if self.context.session.active:
+                    self.context.execution_service.refresh_dead_man_switch(now=now)
             else:
                 logger.error(
                     "Invalid state: not in setup mode but services are missing; forcing setup mode"
@@ -1014,11 +1019,19 @@ class BotController:
 
             # Dynamic sleep based on config
             session_interval = getattr(self.context.session, "loop_interval_sec", None)
-            loop_interval = _coerce_interval(
-                int(session_interval) if session_interval is not None else None,
-                min(strategy_interval, portfolio_interval, 5),
-                "session loop interval",
+            loop_interval = float(
+                _coerce_interval(
+                    int(session_interval) if session_interval is not None else None,
+                    min(strategy_interval, portfolio_interval, 5),
+                    "session loop interval",
+                )
             )
+            if self.context.session.active:
+                heartbeat_interval = (
+                    self.context.execution_service.recommended_dead_man_refresh_interval_seconds()
+                )
+                if heartbeat_interval is not None:
+                    loop_interval = min(loop_interval, heartbeat_interval)
             self.stop_event.wait(loop_interval)
 
         # Final cleanup pass on exit

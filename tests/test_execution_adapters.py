@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock
 
 import pytest
@@ -289,5 +289,79 @@ def test_kraken_execution_adapter_blocks_live_trading_without_paper_tests():
     order = adapter.submit_order(_local_order(), _pair_metadata())
 
     assert order.status == "rejected"
-    assert "paper_tests_completed is False" in order.last_error
+    assert "paper_tests_completed" in order.last_error
     client.add_order.assert_not_called()
+
+
+def test_execution_service_refreshes_dead_man_switch_when_due(
+    inactive_risk_status,
+):
+    config = ExecutionConfig(
+        mode="live",
+        validate_only=False,
+        allow_live_trading=True,
+        paper_tests_completed=True,
+        dead_man_switch_seconds=30,
+    )
+    client = MagicMock()
+    market_data = MagicMock()
+    market_data.get_best_bid_ask.return_value = {"bid": 25.0, "ask": 25.0}
+    market_data.get_pair_metadata_or_raise.side_effect = lambda pair: _pair_metadata(
+        pair
+    )
+
+    service = ExecutionService(
+        config=config,
+        client=client,
+        market_data=market_data,
+        risk_status_provider=inactive_risk_status,
+    )
+
+    now = datetime.now(UTC)
+    refreshed = service.refresh_dead_man_switch(force=True, now=now)
+
+    assert refreshed is True
+    client.cancel_all_orders_after.assert_called_once_with(30)
+    assert (
+        service.recommended_dead_man_refresh_interval_seconds()
+        == pytest.approx(15.0)
+    )
+
+    client.cancel_all_orders_after.reset_mock()
+    skipped = service.refresh_dead_man_switch(now=now + timedelta(seconds=5))
+    assert skipped is False
+    client.cancel_all_orders_after.assert_not_called()
+
+    refreshed_again = service.refresh_dead_man_switch(
+        now=now + timedelta(seconds=16)
+    )
+    assert refreshed_again is True
+    client.cancel_all_orders_after.assert_called_once_with(30)
+
+
+def test_execution_service_dead_man_refresh_disabled_until_live_ready(
+    inactive_risk_status,
+):
+    config = ExecutionConfig(
+        mode="live",
+        validate_only=False,
+        allow_live_trading=True,
+        paper_tests_completed=False,
+        dead_man_switch_seconds=30,
+    )
+    client = MagicMock()
+    market_data = MagicMock()
+    market_data.get_best_bid_ask.return_value = {"bid": 25.0, "ask": 25.0}
+    market_data.get_pair_metadata_or_raise.side_effect = lambda pair: _pair_metadata(
+        pair
+    )
+
+    service = ExecutionService(
+        config=config,
+        client=client,
+        market_data=market_data,
+        risk_status_provider=inactive_risk_status,
+    )
+
+    assert service.refresh_dead_man_switch(force=True) is False
+    client.cancel_all_orders_after.assert_not_called()

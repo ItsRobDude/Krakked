@@ -45,6 +45,37 @@ def _get_path_override(*env_names: str) -> Path | None:
     return None
 
 
+def get_initial_ui_config() -> dict[str, Any]:
+    """Return safe UI bind defaults for local and containerized first boot."""
+
+    default_host = UIConfig().host
+    default_port = UIConfig().port
+
+    env_host = os.environ.get("KRAKKED_UI_HOST")
+    env_port = os.environ.get("KRAKKED_UI_PORT")
+
+    if env_host:
+        host = env_host.strip() or default_host
+    elif os.environ.get("UI_DIST_DIR") == "/app/ui-dist":
+        host = "0.0.0.0"
+    else:
+        host = default_host
+
+    try:
+        port = int(env_port) if env_port else default_port
+    except ValueError:
+        logger.warning(
+            "Invalid KRAKKED_UI_PORT=%s; using default %s", env_port, default_port
+        )
+        port = default_port
+
+    if port <= 0 or port > 65535:
+        logger.warning("Out-of-range UI port %s; using default %s", port, default_port)
+        port = default_port
+
+    return {"enabled": True, "host": host, "port": port}
+
+
 def get_config_dir() -> Path:
     """
     Returns the OS-specific configuration directory for the bot using appdirs.

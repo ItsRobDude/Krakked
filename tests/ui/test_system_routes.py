@@ -75,6 +75,21 @@ def test_health_endpoints_are_public_when_auth_enabled():
     assert system_health.json()["error"] is None
 
 
+def test_root_health_alias_available_when_base_path_is_set():
+    context = build_test_context(
+        auth_enabled=True, auth_token="secret", read_only=False
+    )
+    context.config.ui.base_path = "/krakked"
+
+    app = create_api(context)
+    client = TestClient(app)
+
+    response = client.get("/api/health")
+
+    assert response.status_code == 200
+    assert response.json()["data"]["status"] == "ok"
+
+
 def test_system_health_enveloped(client, system_context):
     system_context.market_data.get_data_status.return_value = SimpleNamespace(
         rest_api_reachable=True,
@@ -354,6 +369,7 @@ def test_mode_change_updates_configs(
     monkeypatch, client, system_context, temp_config_dir
 ):
     system_context.config.execution.allow_live_trading = True
+    system_context.config.execution.paper_tests_completed = True
 
     # Mock account functions to avoid file IO and keyring access
     monkeypatch.setattr("krakked.ui.routes.system.resolve_secrets_path", MagicMock())
@@ -379,6 +395,51 @@ def test_mode_change_updates_configs(
     assert system_context.execution_service.adapter.config.mode == "live"
     assert system_context.session.mode == "live"
     assert system_context.config.session.mode == "live"
+
+
+def test_mode_change_to_live_requires_paper_tests_completed(client, system_context):
+    system_context.config.execution.allow_live_trading = True
+    system_context.config.execution.paper_tests_completed = False
+
+    response = client.post("/api/system/mode", json={"mode": "live"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["data"] is None
+    assert "paper_tests_completed" in payload["error"]
+
+
+def test_start_session_live_mode_requires_paper_tests_completed(client, system_context):
+    system_context.config.execution.mode = "live"
+    system_context.config.execution.validate_only = False
+    system_context.config.execution.allow_live_trading = True
+    system_context.config.execution.paper_tests_completed = False
+    system_context.session.mode = "live"
+
+    response = client.post("/api/system/session/start")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["data"] is None
+    assert "paper_tests_completed" in payload["error"]
+    assert system_context.session.active is False
+
+
+def test_start_session_live_mode_refreshes_dead_man_switch(client, system_context):
+    system_context.config.execution.mode = "live"
+    system_context.config.execution.validate_only = False
+    system_context.config.execution.allow_live_trading = True
+    system_context.config.execution.paper_tests_completed = True
+    system_context.session.mode = "live"
+    system_context.execution_service.refresh_dead_man_switch = MagicMock()
+
+    response = client.post("/api/system/session/start")
+
+    assert response.status_code == 200
+    assert response.json()["error"] is None
+    system_context.execution_service.refresh_dead_man_switch.assert_called_once_with(
+        force=True
+    )
 
 
 def test_patch_session_config_blocked_if_active(client, system_context):

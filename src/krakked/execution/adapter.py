@@ -19,6 +19,23 @@ from .router import build_order_payload
 logger = logging.getLogger(__name__)
 
 
+def get_live_trading_block_reason(config: ExecutionConfig) -> Optional[str]:
+    """Return a human-readable reason why live order submission is blocked."""
+
+    if config.mode != "live" or config.validate_only:
+        return "Live trading disabled by configuration"
+
+    if not getattr(config, "allow_live_trading", False):
+        return "Live trading not enabled. Use the system mode switch with authentication first."
+
+    if not getattr(config, "paper_tests_completed", False):
+        return (
+            "Live trading blocked until paper_tests_completed is True in the execution config."
+        )
+
+    return None
+
+
 class ExecutionAdapter(Protocol):
     """Protocol defining the interface for execution adapters."""
 
@@ -188,28 +205,8 @@ class KrakenExecutionAdapter:
                 return order
 
         should_validate = payload.get("validate") == 1
-        live_trading_allowed = (
-            self.config.mode == "live"
-            and not self.config.validate_only
-            and getattr(self.config, "allow_live_trading", False)
-        )
-
-        if live_trading_allowed and not getattr(
-            self.config, "paper_tests_completed", False
-        ):
-            order.status = "rejected"
-            order.last_error = "Live trading blocked: paper_tests_completed is False"
-            logger.error(
-                order.last_error,
-                extra=structured_log_extra(
-                    event="order_rejected_paper_tests_incomplete",
-                    plan_id=order.plan_id,
-                    strategy_id=order.strategy_id,
-                    pair=order.pair,
-                    local_order_id=order.local_id,
-                ),
-            )
-            return order
+        live_trading_block_reason = get_live_trading_block_reason(self.config)
+        live_trading_allowed = live_trading_block_reason is None
 
         if self.config.dead_man_switch_seconds > 0:
             if live_trading_allowed:
@@ -259,7 +256,7 @@ class KrakenExecutionAdapter:
 
         if not should_validate and not live_trading_allowed:
             order.status = "rejected"
-            order.last_error = "Live trading disabled by configuration"
+            order.last_error = live_trading_block_reason
             logger.error(
                 order.last_error,
                 extra=structured_log_extra(

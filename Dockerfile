@@ -36,6 +36,8 @@ ENV PYTHONUNBUFFERED=1 \
     KRAKKED_SECRET_PW="" \
     KRAKEN_API_KEY="" \
     KRAKEN_API_SECRET="" \
+    KRAKKED_UI_HOST="0.0.0.0" \
+    KRAKKED_UI_PORT="8080" \
     UI_DIST_DIR="/app/ui-dist"
 WORKDIR /app
 COPY --from=python-builder /app/dist/*.whl /tmp/krakked.whl
@@ -44,4 +46,4 @@ RUN pip install --no-cache-dir /tmp/krakked.whl \
 COPY --from=ui-builder /ui/dist ${UI_DIST_DIR}
 EXPOSE 8080
 ENTRYPOINT ["krakked"]
-CMD ["run", "--allow-interactive-setup", "false"]
+CMD ["run"]

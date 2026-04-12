@@ -25,6 +25,7 @@ from krakked.config import dump_runtime_overrides, get_config_dir
 from krakked.config_loader import (
     _load_yaml_mapping,
     _resolve_effective_env,
+    get_initial_ui_config,
     parse_app_config,
     write_initial_config,
 )
@@ -34,6 +35,7 @@ from krakked.connection.exceptions import (
     ServiceUnavailableError,
 )
 from krakked.credentials import CredentialStatus
+from krakked.execution.adapter import get_live_trading_block_reason
 from krakked.market_data.api import MarketDataStatus
 from krakked.password_store import (
     delete_master_password,
@@ -300,12 +302,13 @@ async def setup_config(
 ) -> ApiEnvelope[dict]:
     """Writes the initial configuration file."""
     try:
+        ui_defaults = get_initial_ui_config()
         config_data = {
             "region": {"code": payload.region_code, "default_quote": "USD"},
             "universe": {"include_pairs": payload.universe_pairs},
             # Default minimal structure
             "execution": {"mode": "paper"},
-            "ui": {"enabled": True, "port": 8000},
+            "ui": ui_defaults,
             # Initialize with default session account
             "session": {"account_id": "default"},
             # Default ML config
@@ -1086,10 +1089,11 @@ async def start_session(request: Request) -> ApiEnvelope[SessionStatePayload]:
 
     # Guard: Live Mode
     if current_mode == "live":
-        if not getattr(execution_config, "allow_live_trading", False):
+        live_block_reason = get_live_trading_block_reason(execution_config)
+        if live_block_reason is not None:
             return ApiEnvelope(
                 data=None,
-                error="Live trading not enabled. Use system mode switch with authentication first.",
+                error=live_block_reason,
             )
 
     # Update runtime session state from config source of truth
@@ -1104,6 +1108,7 @@ async def start_session(request: Request) -> ApiEnvelope[SessionStatePayload]:
         ctx.execution_service, "_emit_live_readiness_checklist"
     ):
         ctx.execution_service._emit_live_readiness_checklist()
+        ctx.execution_service.refresh_dead_man_switch(force=True)
 
     logger.info(
         "Session started",
@@ -1367,6 +1372,14 @@ async def set_execution_mode(
 
     # GUARD: Switching TO live mode
     if new_mode == "live":
+        if not getattr(execution_config, "paper_tests_completed", False):
+            return ApiEnvelope(
+                data=None,
+                error=(
+                    "Live trading requires paper_tests_completed=True in the execution config before switching modes."
+                ),
+            )
+
         # Only require password + confirmation if we aren't already allowed to trade live.
         # This allows switching back and forth if already authenticated/unlocked.
         if not execution_config.allow_live_trading:

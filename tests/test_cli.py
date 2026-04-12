@@ -252,6 +252,23 @@ def test_run_once_wires_risk_provider(monkeypatch: pytest.MonkeyPatch) -> None:
     assert captured["risk_status_provider"] is not None
 
 
+def test_run_subcommand_defaults_to_non_interactive_setup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    def fake_run_orchestrator(*, allow_interactive_setup: bool) -> int:
+        captured["allow_interactive_setup"] = allow_interactive_setup
+        return 0
+
+    monkeypatch.setattr(cli, "run_orchestrator", fake_run_orchestrator)
+
+    exit_code = cli.main(["run"])
+
+    assert exit_code == 0
+    assert captured["allow_interactive_setup"] is False
+
+
 def test_migrate_db_subcommand_upgrades_outdated_schema(tmp_path, capsys: Any) -> None:
     db_path = tmp_path / "upgrade_cli.db"
     _seed_schema_version(str(db_path), CURRENT_SCHEMA_VERSION - 1)

@@ -51,6 +51,8 @@ class AuthMiddleware(BaseHTTPMiddleware):
         normalized_base = base_path.rstrip("/") or ""
         self._protected_prefix = f"{normalized_base}/api" or "/api"
         self._health_paths = {
+            "/api/health",
+            "/api/system/health",
             f"{self._protected_prefix}/health",
             f"{self._protected_prefix}/system/health",
         }
@@ -114,6 +116,13 @@ def create_api(context: AppContext) -> FastAPI:
     health_router.add_api_route(
         f"{base_path}/api/health", healthcheck, methods=["GET"], name="healthcheck"
     )
+    if base_path:
+        health_router.add_api_route(
+            "/api/health",
+            healthcheck,
+            methods=["GET"],
+            name="healthcheck-root-alias",
+        )
 
     app.include_router(health_router)
 

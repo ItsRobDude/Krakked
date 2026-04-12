@@ -58,6 +58,7 @@ class ExecutionService:
         self.recent_executions: List[ExecutionResult] = []
         self.kraken_to_local: Dict[str, str] = {}
         self._risk_status_provider = risk_status_provider
+        self._last_dead_man_refresh_at: Optional[datetime] = None
 
         adapter_config = getattr(self.adapter, "config", None)
         self._execution_config = adapter_config or config or ExecutionConfig()
@@ -74,6 +75,77 @@ class ExecutionService:
 
         if mode == "live":
             self._emit_live_readiness_checklist()
+
+    def recommended_dead_man_refresh_interval_seconds(self) -> Optional[float]:
+        """Return the recommended refresh cadence for exchange dead-man heartbeats."""
+
+        timeout_seconds = getattr(self._execution_config, "dead_man_switch_seconds", 0)
+        if not isinstance(timeout_seconds, (int, float)) or timeout_seconds <= 0:
+            return None
+
+        if self._execution_config.mode != "live" or self._execution_config.validate_only:
+            return None
+
+        if not getattr(self._execution_config, "allow_live_trading", False):
+            return None
+
+        return max(1.0, float(timeout_seconds) / 2.0)
+
+    def refresh_dead_man_switch(
+        self, *, force: bool = False, now: Optional[datetime] = None
+    ) -> bool:
+        """Refresh Kraken's dead-man switch heartbeat when live trading is active."""
+
+        interval_seconds = self.recommended_dead_man_refresh_interval_seconds()
+        if interval_seconds is None:
+            return False
+
+        if not getattr(self._execution_config, "paper_tests_completed", False):
+            return False
+
+        client = getattr(self.adapter, "client", None)
+        if client is None or not hasattr(client, "cancel_all_orders_after"):
+            logger.warning(
+                "Dead man switch configured but execution client does not support heartbeat refresh",
+                extra=structured_log_extra(
+                    event="dead_man_switch_unavailable",
+                    timeout_seconds=self._execution_config.dead_man_switch_seconds,
+                ),
+            )
+            return False
+
+        current_time = now or datetime.now(UTC)
+        if (
+            not force
+            and self._last_dead_man_refresh_at is not None
+            and (current_time - self._last_dead_man_refresh_at).total_seconds()
+            < interval_seconds
+        ):
+            return False
+
+        try:
+            client.cancel_all_orders_after(self._execution_config.dead_man_switch_seconds)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "Failed to refresh dead man switch heartbeat",
+                extra=structured_log_extra(
+                    event="dead_man_switch_error",
+                    timeout_seconds=self._execution_config.dead_man_switch_seconds,
+                    error=str(exc),
+                ),
+            )
+            return False
+
+        self._last_dead_man_refresh_at = current_time
+        logger.info(
+            "Dead man switch heartbeat refreshed",
+            extra=structured_log_extra(
+                event="dead_man_switch_refreshed",
+                timeout_seconds=self._execution_config.dead_man_switch_seconds,
+                forced=force,
+            ),
+        )
+        return True
 
     def _kill_switch_active(self, plan: Optional[ExecutionPlan] = None) -> bool:
         """Return True when execution should be blocked by the kill switch."""
