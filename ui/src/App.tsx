@@ -61,6 +61,7 @@ import { RISK_PRESET_META, formatPresetSummary } from './constants/riskPresets';
 
 const DASHBOARD_REFRESH_MS = Number(import.meta.env.VITE_REFRESH_DASHBOARD_MS ?? 5000) || 5000;
 const ORDERS_REFRESH_MS = Number(import.meta.env.VITE_REFRESH_ORDERS_MS ?? 5000) || 5000;
+type SystemMessage = { tone: 'info' | 'error' | 'success'; message: string };
 
 const formatCurrency = (value: number | null | undefined) => {
   const formatter = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 });
@@ -82,6 +83,20 @@ const formatTimestamp = (timestamp: string | null) => {
 
 const isRiskProfile = (value: unknown): value is StrategyRiskProfile =>
   value === 'conservative' || value === 'balanced' || value === 'aggressive';
+
+const extractMlEnabledFromConfig = (
+  snapshot: Record<string, unknown> | null,
+  fallback: boolean,
+) => {
+  const mlSection = snapshot?.ml;
+  if (mlSection && typeof mlSection === 'object') {
+    const enabled = (mlSection as Record<string, unknown>).enabled;
+    if (typeof enabled === 'boolean') {
+      return enabled;
+    }
+  }
+  return fallback;
+};
 
 const RISK_PRESET_OPTIONS: RiskPresetName[] = ['conservative', 'balanced', 'aggressive', 'degen'];
 
@@ -186,18 +201,18 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
   const [strategyLearning, setStrategyLearning] = useState<Record<string, boolean>>({});
   const [strategyBusy, setStrategyBusy] = useState<Set<string>>(new Set());
   const [strategyFeedback, setStrategyFeedback] = useState<string | null>(null);
-  const [systemMessage, setSystemMessage] = useState<{ tone: 'info' | 'error' | 'success'; message: string } | null>(null);
+  const [systemMessage, setSystemMessage] = useState<SystemMessage | null>(null);
   const [refreshIssues, setRefreshIssues] = useState<Record<string, string>>({});
   const [modeBusy, setModeBusy] = useState(false);
   const [session, setSession] = useState<SessionStateResponse | null>(null);
   const [sessionLoading, setSessionLoading] = useState(true);
   const [profiles, setProfiles] = useState<ProfileSummary[]>([]);
   const [loopIntervalDraft, setLoopIntervalDraft] = useState<number>(15);
+  const [startupMlEnabled, setStartupMlEnabled] = useState(true);
 
   const [showLiveModal, setShowLiveModal] = useState(false);
   const [pendingLiveStart, setPendingLiveStart] = useState<SessionConfigRequest | null>(null);
 
-  // Derive global ML state directly from session config, not individual strategies
   const mlEnabled = session?.ml_enabled ?? false;
 
   const sidebarItems = [
@@ -229,10 +244,11 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
   const refreshIssueMessages = Object.values(refreshIssues);
 
   const loadSession = async () => {
-    const [sessionState, profileSummaries, systemHealth] = await Promise.all([
+    const [sessionState, profileSummaries, systemHealth, systemConfig] = await Promise.all([
       fetchSessionState(),
       fetchProfiles(),
       fetchSystemHealth(),
+      fetchSystemConfig().catch(() => null),
     ]);
 
     if (sessionState) {
@@ -254,6 +270,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
     }
 
     setProfiles(profileSummaries);
+    setStartupMlEnabled(extractMlEnabledFromConfig(systemConfig, sessionState?.ml_enabled ?? true));
     setSessionLoading(false);
   };
 
@@ -640,24 +657,64 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
       throw new Error('Backend is in read-only mode.');
     }
 
+    setSystemMessage(null);
     const created = await createProfile(name);
-    setSystemMessage({ tone: 'info', message: `Created profile "${created.name}". Reloading…` });
+    const refreshedProfiles = await fetchProfiles();
+    setProfiles(refreshedProfiles);
 
-    const deadline = Date.now() + 15000;
-    while (Date.now() < deadline) {
-      const refreshed = await fetchProfiles();
-      if (refreshed.some((profile) => profile.name === created.name)) {
-        setProfiles(refreshed);
-        setSystemMessage({ tone: 'success', message: `Profile "${created.name}" created.` });
-        return created.name;
-      }
-      await sleep(500);
+    const createdProfile = refreshedProfiles.find((profile) => profile.name === created.name);
+    if (!createdProfile) {
+      setSystemMessage({
+        tone: 'info',
+        message: `Profile "${created.name}" was created, but Krakked has not refreshed the profile list yet.`,
+      });
+      return;
     }
 
-    const fallback = await fetchProfiles();
-    setProfiles(fallback);
-    setSystemMessage({ tone: 'success', message: `Profile "${created.name}" created.` });
-    return created.name;
+    try {
+      const updated = await updateSessionConfig({ profile_name: created.name });
+      if (!updated) {
+        throw new Error('Unable to switch to the new profile yet.');
+      }
+
+      setSession(updated);
+      setLoopIntervalDraft(updated.loop_interval_sec);
+
+      const [systemHealth, systemConfig] = await Promise.all([
+        fetchSystemHealth(),
+        fetchSystemConfig().catch(() => null),
+      ]);
+
+      if (systemHealth) {
+        setHealth(systemHealth);
+        const healthy = systemHealth.market_data_ok && systemHealth.execution_ok;
+        setConnectionState(healthy ? 'connected' : 'degraded');
+      }
+
+      setStartupMlEnabled(extractMlEnabledFromConfig(systemConfig, updated.ml_enabled));
+      setSystemMessage({ tone: 'success', message: `Profile "${created.name}" created and selected.` });
+    } catch (error) {
+      const [systemHealth, systemConfig] = await Promise.all([
+        fetchSystemHealth(),
+        fetchSystemConfig().catch(() => null),
+      ]);
+
+      if (systemHealth) {
+        setHealth(systemHealth);
+        const healthy = systemHealth.market_data_ok && systemHealth.execution_ok;
+        setConnectionState(healthy ? 'connected' : 'degraded');
+      }
+
+      setStartupMlEnabled(extractMlEnabledFromConfig(systemConfig, mlEnabled));
+      setSystemMessage({
+        tone: 'info',
+        message: `Profile "${created.name}" created, but Krakked could not switch to it yet.`,
+      });
+
+      if (error instanceof Error) {
+        console.warn(error.message);
+      }
+    }
   };
 
   const handleSaveConfig = async () => {
@@ -688,9 +745,10 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
     setSystemMessage({ tone: 'success', message: 'Configuration saved. Reloading…' });
     await sleep(1500);
 
-    const [systemHealth, profileSummaries] = await Promise.all([
+    const [systemHealth, profileSummaries, systemConfig] = await Promise.all([
       fetchSystemHealth(),
       fetchProfiles(),
+      fetchSystemConfig().catch(() => null),
     ]);
 
     if (systemHealth) {
@@ -699,6 +757,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
       setConnectionState(healthy ? 'connected' : 'degraded');
     }
     setProfiles(profileSummaries);
+    setStartupMlEnabled(extractMlEnabledFromConfig(systemConfig, session?.ml_enabled ?? true));
   };
 
   const handleStopSession = async () => {
@@ -733,12 +792,51 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
     if (health?.ui_read_only) {
       throw new Error('Backend is in read-only mode.');
     }
+
+    setSystemMessage(null);
     const updated = await updateSessionConfig({ profile_name: name });
     if (updated) {
       setSession(updated);
       setLoopIntervalDraft(updated.loop_interval_sec);
+
+      const [systemHealth, systemConfig, profileSummaries] = await Promise.all([
+        fetchSystemHealth(),
+        fetchSystemConfig().catch(() => null),
+        fetchProfiles(),
+      ]);
+
+      if (systemHealth) {
+        setHealth(systemHealth);
+        const healthy = systemHealth.market_data_ok && systemHealth.execution_ok;
+        setConnectionState(healthy ? 'connected' : 'degraded');
+      }
+
+      setProfiles(profileSummaries);
+      setStartupMlEnabled(extractMlEnabledFromConfig(systemConfig, updated.ml_enabled));
     } else {
       throw new Error('Failed to update profile.');
+    }
+  };
+
+  const handleStartupMlToggle = async (enabled: boolean) => {
+    if (health?.ui_read_only) {
+      throw new Error('Backend is in read-only mode.');
+    }
+
+    await applyConfig({ ml: { enabled } });
+    setStartupMlEnabled(enabled);
+
+    const [sessionState, systemConfig] = await Promise.all([
+      fetchSessionState(),
+      fetchSystemConfig().catch(() => null),
+    ]);
+
+    if (sessionState) {
+      setSession(sessionState);
+      setLoopIntervalDraft(sessionState.loop_interval_sec);
+      setStartupMlEnabled(extractMlEnabledFromConfig(systemConfig, sessionState.ml_enabled));
+    } else {
+      setStartupMlEnabled(extractMlEnabledFromConfig(systemConfig, enabled));
     }
   };
 
@@ -1160,12 +1258,12 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
           systemMode={resolveExecutionMode(health)}
           modeBusy={modeBusy}
           systemMessage={systemMessage}
-          configMlEnabled={mlEnabled}
+          startupMlEnabled={startupMlEnabled}
           onCreateProfile={handleCreateProfile}
           onProfileChange={handleProfileChange}
           onSaveConfig={handleSaveConfig}
+          onMlToggle={handleStartupMlToggle}
           onStart={handleStartSession}
-          onRefreshConfig={loadSession}
         />
         <LiveModeModal isOpen={showLiveModal} onClose={handleCloseLiveModal} onConfirm={handleConfirmLiveStart} />
       </>

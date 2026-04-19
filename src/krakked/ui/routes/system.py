@@ -21,7 +21,7 @@ from krakked.accounts import (
     resolve_secrets_path,
     save_accounts,
 )
-from krakked.config import dump_runtime_overrides, get_config_dir
+from krakked.config import ProfileConfig, dump_runtime_overrides, get_config_dir
 from krakked.config_loader import (
     _load_yaml_mapping,
     _resolve_effective_env,
@@ -1391,7 +1391,17 @@ async def create_profile(
 
         atomic_write(main_config_path, main_data, dump_func=yaml.safe_dump)
 
-        # 7. Trigger Reload
+        # 7. Update in-memory registry immediately so the profile is available
+        # to list/select routes before the async reload completes.
+        ctx.config.profiles[safe_name] = ProfileConfig(
+            name=safe_name,
+            description=payload.description,
+            config_path=str(Path("profiles") / profile_filename),
+            credentials_path="",
+            default_mode=payload.default_mode,
+        )
+
+        # 8. Trigger Reload
         ctx.reinitialize_event.set()
 
         logger.info(

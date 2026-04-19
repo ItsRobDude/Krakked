@@ -73,7 +73,8 @@ export function StrategiesPanel({
       </div>
       <p className="panel__description">
         Enable or pause each strategy, choose a simple relative weight, and set its risk profile. The profile-level ML
-        switch lives in session setup. Learning here only controls continuous training for enabled ML strategies.
+        switch lives in Startup strategy setup while the session is stopped. Learning here only controls continuous
+        training for enabled ML strategies.
       </p>
 
       <div className="table table--strategies" role="table" aria-label="Strategy controls">

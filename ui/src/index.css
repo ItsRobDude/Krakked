@@ -1373,6 +1373,19 @@ input[aria-invalid='true'] {
   gap: var(--space-4);
 }
 
+.startup__section {
+  display: grid;
+  gap: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border-subtle);
+}
+
+.startup__section-header h2 {
+  margin: 0;
+  font-size: 1.05rem;
+  color: #f8fafc;
+}
+
 .startup__actions {
   display: flex;
   gap: var(--space-2);

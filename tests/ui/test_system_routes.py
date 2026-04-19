@@ -1,4 +1,5 @@
 import logging
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -7,7 +8,7 @@ import yaml
 from starlette.testclient import TestClient
 
 import krakked.connection.validation as validation_mod
-from krakked.config import StrategyConfig
+from krakked.config import ProfileConfig, StrategyConfig
 from krakked.connection.exceptions import (
     AuthError,
     KrakenAPIError,
@@ -703,6 +704,97 @@ def test_patch_session_config_blocked_if_active(client, system_context):
     )
     assert response.status_code == 200
     assert "active" in response.json()["error"]
+
+
+def test_create_profile_updates_registry_and_allows_immediate_selection(
+    client, system_context, tmp_path, monkeypatch
+):
+    import krakked.ui.routes.system as system_routes
+
+    config_dir = tmp_path / "config"
+    profiles_dir = config_dir / "profiles"
+    profiles_dir.mkdir(parents=True)
+
+    main_config_path = config_dir / "config.yaml"
+    main_config_path.write_text("profiles: {}\nsession: {}\n")
+    (config_dir / "config.test.yaml").write_text("{}\n")
+
+    monkeypatch.setattr(system_routes, "get_config_dir", lambda: config_dir)
+    monkeypatch.setattr(system_routes, "_resolve_effective_env", lambda *_: "test")
+    monkeypatch.setattr(system_routes, "parse_app_config", lambda *args, **kwargs: None)
+
+    response = client.post("/api/system/profiles", json={"name": "Swing Alpha"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["error"] is None
+    assert payload["data"]["name"] == "SwingAlpha"
+    assert system_context.reinitialize_event.is_set() is True
+
+    created_profile = system_context.config.profiles["SwingAlpha"]
+    assert isinstance(created_profile, ProfileConfig)
+    assert created_profile.description == ""
+    assert Path(created_profile.config_path) == Path("profiles") / "SwingAlpha.yaml"
+
+    profiles_response = client.get("/api/system/profiles")
+    assert profiles_response.status_code == 200
+    assert profiles_response.json()["data"] == [
+        {"name": "SwingAlpha", "description": ""}
+    ]
+
+    select_response = client.patch(
+        "/api/system/session/config",
+        json={"profile_name": "SwingAlpha"},
+    )
+    assert select_response.status_code == 200
+    select_payload = select_response.json()
+    assert select_payload["error"] is None
+    assert select_payload["data"]["profile_name"] == "SwingAlpha"
+    assert system_context.session.profile_name == "SwingAlpha"
+
+
+def test_create_profile_preserves_existing_registry_entries_in_memory(
+    client, system_context, tmp_path, monkeypatch
+):
+    import krakked.ui.routes.system as system_routes
+
+    config_dir = tmp_path / "config"
+    profiles_dir = config_dir / "profiles"
+    profiles_dir.mkdir(parents=True)
+
+    (profiles_dir / "existing.yaml").write_text("{}\n")
+    main_config_path = config_dir / "config.yaml"
+    main_config_path.write_text(
+        "profiles:\n"
+        "  existing:\n"
+        "    name: existing\n"
+        "    description: Existing profile\n"
+        "    config_path: profiles/existing.yaml\n"
+        "    credentials_path: ''\n"
+        "    default_mode: paper\n"
+    )
+    (config_dir / "config.test.yaml").write_text("{}\n")
+
+    system_context.config.profiles["existing"] = ProfileConfig(
+        name="existing",
+        description="Existing profile",
+        config_path="profiles/existing.yaml",
+        credentials_path="",
+        default_mode="paper",
+    )
+
+    monkeypatch.setattr(system_routes, "get_config_dir", lambda: config_dir)
+    monkeypatch.setattr(system_routes, "_resolve_effective_env", lambda *_: "test")
+    monkeypatch.setattr(system_routes, "parse_app_config", lambda *args, **kwargs: None)
+
+    response = client.post(
+        "/api/system/profiles",
+        json={"name": "Momentum Desk", "description": "Rotates faster"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["error"] is None
+    assert sorted(system_context.config.profiles.keys()) == ["MomentumDesk", "existing"]
 
 
 def test_start_session_blocked_during_reload(client, system_context):

@@ -1,5 +1,4 @@
 import { useMemo, useState } from 'react';
-import { applyConfig } from '../services/api';
 import type { ExecutionMode, ProfileSummary, SessionConfigRequest } from '../services/api';
 
 export type StartupScreenProps = {
@@ -9,13 +8,12 @@ export type StartupScreenProps = {
   systemMode?: ExecutionMode | null;
   modeBusy?: boolean;
   systemMessage?: { tone: 'info' | 'success' | 'error'; message: string } | null;
-  // NOTE: mlEnabled now comes from external config state, not session state request
-  configMlEnabled?: boolean;
-  onCreateProfile: (name: string) => Promise<string>;
+  startupMlEnabled?: boolean;
+  onCreateProfile: (name: string) => Promise<void>;
   onProfileChange: (name: string) => Promise<void> | void;
   onSaveConfig: () => Promise<void>;
+  onMlToggle: (enabled: boolean) => Promise<void> | void;
   onStart: (params: SessionConfigRequest) => Promise<void> | void;
-  onRefreshConfig?: () => void;
 };
 
 const DEFAULT_LOOP_INTERVAL = 15;
@@ -27,12 +25,12 @@ export function StartupScreen({
   systemMode,
   modeBusy,
   systemMessage,
-  configMlEnabled = true,
+  startupMlEnabled = true,
   onCreateProfile,
   onProfileChange,
   onSaveConfig,
+  onMlToggle,
   onStart,
-  onRefreshConfig,
 }: StartupScreenProps) {
   const [mode, setMode] = useState<SessionConfigRequest['mode']>('paper');
   const [loopInterval, setLoopInterval] = useState<number>(DEFAULT_LOOP_INTERVAL);
@@ -83,8 +81,7 @@ export function StartupScreen({
     setError(null);
 
     try {
-      const createdName = await onCreateProfile(trimmed);
-      await onProfileChange(createdName);
+      await onCreateProfile(trimmed);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to create profile');
     } finally {
@@ -158,10 +155,7 @@ export function StartupScreen({
 
     setError(null);
     try {
-      await applyConfig({ ml: { enabled } });
-      if (onRefreshConfig) {
-        onRefreshConfig();
-      }
+      await onMlToggle(enabled);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to update ML settings');
     }
@@ -247,29 +241,39 @@ export function StartupScreen({
             />
             <p className="field__hint">How often the engine should evaluate and place orders.</p>
           </div>
+        </div>
+
+        <section className="startup__section" aria-label="Strategy setup">
+          <div className="startup__section-header">
+            <div>
+              <h2>Strategy setup</h2>
+              <p className="panel__hint">Profile-level strategy switches belong here before you start a session.</p>
+            </div>
+          </div>
 
           <div className="field field--checkbox">
             <label>
               <input
                 type="checkbox"
-                checked={configMlEnabled}
+                checked={startupMlEnabled}
                 disabled={readOnly || modeBusy || !activeProfileName}
                 onChange={(event) => handleMlToggle(event.target.checked)}
               />
               Enable ML strategies for this profile
             </label>
             <p className="field__hint">
-              Profile-level switch. It applies the next time a stopped session reloads or starts.
+              Profile-level strategy setting. It controls whether ML strategies participate for the active profile.
             </p>
             <p className="field__hint">
-              Turning it off removes ML strategies from the enabled strategy list. Per-strategy Learning only controls
-              continuous training inside enabled ML strategies.
+              Changes apply when the stopped session reloads or starts. Turning this off removes ML strategies from the
+              enabled strategy set at config load time.
             </p>
+            <p className="field__hint">Per-strategy Learning only controls continuous training for enabled ML strategies.</p>
             {!activeProfileName && (
               <p className="field__hint field__hint--warn">Select and activate a profile to change ML settings.</p>
             )}
           </div>
-        </div>
+        </section>
 
         <div className="startup__actions">
           <button

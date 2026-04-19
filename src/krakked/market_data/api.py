@@ -1,6 +1,7 @@
 # src/krakked/market_data/api.py
 
 import logging
+import threading
 import time
 from dataclasses import dataclass
 from functools import lru_cache
@@ -131,6 +132,7 @@ class MarketDataAPI:
         self._ws_stale_tolerance = config.market_data.ws.get(
             "stale_tolerance_seconds", 60
         )
+        self._backfill_thread: Optional[threading.Thread] = None
 
         # Instance-specific cache for normalize_pair to avoid global state
         # and support proper cache clearing per instance.
@@ -162,15 +164,44 @@ class MarketDataAPI:
 
         # 3. Backfill historical data
         if backfill:
-            for pair_meta in self._universe:
-                for timeframe in self._config.market_data.backfill_timeframes:
-                    backfill_ohlc(
-                        pair_metadata=pair_meta,
-                        timeframe=timeframe,
-                        client=self._rest_client,
-                        store=self._ohlc_store,
-                    )
+            self.backfill_history()
         logger.info("MarketDataAPI initialized.")
+
+    def backfill_history(self) -> None:
+        """Backfill configured history for the current universe."""
+        if not self._universe or not self._config.market_data.backfill_timeframes:
+            logger.info("No historical backfill scheduled.")
+            return
+
+        assert self._rest_client is not None
+        for pair_meta in self._universe:
+            for timeframe in self._config.market_data.backfill_timeframes:
+                backfill_ohlc(
+                    pair_metadata=pair_meta,
+                    timeframe=timeframe,
+                    client=self._rest_client,
+                    store=self._ohlc_store,
+                )
+
+    def start_background_backfill(self) -> None:
+        """Kick historical backfill onto a daemon thread so boot can continue."""
+        if self._backfill_thread and self._backfill_thread.is_alive():
+            return
+
+        if not self._config.market_data.backfill_timeframes or not self._universe:
+            return
+
+        def _run() -> None:
+            logger.info("Background OHLC backfill started.")
+            try:
+                self.backfill_history()
+            except Exception as exc:  # pragma: no cover - defensive logging
+                logger.exception("Background OHLC backfill failed: %s", exc)
+            else:
+                logger.info("Background OHLC backfill completed.")
+
+        self._backfill_thread = threading.Thread(target=_run, daemon=True)
+        self._backfill_thread.start()
 
     def _on_candle_closed(
         self, pair: str, timeframe: str, candle_data: Dict[str, Any]

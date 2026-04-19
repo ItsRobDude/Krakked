@@ -69,7 +69,8 @@ def build_app_context(allow_interactive_setup: bool = True) -> AppContext:
         )
 
     market_data = MarketDataAPI(config, rate_limiter=rate_limiter)
-    market_data.refresh_universe()
+    market_data.initialize(backfill=False)
+    market_data.start_background_backfill()
 
     portfolio = PortfolioService(
         config, market_data, rest_client=client, rate_limiter=rate_limiter

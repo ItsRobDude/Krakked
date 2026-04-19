@@ -569,7 +569,8 @@ class BotController:
             market_data = MarketDataAPI(
                 config, rest_client=client, rate_limiter=rate_limiter
             )
-            market_data.initialize()
+            market_data.initialize(backfill=False)
+            market_data.start_background_backfill()
 
             portfolio = PortfolioService(
                 config,
