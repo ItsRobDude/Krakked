@@ -326,12 +326,83 @@ class StrategyEngine:
                 current_positions=list(state.current_positions),
                 pnl_summary=dict(state.pnl_summary),
                 last_intents=list(state.last_intents) if state.last_intents else None,
+                conflict_summary=(
+                    list(state.conflict_summary) if state.conflict_summary else None
+                ),
                 params=dict(state.params),
                 configured_weight=state.configured_weight,
                 effective_weight_pct=state.effective_weight_pct,
             )
             for state in self.strategy_states.values()
         ]
+
+    def _build_conflict_summaries(
+        self,
+        intents: List[StrategyIntent],
+        actions: List[RiskAdjustedAction],
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        pair_groups: Dict[str, List[StrategyIntent]] = {}
+        for intent in intents:
+            pair_groups.setdefault(intent.pair, []).append(intent)
+
+        actions_by_pair = {action.pair: action for action in actions}
+        summaries_by_strategy: Dict[str, List[Dict[str, Any]]] = {}
+
+        for pair, pair_intents in pair_groups.items():
+            strategy_ids = sorted({intent.strategy_id for intent in pair_intents})
+            if len(strategy_ids) < 2:
+                continue
+
+            ranked_intents = sorted(
+                pair_intents,
+                key=lambda intent: (
+                    self.strategy_states.get(intent.strategy_id).effective_weight_pct
+                    if self.strategy_states.get(intent.strategy_id) is not None
+                    and self.strategy_states[intent.strategy_id].effective_weight_pct
+                    is not None
+                    else 0.0,
+                    intent.confidence,
+                ),
+                reverse=True,
+            )
+
+            pair_action = actions_by_pair.get(pair)
+            winner_strategy_id = ranked_intents[0].strategy_id if ranked_intents else None
+            winning_reason = "higher effective share"
+
+            if pair_action and pair_action.action_type == "none":
+                winner_strategy_id = None
+                winning_reason = (
+                    "risk blocked competing intent"
+                    if pair_action.blocked
+                    else "no action because conflict netted out"
+                )
+            elif winner_strategy_id:
+                winner_state = self.strategy_states.get(winner_strategy_id)
+                if winner_state and not winner_state.enabled:
+                    winning_reason = "other strategy paused"
+
+            display_pair = self.market_data.get_display_pair(pair)
+
+            for strategy_id in strategy_ids:
+                if winner_strategy_id is None:
+                    outcome = "netted_out"
+                elif strategy_id == winner_strategy_id:
+                    outcome = "winner"
+                else:
+                    outcome = "loser"
+
+                summaries_by_strategy.setdefault(strategy_id, []).append(
+                    {
+                        "pair": display_pair,
+                        "competing_strategies": strategy_ids,
+                        "winner_strategy_id": winner_strategy_id,
+                        "winning_reason": winning_reason,
+                        "outcome": outcome,
+                    }
+                )
+
+        return summaries_by_strategy
 
     def _collect_intents(
         self,
@@ -393,7 +464,9 @@ class StrategyEngine:
                         if len(summary) < 10:
                             summary.append(
                                 {
-                                    "pair": intent.pair,
+                                    "pair": self.market_data.get_display_pair(
+                                        intent.pair
+                                    ),
                                     "side": intent.side,
                                     "intent_type": intent.intent_type,
                                     "desired_exposure_usd": intent.desired_exposure_usd,
@@ -524,6 +597,7 @@ class StrategyEngine:
         risk_actions = self.risk_engine.process_intents(
             filtered, weights=weights, pending_orders=pending_orders
         )
+        conflict_summaries = self._build_conflict_summaries(filtered, risk_actions)
 
         for action in risk_actions:
             strat_cfg = self.config.strategies.configs.get(action.strategy_id)
@@ -558,6 +632,7 @@ class StrategyEngine:
                 "exposure_pct": ctx.per_strategy_exposure_pct.get(strategy_id, 0.0),
             }
             state.last_intents = intent_summaries.get(strategy_id, [])
+            state.conflict_summary = conflict_summaries.get(strategy_id, [])
 
         plan = ExecutionPlan(
             plan_id=plan_id,
@@ -825,6 +900,9 @@ class StrategyEngine:
                 current_positions=list(state.current_positions),
                 pnl_summary=dict(state.pnl_summary),
                 last_intents=list(state.last_intents) if state.last_intents else None,
+                conflict_summary=(
+                    list(state.conflict_summary) if state.conflict_summary else None
+                ),
                 params=dict(state.params),
                 configured_weight=state.configured_weight,
                 effective_weight_pct=state.effective_weight_pct,

@@ -181,6 +181,7 @@ class StrategyStatePayload(BaseModel):
     current_positions: List[StrategyPosition]
     pnl_summary: Dict[str, float]
     last_intents: Optional[list[dict[str, Any]]] = None
+    conflict_summary: Optional[list[dict[str, Any]]] = None
     params: Dict[str, Any] = Field(default_factory=dict)
     configured_weight: int = 100
     effective_weight_pct: Optional[float] = None
@@ -247,6 +248,7 @@ class SystemHealthPayload(BaseModel):
     market_data_ok: bool
     market_data_status: str
     market_data_reason: Optional[str] = None
+    market_data_detail: Optional[str] = None
     market_data_stale: Optional[bool] = Field(
         None,
         description="Indicates whether market data is considered stale based on stream freshness.",

@@ -61,6 +61,7 @@ const DASHBOARD_REFRESH_MS = Number(import.meta.env.VITE_REFRESH_DASHBOARD_MS ??
 const ORDERS_REFRESH_MS = Number(import.meta.env.VITE_REFRESH_ORDERS_MS ?? 5000) || 5000;
 const ACTIVE_DASHBOARD_REFRESH_MS = Math.min(DASHBOARD_REFRESH_MS, ORDERS_REFRESH_MS);
 const ACTIVE_RESOURCE_TIMEOUT_MS = 3500;
+const STARTER_STRATEGY_IDS = ['trend_core', 'vol_breakout', 'majors_mean_rev', 'rs_rotation'] as const;
 type SystemMessage = { tone: 'info' | 'error' | 'success'; message: string };
 type DashboardAlert = { id: string; tone: 'danger' | 'warning' | 'info'; title: string; message: string };
 
@@ -122,6 +123,42 @@ const extractMlEnabledFromConfig = (
 const RISK_PRESET_OPTIONS: RiskPresetName[] = ['conservative', 'balanced', 'aggressive', 'degen'];
 
 const isExchangeBalanceBaseline = (baseline: string | null | undefined) => baseline === 'exchange_balances';
+
+const recomputeEffectiveWeights = (nextStrategies: StrategyState[]) => {
+  const totalWeight = nextStrategies
+    .filter((strategy) => strategy.enabled)
+    .reduce((sum, strategy) => sum + (strategy.configured_weight || 100), 0);
+
+  return nextStrategies.map((strategy) => ({
+    ...strategy,
+    effective_weight_pct: strategy.enabled && totalWeight > 0
+      ? ((strategy.configured_weight || 100) / totalWeight) * 100
+      : null,
+  }));
+};
+
+const getDrawdownState = (drawdownPct?: number) => {
+  if (drawdownPct === undefined) return { label: 'No data', tone: 'neutral' as const };
+  if (drawdownPct < 10) return { label: 'Leading', tone: 'success' as const };
+  if (drawdownPct < 25) return { label: 'Cooling', tone: 'warning' as const };
+  return { label: 'Under pressure', tone: 'danger' as const };
+};
+
+const getStrategyMomentum = (strategy: StrategyState, performance?: StrategyPerformance) => {
+  if (!strategy.enabled) {
+    return { label: 'Paused', tone: 'neutral' as const };
+  }
+  if ((strategy.conflict_summary?.some((entry) => entry.outcome === 'winner'))) {
+    return { label: 'Leading', tone: 'success' as const };
+  }
+  if ((performance?.max_drawdown_pct ?? 0) >= 25) {
+    return { label: 'Under pressure', tone: 'danger' as const };
+  }
+  if ((performance?.realized_pnl_quote ?? 0) < 0 || (performance?.max_drawdown_pct ?? 0) >= 10) {
+    return { label: 'Cooling', tone: 'warning' as const };
+  }
+  return { label: 'Stable', tone: 'info' as const };
+};
 
 const buildKpis = (summary: PortfolioSummary) => {
   const exchangeBalanceBaseline = isExchangeBalanceBaseline(summary.portfolio_baseline);
@@ -1032,7 +1069,9 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
 
     const previousStrategies = strategies.map((strategy) => ({ ...strategy }));
     setStrategies((current) =>
-      current.map((strategy) => (strategy.strategy_id === strategyId ? { ...strategy, enabled } : strategy)),
+      recomputeEffectiveWeights(
+        current.map((strategy) => (strategy.strategy_id === strategyId ? { ...strategy, enabled } : strategy)),
+      ),
     );
 
     try {
@@ -1149,20 +1188,11 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
 
     try {
       await patchStrategyConfig(strategyId, { strategy_weight: weight });
-      setStrategies((current) => {
-        const activeStrategies = current.map((strategy) =>
+      setStrategies((current) => recomputeEffectiveWeights(
+        current.map((strategy) =>
           strategy.strategy_id === strategyId ? { ...strategy, configured_weight: weight } : strategy,
-        );
-        const enabled = activeStrategies.filter((strategy) => strategy.enabled);
-        const totalWeight = enabled.reduce((sum, strategy) => sum + (strategy.configured_weight || 100), 0);
-
-        return activeStrategies.map((strategy) => ({
-          ...strategy,
-          effective_weight_pct: strategy.enabled && totalWeight > 0
-            ? ((strategy.configured_weight || 100) / totalWeight) * 100
-            : null,
-        }));
-      });
+        ),
+      ));
       setStrategyFeedback(`Updated ${strategyId} weight to ${weight}.`);
     } catch (error) {
       setStrategies((current) =>
@@ -1175,6 +1205,51 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
       setStrategyFeedback(`Unable to update weight for ${strategyId}.`);
     } finally {
       setStrategyBusyState(strategyId, false);
+    }
+  };
+
+  const handleRestoreStarterStrategies = async () => {
+    if (health?.ui_read_only) {
+      setStrategyFeedback('Backend is read-only. Starter recovery is disabled.');
+      return;
+    }
+
+    const existingStarterIds = STARTER_STRATEGY_IDS.filter((strategyId) =>
+      strategies.some((strategy) => strategy.strategy_id === strategyId),
+    );
+    if (existingStarterIds.length === 0) {
+      setStrategyFeedback('Starter strategies are not available on this profile yet.');
+      return;
+    }
+
+    setStrategyFeedback(null);
+    const previousStrategies = strategies.map((strategy) => ({ ...strategy }));
+    existingStarterIds.forEach((strategyId) => setStrategyBusyState(strategyId, true));
+
+    setStrategies((current) => recomputeEffectiveWeights(
+      current.map((strategy) => (
+        STARTER_STRATEGY_IDS.includes(strategy.strategy_id as (typeof STARTER_STRATEGY_IDS)[number])
+          ? { ...strategy, enabled: true, configured_weight: 100 }
+          : strategy
+      )),
+    ));
+
+    try {
+      for (const strategyId of existingStarterIds) {
+        await setStrategyEnabled(strategyId, true);
+        await patchStrategyConfig(strategyId, { strategy_weight: 100 });
+      }
+
+      const refreshed = await fetchStrategies({ timeoutMs: ACTIVE_RESOURCE_TIMEOUT_MS });
+      if (refreshed) {
+        setStrategies(refreshed);
+      }
+      setStrategyFeedback('Starter strategy pack restored and enabled.');
+    } catch (error) {
+      setStrategies(previousStrategies);
+      setStrategyFeedback('Unable to restore the starter strategy pack.');
+    } finally {
+      existingStarterIds.forEach((strategyId) => setStrategyBusyState(strategyId, false));
     }
   };
 
@@ -1335,7 +1410,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
       message:
         health.market_data_status === 'warming_up'
           ? 'Streaming is online, but Krakked is still waiting for fresh startup data.'
-          : (health.market_data_reason || 'Streaming or REST market data is degraded.'),
+          : (health.market_data_detail || health.market_data_reason || 'Streaming or REST market data is degraded.'),
     });
   }
   if (health?.drift_detected) {
@@ -1377,6 +1452,11 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
       return (right.effective_weight_pct ?? 0) - (left.effective_weight_pct ?? 0);
     })
     .slice(0, 5);
+  const activeStarterCount = strategies.filter(
+    (strategy) =>
+      STARTER_STRATEGY_IDS.includes(strategy.strategy_id as (typeof STARTER_STRATEGY_IDS)[number]) && strategy.enabled,
+  ).length;
+  const noActiveStrategies = strategies.every((strategy) => !strategy.enabled);
 
   const systemStatusItems = [
     {
@@ -1437,7 +1517,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
       hint:
         health?.market_data_status === 'warming_up'
           ? 'Streaming is online; waiting for fresh startup data'
-          : (health?.market_data_reason || `${health?.streaming_pairs ?? 0} pairs streaming`),
+          : (health?.market_data_detail || health?.market_data_reason || `${health?.streaming_pairs ?? 0} pairs streaming`),
     },
     {
       label: 'Drift',
@@ -1622,7 +1702,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
               <p className="integrity-panel__hint">
                 {health?.market_data_status === 'warming_up'
                   ? 'Streaming is online; waiting for fresh startup data'
-                  : (health?.market_data_reason || `${health?.streaming_pairs ?? 0} pairs streaming`)}
+                  : (health?.market_data_detail || health?.market_data_reason || `${health?.streaming_pairs ?? 0} pairs streaming`)}
               </p>
             </div>
             <div className="integrity-panel__item">
@@ -1652,57 +1732,129 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
           <div className="panel__header">
             <div>
               <h2>Strategy Summary</h2>
-              <p className="panel__hint">Current posture across the most relevant strategies.</p>
+              <p className="panel__hint">Starter-pack posture, current leaders, and conflict winners at a glance.</p>
             </div>
           </div>
-          {strategySummary.length === 0 ? (
-            <div className="panel__empty">No configured strategies are active for this profile yet.</div>
+          {strategySummary.length === 0 || noActiveStrategies ? (
+            <div className="panel__empty strategy-scorecard__empty">
+              <p>No strategies are active for this profile right now.</p>
+              <p>The recommended beginner starter pack can be restored in one step.</p>
+              <button
+                type="button"
+                className="ghost-button"
+                onClick={handleRestoreStarterStrategies}
+                disabled={Boolean(health?.ui_read_only)}
+              >
+                Restore starter pack
+              </button>
+            </div>
           ) : (
-            <div className="summary-table summary-table--strategies" role="table" aria-label="Strategy summary">
-              <div className="summary-table__head" role="row">
-                <span role="columnheader">Strategy</span>
-                <span role="columnheader">State</span>
-                <span role="columnheader">Share</span>
-                <span role="columnheader">Latest signal</span>
-                <span role="columnheader">PnL</span>
-                <span role="columnheader">Drawdown</span>
-              </div>
-              <div className="summary-table__body">
-                {strategySummary.map((strategy) => {
-                  const perf = strategyPerformance[strategy.strategy_id];
-                  const latestIntent = strategy.last_intents?.[0];
-                  return (
-                    <div key={strategy.strategy_id} className="summary-table__row" role="row">
-                      <span role="cell">
-                        <strong>{strategy.label}</strong>
-                      </span>
-                      <span role="cell">
+            <div className="strategy-scorecard-grid">
+              {strategySummary.map((strategy) => {
+                const perf = strategyPerformance[strategy.strategy_id];
+                const latestIntent = strategy.last_intents?.[0];
+                const latestConflict = strategy.conflict_summary?.[0];
+                const momentum = getStrategyMomentum(strategy, perf);
+                const drawdown = getDrawdownState(perf?.max_drawdown_pct);
+                const freshAt = strategy.last_actions_at || strategy.last_intents_at;
+                return (
+                  <article key={strategy.strategy_id} className="strategy-scorecard">
+                    <div className="strategy-scorecard__header">
+                      <div>
+                        <p className="strategy-scorecard__title">{strategy.label}</p>
+                        <p className="strategy-scorecard__subtitle">{strategy.strategy_id}</p>
+                      </div>
+                      <div className="strategy-scorecard__pills">
                         <span className={`pill ${strategy.enabled ? 'pill--long' : 'pill--neutral'}`}>
-                          {strategy.enabled ? 'On' : 'Off'}
+                          {strategy.enabled ? 'Active' : 'Paused'}
                         </span>
-                      </span>
-                      <span role="cell">
-                        {typeof strategy.effective_weight_pct === 'number'
-                          ? `${strategy.effective_weight_pct.toFixed(1)}%`
-                          : '—'}
-                      </span>
-                      <span role="cell">
+                        <span
+                          className={`pill ${
+                            momentum.tone === 'success'
+                              ? 'pill--long'
+                              : momentum.tone === 'warning'
+                                ? 'pill--warning'
+                                : momentum.tone === 'danger'
+                                  ? 'pill--danger'
+                                  : 'pill--info'
+                          }`}
+                        >
+                          {momentum.label}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="strategy-scorecard__metrics">
+                      <div>
+                        <span className="strategy-scorecard__label">Configured</span>
+                        <strong>{strategy.configured_weight}</strong>
+                      </div>
+                      <div>
+                        <span className="strategy-scorecard__label">Effective share</span>
+                        <strong>{typeof strategy.effective_weight_pct === 'number' ? `${strategy.effective_weight_pct.toFixed(1)}%` : '—'}</strong>
+                      </div>
+                      <div>
+                        <span className="strategy-scorecard__label">Recent PnL</span>
+                        <strong className={(perf?.realized_pnl_quote ?? 0) < 0 ? 'text--danger' : 'text--success'}>
+                          {perf ? formatCurrency(perf.realized_pnl_quote) : 'No trades'}
+                        </strong>
+                      </div>
+                      <div>
+                        <span className="strategy-scorecard__label">Freshness</span>
+                        <strong>{freshAt ? formatTimestamp(freshAt) : 'No signal yet'}</strong>
+                      </div>
+                    </div>
+                    <div className="strategy-scorecard__detail-row">
+                      <span className="strategy-scorecard__detail-label">Latest</span>
+                      <span>
                         {latestIntent
-                          ? `${latestIntent.side} ${latestIntent.pair}`
+                          ? `${latestIntent.side} ${latestIntent.pair} (${latestIntent.timeframe})`
                           : 'No recent signal'}
                       </span>
-                      <span role="cell" className={(perf?.realized_pnl_quote ?? 0) < 0 ? 'text--danger' : 'text--success'}>
-                        {perf ? formatCurrency(perf.realized_pnl_quote) : 'No trades'}
-                      </span>
-                      <span role="cell">
-                        {perf ? `${perf.max_drawdown_pct.toFixed(1)}%` : '—'}
+                    </div>
+                    <div className="strategy-scorecard__detail-row">
+                      <span className="strategy-scorecard__detail-label">Drawdown</span>
+                      <span className={`pill ${
+                        drawdown.tone === 'success'
+                          ? 'pill--long'
+                          : drawdown.tone === 'warning'
+                            ? 'pill--warning'
+                            : drawdown.tone === 'danger'
+                              ? 'pill--danger'
+                              : 'pill--neutral'
+                      }`}>
+                        {drawdown.label}{perf ? ` ${perf.max_drawdown_pct.toFixed(1)}%` : ''}
                       </span>
                     </div>
-                  );
-                })}
-              </div>
+                    <div className="strategy-scorecard__detail-row">
+                      <span className="strategy-scorecard__detail-label">Conflict</span>
+                      <span>
+                        {latestConflict
+                          ? `${latestConflict.pair}: ${latestConflict.winning_reason}`
+                          : 'No active conflict'}
+                      </span>
+                    </div>
+                  </article>
+                );
+              })}
             </div>
           )}
+          {activeStarterCount < STARTER_STRATEGY_IDS.length ? (
+            <div className="strategy-summary-panel__footer">
+              <p className="panel__hint">
+                {activeStarterCount === 0
+                  ? 'The starter pack is fully paused.'
+                  : `${STARTER_STRATEGY_IDS.length - activeStarterCount} starter strategies are currently disabled.`}
+              </p>
+              <button
+                type="button"
+                className="ghost-button"
+                onClick={handleRestoreStarterStrategies}
+                disabled={Boolean(health?.ui_read_only)}
+              >
+                Re-enable starter pack
+              </button>
+            </div>
+          ) : null}
         </section>
 
         <section className="panel risk-snapshot-panel">

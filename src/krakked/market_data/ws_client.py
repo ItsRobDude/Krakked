@@ -17,6 +17,14 @@ from krakked.config import PairMetadata
 logger = logging.getLogger(__name__)
 
 KRAKEN_WS_V2_URL = "wss://ws.kraken.com/v2"
+WS_SYMBOL_ALIASES = {
+    "BTC": "XBT",
+    "XBT": "BTC",
+    "DOGE": "XDG",
+    "XDG": "DOGE",
+    "USD": "ZUSD",
+    "ZUSD": "USD",
+}
 
 
 class KrakenWSClientV2:
@@ -34,7 +42,9 @@ class KrakenWSClientV2:
         self._url = KRAKEN_WS_V2_URL
         self._pairs = pairs
         self._ws_symbols = [p.ws_symbol for p in self._pairs]
+        self._canonical_by_ws_symbol: Dict[str, str] = {}
         self._timeframes = timeframes
+        self._live_ohlc_timeframes = timeframes[:1]
         self._on_candle_closed = on_candle_closed
         self._running = False
         self._thread: Optional[threading.Thread] = None
@@ -56,6 +66,15 @@ class KrakenWSClientV2:
         self.subscription_status: Dict[str, Dict[str, Dict[str, Any]]] = defaultdict(
             dict
         )
+        self._pending_subscriptions: Dict[int, Dict[str, Any]] = {}
+        self._next_req_id = int(time.time() * 1000)
+        for pair in self._pairs:
+            for symbol_variant in self._iter_ws_symbol_variants(pair.ws_symbol):
+                self._canonical_by_ws_symbol[symbol_variant] = pair.canonical
+
+    def _allocate_req_id(self) -> int:
+        self._next_req_id += 1
+        return self._next_req_id
 
     @property
     def is_connected(self) -> bool:
@@ -87,10 +106,24 @@ class KrakenWSClientV2:
         logger.info("WebSocket client stopped.")
 
     def _get_canonical_from_ws_symbol(self, ws_symbol: str) -> Optional[str]:
-        for p in self._pairs:
-            if p.ws_symbol == ws_symbol:
-                return p.canonical
+        for symbol_variant in self._iter_ws_symbol_variants(ws_symbol):
+            canonical = self._canonical_by_ws_symbol.get(symbol_variant)
+            if canonical:
+                return canonical
         return None
+
+    def _iter_ws_symbol_variants(self, ws_symbol: str) -> set[str]:
+        variants = {ws_symbol}
+        if "/" not in ws_symbol:
+            return variants
+
+        base, quote = ws_symbol.split("/", 1)
+        alias_bases = {base, WS_SYMBOL_ALIASES.get(base, base)}
+        alias_quotes = {quote, WS_SYMBOL_ALIASES.get(quote, quote)}
+        for alias_base in alias_bases:
+            for alias_quote in alias_quotes:
+                variants.add(f"{alias_base}/{alias_quote}")
+        return {variant for variant in variants if variant}
 
     async def _subscribe(self):
         """Subscribes to ticker and OHLC channels for all pairs."""
@@ -102,19 +135,30 @@ class KrakenWSClientV2:
         # Ticker subscription
         for i in range(0, len(self._ws_symbols), chunk_size):
             chunk = self._ws_symbols[i : i + chunk_size]
+            req_id = self._allocate_req_id()
+            self._pending_subscriptions[req_id] = {
+                "channel": "ticker",
+                "symbol": chunk,
+            }
             ticker_sub = {
                 "method": "subscribe",
                 "params": {
                     "channel": "ticker",
                     "symbol": chunk,
                 },
-                "req_id": int(time.time() * 1000),
+                "req_id": req_id,
             }
             await self._websocket.send(json.dumps(ticker_sub))
         logger.info(f"Subscribed to ticker for {len(self._ws_symbols)} pairs.")
 
         # OHLC subscriptions
-        for tf in self._timeframes:
+        if len(self._timeframes) > 1:
+            logger.info(
+                "Kraken WS v2 accepts one live OHLC interval per symbol per connection; using %s for streaming and relying on persisted/backfilled bars for slower intervals.",
+                self._live_ohlc_timeframes[0],
+            )
+
+        for tf in self._live_ohlc_timeframes:
             interval = (
                 int(tf[:-1])
                 if tf.endswith("m")
@@ -122,6 +166,12 @@ class KrakenWSClientV2:
             )
             for i in range(0, len(self._ws_symbols), chunk_size):
                 chunk = self._ws_symbols[i : i + chunk_size]
+                req_id = self._allocate_req_id()
+                self._pending_subscriptions[req_id] = {
+                    "channel": "ohlc",
+                    "symbol": chunk,
+                    "interval": interval,
+                }
                 ohlc_sub = {
                     "method": "subscribe",
                     "params": {
@@ -129,7 +179,7 @@ class KrakenWSClientV2:
                         "symbol": chunk,
                         "interval": interval,
                     },
-                    "req_id": int(time.time() * 1000) + 1,
+                    "req_id": req_id,
                 }
                 await self._websocket.send(json.dumps(ohlc_sub))
             logger.info(f"Subscribed to OHLC ({tf}) for {len(self._ws_symbols)} pairs.")
@@ -140,61 +190,123 @@ class KrakenWSClientV2:
         interval_to_tf = {1: "1m", 5: "5m", 15: "15m", 60: "1h", 240: "4h", 1440: "1d"}
         return interval_to_tf.get(interval)
 
+    def _record_subscription_status(
+        self,
+        *,
+        channel: str,
+        status: str,
+        ws_symbols: Any,
+        req_id: Any,
+        error_message: Optional[str],
+    ) -> None:
+        if not isinstance(ws_symbols, list):
+            ws_symbols = [ws_symbols]
+
+        recorded_pairs = []
+        display_names = []
+        for ws_symbol in ws_symbols:
+            canonical_pair = (
+                self._get_canonical_from_ws_symbol(ws_symbol) if ws_symbol else None
+            )
+            pair_key = canonical_pair or ws_symbol or "unknown"
+            status_record = {
+                "status": status,
+                "message": error_message,
+                "req_id": req_id,
+            }
+            self.subscription_status[pair_key][channel] = status_record
+            recorded_pairs.append(pair_key)
+            display_names.append(ws_symbol or canonical_pair or "unknown")
+
+        pair_display = ", ".join(display_names) if display_names else "unknown"
+        if status == "subscribed":
+            logger.info("Subscribed to %s for %s.", channel, pair_display)
+        else:
+            logger.error(
+                "Subscription to %s for %s failed: %s",
+                channel,
+                pair_display,
+                error_message or "unknown error",
+            )
+
+    def _extract_ws_symbol(self, data: dict[str, Any], payload: list[Any]) -> Optional[str]:
+        ws_symbol = data.get("symbol")
+        if isinstance(ws_symbol, str) and ws_symbol:
+            return ws_symbol
+        if payload and isinstance(payload[0], dict):
+            nested_symbol = payload[0].get("symbol")
+            if isinstance(nested_symbol, str) and nested_symbol:
+                return nested_symbol
+        return None
+
+    def _extract_ohlc_interval(
+        self, data: dict[str, Any], candle_data: dict[str, Any]
+    ) -> Optional[int]:
+        interval = data.get("interval")
+        if isinstance(interval, int):
+            return interval
+
+        params_interval = data.get("params", {}).get("interval")
+        if isinstance(params_interval, int):
+            return params_interval
+
+        candle_interval = candle_data.get("interval")
+        if isinstance(candle_interval, int):
+            return candle_interval
+
+        return None
+
+    def _extract_candle_marker(self, candle_data: dict[str, Any]) -> Optional[str]:
+        for key in ("interval_begin", "endtime", "timestamp"):
+            value = candle_data.get(key)
+            if value is not None:
+                return str(value)
+        return None
+
     async def _handle_message(self, message: str):
         """Parses an incoming message and updates the cache."""
         data = json.loads(message)
 
+        if data.get("method") == "subscribe":
+            req_id = data.get("req_id")
+            pending = (
+                self._pending_subscriptions.pop(req_id, {})
+                if isinstance(req_id, int)
+                else {}
+            )
+            result = data.get("result") or {}
+            channel = result.get("channel") or pending.get("channel") or "unknown"
+            success = bool(data.get("success"))
+            status = "subscribed" if success else "error"
+            error_message = data.get("error") or data.get("errorMessage")
+            self._record_subscription_status(
+                channel=channel,
+                status=status,
+                ws_symbols=result.get("symbol") or pending.get("symbol"),
+                req_id=req_id,
+                error_message=error_message,
+            )
+            return
+
         if "event" in data:
             event_type = data.get("event")
             if event_type == "subscriptionStatus":
-                status = data.get("status")
-                channel = data.get("channel") or "unknown"
-                ws_symbols = data.get("symbol")
-                req_id = data.get("req_id")
-                error_message = data.get("errorMessage")
-
-                if not isinstance(ws_symbols, list):
-                    ws_symbols = [ws_symbols]
-
-                recorded_pairs = []
-                display_names = []
-                for ws_symbol in ws_symbols:
-                    canonical_pair = (
-                        self._get_canonical_from_ws_symbol(ws_symbol)
-                        if ws_symbol
-                        else None
-                    )
-                    pair_key = canonical_pair or ws_symbol or "unknown"
-                    status_record = {
-                        "status": status,
-                        "message": error_message,
-                        "req_id": req_id,
-                    }
-                    self.subscription_status[pair_key][channel] = status_record
-                    recorded_pairs.append(pair_key)
-                    display_names.append(ws_symbol or canonical_pair or "unknown")
-
-                pair_display = ", ".join(display_names) if display_names else "unknown"
-                if status == "subscribed":
-                    logger.info(f"Subscribed to {channel} for {pair_display}.")
-                else:
-                    logger.error(
-                        f"Subscription to {channel} for {pair_display} failed: {error_message or 'unknown error'}"
-                    )
+                self._record_subscription_status(
+                    channel=data.get("channel") or "unknown",
+                    status=data.get("status") or "error",
+                    ws_symbols=data.get("symbol"),
+                    req_id=data.get("req_id"),
+                    error_message=data.get("errorMessage"),
+                )
             else:
                 logger.debug(f"Unhandled event message type: {event_type}")
             return
 
         if "channel" in data:
             channel = data["channel"]
-            ws_symbol = data.get("symbol")
             payload = data.get("data")
 
-            if not isinstance(ws_symbol, str) or not ws_symbol:
-                logger.debug(
-                    "Ignoring channel message without symbol",
-                    extra={"event": "ws_channel_missing_symbol", "channel": channel},
-                )
+            if channel in {"status", "heartbeat"}:
                 return
 
             if not isinstance(payload, list) or not payload:
@@ -203,8 +315,17 @@ class KrakenWSClientV2:
                     extra={
                         "event": "ws_channel_missing_data",
                         "channel": channel,
-                        "symbol": ws_symbol,
+                        "symbol": data.get("symbol"),
                     },
+                )
+                return
+
+            ws_symbol = self._extract_ws_symbol(data, payload)
+
+            if not isinstance(ws_symbol, str) or not ws_symbol:
+                logger.debug(
+                    "Ignoring channel message without symbol",
+                    extra={"event": "ws_channel_missing_symbol", "channel": channel},
                 )
                 return
 
@@ -227,15 +348,8 @@ class KrakenWSClientV2:
                 self.ticker_cache[canonical_pair] = payload[0]
                 self.last_ticker_update_ts[canonical_pair] = time.monotonic()
             elif channel == "ohlc":
-                interval = data.get("params", {}).get("interval")
-                timeframe_key = self._get_timeframe_from_interval(interval)
-                if not timeframe_key:
-                    logger.warning(
-                        f"Received OHLC data for unknown interval: {interval}"
-                    )
-                    return
-
-                if not isinstance(payload[0], dict):
+                candle_data = payload[-1]
+                if not isinstance(candle_data, dict):
                     logger.debug(
                         "Ignoring malformed OHLC payload",
                         extra={
@@ -245,11 +359,17 @@ class KrakenWSClientV2:
                     )
                     return
 
-                candle_data = payload[0]
+                interval = self._extract_ohlc_interval(data, candle_data)
+                timeframe_key = self._get_timeframe_from_interval(interval)
+                if not timeframe_key:
+                    logger.warning(
+                        f"Received OHLC data for unknown interval: {interval}"
+                    )
+                    return
 
                 # Check for candle rollover
-                # 'endtime' identifies the candle interval.
-                current_endtime = candle_data.get("endtime")
+                # Use the candle's interval marker to detect rollovers.
+                current_endtime = self._extract_candle_marker(candle_data)
                 last_endtime = self._last_candle_endtime[canonical_pair].get(
                     timeframe_key
                 )

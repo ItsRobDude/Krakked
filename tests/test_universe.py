@@ -168,6 +168,7 @@ def test_universe_filtering(mock_region_profile, mock_kraken_asset_pairs_respons
     assert pair_map["XBTUSD"].min_order_size == pytest.approx(0.0001)
     assert pair_map["ETHUSD"].min_order_size == pytest.approx(0.002)
     assert pair_map["ETHUSDM"].min_order_size == 0.0
+    assert pair_map["XBTUSD"].ws_symbol == "BTC/USD"
 
     assert "XBTEUR" not in pair_names  # Non-USD
     assert "ADAUSD" not in pair_names  # cancel_only

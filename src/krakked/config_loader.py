@@ -31,6 +31,12 @@ from krakked.logging_config import get_log_environment, structured_log_extra
 from krakked.strategy.catalog import CANONICAL_STRATEGIES
 
 RUNTIME_OVERRIDES_FILENAME = "config.runtime.yaml"
+DEFAULT_STARTER_STRATEGY_IDS = [
+    "trend_core",
+    "vol_breakout",
+    "majors_mean_rev",
+    "rs_rotation",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -96,6 +102,41 @@ def get_default_ohlc_store_config() -> Dict[str, str]:
         data_dir = Path(appdirs.user_data_dir("krakked"))
     default_root = data_dir / "ohlc"
     return {"root_dir": str(default_root), "backend": "parquet"}
+
+
+def get_default_starter_strategies_config() -> Dict[str, Any]:
+    """Return a conservative non-ML starter strategy block for first run."""
+
+    configs: Dict[str, Any] = {}
+    for strategy_id in DEFAULT_STARTER_STRATEGY_IDS:
+        definition = CANONICAL_STRATEGIES[strategy_id]
+        configs[strategy_id] = {
+            "name": strategy_id,
+            "type": definition.type,
+            "enabled": True,
+            "strategy_weight": 100,
+        }
+
+    return {
+        "enabled": list(DEFAULT_STARTER_STRATEGY_IDS),
+        "configs": configs,
+    }
+
+
+def _has_nonempty_strategy_config(config_data: dict[str, Any]) -> bool:
+    strategies = config_data.get("strategies")
+    if not isinstance(strategies, dict):
+        return False
+
+    enabled = strategies.get("enabled")
+    if isinstance(enabled, list) and len(enabled) > 0:
+        return True
+
+    configs = strategies.get("configs")
+    if isinstance(configs, dict) and len(configs) > 0:
+        return True
+
+    return False
 
 
 def _load_yaml_mapping(path: Path) -> dict:
@@ -539,6 +580,7 @@ def parse_app_config(
         risk_data = {}
 
     # Parsing Strategies Config
+    strategies_declared = "strategies" in raw_config
     strategies_data = raw_config.get("strategies") or {}
     if not isinstance(strategies_data, dict):
         logger.warning(
@@ -549,6 +591,16 @@ def parse_app_config(
             },
         )
         strategies_data = {}
+    if not strategies_declared:
+        strategies_data = get_default_starter_strategies_config()
+        logger.info(
+            "No strategies block found; applying starter strategy defaults",
+            extra={
+                "event": "config_default_starter_strategies",
+                "config_path": str(config_path),
+                "strategy_ids": list(DEFAULT_STARTER_STRATEGY_IDS),
+            },
+        )
     strategy_configs: Dict[str, StrategyConfig] = {}
 
     # Process 'configs' section
@@ -1146,6 +1198,7 @@ def load_config(
         raw_config = _deep_merge_dicts(raw_config, env_config)
 
     config_dir = get_config_dir()
+    has_declared_strategy_config = _has_nonempty_strategy_config(raw_config)
 
     # 3. Merge Active Profile
     session_data = raw_config.get("session") or {}
@@ -1163,6 +1216,9 @@ def load_config(
             profile_config = _load_yaml_mapping(profile_path)
             if profile_config:
                 raw_config = _deep_merge_dicts(raw_config, profile_config)
+                has_declared_strategy_config = has_declared_strategy_config or (
+                    _has_nonempty_strategy_config(profile_config)
+                )
 
     # 4. Merge Runtime Overrides
     # If active profile, look for profiles/<profile>/config.runtime.yaml
@@ -1175,6 +1231,13 @@ def load_config(
 
     runtime_overrides = _load_yaml_mapping(overrides_path)
     if runtime_overrides:
+        if (
+            not has_declared_strategy_config
+            and isinstance(runtime_overrides.get("strategies"), dict)
+            and not _has_nonempty_strategy_config(runtime_overrides)
+        ):
+            runtime_overrides = dict(runtime_overrides)
+            runtime_overrides.pop("strategies", None)
         raw_config = _deep_merge_dicts(raw_config, runtime_overrides)
 
     # 5. Parse and Validate

@@ -13,6 +13,21 @@ ASSET_ALIASES = {
     "DOGE": "XDG",
     "ZUSD": "USD",
 }
+WS_DISPLAY_ALIASES = {
+    "XBT": "BTC",
+    "XDG": "DOGE",
+    "ZUSD": "USD",
+}
+
+
+def _normalize_ws_symbol_for_v2(ws_symbol: str) -> str:
+    if "/" not in ws_symbol:
+        return ws_symbol
+
+    base, quote = ws_symbol.split("/", 1)
+    normalized_base = WS_DISPLAY_ALIASES.get(base, base)
+    normalized_quote = WS_DISPLAY_ALIASES.get(quote, quote)
+    return f"{normalized_base}/{normalized_quote}"
 
 
 def _pair_lookup_candidates(pair: str) -> List[str]:
@@ -80,7 +95,7 @@ def _create_pair_metadata(raw_name: str, pair_data: Dict[str, Any]) -> PairMetad
     except (TypeError, ValueError):
         min_order_size = 0.0
 
-    ws_symbol = pair_data.get("wsname") or altname
+    ws_symbol = _normalize_ws_symbol_for_v2(str(pair_data.get("wsname") or altname))
     price_decimals = int(pair_data.get("pair_decimals") or 0)
     volume_decimals = int(pair_data.get("lot_decimals") or 0)
     status = str(pair_data.get("status") or "unknown")

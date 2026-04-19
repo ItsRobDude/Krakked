@@ -24,6 +24,15 @@ def test_get_strategies_enveloped(client, strategy_context):
             last_actions_at=None,
             current_positions=[],
             pnl_summary={"pnl": 1.0},
+            conflict_summary=[
+                {
+                    "pair": "BTC/USD",
+                    "competing_strategies": ["trend_core", "vol_breakout"],
+                    "winner_strategy_id": "trend_core",
+                    "winning_reason": "higher effective share",
+                    "outcome": "winner",
+                }
+            ],
         )
     ]
 
@@ -35,6 +44,7 @@ def test_get_strategies_enveloped(client, strategy_context):
     assert payload["data"][0]["strategy_id"] == "trend_core"
     assert payload["data"][0]["label"] == "Trend Core"
     assert payload["data"][0]["configured_weight"] == 100
+    assert payload["data"][0]["conflict_summary"][0]["pair"] == "BTC/USD"
 
 
 def test_get_strategies_without_trailing_slash(client, strategy_context):

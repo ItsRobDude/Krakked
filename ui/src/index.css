@@ -1711,6 +1711,82 @@ body {
   gap: 0.45rem;
 }
 
+.strategy-scorecard-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 0.75rem;
+}
+
+.strategy-scorecard {
+  display: grid;
+  gap: 0.7rem;
+  padding: 0.9rem 1rem;
+  border-radius: 14px;
+  border: 1px solid rgba(146, 162, 183, 0.12);
+  background: rgba(16, 24, 35, 0.78);
+}
+
+.strategy-scorecard__header,
+.strategy-scorecard__pills,
+.strategy-summary-panel__footer {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.65rem;
+  flex-wrap: wrap;
+}
+
+.strategy-scorecard__title {
+  margin: 0;
+  font-weight: 800;
+  color: #f8fafc;
+}
+
+.strategy-scorecard__subtitle {
+  margin: 0.18rem 0 0;
+  color: #8ea2b7;
+  font-size: 0.82rem;
+}
+
+.strategy-scorecard__metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.65rem;
+}
+
+.strategy-scorecard__label,
+.strategy-scorecard__detail-label {
+  display: block;
+  color: #91a4b8;
+  font-size: 0.76rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.strategy-scorecard__metrics strong {
+  display: block;
+  margin-top: 0.18rem;
+  color: #f8fafc;
+}
+
+.strategy-scorecard__detail-row {
+  display: grid;
+  gap: 0.18rem;
+  color: #d5dfeb;
+  font-size: 0.9rem;
+}
+
+.strategy-scorecard__empty {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.strategy-summary-panel__footer {
+  margin-top: 0.85rem;
+  padding-top: 0.85rem;
+  border-top: 1px solid rgba(146, 162, 183, 0.1);
+}
+
 .summary-table__head,
 .summary-table__row {
   display: grid;
@@ -1828,6 +1904,10 @@ body {
   }
 
   .summary-table__row {
+    grid-template-columns: 1fr;
+  }
+
+  .strategy-scorecard__metrics {
     grid-template-columns: 1fr;
   }
 

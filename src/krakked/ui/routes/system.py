@@ -26,6 +26,7 @@ from krakked.config_loader import (
     _load_yaml_mapping,
     _resolve_effective_env,
     get_default_ohlc_store_config,
+    get_default_starter_strategies_config,
     get_initial_ui_config,
     parse_app_config,
     write_initial_config,
@@ -147,6 +148,7 @@ def _build_setup_config_data(
         "session": {"account_id": "default"},
         # Default ML config
         "ml": {"enabled": True},
+        "strategies": get_default_starter_strategies_config(),
     }
 
 
@@ -1000,6 +1002,7 @@ async def system_health(request: Request) -> ApiEnvelope[SystemHealthPayload]:
         market_data_ok = None
         market_data_stale = None
         market_data_reason = None
+        market_data_detail = None
         market_data_max_staleness = None
 
         if market_data_health:
@@ -1012,6 +1015,7 @@ async def system_health(request: Request) -> ApiEnvelope[SystemHealthPayload]:
                 "degraded",
             }
             market_data_reason = getattr(market_data_health, "reason", None)
+            market_data_detail = getattr(market_data_health, "detail", None)
             market_data_max_staleness = getattr(
                 market_data_health, "max_staleness", None
             )
@@ -1079,6 +1083,7 @@ async def system_health(request: Request) -> ApiEnvelope[SystemHealthPayload]:
             market_data_ok=bool(market_data_ok),
             market_data_status=market_data_status,
             market_data_reason=market_data_reason,
+            market_data_detail=market_data_detail,
             market_data_stale=market_data_stale,
             market_data_max_staleness=market_data_max_staleness,
             execution_ok=execution_ok,

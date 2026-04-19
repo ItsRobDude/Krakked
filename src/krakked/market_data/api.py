@@ -37,6 +37,7 @@ class MarketDataStatus:
     max_staleness: Optional[float] = None
     reason: Optional[str] = None
     stale_pairs: Optional[List[str]] = None
+    detail: Optional[str] = None
 
 
 def validate_pairs_with_client(client: KrakenRESTClient, pairs: List[str]) -> List[str]:
@@ -494,6 +495,12 @@ class MarketDataAPI:
             raise PairNotFoundError(pair)
         return self._universe_map[canonical]
 
+    def get_display_pair(self, pair: str) -> str:
+        try:
+            return self.get_pair_metadata(pair).ws_symbol
+        except Exception:
+            return pair
+
     def get_pair_metadata_or_raise(self, pair: str) -> PairMetadata:
         """Return metadata for ``pair`` or raise a :class:`ValueError` if missing."""
 
@@ -729,6 +736,7 @@ class MarketDataAPI:
         max_staleness: Optional[float] = None
         stale_detected = False
         stale_pairs: List[str] = []
+        market_data_detail: Optional[str] = None
 
         for pair_meta in self._universe:
             is_fresh, stale_time = self._ticker_freshness(pair_meta.canonical)
@@ -752,11 +760,36 @@ class MarketDataAPI:
                 max_staleness=max_staleness,
                 reason="awaiting_first_ticks",
                 stale_pairs=stale_pairs or None,
+                detail="Streaming is connected and waiting for the first fresh ticks.",
             )
             self._last_health_status = status
             return status
 
+        if self._ws_client:
+            for pair_key, pair_status in self._ws_client.subscription_status.items():
+                for channel, status_record in pair_status.items():
+                    if status_record.get("status") != "subscribed":
+                        display_pair = self.get_display_pair(pair_key)
+                        message = status_record.get("message") or "subscription failed"
+                        market_data_detail = (
+                            f"{display_pair} {channel} subscription issue: {message}"
+                        )
+                        status = MarketDataStatus(
+                            health="degraded",
+                            max_staleness=max_staleness,
+                            reason="subscription_error",
+                            stale_pairs=stale_pairs or None,
+                            detail=market_data_detail,
+                        )
+                        self._last_health_status = status
+                        return status
+
         if stale_detected:
+            if stale_pairs:
+                display_pairs = [self.get_display_pair(pair) for pair in stale_pairs[:3]]
+                market_data_detail = ", ".join(display_pairs)
+                if len(stale_pairs) > 3:
+                    market_data_detail = f"{market_data_detail} and {len(stale_pairs) - 3} more"
             status_name = (
                 "warming_up"
                 if (in_startup_grace or backfill_active)
@@ -769,6 +802,7 @@ class MarketDataAPI:
                 max_staleness=max_staleness,
                 reason="data_stale" if status_name == "degraded" else "warming_up",
                 stale_pairs=stale_pairs,
+                detail=market_data_detail,
             )
             self._last_health_status = status
             return status
@@ -777,6 +811,7 @@ class MarketDataAPI:
             health="streaming",
             max_staleness=max_staleness or 0.0,
             reason="streaming",
+            detail=f"{connection_status.streaming_pairs} pairs streaming",
         )
         self._last_health_status = status
         return status

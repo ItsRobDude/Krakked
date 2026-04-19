@@ -154,7 +154,10 @@ def test_system_health_reports_config_and_risk_flags(client, system_context):
         subscription_errors=0,
     )
     system_context.market_data.get_cached_health_status.return_value = MarketDataStatus(
-        health="degraded", max_staleness=12.5, reason="stream delay"
+        health="degraded",
+        max_staleness=12.5,
+        reason="stream delay",
+        detail="BTC/USD ticker subscription issue: Currency pair not supported XBT/USD",
     )
     system_context.strategy_engine.get_risk_status.return_value = SimpleNamespace(
         kill_switch_active=True
@@ -175,6 +178,10 @@ def test_system_health_reports_config_and_risk_flags(client, system_context):
     assert payload["ui_read_only"] is True
     assert payload["market_data_status"] == "degraded"
     assert payload["market_data_reason"] == "stream delay"
+    assert (
+        payload["market_data_detail"]
+        == "BTC/USD ticker subscription issue: Currency pair not supported XBT/USD"
+    )
     assert payload["market_data_ok"] is False
     assert payload["market_data_stale"] is True
     assert payload["kill_switch_active"] is True
@@ -483,6 +490,12 @@ def test_setup_config_uses_starter_universe_when_none_provided(
         "ETH/USD",
         "SOL/USD",
         "ADA/USD",
+    ]
+    assert config_data["strategies"]["enabled"] == [
+        "trend_core",
+        "vol_breakout",
+        "majors_mean_rev",
+        "rs_rotation",
     ]
 
 

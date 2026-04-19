@@ -105,6 +105,7 @@ export type SystemHealth = {
   market_data_ok: boolean;
   market_data_status: string;
   market_data_reason?: string | null;
+  market_data_detail?: string | null;
   market_data_stale?: boolean;
   market_data_max_staleness?: number | null;
   execution_ok: boolean;
@@ -167,6 +168,13 @@ export type StrategyState = {
   last_actions_at: string | null;
   pnl_summary: { realized_pnl_usd?: number; exposure_pct?: number };
   last_intents?: StrategyIntentPreview[] | null;
+  conflict_summary?: Array<{
+    pair: string;
+    competing_strategies: string[];
+    winner_strategy_id: string | null;
+    winning_reason: string;
+    outcome: 'winner' | 'loser' | 'netted_out';
+  }> | null;
   params?: StrategyParams;
   configured_weight: number;
   effective_weight_pct?: number | null;

@@ -63,12 +63,24 @@ export function StrategiesPanel({
     return { label: 'In trouble', tone: 'pill--danger' as const };
   };
 
+  const momentumBadge = (strategy: StrategyState, realizedPnl?: number, drawdownPct?: number) => {
+    if (!strategy.enabled) return { label: 'Paused', tone: 'pill--neutral' as const };
+    if (strategy.conflict_summary?.some((entry) => entry.outcome === 'winner')) {
+      return { label: 'Leading', tone: 'pill--long' as const };
+    }
+    if ((drawdownPct ?? 0) >= 25) return { label: 'Under pressure', tone: 'pill--danger' as const };
+    if ((realizedPnl ?? 0) < 0 || (drawdownPct ?? 0) >= 10) {
+      return { label: 'Cooling', tone: 'pill--warning' as const };
+    }
+    return { label: 'Stable', tone: 'pill--info' as const };
+  };
+
   return (
     <section className="panel strategy-panel" aria-live="polite">
       <div className="panel__header">
         <div>
           <h2>Strategies</h2>
-          <p className="panel__hint">Toggle strategies, set a 1-100 weight, and pick a risk posture</p>
+          <p className="panel__hint">Toggle strategies, tune weights, and see which strategies are currently leading or cooling.</p>
         </div>
       </div>
       <p className="panel__description">
@@ -100,12 +112,15 @@ export function StrategiesPanel({
             const perf = performance[strategy.strategy_id];
             const drawdown = drawdownBadge(perf?.max_drawdown_pct);
             const latestIntent = strategy.last_intents?.[0];
+            const latestConflict = strategy.conflict_summary?.[0];
+            const momentum = momentumBadge(strategy, perf?.realized_pnl_quote, perf?.max_drawdown_pct);
 
             return (
               <div key={strategy.strategy_id} className="table__row" role="row">
                 <span role="cell" className="strategy__label">
                   <span className="strategy__name" title={strategy.strategy_id}>{strategy.label}</span>
                   <span className="strategy__id">{strategy.strategy_id}</span>
+                  <span className={`pill ${momentum.tone}`}>{momentum.label}</span>
                   {STRATEGY_TAGS[strategy.strategy_id] ? (
                     <span className="pill pill--muted strategy__tag">
                       {STRATEGY_TAGS[strategy.strategy_id]}
@@ -156,9 +171,18 @@ export function StrategiesPanel({
                   {formatPnl(strategy.pnl_summary?.realized_pnl_usd)}
                 </span>
                 <span role="cell" className="strategy__meta" title={latestIntent ? JSON.stringify(latestIntent) : undefined}>
-                  {latestIntent
-                    ? `${latestIntent.side} ${latestIntent.pair} (${latestIntent.timeframe})`
-                    : 'No recent signals'}
+                  <div style={{ display: 'grid', gap: '0.35rem' }}>
+                    <span>
+                      {latestIntent
+                        ? `${latestIntent.side} ${latestIntent.pair} (${latestIntent.timeframe})`
+                        : 'No recent signals'}
+                    </span>
+                    <span>
+                      {latestConflict
+                        ? `Conflict: ${latestConflict.pair} ${latestConflict.winning_reason}`
+                        : 'Conflict: clear'}
+                    </span>
+                  </div>
                 </span>
                 <span role="cell" className="strategy__meta">
                   {perf ? formatPnl(perf.realized_pnl_quote) : 'No trades'}

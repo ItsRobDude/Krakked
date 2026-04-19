@@ -88,6 +88,7 @@ class StrategyState:
     current_positions: List[SpotPosition]  # positions attributable to this strategy
     pnl_summary: Dict[str, float]  # high-level from PortfolioService
     last_intents: Optional[List[Dict[str, Any]]] = None
+    conflict_summary: Optional[List[Dict[str, Any]]] = None
     params: Dict[str, Any] = field(default_factory=dict)
     configured_weight: int = 100
     effective_weight_pct: Optional[float] = None

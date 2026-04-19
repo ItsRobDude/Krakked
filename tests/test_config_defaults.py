@@ -3,6 +3,7 @@ from pathlib import Path
 import appdirs  # type: ignore[import-untyped]
 
 from krakked.config import get_config_dir, load_config
+from krakked.config_loader import DEFAULT_STARTER_STRATEGY_IDS
 
 
 def test_load_config_sets_default_ohlc_store(monkeypatch, tmp_path: Path):
@@ -77,3 +78,52 @@ def test_load_config_uses_data_dir_env_override_for_default_ohlc_store(
     app_config = load_config()
 
     assert app_config.market_data.ohlc_store["root_dir"] == str(data_dir / "ohlc")
+
+
+def test_load_config_applies_default_starter_strategies_when_missing(
+    monkeypatch, tmp_path: Path
+):
+    config_dir = tmp_path / "config"
+    data_dir = tmp_path / "data"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    (config_dir / "config.yaml").write_text("execution:\n  mode: paper\n")
+
+    monkeypatch.setattr(appdirs, "user_config_dir", lambda appname: config_dir)
+    monkeypatch.setattr(appdirs, "user_data_dir", lambda appname: data_dir)
+
+    app_config = load_config()
+
+    assert app_config.strategies.enabled == DEFAULT_STARTER_STRATEGY_IDS
+    assert set(app_config.strategies.configs) == set(DEFAULT_STARTER_STRATEGY_IDS)
+    assert app_config.strategies.configs["trend_core"].enabled is True
+
+
+def test_load_config_ignores_empty_runtime_strategy_override_when_bootstrapping(
+    monkeypatch, tmp_path: Path
+):
+    config_dir = tmp_path / "config"
+    data_dir = tmp_path / "data"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    (config_dir / "config.yaml").write_text(
+        "session:\n  profile_name: Rob\nprofiles:\n  Rob:\n    config_path: profiles\\Rob.yaml\n"
+    )
+    profile_dir = config_dir / "profiles" / "Rob"
+    profile_dir.mkdir(parents=True, exist_ok=True)
+    (config_dir / "profiles" / "Rob.yaml").write_text(
+        "execution:\n  mode: paper\nml:\n  enabled: true\n"
+    )
+    (profile_dir / "config.runtime.yaml").write_text(
+        "strategies:\n  enabled: []\n  configs: {}\n"
+    )
+
+    monkeypatch.setattr(appdirs, "user_config_dir", lambda appname: config_dir)
+    monkeypatch.setattr(appdirs, "user_data_dir", lambda appname: data_dir)
+
+    app_config = load_config()
+
+    assert app_config.strategies.enabled == DEFAULT_STARTER_STRATEGY_IDS
+    assert "trend_core" in app_config.strategies.configs
