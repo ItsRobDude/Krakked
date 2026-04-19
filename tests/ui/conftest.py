@@ -147,6 +147,10 @@ def build_test_context(
     portfolio.get_asset_exposure.return_value = []
     portfolio.get_trade_history.return_value = []
     portfolio.create_snapshot.return_value = _mock_snapshot()
+    portfolio.last_sync_ok = True
+    portfolio.last_sync_reason = None
+    portfolio.last_sync_at = None
+    portfolio.baseline_source = "ledger_history"
 
     strategy_engine = MagicMock(name="strategy_engine")
     strategy_engine.get_risk_status.return_value = _mock_risk_status()

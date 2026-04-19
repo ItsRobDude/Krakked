@@ -12,17 +12,24 @@ export type PositionsTableProps = {
   positions: PositionRow[];
   title?: string;
   hint?: string;
+  emptyMessage?: string;
 };
 
-export function PositionsTable({ positions, title = "Open Positions", hint = "Live feed ready" }: PositionsTableProps) {
-  if (positions.length === 0) return null;
-
+export function PositionsTable({
+  positions,
+  title = "Open Positions",
+  hint = "Live feed ready",
+  emptyMessage = "No open positions.",
+}: PositionsTableProps) {
   return (
     <div className="panel">
       <div className="panel__header">
         <h2>{title}</h2>
         <p className="panel__hint">{hint}</p>
       </div>
+      {positions.length === 0 ? (
+        <div className="panel__empty">{emptyMessage}</div>
+      ) : (
       <div className="table table--positions" role="table" aria-label={title}>
         <div className="table__head" role="row">
           <span role="columnheader">Pair</span>
@@ -49,6 +56,7 @@ export function PositionsTable({ positions, title = "Open Positions", hint = "Li
           ))}
         </div>
       </div>
+      )}
     </div>
   );
 }

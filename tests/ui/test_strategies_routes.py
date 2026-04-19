@@ -36,6 +36,27 @@ def test_get_strategies_enveloped(client, strategy_context):
     assert payload["data"][0]["configured_weight"] == 100
 
 
+def test_get_strategies_without_trailing_slash(client, strategy_context):
+    now = datetime.now(UTC)
+    strategy_context.strategy_engine.get_strategy_state.return_value = [
+        StrategyState(
+            strategy_id="trend_core",
+            enabled=True,
+            last_intents_at=now,
+            last_actions_at=None,
+            current_positions=[],
+            pnl_summary={"pnl": 1.0},
+        )
+    ]
+
+    response = client.get("/api/strategies")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["error"] is None
+    assert payload["data"][0]["strategy_id"] == "trend_core"
+
+
 @pytest.mark.parametrize("ui_read_only", [False])
 def test_set_strategy_enabled_updates_state(client, strategy_context):
     strategy_context.strategy_engine.strategy_states["alpha"] = SimpleNamespace(

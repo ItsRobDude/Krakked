@@ -8,6 +8,35 @@ from krakked.connection.rest_client import KrakenRESTClient
 
 logger = logging.getLogger(__name__)
 
+ASSET_ALIASES = {
+    "BTC": "XBT",
+    "DOGE": "XDG",
+    "ZUSD": "USD",
+}
+
+
+def _pair_lookup_candidates(pair: str) -> List[str]:
+    normalized = str(pair or "").strip().upper()
+    if not normalized:
+        return []
+
+    candidates = [normalized]
+    slashless = normalized.replace("/", "")
+    if slashless not in candidates:
+        candidates.append(slashless)
+
+    if "/" in normalized:
+        base, quote = normalized.split("/", 1)
+        alias_base = ASSET_ALIASES.get(base, base)
+        alias_quote = ASSET_ALIASES.get(quote, quote)
+        aliased = f"{alias_base}/{alias_quote}"
+        aliased_slashless = f"{alias_base}{alias_quote}"
+        for candidate in (aliased, aliased_slashless):
+            if candidate not in candidates:
+                candidates.append(candidate)
+
+    return candidates
+
 
 def _is_valid_usd_spot_pair(
     raw_name: str, pair_data: Dict[str, Any], region_profile: RegionProfile
@@ -162,11 +191,16 @@ def build_universe(
 
     # 2. Apply filtering logic
     candidate_pairs = {}
-    raw_pairs_by_altname = {}
+    raw_pairs_by_alias = {}
     for raw_name, pair_data in asset_pairs_response.items():
-        altname = pair_data.get("altname")
+        altname = str(pair_data.get("altname") or "").upper()
+        wsname = str(pair_data.get("wsname") or "").upper()
         if altname:
-            raw_pairs_by_altname[altname] = (raw_name, pair_data)
+            raw_pairs_by_alias[altname] = (raw_name, pair_data)
+            raw_pairs_by_alias[altname.replace("/", "")] = (raw_name, pair_data)
+        if wsname:
+            raw_pairs_by_alias[wsname] = (raw_name, pair_data)
+            raw_pairs_by_alias[wsname.replace("/", "")] = (raw_name, pair_data)
 
         if _is_valid_usd_spot_pair(raw_name, pair_data, region_profile):
             metadata = _create_pair_metadata(raw_name, pair_data)
@@ -178,18 +212,25 @@ def build_universe(
 
     # 3. Apply include/exclude overrides with hard validity handling
     forced_includes = set()
-    universe_after_overrides = set(candidate_pairs.keys())
+    universe_after_overrides = (
+        set() if universe_config.include_pairs else set(candidate_pairs.keys())
+    )
 
     if universe_config.include_pairs:
         for pair in universe_config.include_pairs:
-            raw_pair_entry = raw_pairs_by_altname.get(pair)
+            raw_pair_entry = None
+            for candidate in _pair_lookup_candidates(pair):
+                raw_pair_entry = raw_pairs_by_alias.get(candidate)
+                if raw_pair_entry:
+                    break
             if raw_pair_entry:
                 raw_name_for_alt, pair_data_for_alt = raw_pair_entry
                 if _is_valid_usd_spot_pair(
                     raw_name_for_alt, pair_data_for_alt, region_profile
                 ):
-                    forced_includes.add(pair)
-                    universe_after_overrides.add(pair)
+                    canonical = str(pair_data_for_alt.get("altname") or pair).upper()
+                    forced_includes.add(canonical)
+                    universe_after_overrides.add(canonical)
                 else:
                     logger.warning(
                         f"Pair '{pair}' in 'include_pairs' failed hard validity checks and will be ignored."

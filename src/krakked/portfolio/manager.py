@@ -1,7 +1,7 @@
 # src/krakked/portfolio/manager.py
 
 import logging
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
@@ -13,7 +13,7 @@ from krakked.market_data.api import MarketDataAPI
 from krakked.strategy.performance import compute_strategy_performance
 
 from .balance_engine import BalanceEngine, classify_cashflow, rebuild_balances
-from .models import CashFlowRecord, LedgerEntry, PortfolioSnapshot
+from .models import AssetBalance, BalanceSnapshot, CashFlowRecord, LedgerEntry, PortfolioSnapshot
 from .portfolio import Portfolio
 from .store import PortfolioStore, SQLitePortfolioStore
 
@@ -64,12 +64,37 @@ class PortfolioService:
         )
         self._bootstrapped = False
         self._last_sync_ok: bool = True  # pessimistic until first failure
+        self._last_sync_at: Optional[datetime] = None
+        self._last_sync_reason: Optional[str] = None
+        self._baseline_source: str = (
+            "exchange_balances"
+            if getattr(config.execution, "mode", "paper") == "paper"
+            else "ledger_history"
+        )
 
     @property
     def last_sync_ok(self) -> bool:
         """True if the last sync completed successfully."""
 
         return self._last_sync_ok
+
+    @property
+    def last_sync_at(self) -> Optional[datetime]:
+        """Timestamp of the most recent successful sync."""
+
+        return self._last_sync_at
+
+    @property
+    def last_sync_reason(self) -> Optional[str]:
+        """Reason for the last failed sync, if any."""
+
+        return self._last_sync_reason
+
+    @property
+    def baseline_source(self) -> str:
+        """Describes the portfolio baseline currently exposed to the UI."""
+
+        return self._baseline_source
 
     def initialize(self):
         """
@@ -88,6 +113,16 @@ class PortfolioService:
 
     def _bootstrap_from_store(self):
         if self._bootstrapped:
+            return
+
+        if self._is_paper_mode():
+            snapshot = self.store.get_latest_balance_snapshot()
+            self.portfolio.balances = dict(snapshot.balances) if snapshot else {}
+            self.portfolio.positions.clear()
+            self.portfolio.realized_pnl_history.clear()
+            self.portfolio.realized_pnl_base_by_pair.clear()
+            self.portfolio.fees_paid_base_by_pair.clear()
+            self._bootstrapped = True
             return
 
         # 1. Load latest BalanceSnapshot
@@ -133,27 +168,109 @@ class PortfolioService:
 
         self._bootstrap_from_store()
         self._last_sync_ok = False
+        self._last_sync_reason = None
 
-        # 1. Fetch and Save Trades
-        latest_trades = self.store.get_trades(limit=1)  # ordered by time desc
-        since_ts = latest_trades[0]["time"] if latest_trades else None
+        try:
+            if self._is_paper_mode():
+                return self._sync_paper_reference_portfolio()
 
-        new_trade_count = self._sync_trades_history(since_ts)
-        if new_trade_count < 0:
-            # Sync failed (logged internally), return partial results (0, 0)
-            return {"new_trades": 0, "new_cash_flows": 0}
+            # 1. Fetch and Save Trades
+            latest_trades = self.store.get_trades(limit=1)  # ordered by time desc
+            since_ts = latest_trades[0]["time"] if latest_trades else None
 
-        # 2. Fetch Ledgers
-        new_cash_flows = self._sync_ledgers()
+            new_trade_count = self._sync_trades_history(since_ts)
+            if new_trade_count < 0:
+                # Sync failed (logged internally), return partial results (0, 0)
+                self._last_sync_reason = "Trade ingestion failed during portfolio sync."
+                return {"new_trades": 0, "new_cash_flows": 0}
 
-        # 3. Reconcile
-        self._reconcile()
+            # 2. Fetch Ledgers
+            new_cash_flows = self._sync_ledgers()
+
+            # 3. Reconcile
+            self._reconcile()
+            self._last_sync_ok = True
+            self._last_sync_reason = None
+            self._last_sync_at = datetime.now(timezone.utc)
+
+            return {
+                "new_trades": new_trade_count,
+                "new_cash_flows": new_cash_flows,
+            }
+        except Exception as exc:
+            self._last_sync_reason = str(exc)
+            raise
+
+    def _is_paper_mode(self) -> bool:
+        execution_config = getattr(getattr(self, "app_config", None), "execution", None)
+        return getattr(execution_config, "mode", None) == "paper"
+
+    def _sync_paper_reference_portfolio(self) -> Dict[str, int]:
+        """Use current exchange balances as the paper-mode portfolio baseline."""
+
+        balance_resp = self.rest_client.get_private("Balance")
+        now = datetime.now(timezone.utc)
+        self._baseline_source = "exchange_balances"
+        self.portfolio.balances = self._balances_from_exchange(balance_resp)
+        self.portfolio.positions.clear()
+        self.portfolio.realized_pnl_history.clear()
+        self.portfolio.realized_pnl_base_by_pair.clear()
+        self.portfolio.fees_paid_base_by_pair.clear()
+
+        # Paper mode is a reference portfolio seeded from current balances, not
+        # a replayed history. Reconcile against the same exchange snapshot so
+        # integrity stays tied to the latest fetched baseline.
+        self.portfolio.reconcile(balance_resp)
+        self._save_balance_snapshot(now)
+        self.portfolio.maybe_snapshot(now=int(now.timestamp()))
+
         self._last_sync_ok = True
+        self._last_sync_reason = None
+        self._last_sync_at = now
+        return {"new_trades": 0, "new_cash_flows": 0}
 
-        return {
-            "new_trades": new_trade_count,
-            "new_cash_flows": new_cash_flows,
-        }
+    def _balances_from_exchange(
+        self, balance_resp: Dict[str, str]
+    ) -> Dict[str, AssetBalance]:
+        balances: Dict[str, AssetBalance] = {}
+        for asset_raw, amount_str in balance_resp.items():
+            try:
+                total = float(amount_str)
+            except (TypeError, ValueError):
+                continue
+
+            if abs(total) < 1e-12:
+                continue
+
+            asset = self.market_data.normalize_asset(asset_raw)
+            balances[asset] = AssetBalance(
+                asset=asset,
+                free=total,
+                reserved=0.0,
+                total=total,
+            )
+
+        return balances
+
+    def _save_balance_snapshot(self, now: datetime) -> None:
+        snapshot = BalanceSnapshot(
+            id=None,
+            time=now.timestamp(),
+            last_ledger_id="",
+            balances={
+                asset: AssetBalance(
+                    asset=balance.asset,
+                    free=balance.free,
+                    reserved=balance.reserved,
+                    total=balance.total,
+                )
+                for asset, balance in self.portfolio.balances.items()
+            },
+        )
+        latest_snapshot = self.store.get_latest_balance_snapshot()
+        if latest_snapshot and latest_snapshot.balances == snapshot.balances:
+            return
+        self.store.save_balance_snapshot(snapshot)
 
     def _sync_trades_history(self, since_ts: Optional[float]) -> int:
         """Fetch, deduplicate, enrich, and persist new trades."""

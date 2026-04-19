@@ -57,17 +57,31 @@ def validate_pairs_with_client(client: KrakenRESTClient, pairs: List[str]) -> Li
         if "result" in resp:
             known_pairs = resp["result"]
 
-        known_keys = set(known_pairs.keys())
-        known_altnames = {
-            v.get("altname") for v in known_pairs.values() if isinstance(v, dict)
-        }
+        known_aliases = set()
+        for raw_name, pair_data in known_pairs.items():
+            known_aliases.add(str(raw_name).upper())
+            if isinstance(pair_data, dict):
+                altname = str(pair_data.get("altname") or "").upper()
+                wsname = str(pair_data.get("wsname") or "").upper()
+                if altname:
+                    known_aliases.add(altname)
+                    known_aliases.add(altname.replace("/", ""))
+                if wsname:
+                    known_aliases.add(wsname)
+                    known_aliases.add(wsname.replace("/", ""))
 
         invalid = []
         for pair in pairs:
-            if pair not in known_keys and pair not in known_altnames:
-                slashless = pair.replace("/", "")
-                if slashless not in known_keys and slashless not in known_altnames:
-                    invalid.append(pair)
+            normalized = str(pair or "").strip().upper()
+            candidates = [normalized, normalized.replace("/", "")]
+            if "/" in normalized:
+                base, quote = normalized.split("/", 1)
+                alias_base = ASSET_ALIASES.get(base, base)
+                alias_quote = ASSET_ALIASES.get(quote, quote)
+                candidates.extend([f"{alias_base}/{alias_quote}", f"{alias_base}{alias_quote}"])
+
+            if not any(candidate in known_aliases for candidate in candidates):
+                invalid.append(pair)
         return invalid
 
     except Exception as e:

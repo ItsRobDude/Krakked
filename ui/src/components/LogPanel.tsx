@@ -8,6 +8,8 @@ export type LogEntry = {
 
 export type LogPanelProps = {
   entries: LogEntry[];
+  title?: string;
+  hint?: string;
 };
 
 const levelToBadge: Record<LogEntry['level'], string> = {
@@ -16,27 +18,35 @@ const levelToBadge: Record<LogEntry['level'], string> = {
   error: 'pill--danger',
 };
 
-export function LogPanel({ entries }: LogPanelProps) {
+export function LogPanel({
+  entries,
+  title = 'Recent Logs',
+  hint = 'Feed from the trading runtime',
+}: LogPanelProps) {
   return (
     <div className="panel log-panel">
       <div className="panel__header">
-        <h2>Recent Logs</h2>
-        <p className="panel__hint">Feed from the trading runtime</p>
+        <h2>{title}</h2>
+        <p className="panel__hint">{hint}</p>
       </div>
-      <ul className="log-panel__list" aria-live="polite">
-        {entries.map((entry) => (
-          <li key={entry.timestamp + entry.message} className="log-panel__item">
-            <div>
-              <p className="log-panel__message">{entry.message}</p>
-              <p className="log-panel__meta">
-                <span className={`pill ${levelToBadge[entry.level]}`}>{entry.level}</span>
-                {entry.source ? <span className="log-panel__source">{entry.source}</span> : null}
-              </p>
-            </div>
-            <time className="log-panel__time">{entry.timestamp}</time>
-          </li>
-        ))}
-      </ul>
+      {entries.length === 0 ? (
+        <div className="panel__empty">No recent activity yet.</div>
+      ) : (
+        <ul className="log-panel__list" aria-live="polite">
+          {entries.map((entry) => (
+            <li key={entry.timestamp + entry.message} className="log-panel__item">
+              <div>
+                <p className="log-panel__message">{entry.message}</p>
+                <p className="log-panel__meta">
+                  <span className={`pill ${levelToBadge[entry.level]}`}>{entry.level}</span>
+                  {entry.source ? <span className="log-panel__source">{entry.source}</span> : null}
+                </p>
+              </div>
+              <time className="log-panel__time">{entry.timestamp}</time>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }

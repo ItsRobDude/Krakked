@@ -24,6 +24,7 @@ class PortfolioSummary(BaseModel):
     unrealized_pnl_usd: Optional[float]
     drift_flag: Optional[bool]
     last_snapshot_ts: Optional[int]
+    portfolio_baseline: Optional[str] = None
 
 
 class PositionPayload(BaseModel):
@@ -256,6 +257,22 @@ class SystemHealthPayload(BaseModel):
     kill_switch_active: Optional[bool] = Field(
         None,
         description="Reports whether the risk engine's kill switch is currently active.",
+    )
+    portfolio_sync_ok: bool = Field(
+        True,
+        description="Whether the latest portfolio sync completed successfully.",
+    )
+    portfolio_sync_reason: Optional[str] = Field(
+        None,
+        description="Reason the latest portfolio sync failed, when degraded.",
+    )
+    portfolio_last_sync_at: Optional[datetime] = Field(
+        None,
+        description="Timestamp of the most recent successful portfolio sync.",
+    )
+    portfolio_baseline: Optional[str] = Field(
+        None,
+        description="Describes the portfolio baseline shown in the UI, such as exchange_balances or ledger_history.",
     )
     drift_detected: bool
     drift_reason: Optional[str] = None

@@ -179,6 +179,7 @@ class SessionStatePayload(BaseModel):
     """Response payload describing the current session state."""
 
     active: bool
+    reloading: bool = False
     mode: str
     loop_interval_sec: float
     profile_name: Optional[str]
@@ -299,6 +300,7 @@ def _session_payload(ctx) -> SessionStatePayload:
     session = ctx.session
     return SessionStatePayload(
         active=session.active,
+        reloading=bool(ctx.reinitialize_event.is_set()),
         mode=session.mode,
         loop_interval_sec=session.loop_interval_sec,
         profile_name=session.profile_name,
@@ -960,6 +962,10 @@ async def system_health(request: Request) -> ApiEnvelope[SystemHealthPayload]:
                     current_mode="setup",
                     ui_read_only=False,
                     kill_switch_active=False,
+                    portfolio_sync_ok=False,
+                    portfolio_sync_reason="setup_required",
+                    portfolio_last_sync_at=None,
+                    portfolio_baseline=None,
                     drift_detected=False,
                     market_data_max_staleness=None,
                 ),
@@ -1027,6 +1033,10 @@ async def system_health(request: Request) -> ApiEnvelope[SystemHealthPayload]:
             or get_live_trading_block_reason(execution_config) is None
         )
         risk_status = ctx.strategy_engine.get_risk_status()
+        portfolio_sync_ok = bool(getattr(ctx.portfolio, "last_sync_ok", True))
+        portfolio_sync_reason = getattr(ctx.portfolio, "last_sync_reason", None)
+        portfolio_last_sync_at = getattr(ctx.portfolio, "last_sync_at", None)
+        portfolio_baseline = getattr(ctx.portfolio, "baseline_source", None)
         health_payload = SystemHealthPayload(
             app_version=APP_VERSION,
             execution_mode=getattr(execution_config, "mode", None),
@@ -1044,6 +1054,10 @@ async def system_health(request: Request) -> ApiEnvelope[SystemHealthPayload]:
             current_mode=execution_config.mode,
             ui_read_only=ctx.config.ui.read_only,
             kill_switch_active=getattr(risk_status, "kill_switch_active", None),
+            portfolio_sync_ok=portfolio_sync_ok,
+            portfolio_sync_reason=portfolio_sync_reason,
+            portfolio_last_sync_at=portfolio_last_sync_at,
+            portfolio_baseline=portfolio_baseline,
             drift_detected=bool(metrics_snapshot.get("drift_detected")),
             drift_reason=metrics_snapshot.get("drift_reason"),
         )

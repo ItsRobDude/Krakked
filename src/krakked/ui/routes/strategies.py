@@ -39,6 +39,7 @@ def _strategy_label(ctx, strategy_id: str) -> str:
     return strategy_id.replace("_", " ").replace("-", " ").title()
 
 
+@router.get("", response_model=ApiEnvelope[list[StrategyStatePayload]], include_in_schema=False)
 @router.get("/", response_model=ApiEnvelope[list[StrategyStatePayload]])
 async def get_strategies(request: Request) -> ApiEnvelope[list[StrategyStatePayload]]:
     ctx = _context(request)

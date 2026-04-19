@@ -1,4 +1,5 @@
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -129,6 +130,10 @@ def test_system_health_enveloped(client, system_context):
     assert payload["error"] is None
     assert payload["data"]["market_data_ok"] is True
     assert payload["data"]["current_mode"] == "paper"
+    assert payload["data"]["portfolio_sync_ok"] is True
+    assert payload["data"]["portfolio_sync_reason"] is None
+    assert payload["data"]["portfolio_last_sync_at"] is None
+    assert payload["data"]["portfolio_baseline"] == "ledger_history"
 
 
 def test_system_health_reports_config_and_risk_flags(client, system_context):
@@ -154,6 +159,10 @@ def test_system_health_reports_config_and_risk_flags(client, system_context):
     system_context.strategy_engine.get_risk_status.return_value = SimpleNamespace(
         kill_switch_active=True
     )
+    system_context.portfolio.last_sync_ok = False
+    system_context.portfolio.last_sync_reason = "Trade ingestion failed during portfolio sync."
+    system_context.portfolio.last_sync_at = datetime(2026, 4, 19, 19, 30, tzinfo=timezone.utc)
+    system_context.portfolio.baseline_source = "exchange_balances"
 
     response = client.get("/api/system/health")
 
@@ -169,6 +178,10 @@ def test_system_health_reports_config_and_risk_flags(client, system_context):
     assert payload["market_data_ok"] is False
     assert payload["market_data_stale"] is True
     assert payload["kill_switch_active"] is True
+    assert payload["portfolio_sync_ok"] is False
+    assert payload["portfolio_sync_reason"] == "Trade ingestion failed during portfolio sync."
+    assert payload["portfolio_last_sync_at"] == "2026-04-19T19:30:00Z"
+    assert payload["portfolio_baseline"] == "exchange_balances"
 
     assert isinstance(payload["rest_api_reachable"], bool)
     assert isinstance(payload["websocket_connected"], bool)
@@ -366,6 +379,17 @@ def test_start_session_reads_ml_from_config(client, system_context):
     assert system_context.session.ml_enabled is False
 
 
+def test_session_payload_reports_reloading_flag(client, system_context):
+    system_context.reinitialize_event.set()
+
+    response = client.get("/api/system/session")
+
+    assert response.status_code == 200
+    payload = response.json()["data"]
+    assert payload["reloading"] is True
+    assert payload["active"] is False
+
+
 def test_config_loader_gating_prevents_risk_validation_failure(monkeypatch):
     """
     Ensures that when ml.enabled=False, ML strategies are stripped from enabled list
@@ -460,6 +484,25 @@ def test_setup_config_uses_starter_universe_when_none_provided(
         "SOL/USD",
         "ADA/USD",
     ]
+
+
+def test_setup_config_preserves_ws_style_pairs(
+    monkeypatch, client, temp_config_dir
+):
+    monkeypatch.setattr(
+        "krakked.ui.routes.system.get_config_dir", lambda: temp_config_dir
+    )
+
+    response = client.post(
+        "/api/system/setup/config",
+        json={"region_code": "US", "universe_pairs": ["BTC/USD", "ETH/USD"]},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["error"] is None
+
+    config_data = yaml.safe_load((temp_config_dir / "config.yaml").read_text())
+    assert config_data["universe"]["include_pairs"] == ["BTC/USD", "ETH/USD"]
     assert config_data["universe"]["min_24h_volume_usd"] == 100000.0
     assert config_data["market_data"]["backfill_timeframes"] == ["1h", "4h"]
     assert config_data["market_data"]["ws_timeframes"] == ["1m", "5m"]

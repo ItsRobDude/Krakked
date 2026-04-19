@@ -1,21 +1,31 @@
-export type SidebarItem = {
+export type SidebarStatusItem = {
   label: string;
-  description?: string;
-  active?: boolean;
-  badge?: string;
-  planned?: boolean;
+  value: string;
+  tone?: 'ok' | 'warning' | 'danger' | 'muted';
+  hint?: string;
+};
+
+export type SidebarAction = {
+  label: string;
+  tone?: 'default' | 'danger';
+  disabled?: boolean;
+  onClick?: () => void;
+};
+
+export type SidebarMenuItem = {
+  label: string;
+  href: string;
 };
 
 export type SidebarProps = {
-  items: SidebarItem[];
-  footer?: {
-    label: string;
-    value: string;
-    note?: string;
-  };
+  systemStatus: SidebarStatusItem[];
+  integrity: SidebarStatusItem[];
+  actions: SidebarAction[];
+  menu: SidebarMenuItem[];
+  note?: string;
 };
 
-export function Sidebar({ items, footer }: SidebarProps) {
+export function Sidebar({ systemStatus, integrity, actions, menu, note }: SidebarProps) {
   return (
     <div className="sidebar">
       <div className="sidebar__brand">
@@ -26,36 +36,71 @@ export function Sidebar({ items, footer }: SidebarProps) {
         </div>
       </div>
 
-      <nav aria-label="Dashboard sections">
-        <ul className="sidebar__list">
-          {items.map((item) => (
-            <li
-              key={item.label}
-              className={[
-                'sidebar__item',
-                item.active ? 'sidebar__item--active' : '',
-                item.planned ? 'sidebar__item--planned' : '',
-              ].filter(Boolean).join(' ')}
-            >
+      <section className="sidebar__section" aria-label="System status">
+        <p className="sidebar__section-title">System Status</p>
+        <ul className="sidebar__status-list">
+          {systemStatus.map((item) => (
+            <li key={item.label} className="sidebar__status-item">
+              <span className={`sidebar__status-dot sidebar__status-dot--${item.tone ?? 'muted'}`} aria-hidden="true" />
               <div>
-                <p className="sidebar__label">{item.label}</p>
-                {item.description ? <p className="sidebar__description">{item.description}</p> : null}
+                <p className="sidebar__status-label">{item.label}</p>
+                <p className="sidebar__status-value">{item.value}</p>
+                {item.hint ? <p className="sidebar__status-hint">{item.hint}</p> : null}
               </div>
-              {item.badge ? (
-                <span className={`sidebar__badge${item.planned ? ' sidebar__badge--planned' : ''}`}>
-                  {item.badge}
-                </span>
-              ) : null}
+            </li>
+          ))}
+        </ul>
+      </section>
+
+      <section className="sidebar__section" aria-label="Integrity">
+        <p className="sidebar__section-title">Integrity</p>
+        <ul className="sidebar__status-list">
+          {integrity.map((item) => (
+            <li key={item.label} className="sidebar__status-item">
+              <span className={`sidebar__status-dot sidebar__status-dot--${item.tone ?? 'muted'}`} aria-hidden="true" />
+              <div>
+                <p className="sidebar__status-label">{item.label}</p>
+                <p className="sidebar__status-value">{item.value}</p>
+                {item.hint ? <p className="sidebar__status-hint">{item.hint}</p> : null}
+              </div>
+            </li>
+          ))}
+        </ul>
+      </section>
+
+      <section className="sidebar__section" aria-label="Actions">
+        <p className="sidebar__section-title">Actions</p>
+        <div className="sidebar__actions">
+          {actions.map((action) => (
+            <button
+              key={action.label}
+              type="button"
+              className={`sidebar__action${action.tone === 'danger' ? ' sidebar__action--danger' : ''}`}
+              disabled={action.disabled}
+              onClick={action.onClick}
+            >
+              {action.label}
+            </button>
+          ))}
+        </div>
+      </section>
+
+      <nav className="sidebar__section" aria-label="Dashboard sections">
+        <p className="sidebar__section-title">Menu</p>
+        <ul className="sidebar__menu-list">
+          {menu.map((item) => (
+            <li key={item.href}>
+              <a className="sidebar__menu-link" href={item.href}>
+                {item.label}
+              </a>
             </li>
           ))}
         </ul>
       </nav>
 
-      {footer ? (
+      {note ? (
         <div className="sidebar__footer">
-          <p className="sidebar__footer-label">{footer.label}</p>
-          <p className="sidebar__footer-value">{footer.value}</p>
-          {footer.note ? <p className="sidebar__footer-note">{footer.note}</p> : null}
+          <p className="sidebar__footer-note">{note}</p>
         </div>
       ) : null}
     </div>

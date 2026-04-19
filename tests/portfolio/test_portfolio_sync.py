@@ -1,6 +1,10 @@
+from types import SimpleNamespace
 from unittest.mock import Mock
 
+from krakked.config import PortfolioConfig
+from krakked.market_data.exceptions import PairNotFoundError
 from krakked.portfolio.manager import PortfolioService
+from krakked.portfolio.portfolio import Portfolio
 
 
 def _build_service(store, portfolio, api_client):
@@ -145,3 +149,64 @@ def test_sync_does_not_persist_cash_flows_on_failure():
     # Let's check manager.py.
     # If it crashes, last_sync_ok remains False (set at start).
     assert service.last_sync_ok is False
+
+
+def test_paper_sync_uses_exchange_balances_without_trade_replay():
+    store = Mock()
+    portfolio = Mock()
+    api_client = Mock()
+
+    portfolio.balances = {}
+    portfolio.positions = {}
+    portfolio.realized_pnl_history = []
+    portfolio.realized_pnl_base_by_pair = {}
+    portfolio.fees_paid_base_by_pair = {}
+    portfolio.maybe_snapshot = Mock()
+    portfolio.reconcile = Mock()
+
+    api_client.get_private.return_value = {
+        "ZUSD": "125.50",
+        "XXBT": "0.0100000000",
+    }
+
+    service = _build_service(store, portfolio, api_client)
+    service.app_config = SimpleNamespace(execution=SimpleNamespace(mode="paper"))
+    service.market_data = Mock()
+    service.market_data.normalize_asset.side_effect = (
+        lambda asset: {"ZUSD": "USD", "XXBT": "XBT"}.get(asset, asset)
+    )
+
+    result = service.sync()
+
+    assert result == {"new_trades": 0, "new_cash_flows": 0}
+    assert service.last_sync_ok is True
+    assert portfolio.balances["USD"].total == 125.50
+    assert portfolio.balances["XBT"].total == 0.01
+    portfolio.reconcile.assert_called_once()
+    portfolio.maybe_snapshot.assert_called_once()
+    store.save_balance_snapshot.assert_called_once()
+
+
+def test_portfolio_ingest_trades_skips_pairs_outside_active_universe():
+    market_data = Mock()
+    market_data.get_pair_metadata.side_effect = PairNotFoundError("GALAUSD")
+    store = Mock()
+    portfolio = Portfolio(PortfolioConfig(), market_data, store)
+
+    portfolio.ingest_trades(
+        [
+            {
+                "id": "T1",
+                "pair": "GALAUSD",
+                "type": "sell",
+                "price": "0.02",
+                "cost": "2.00",
+                "fee": "0.01",
+                "vol": "100.0",
+                "time": 1,
+            }
+        ],
+        persist=False,
+    )
+
+    assert portfolio.get_positions() == []

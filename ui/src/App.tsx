@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react';
-import { FooterHotkeys } from './components/FooterHotkeys';
 import { KpiGrid, Kpi } from './components/KpiGrid';
 import { Layout } from './components/Layout';
 import { RiskPanel } from './components/RiskPanel';
@@ -7,7 +6,6 @@ import { LogEntry, LogPanel } from './components/LogPanel';
 import { PositionRow, PositionsTable } from './components/PositionsTable';
 import { Sidebar } from './components/Sidebar';
 import { StrategiesPanel } from './components/StrategiesPanel';
-import { WalletRow, WalletTable } from './components/WalletTable';
 import { StartupScreen } from './components/StartupScreen';
 import { SetupWizard } from './components/SetupWizard';
 import { PasswordScreen } from './components/PasswordScreen';
@@ -62,6 +60,7 @@ import { RISK_PRESET_META, formatPresetSummary } from './constants/riskPresets';
 const DASHBOARD_REFRESH_MS = Number(import.meta.env.VITE_REFRESH_DASHBOARD_MS ?? 5000) || 5000;
 const ORDERS_REFRESH_MS = Number(import.meta.env.VITE_REFRESH_ORDERS_MS ?? 5000) || 5000;
 type SystemMessage = { tone: 'info' | 'error' | 'success'; message: string };
+type DashboardAlert = { id: string; tone: 'danger' | 'warning' | 'info'; title: string; message: string };
 
 const formatCurrency = (value: number | null | undefined) => {
   const formatter = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 });
@@ -80,6 +79,21 @@ const formatTimestamp = (timestamp: string | null) => {
   if (Number.isNaN(parsed.getTime())) return 'Unknown';
   return parsed.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
 };
+
+const formatDateTime = (timestamp: string | null | undefined) => {
+  if (!timestamp) return 'Unknown';
+  const parsed = new Date(timestamp);
+  if (Number.isNaN(parsed.getTime())) return 'Unknown';
+  return parsed.toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+};
+
+const getConnectionStateFromHealth = (state: SystemHealth | null): 'connected' | 'degraded' =>
+  state?.market_data_ok && state?.execution_ok && state?.portfolio_sync_ok ? 'connected' : 'degraded';
 
 const isRiskProfile = (value: unknown): value is StrategyRiskProfile =>
   value === 'conservative' || value === 'balanced' || value === 'aggressive';
@@ -100,16 +114,42 @@ const extractMlEnabledFromConfig = (
 
 const RISK_PRESET_OPTIONS: RiskPresetName[] = ['conservative', 'balanced', 'aggressive', 'degen'];
 
-const buildKpis = (summary: PortfolioSummary) => [
-  {
-    label: 'Equity',
-    value: formatCurrency(summary.equity_usd),
-    hint: summary.last_snapshot_ts ? `Last snapshot ${formatTimestamp(summary.last_snapshot_ts)}` : 'Snapshot pending',
-  },
-  { label: 'Cash', value: formatCurrency(summary.cash_usd), hint: 'Usable collateral' },
-  { label: 'Realized PnL', value: formatCurrency(summary.realized_pnl_usd), hint: 'Total' },
-  { label: 'Unrealized PnL', value: formatCurrency(summary.unrealized_pnl_usd), hint: summary.drift_flag ? 'Rebalance suggested' : 'In bounds' },
-];
+const isExchangeBalanceBaseline = (baseline: string | null | undefined) => baseline === 'exchange_balances';
+
+const buildKpis = (summary: PortfolioSummary) => {
+  const exchangeBalanceBaseline = isExchangeBalanceBaseline(summary.portfolio_baseline);
+
+  return [
+    {
+      label: 'Total Equity',
+      value: formatCurrency(summary.equity_usd),
+      tone: 'neutral' as const,
+      hint: exchangeBalanceBaseline
+        ? 'Reference equity from current exchange balances'
+        : (summary.last_snapshot_ts ? `Last snapshot ${formatTimestamp(summary.last_snapshot_ts)}` : 'Snapshot pending'),
+    },
+    {
+      label: 'Unrealized PnL',
+      value: formatCurrency(summary.unrealized_pnl_usd),
+      tone: (summary.unrealized_pnl_usd ?? 0) < 0 ? 'danger' as const : 'success' as const,
+      hint: exchangeBalanceBaseline
+        ? 'Valued against current market prices'
+        : (summary.drift_flag ? 'Drift detected' : 'Within expected range'),
+    },
+    {
+      label: 'Session Realized',
+      value: formatCurrency(summary.realized_pnl_usd),
+      tone: (summary.realized_pnl_usd ?? 0) < 0 ? 'danger' as const : 'success' as const,
+      hint: exchangeBalanceBaseline ? 'Prior live trade history is not replayed into paper PnL' : 'Realized session result',
+    },
+    {
+      label: 'Available Cash',
+      value: formatCurrency(summary.cash_usd),
+      tone: 'neutral' as const,
+      hint: exchangeBalanceBaseline ? 'Reference cash from current exchange balances' : 'Deployable collateral',
+    },
+  ];
+};
 
 const transformPositions = (payload: PositionPayload[]): PositionRow[] =>
   payload.map((position) => {
@@ -127,14 +167,6 @@ const transformPositions = (payload: PositionPayload[]): PositionRow[] =>
 
     return { pair: position.pair, side, size, entry, mark, pnl, status };
   });
-
-const transformBalances = (exposure: ExposureBreakdown) =>
-  exposure.by_asset.map((asset) => ({
-    asset: asset.asset,
-    total: formatPercent(asset.pct_of_equity || 0),
-    available: '—',
-    valueUsd: formatCurrency(asset.value_usd || 0),
-  }));
 
 const transformLogs = (executions: RecentExecution[]) =>
   executions.map((execution) => {
@@ -181,7 +213,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
   const [kpis, setKpis] = useState<Kpi[]>([]);
   const [activePositions, setActivePositions] = useState<PositionRow[]>([]);
   const [dustPositions, setDustPositions] = useState<PositionRow[]>([]);
-  const [balances, setBalances] = useState<WalletRow[]>([]);
+  const [exposure, setExposure] = useState<ExposureBreakdown | null>(null);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [connectionState, setConnectionState] = useState<'connected' | 'degraded'>('degraded');
   const [health, setHealth] = useState<SystemHealth | null>(null);
@@ -214,20 +246,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
   const [pendingLiveStart, setPendingLiveStart] = useState<SessionConfigRequest | null>(null);
 
   const mlEnabled = session?.ml_enabled ?? false;
-
-  const sidebarItems = [
-    { label: 'Overview', description: 'KPIs & positions', active: true, badge: 'Live' },
-    { label: 'Signals', description: 'Planned strategy stream. Not available in this build.', badge: 'Planned', planned: true },
-    { label: 'Backtests', description: 'Planned historical analysis. Not available in this build.', badge: 'Planned', planned: true },
-    { label: 'Settings', description: 'API keys & risk' },
-  ];
-
-  const hotkeys = [
-    { keys: 'R', description: 'Restart the trading runtime' },
-    { keys: 'Shift + C', description: 'Cancel all working orders' },
-    { keys: 'L', description: 'Toggle live log streaming' },
-    { keys: 'G', description: 'Refresh balances and positions' },
-  ];
+  const startupReloading = Boolean(session?.reloading && !session?.active);
 
   const updateRefreshIssue = (key: string, message: string | null) => {
     setRefreshIssues((current) => {
@@ -240,8 +259,6 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
       return next;
     });
   };
-
-  const refreshIssueMessages = Object.values(refreshIssues);
 
   const loadSession = async () => {
     const [sessionState, profileSummaries, systemHealth, systemConfig] = await Promise.all([
@@ -258,8 +275,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
 
     if (systemHealth) {
       setHealth(systemHealth);
-      const healthy = systemHealth.market_data_ok && systemHealth.execution_ok;
-      setConnectionState(healthy ? 'connected' : 'degraded');
+      setConnectionState(getConnectionStateFromHealth(systemHealth));
       updateRefreshIssue('session-health', null);
     } else {
       setConnectionState('degraded');
@@ -291,6 +307,23 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
   }, [session?.loop_interval_sec]);
 
   useEffect(() => {
+    if (!startupReloading) return;
+
+    let cancelled = false;
+    const interval = setInterval(() => {
+      if (cancelled) return;
+      void loadSession();
+    }, 1500);
+
+    void loadSession();
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [startupReloading]);
+
+  useEffect(() => {
     if (!session?.active) return;
 
     let cancelled = false;
@@ -315,8 +348,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
 
       if (systemHealth) {
         setHealth(systemHealth);
-        const healthy = systemHealth.market_data_ok && systemHealth.execution_ok;
-        setConnectionState(healthy ? 'connected' : 'degraded');
+        setConnectionState(getConnectionStateFromHealth(systemHealth));
       } else {
         failures.push('system health');
         setConnectionState('degraded');
@@ -329,7 +361,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
       }
 
       if (exposure) {
-        setBalances(transformBalances(exposure));
+        setExposure(exposure);
       } else {
         failures.push('exposure');
       }
@@ -534,6 +566,18 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
     return null;
   };
 
+  const waitForSessionActivation = async (timeoutMs = 20000) => {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const latest = await fetchSessionState();
+      if (latest?.active) {
+        return latest;
+      }
+      await sleep(500);
+    }
+    return null;
+  };
+
   const applyStartedSession = async (next: SessionStateResponse) => {
     setSession(next);
     setLoopIntervalDraft(next.loop_interval_sec);
@@ -545,8 +589,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
 
     if (systemHealth) {
       setHealth(systemHealth);
-      const healthy = systemHealth.market_data_ok && systemHealth.execution_ok;
-      setConnectionState(healthy ? 'connected' : 'degraded');
+      setConnectionState(getConnectionStateFromHealth(systemHealth));
     }
 
     if (riskStatus) {
@@ -567,8 +610,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
       const latest = await waitForExecutionMode(mode);
       if (latest) {
         setHealth(latest);
-        const healthy = latest.market_data_ok && latest.execution_ok;
-        setConnectionState(healthy ? 'connected' : 'degraded');
+        setConnectionState(getConnectionStateFromHealth(latest));
         updateRefreshIssue('session-health', null);
         return;
       }
@@ -576,8 +618,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
       const fallback = await fetchSystemHealth();
       if (fallback) {
         setHealth(fallback);
-        const healthy = fallback.market_data_ok && fallback.execution_ok;
-        setConnectionState(healthy ? 'connected' : 'degraded');
+        setConnectionState(getConnectionStateFromHealth(fallback));
         updateRefreshIssue('session-health', null);
       } else {
         setConnectionState('degraded');
@@ -594,6 +635,10 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
   const handleStartSession = async (config: SessionConfigRequest) => {
     if (health?.ui_read_only) {
       throw new Error('Backend is in read-only mode.');
+    }
+
+    if (session?.reloading) {
+      throw new Error('Krakked is reloading configuration. Please wait for reload to finish.');
     }
 
     const currentMode = resolveExecutionMode(health) ?? 'paper';
@@ -615,11 +660,12 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
     }
 
     const next = await startSession();
-    if (!next) {
+    const startedSession = next?.active ? next : await waitForSessionActivation();
+    if (!startedSession) {
       throw new Error('Unable to start session.');
     }
 
-    await applyStartedSession(next);
+    await applyStartedSession(startedSession);
   };
 
   const handleConfirmLiveStart = async (
@@ -638,11 +684,12 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
     }
 
     const next = await startSession();
-    if (!next) {
+    const startedSession = next?.active ? next : await waitForSessionActivation();
+    if (!startedSession) {
       throw new Error('Unable to start session.');
     }
 
-    await applyStartedSession(next);
+    await applyStartedSession(startedSession);
     setPendingLiveStart(null);
     setShowLiveModal(false);
   };
@@ -687,8 +734,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
 
       if (systemHealth) {
         setHealth(systemHealth);
-        const healthy = systemHealth.market_data_ok && systemHealth.execution_ok;
-        setConnectionState(healthy ? 'connected' : 'degraded');
+        setConnectionState(getConnectionStateFromHealth(systemHealth));
       }
 
       setStartupMlEnabled(extractMlEnabledFromConfig(systemConfig, updated.ml_enabled));
@@ -701,8 +747,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
 
       if (systemHealth) {
         setHealth(systemHealth);
-        const healthy = systemHealth.market_data_ok && systemHealth.execution_ok;
-        setConnectionState(healthy ? 'connected' : 'degraded');
+        setConnectionState(getConnectionStateFromHealth(systemHealth));
       }
 
       setStartupMlEnabled(extractMlEnabledFromConfig(systemConfig, mlEnabled));
@@ -742,22 +787,8 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
     }
 
     await applyConfig(configPayload);
-    setSystemMessage({ tone: 'success', message: 'Configuration saved. Reloading…' });
-    await sleep(1500);
-
-    const [systemHealth, profileSummaries, systemConfig] = await Promise.all([
-      fetchSystemHealth(),
-      fetchProfiles(),
-      fetchSystemConfig().catch(() => null),
-    ]);
-
-    if (systemHealth) {
-      setHealth(systemHealth);
-      const healthy = systemHealth.market_data_ok && systemHealth.execution_ok;
-      setConnectionState(healthy ? 'connected' : 'degraded');
-    }
-    setProfiles(profileSummaries);
-    setStartupMlEnabled(extractMlEnabledFromConfig(systemConfig, session?.ml_enabled ?? true));
+    setSystemMessage({ tone: 'info', message: 'Configuration saved. Krakked is reloading…' });
+    await loadSession();
   };
 
   const handleStopSession = async () => {
@@ -807,8 +838,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
 
       if (systemHealth) {
         setHealth(systemHealth);
-        const healthy = systemHealth.market_data_ok && systemHealth.execution_ok;
-        setConnectionState(healthy ? 'connected' : 'degraded');
+        setConnectionState(getConnectionStateFromHealth(systemHealth));
       }
 
       setProfiles(profileSummaries);
@@ -825,19 +855,8 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
 
     await applyConfig({ ml: { enabled } });
     setStartupMlEnabled(enabled);
-
-    const [sessionState, systemConfig] = await Promise.all([
-      fetchSessionState(),
-      fetchSystemConfig().catch(() => null),
-    ]);
-
-    if (sessionState) {
-      setSession(sessionState);
-      setLoopIntervalDraft(sessionState.loop_interval_sec);
-      setStartupMlEnabled(extractMlEnabledFromConfig(systemConfig, sessionState.ml_enabled));
-    } else {
-      setStartupMlEnabled(extractMlEnabledFromConfig(systemConfig, enabled));
-    }
+    setSystemMessage({ tone: 'info', message: 'Strategy settings updated. Krakked is reloading…' });
+    await loadSession();
   };
 
   const handleToggleKillSwitch = async () => {
@@ -1256,7 +1275,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
           activeProfileName={session?.profile_name ?? null}
           readOnly={Boolean(health?.ui_read_only)}
           systemMode={resolveExecutionMode(health)}
-          modeBusy={modeBusy}
+          modeBusy={modeBusy || startupReloading}
           systemMessage={systemMessage}
           startupMlEnabled={startupMlEnabled}
           onCreateProfile={handleCreateProfile}
@@ -1270,15 +1289,160 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
     );
   }
 
+  const dashboardAlerts: DashboardAlert[] = [];
+  if (health?.portfolio_sync_ok === false) {
+    dashboardAlerts.push({
+      id: 'portfolio-sync',
+      tone: 'danger',
+      title: 'Portfolio sync degraded',
+      message: health.portfolio_sync_reason || 'Krakked could not complete the latest portfolio sync. Positions and balances may be stale.',
+    });
+  }
+  if (session.mode === 'paper' && isExchangeBalanceBaseline(health?.portfolio_baseline)) {
+    dashboardAlerts.push({
+      id: 'paper-baseline',
+      tone: 'info',
+      title: 'Paper mode uses exchange reference balances',
+      message: 'Krakked is validating orders against Kraken while showing current exchange balances as the paper baseline. No live orders are sent.',
+    });
+  }
+  if (health && !health.market_data_ok) {
+    dashboardAlerts.push({
+      id: 'market-data',
+      tone: health.market_data_stale ? 'warning' : 'danger',
+      title: 'Market data degraded',
+      message: health.market_data_reason || 'Streaming or REST market data is degraded.',
+    });
+  }
+  if (health?.drift_detected) {
+    dashboardAlerts.push({
+      id: 'drift',
+      tone: 'warning',
+      title: 'Portfolio drift detected',
+      message: health.drift_reason || 'Expected positions and tracked balances do not line up cleanly.',
+    });
+  }
+  if (refreshIssues.strategies) {
+    dashboardAlerts.push({
+      id: 'strategies',
+      tone: 'warning',
+      title: 'Strategy state refresh failed',
+      message: refreshIssues.strategies,
+    });
+  }
+  if (health?.ui_read_only) {
+    dashboardAlerts.push({
+      id: 'read-only',
+      tone: 'info',
+      title: 'Read-only mode',
+      message: 'Urgent controls stay visible, but configuration changes are blocked while the backend is read-only.',
+    });
+  }
+
+  const topAsset = exposure?.by_asset
+    ?.filter((asset) => typeof asset.pct_of_equity === 'number')
+    .sort((a, b) => (b.pct_of_equity ?? 0) - (a.pct_of_equity ?? 0))[0] ?? null;
+  const topStrategyExposure = risk
+    ? Object.entries(risk.per_strategy_exposure_pct)
+        .sort(([, left], [, right]) => right - left)[0] ?? null
+    : null;
+  const strategySummary = [...strategies]
+    .sort((left, right) => {
+      const enabledDelta = Number(right.enabled) - Number(left.enabled);
+      if (enabledDelta !== 0) return enabledDelta;
+      return (right.effective_weight_pct ?? 0) - (left.effective_weight_pct ?? 0);
+    })
+    .slice(0, 5);
+
+  const systemStatusItems = [
+    {
+      label: 'Connection',
+      value: connectionState === 'connected' ? 'Online' : 'Degraded',
+      tone: connectionState === 'connected' ? 'ok' as const : 'warning' as const,
+      hint: health?.rest_api_reachable ? 'REST reachable' : 'REST degraded',
+    },
+    {
+      label: 'Mode',
+      value: session.mode === 'live' ? 'Live' : 'Paper',
+      tone: session.mode === 'live' ? 'warning' as const : 'ok' as const,
+      hint:
+        session.mode === 'paper' && isExchangeBalanceBaseline(health?.portfolio_baseline)
+          ? 'Validate-only with current exchange balances as reference'
+          : (session.profile_name ? `Profile ${session.profile_name}` : 'No active profile'),
+    },
+    {
+      label: 'Trading',
+      value: risk?.kill_switch_active ? 'Paused' : 'Active',
+      tone: risk?.kill_switch_active ? 'danger' as const : 'ok' as const,
+      hint: `Loop ${session.loop_interval_sec.toFixed(1)}s`,
+    },
+  ];
+
+  const integrityItems = [
+    {
+      label: 'Portfolio Sync',
+      value: health?.portfolio_sync_ok ? 'Healthy' : 'Degraded',
+      tone: health?.portfolio_sync_ok ? 'ok' as const : 'danger' as const,
+      hint: health?.portfolio_sync_ok
+        ? (
+          session.mode === 'paper' && isExchangeBalanceBaseline(health?.portfolio_baseline)
+            ? `Exchange balances loaded ${formatDateTime(health.portfolio_last_sync_at)}`
+            : `Last sync ${formatDateTime(health.portfolio_last_sync_at)}`
+        )
+        : (health?.portfolio_sync_reason || 'Latest sync failed'),
+    },
+    {
+      label: 'Market Data',
+      value: health?.market_data_ok ? 'Healthy' : (health?.market_data_stale ? 'Stale' : 'Unavailable'),
+      tone: health?.market_data_ok ? 'ok' as const : (health?.market_data_stale ? 'warning' as const : 'danger' as const),
+      hint: health?.market_data_reason || `${health?.streaming_pairs ?? 0} pairs streaming`,
+    },
+    {
+      label: 'Drift',
+      value: health?.drift_detected ? 'Detected' : 'Clear',
+      tone: health?.drift_detected ? 'warning' as const : 'ok' as const,
+      hint: health?.drift_reason || 'Portfolio within expected bounds',
+    },
+  ];
+
+  const sidebarActions = [
+    {
+      label: risk?.kill_switch_active ? 'Resume Trading' : 'Pause Trading',
+      disabled: riskBusy || !risk || health?.ui_read_only,
+      onClick: handleToggleKillSwitch,
+    },
+    {
+      label: 'Flatten All Positions',
+      disabled: Boolean(health?.ui_read_only),
+      onClick: handleFlattenAll,
+    },
+    {
+      label: 'Stop Session',
+      tone: 'danger' as const,
+      disabled: Boolean(health?.ui_read_only),
+      onClick: handleStopSession,
+    },
+  ];
+
+  const sidebarMenu = [
+    { label: 'Overview', href: '#overview' },
+    { label: 'Positions', href: '#positions' },
+    { label: 'Strategies', href: '#strategies' },
+    { label: 'Risk', href: '#risk' },
+    { label: 'Activity', href: '#activity' },
+    { label: 'Settings', href: '#settings' },
+  ];
+
   return (
     <Layout
-      title="Trading Overview"
+      title={session.mode === 'live' ? 'Live Trading Overview' : 'Paper Trading Overview'}
       subtitle={
         <div className="layout__status-row">
-          <span className="pill pill--muted">
-            Mode:{' '}
-            {session?.mode === 'live' ? 'Live' : 'Paper'}
-          </span>
+          {session.profile_name ? <span className="pill pill--muted">Profile: {session.profile_name}</span> : null}
+          <span className="pill pill--muted">Mode: {session.mode === 'live' ? 'Live' : 'Paper'}</span>
+          {session.mode === 'paper' && isExchangeBalanceBaseline(health?.portfolio_baseline) ? (
+            <span className="pill pill--info">Portfolio: Exchange reference</span>
+          ) : null}
 
           <span
             className={
@@ -1311,6 +1475,8 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
 
           <span className="pill pill--muted">Loop: {session.loop_interval_sec.toFixed(1)}s</span>
 
+          {health?.ui_read_only && <span className="pill pill--warning">Read-only</span>}
+
           {session.emergency_flatten && (
             <span className="pill pill--danger">Emergency Flattening</span>
           )}
@@ -1318,142 +1484,278 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
       }
       sidebar={
         <Sidebar
-          items={sidebarItems}
-          footer={{
-            label: 'Session',
-            value: connectionState === 'connected' ? 'Connected' : 'Degraded',
-            note: 'Planned sections are roadmap surfaces, not live UI pages.',
-          }}
+          systemStatus={systemStatusItems}
+          integrity={integrityItems}
+          actions={sidebarActions}
+          menu={sidebarMenu}
+          note="Only implemented sections are shown here. Roadmap surfaces stay out of the cockpit until they are real."
         />
       }
       actions={
         <div className="layout__action-buttons">
-          <button
-            type="button"
-            className="primary-button"
-            disabled={riskBusy || !risk || health?.ui_read_only}
-            aria-busy={riskBusy}
-            onClick={handleToggleKillSwitch}
-          >
-            {riskBusy
-              ? 'Updating…'
-              : risk?.kill_switch_active
-                ? 'Resume trading'
-                : 'Pause trading'}
-          </button>
-          <button
-            type="button"
-            className="ghost-button"
-            onClick={handleFlattenAll}
-            disabled={health?.ui_read_only}
-          >
-            Flatten all positions
-          </button>
-          <button
-            type="button"
-            className="ghost-button"
-            onClick={handleStopSession}
-            disabled={health?.ui_read_only}
-          >
-            Stop session
-          </button>
           <button type="button" className="ghost-button" onClick={onLogout}>
             Log out
           </button>
         </div>
       }
-      footer={<FooterHotkeys hotkeys={hotkeys} />}
     >
-      <section className="panel">
-        <div className="panel__header">
-          <h2>Connection</h2>
-          <span className="status-pill" data-status={connectionState}>
-            {connectionState === 'connected' ? 'Connected' : 'Degraded'}
-          </span>
-        </div>
-        <p className="panel__description">
-          Data refreshes automatically every {Math.round(DASHBOARD_REFRESH_MS / 1000)}s. Controls respect read-only mode and execution mode reported by the backend.
-        </p>
-        <div className="field" style={{ maxWidth: '280px' }}>
-          <label className="field__label-row">
-            <span>Execution mode</span>
-            <span
-              className={
-                resolveExecutionMode(health) === 'live' ? 'pill pill--danger' : 'pill pill--muted'
-              }
-            >
-              {resolveExecutionMode(health) === 'live' ? 'Live' : 'Paper'}
-            </span>
-          </label>
-          <p className="field__hint">Stop the session to change execution mode from the Startup screen.</p>
-        </div>
-        <div className="field" style={{ maxWidth: '280px' }}>
-          <label className="field__label-row" htmlFor="loop-interval">
-            <span>Loop frequency (seconds)</span>
-            <span className="pill pill--muted">Current: {loopIntervalDraft.toFixed(1)}s</span>
-          </label>
-          <input
-            id="loop-interval"
-            type="number"
-            min={1}
-            max={300}
-            value={loopIntervalDraft}
-            onChange={(event) => setLoopIntervalDraft(Number(event.target.value))}
-            disabled={health?.ui_read_only}
-          />
-          <button
-            type="button"
-            className="ghost-button"
-            onClick={handleLoopIntervalUpdate}
-            disabled={health?.ui_read_only}
-          >
-            Apply frequency
-          </button>
-        </div>
-        {systemMessage ? <div className={`feedback feedback--${systemMessage.tone}`}>{systemMessage.message}</div> : null}
-        {refreshIssueMessages.length > 0 ? (
-          <div className="feedback feedback--error">
-            {refreshIssueMessages.join(' ')}
-          </div>
-        ) : null}
-        <ul className="placeholder-list">
-          <li>KPIs and balances poll the portfolio endpoints.</li>
-          <li>Recent executions stream into the log panel.</li>
-          <li>Sidebar session badge reflects the latest fetch outcome.</li>
-          {health ? (
-            <li>
-              Mode: <strong>{health.current_mode}</strong> · {health.ui_read_only ? 'Read-only' : 'Mutable'}
-            </li>
-          ) : null}
-        </ul>
+      {systemMessage ? <div className={`feedback feedback--${systemMessage.tone}`}>{systemMessage.message}</div> : null}
+
+      {dashboardAlerts.length > 0 ? (
+        <section className="alert-strip" aria-label="System alerts">
+          {dashboardAlerts.map((alert) => (
+            <article key={alert.id} className={`alert-card alert-card--${alert.tone}`}>
+              <p className="alert-card__title">{alert.title}</p>
+              <p className="alert-card__message">{alert.message}</p>
+            </article>
+          ))}
+        </section>
+      ) : null}
+
+      <section id="overview" className="dashboard-anchor">
+        <KpiGrid items={kpis} />
       </section>
 
-      <RiskPanel
-        status={risk}
-        riskConfig={riskConfig}
-        readOnly={Boolean(health?.ui_read_only)}
-        busy={riskBusy}
-        presetBusy={riskConfigBusy}
-        presetOptions={RISK_PRESET_OPTIONS}
-        onPresetChange={handlePresetChange}
-        onToggle={handleToggleKillSwitch}
-        currentPreset={currentPreset}
-        feedback={riskFeedback}
-      />
+      <div className="dashboard-grid dashboard-grid--primary">
+        <section id="positions" className="dashboard-anchor">
+          <PositionsTable
+            positions={activePositions}
+            title="Positions"
+            hint={
+              session.mode === 'paper' && isExchangeBalanceBaseline(summary?.portfolio_baseline)
+                ? 'Reference balances drive paper equity. Tracked paper positions appear here only after Krakked records them locally.'
+                : (summary?.last_snapshot_ts ? `Snapshot ${formatDateTime(summary.last_snapshot_ts)}` : 'Portfolio snapshot pending')
+            }
+            emptyMessage={
+              session.mode === 'paper' && isExchangeBalanceBaseline(summary?.portfolio_baseline)
+                ? 'No tracked paper positions yet. Reference balances still contribute to equity and exposure.'
+                : 'No active positions right now.'
+            }
+          />
+          {dustPositions.length > 0 && (
+            <PositionsTable
+              positions={dustPositions}
+              title="Dust"
+              hint="Below Kraken minimum order size; these become actionable once accumulated."
+            />
+          )}
+        </section>
 
-      {riskConfig ? (
-        <section className="panel">
+        <section className="panel integrity-panel">
           <div className="panel__header">
-            <h2>Risk settings & budgets</h2>
-            {riskConfigBusy ? <span className="pill pill--info">Saving…</span> : null}
+            <div>
+              <h2>Portfolio Integrity</h2>
+              <p className="panel__hint">Health based on sync state, drift, exposure, and live runtime status.</p>
+            </div>
           </div>
-          <p className="panel__description">
-            Global risk limits and per-strategy caps. Changes apply immediately.
-          </p>
+          <div className="integrity-panel__list">
+            <div className="integrity-panel__item">
+              <p className="integrity-panel__label">Portfolio sync</p>
+              <p className={`integrity-panel__value${health?.portfolio_sync_ok ? ' text--success' : ' text--danger'}`}>
+                {health?.portfolio_sync_ok ? 'Healthy' : 'Degraded'}
+              </p>
+              <p className="integrity-panel__hint">
+                {health?.portfolio_sync_ok
+                  ? (
+                    session.mode === 'paper' && isExchangeBalanceBaseline(health?.portfolio_baseline)
+                      ? `Current exchange balances loaded ${formatDateTime(health?.portfolio_last_sync_at)}`
+                      : `Last successful sync ${formatDateTime(health?.portfolio_last_sync_at)}`
+                  )
+                  : (health?.portfolio_sync_reason || 'Latest sync failed')}
+              </p>
+            </div>
+            <div className="integrity-panel__item">
+              <p className="integrity-panel__label">Market data</p>
+              <p className={`integrity-panel__value${health?.market_data_ok ? ' text--success' : ' text--danger'}`}>
+                {health?.market_data_ok ? 'Healthy' : (health?.market_data_stale ? 'Stale' : 'Unavailable')}
+              </p>
+              <p className="integrity-panel__hint">
+                {health?.market_data_reason || `${health?.streaming_pairs ?? 0} pairs streaming`}
+              </p>
+            </div>
+            <div className="integrity-panel__item">
+              <p className="integrity-panel__label">Drift monitor</p>
+              <p className={`integrity-panel__value${health?.drift_detected ? ' text--danger' : ' text--success'}`}>
+                {health?.drift_detected ? 'Drift detected' : 'Clear'}
+              </p>
+              <p className="integrity-panel__hint">
+                {health?.drift_reason || 'Expected positions and local balances remain aligned.'}
+              </p>
+            </div>
+            <div className="integrity-panel__item">
+              <p className="integrity-panel__label">Top asset exposure</p>
+              <p className="integrity-panel__value">
+                {topAsset ? `${topAsset.asset} ${formatPercent(topAsset.pct_of_equity)}` : 'No exposure'}
+              </p>
+              <p className="integrity-panel__hint">
+                {topAsset ? formatCurrency(topAsset.value_usd) : 'No asset exposure reported yet.'}
+              </p>
+            </div>
+          </div>
+        </section>
+      </div>
 
-          {riskConfigError ? <p className="field__error">{riskConfigError}</p> : null}
+      <div className="dashboard-grid dashboard-grid--secondary">
+        <section className="panel strategy-summary-panel">
+          <div className="panel__header">
+            <div>
+              <h2>Strategy Summary</h2>
+              <p className="panel__hint">Current posture across the most relevant strategies.</p>
+            </div>
+          </div>
+          {strategySummary.length === 0 ? (
+            <div className="panel__empty">No active strategy state reported yet.</div>
+          ) : (
+            <div className="summary-table summary-table--strategies" role="table" aria-label="Strategy summary">
+              <div className="summary-table__head" role="row">
+                <span role="columnheader">Strategy</span>
+                <span role="columnheader">State</span>
+                <span role="columnheader">Share</span>
+                <span role="columnheader">Latest signal</span>
+                <span role="columnheader">PnL</span>
+                <span role="columnheader">Drawdown</span>
+              </div>
+              <div className="summary-table__body">
+                {strategySummary.map((strategy) => {
+                  const perf = strategyPerformance[strategy.strategy_id];
+                  const latestIntent = strategy.last_intents?.[0];
+                  return (
+                    <div key={strategy.strategy_id} className="summary-table__row" role="row">
+                      <span role="cell">
+                        <strong>{strategy.label}</strong>
+                      </span>
+                      <span role="cell">
+                        <span className={`pill ${strategy.enabled ? 'pill--long' : 'pill--neutral'}`}>
+                          {strategy.enabled ? 'On' : 'Off'}
+                        </span>
+                      </span>
+                      <span role="cell">
+                        {typeof strategy.effective_weight_pct === 'number'
+                          ? `${strategy.effective_weight_pct.toFixed(1)}%`
+                          : '—'}
+                      </span>
+                      <span role="cell">
+                        {latestIntent
+                          ? `${latestIntent.side} ${latestIntent.pair}`
+                          : 'No recent signal'}
+                      </span>
+                      <span role="cell" className={(perf?.realized_pnl_quote ?? 0) < 0 ? 'text--danger' : 'text--success'}>
+                        {perf ? formatCurrency(perf.realized_pnl_quote) : 'No trades'}
+                      </span>
+                      <span role="cell">
+                        {perf ? `${perf.max_drawdown_pct.toFixed(1)}%` : '—'}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </section>
 
-          <div className="risk-config__grid risk-config__grid--global">
+        <section className="panel risk-snapshot-panel">
+          <div className="panel__header">
+            <div>
+              <h2>Risk Snapshot</h2>
+              <p className="panel__hint">What matters before you decide whether to intervene.</p>
+            </div>
+          </div>
+          <div className="snapshot-grid">
+            <div className="snapshot-grid__item">
+              <span className="snapshot-grid__label">Kill switch</span>
+              <span className={`snapshot-grid__value${risk?.kill_switch_active ? ' text--danger' : ' text--success'}`}>
+                {risk?.kill_switch_active ? 'Paused' : 'Active'}
+              </span>
+            </div>
+            <div className="snapshot-grid__item">
+              <span className="snapshot-grid__label">Total exposure</span>
+              <span className="snapshot-grid__value">{risk ? `${risk.total_exposure_pct.toFixed(1)}%` : '—'}</span>
+            </div>
+            <div className="snapshot-grid__item">
+              <span className="snapshot-grid__label">Daily drawdown</span>
+              <span className={`snapshot-grid__value${(risk?.daily_drawdown_pct ?? 0) > 0 ? ' text--danger' : ''}`}>
+                {risk ? `${risk.daily_drawdown_pct.toFixed(1)}%` : '—'}
+              </span>
+            </div>
+            <div className="snapshot-grid__item">
+              <span className="snapshot-grid__label">Preset</span>
+              <span className="snapshot-grid__value">
+                {currentPreset ? RISK_PRESET_META[currentPreset].label : 'Custom'}
+              </span>
+            </div>
+            <div className="snapshot-grid__item snapshot-grid__item--wide">
+              <span className="snapshot-grid__label">Top strategy exposure</span>
+              <span className="snapshot-grid__value">
+                {topStrategyExposure ? `${topStrategyExposure[0]} ${topStrategyExposure[1].toFixed(1)}%` : 'No strategy exposure'}
+              </span>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <section id="activity" className="dashboard-anchor">
+        <LogPanel
+          entries={logs}
+          title="Activity Log"
+          hint="Recent executions and meaningful risk decisions, newest first."
+        />
+      </section>
+
+      <section id="strategies" className="dashboard-anchor dashboard-section">
+        <div className="section-header">
+          <div>
+            <p className="section-header__eyebrow">Strategies</p>
+            <h2 className="section-header__title">Strategy controls</h2>
+          </div>
+        </div>
+        <StrategiesPanel
+          strategies={strategies}
+          performance={strategyPerformance}
+          riskSelections={strategyRisk}
+          learningSelections={strategyLearning}
+          busy={strategyBusy}
+          readOnly={Boolean(health?.ui_read_only)}
+          feedback={strategyFeedback}
+          onToggle={handleStrategyToggle}
+          onWeightChange={handleStrategyWeightChange}
+          onRiskProfileChange={handleRiskProfileChange}
+          onLearningToggle={handleLearningToggle}
+        />
+      </section>
+
+      <section id="risk" className="dashboard-anchor dashboard-section">
+        <div className="section-header">
+          <div>
+            <p className="section-header__eyebrow">Risk</p>
+            <h2 className="section-header__title">Risk controls and budgets</h2>
+          </div>
+        </div>
+        <RiskPanel
+          status={risk}
+          riskConfig={riskConfig}
+          readOnly={Boolean(health?.ui_read_only)}
+          busy={riskBusy}
+          presetBusy={riskConfigBusy}
+          presetOptions={RISK_PRESET_OPTIONS}
+          onPresetChange={handlePresetChange}
+          onToggle={handleToggleKillSwitch}
+          currentPreset={currentPreset}
+          feedback={riskFeedback}
+        />
+
+        {riskConfig ? (
+          <section className="panel">
+            <div className="panel__header">
+              <h2>Risk settings & budgets</h2>
+              {riskConfigBusy ? <span className="pill pill--info">Saving…</span> : null}
+            </div>
+            <p className="panel__description">
+              Global risk limits and per-strategy caps. Changes apply immediately.
+            </p>
+
+            {riskConfigError ? <p className="field__error">{riskConfigError}</p> : null}
+
+            <div className="risk-config__grid risk-config__grid--global">
             <div className="field">
               <label>Max risk per trade (%)</label>
               <input
@@ -1609,57 +1911,60 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
               </div>
             ))}
           </div>
-        </section>
-      ) : null}
-
-      <section className="panel">
-        <div className="panel__header">
-          <h2>Settings</h2>
-        </div>
-        <p className="panel__description">
-          Download the current runtime configuration as JSON (including UI overrides).
-        </p>
-        <button
-          type="button"
-          className="ghost-button"
-          onClick={handleDownloadRuntimeConfig}
-        >
-          Download current config
-        </button>
+          </section>
+        ) : null}
       </section>
 
-      <StrategiesPanel
-        strategies={strategies}
-        performance={strategyPerformance}
-        riskSelections={strategyRisk}
-        learningSelections={strategyLearning}
-        busy={strategyBusy}
-        readOnly={Boolean(health?.ui_read_only)}
-        feedback={strategyFeedback}
-        onToggle={handleStrategyToggle}
-        onWeightChange={handleStrategyWeightChange}
-        onRiskProfileChange={handleRiskProfileChange}
-        onLearningToggle={handleLearningToggle}
-      />
-
-      <KpiGrid items={kpis} />
-
-      <div className="dashboard__columns">
-        <div className="dashboard__column dashboard__column--wide">
-          <PositionsTable positions={activePositions} />
-          {dustPositions.length > 0 && (
-             <PositionsTable
-               positions={dustPositions}
-               title="Dust"
-               hint="Below Kraken minimum order size; will become sellable if accumulated."
-             />
-          )}
-          <LogPanel entries={logs} />
+      <section id="settings" className="dashboard-anchor dashboard-section">
+        <div className="section-header">
+          <div>
+            <p className="section-header__eyebrow">Settings</p>
+            <h2 className="section-header__title">Session maintenance</h2>
+          </div>
         </div>
-        <div className="dashboard__column">
-          <WalletTable balances={balances} />
-        </div>
-      </div>
+        <section className="panel settings-panel">
+          <div className="settings-panel__grid">
+            <div className="field">
+              <label className="field__label-row" htmlFor="loop-interval">
+                <span>Loop frequency (seconds)</span>
+                <span className="pill pill--muted">Current: {loopIntervalDraft.toFixed(1)}s</span>
+              </label>
+              <input
+                id="loop-interval"
+                type="number"
+                min={1}
+                max={300}
+                value={loopIntervalDraft}
+                onChange={(event) => setLoopIntervalDraft(Number(event.target.value))}
+                disabled={health?.ui_read_only}
+              />
+              <p className="field__hint">Use this when you want slower or tighter evaluation cadence without restarting the session.</p>
+              <button
+                type="button"
+                className="ghost-button"
+                onClick={handleLoopIntervalUpdate}
+                disabled={health?.ui_read_only}
+              >
+                Apply frequency
+              </button>
+            </div>
+
+            <div className="field">
+              <label>Runtime configuration</label>
+              <p className="field__hint">
+                Download the current runtime configuration, including UI overrides and session-derived state.
+              </p>
+              <button
+                type="button"
+                className="ghost-button"
+                onClick={handleDownloadRuntimeConfig}
+              >
+                Download current config
+              </button>
+            </div>
+          </div>
+        </section>
+      </section>
     </Layout>
   );
 }

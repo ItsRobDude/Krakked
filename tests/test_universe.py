@@ -201,8 +201,25 @@ def test_universe_overrides(
     universe_included = build_universe(mock_client, mock_region_profile, include_config)
 
     assert any("DOGEUSD" in message for message in caplog.messages)
-    assert len(universe_included) == 3
+    assert len(universe_included) == 0
     assert "DOGEUSD" not in {p.canonical for p in universe_included}
+
+
+def test_universe_overrides_accept_ws_style_pairs(
+    mock_region_profile, mock_kraken_asset_pairs_response
+):
+    mock_client = MagicMock()
+    mock_client.get_public.return_value = mock_kraken_asset_pairs_response
+
+    include_config = UniverseConfig(
+        include_pairs=["BTC/USD", "ETH/USD"],
+        exclude_pairs=["DOGEUSD", "XMRUSD", "ETHUSDM", "ADAUSDF"],
+        min_24h_volume_usd=0,
+    )
+
+    universe = build_universe(mock_client, mock_region_profile, include_config)
+
+    assert {pair.canonical for pair in universe} == {"XBTUSD", "ETHUSD"}
 
 
 def test_universe_volume_filtering(
@@ -312,12 +329,8 @@ def test_include_pairs_bypass_volume_filter(
     universe = build_universe(mock_client, mock_region_profile, config)
     pair_names = {p.canonical for p in universe}
 
-    assert pair_names == {"XBTUSD", "ETHUSD"}
-
-    ticker_call_args = mock_client.get_public.call_args_list[1]
-    called_pairs = set(ticker_call_args[1]["params"]["pair"].split(","))
-    assert "ETHUSD" not in called_pairs
-    assert called_pairs == {"XBTUSD", "DOGEUSD", "ETHUSDM", "XMRUSD", "ADAUSDF"}
+    assert pair_names == {"ETHUSD"}
+    assert len(mock_client.get_public.call_args_list) == 1
 
 
 def test_exclude_applies_to_forced_includes(

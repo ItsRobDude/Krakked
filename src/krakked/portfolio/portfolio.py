@@ -8,6 +8,7 @@ without duplicating logic.
 
 from __future__ import annotations
 
+import logging
 import time
 from collections import defaultdict
 from dataclasses import dataclass
@@ -26,6 +27,7 @@ from typing import (
 
 from krakked.config import PortfolioConfig
 from krakked.market_data.api import MarketDataAPI
+from krakked.market_data.exceptions import PairNotFoundError
 from krakked.portfolio.models import (
     AssetBalance,
     AssetExposure,
@@ -39,6 +41,8 @@ from krakked.portfolio.models import (
     SpotPosition,
 )
 from krakked.portfolio.store import PortfolioStore
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -122,7 +126,17 @@ class Portfolio:
             )
 
         for trade in trades_sorted:
-            self._process_trade(trade)
+            try:
+                self._process_trade(trade)
+            except PairNotFoundError:
+                logger.warning(
+                    "Skipping trade outside active market-data universe",
+                    extra={
+                        "pair": trade.get("pair"),
+                        "trade_id": trade.get("id"),
+                        "order_id": trade.get("ordertxid"),
+                    },
+                )
 
     def ingest_cashflows(
         self, ledger_entries: Dict[str, Dict], persist: bool = True

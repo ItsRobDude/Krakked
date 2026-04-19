@@ -10,6 +10,7 @@ export type PortfolioSummary = {
   unrealized_pnl_usd: number | null;
   drift_flag: boolean | null;
   last_snapshot_ts: string | null;
+  portfolio_baseline?: string | null;
 };
 
 export type PositionPayload = {
@@ -105,6 +106,10 @@ export type SystemHealth = {
   current_mode: string;
   ui_read_only: boolean;
   kill_switch_active?: boolean | null;
+  portfolio_sync_ok: boolean;
+  portfolio_sync_reason?: string | null;
+  portfolio_last_sync_at?: string | null;
+  portfolio_baseline?: string | null;
   drift_detected: boolean;
   drift_reason?: string | null;
 };
@@ -174,6 +179,7 @@ export type StrategyPerformance = {
 
 export type SessionStateResponse = {
   active: boolean;
+  reloading: boolean;
   mode: SessionMode;
   loop_interval_sec: number;
   profile_name: string | null;
@@ -289,7 +295,7 @@ export async function fetchSessionState(): Promise<SessionStateResponse | null> 
 }
 
 export async function startSession(): Promise<SessionStateResponse | null> {
-  return fetchJson<SessionStateResponse>('/system/session/start', {
+  return fetchJsonStrict<SessionStateResponse>('/system/session/start', {
     method: 'POST',
   });
 }
@@ -297,14 +303,14 @@ export async function startSession(): Promise<SessionStateResponse | null> {
 export async function updateSessionConfig(
   patch: Partial<SessionConfigRequest>,
 ): Promise<SessionStateResponse | null> {
-  return fetchJson<SessionStateResponse>('/system/session/config', {
+  return fetchJsonStrict<SessionStateResponse>('/system/session/config', {
     method: 'PATCH',
     body: JSON.stringify(patch),
   });
 }
 
 export async function stopSession(): Promise<SessionStateResponse | null> {
-  return fetchJson<SessionStateResponse>('/system/session/stop', {
+  return fetchJsonStrict<SessionStateResponse>('/system/session/stop', {
     method: 'POST',
   });
 }

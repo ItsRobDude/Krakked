@@ -84,6 +84,7 @@ async def get_portfolio_summary(request: Request) -> ApiEnvelope[PortfolioSummar
             unrealized_pnl_usd=equity.unrealized_pnl_base_total,
             drift_flag=equity.drift_flag,
             last_snapshot_ts=latest_snapshot.timestamp if latest_snapshot else None,
+            portfolio_baseline=getattr(ctx.portfolio, "baseline_source", None),
         )
         return ApiEnvelope(data=data, error=None)
     except Exception as exc:  # pragma: no cover - defensive

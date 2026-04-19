@@ -31,6 +31,28 @@ def test_portfolio_summary_enveloped(client, portfolio_context):
     assert payload["error"] is None
     assert payload["data"]["equity_usd"] == 1000.0
     assert payload["data"]["last_snapshot_ts"] == 123456
+    assert payload["data"]["portfolio_baseline"] == "ledger_history"
+
+
+def test_portfolio_summary_reports_exchange_balance_baseline(client, portfolio_context):
+    portfolio_context.portfolio.get_equity.return_value = EquityView(
+        equity_base=42.0,
+        cash_base=10.0,
+        realized_pnl_base_total=0.0,
+        unrealized_pnl_base_total=1.5,
+        drift_flag=False,
+    )
+    portfolio_context.portfolio.get_latest_snapshot.return_value = SimpleNamespace(
+        timestamp=987654
+    )
+    portfolio_context.portfolio.baseline_source = "exchange_balances"
+
+    response = client.get("/api/portfolio/summary")
+
+    assert response.status_code == 200
+    payload = response.json()["data"]
+    assert payload["portfolio_baseline"] == "exchange_balances"
+    assert payload["cash_usd"] == 10.0
 
 
 def test_positions_shape_matches_payload(client, portfolio_context):
