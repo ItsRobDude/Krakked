@@ -1,3 +1,4 @@
+import time
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -5,6 +6,7 @@ import pytest
 from starlette.testclient import TestClient
 
 from krakked.portfolio.models import AssetExposure, EquityView, SpotPosition
+from krakked.ui import route_runtime
 
 
 @pytest.fixture
@@ -20,6 +22,7 @@ def test_portfolio_summary_enveloped(client, portfolio_context):
         unrealized_pnl_base_total=25.0,
         drift_flag=True,
     )
+    portfolio_context.portfolio.portfolio._last_snapshot_ts = 0
     portfolio_context.portfolio.get_latest_snapshot.return_value = SimpleNamespace(
         timestamp=123456
     )
@@ -53,6 +56,32 @@ def test_portfolio_summary_reports_exchange_balance_baseline(client, portfolio_c
     payload = response.json()["data"]
     assert payload["portfolio_baseline"] == "exchange_balances"
     assert payload["cash_usd"] == 10.0
+
+
+def test_portfolio_summary_times_out_fast(client, portfolio_context, monkeypatch):
+    monkeypatch.setattr(route_runtime, "DEFAULT_UI_ROUTE_TIMEOUT_SECONDS", 0.01)
+
+    def _slow_equity():
+        time.sleep(0.05)
+        return EquityView(
+            equity_base=100.0,
+            cash_base=25.0,
+            realized_pnl_base_total=0.0,
+            unrealized_pnl_base_total=0.0,
+            drift_flag=False,
+        )
+
+    portfolio_context.portfolio.get_equity.side_effect = _slow_equity
+
+    started = time.perf_counter()
+    response = client.get("/api/portfolio/summary")
+    elapsed = time.perf_counter() - started
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["data"] is None
+    assert payload["error"] == "Portfolio summary timed out."
+    assert elapsed < 0.04
 
 
 def test_positions_shape_matches_payload(client, portfolio_context):

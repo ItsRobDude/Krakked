@@ -17,6 +17,7 @@ from krakked.ui.models import (
     StrategyPerformancePayload,
     StrategyStatePayload,
 )
+from krakked.ui.route_runtime import run_bounded_route_read
 
 logger = logging.getLogger(__name__)
 
@@ -43,18 +44,22 @@ def _strategy_label(ctx, strategy_id: str) -> str:
 @router.get("/", response_model=ApiEnvelope[list[StrategyStatePayload]])
 async def get_strategies(request: Request) -> ApiEnvelope[list[StrategyStatePayload]]:
     ctx = _context(request)
-    try:
-        strategies = [
+
+    def _read_strategies() -> list[StrategyStatePayload]:
+        return [
             StrategyStatePayload(label=_strategy_label(ctx, state.strategy_id), **state.__dict__)
             for state in ctx.strategy_engine.get_strategy_state()
         ]
-        return ApiEnvelope(data=strategies, error=None)
-    except Exception as exc:  # pragma: no cover - defensive
-        logger.exception(
-            "Failed to fetch strategies",
-            extra=build_request_log_extra(request, event="strategies_fetch_failed"),
-        )
-        return ApiEnvelope(data=None, error=str(exc))
+
+    return await run_bounded_route_read(
+        request,
+        route_key="strategies.state",
+        reader=_read_strategies,
+        logger=logger,
+        busy_error="Strategy refresh is already in progress.",
+        timeout_error="Strategies request timed out.",
+        failure_event="strategies_fetch_failed",
+    )
 
 
 @router.get(
@@ -64,20 +69,22 @@ async def get_strategy_performance(
     request: Request,
 ) -> ApiEnvelope[list[StrategyPerformancePayload]]:
     ctx = _context(request)
-    try:
+
+    def _read_performance() -> list[StrategyPerformancePayload]:
         perf = ctx.portfolio.get_strategy_performance()
-        payload = [
+        return [
             StrategyPerformancePayload(**record.__dict__) for record in perf.values()
         ]
-        return ApiEnvelope(data=payload, error=None)
-    except Exception as exc:  # pragma: no cover - defensive
-        logger.exception(
-            "Failed to fetch strategy performance",
-            extra=build_request_log_extra(
-                request, event="strategy_performance_fetch_failed"
-            ),
-        )
-        return ApiEnvelope(data=None, error=str(exc))
+
+    return await run_bounded_route_read(
+        request,
+        route_key="strategies.performance",
+        reader=_read_performance,
+        logger=logger,
+        busy_error="Strategy performance refresh is already in progress.",
+        timeout_error="Strategy performance request timed out.",
+        failure_event="strategy_performance_fetch_failed",
+    )
 
 
 @router.patch("/{strategy_id}/enabled", response_model=ApiEnvelope[dict])

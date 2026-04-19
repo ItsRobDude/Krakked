@@ -20,6 +20,7 @@ from krakked.ui.models import (
     RiskDecisionPayload,
     RiskStatusPayload,
 )
+from krakked.ui.route_runtime import run_bounded_route_read
 
 logger = logging.getLogger(__name__)
 
@@ -181,16 +182,20 @@ def _require_kill_switch_confirmation(payload: KillSwitchPayload) -> str | None:
 @router.get("/status", response_model=ApiEnvelope[RiskStatusPayload])
 async def get_risk_status(request: Request) -> ApiEnvelope[RiskStatusPayload]:
     ctx = _context(request)
-    try:
+
+    def _read_status() -> RiskStatusPayload:
         status = ctx.strategy_engine.get_risk_status()
-        data = RiskStatusPayload(**status.__dict__)
-        return ApiEnvelope(data=data, error=None)
-    except Exception as exc:  # pragma: no cover - defensive
-        logger.exception(
-            "Failed to fetch risk status",
-            extra=build_request_log_extra(request, event="risk_status_failed"),
-        )
-        return ApiEnvelope(data=None, error=str(exc))
+        return RiskStatusPayload(**status.__dict__)
+
+    return await run_bounded_route_read(
+        request,
+        route_key="risk.status",
+        reader=_read_status,
+        logger=logger,
+        busy_error="Risk status refresh is already in progress.",
+        timeout_error="Risk status request timed out.",
+        failure_event="risk_status_failed",
+    )
 
 
 @router.get("/decisions", response_model=ApiEnvelope[List[RiskDecisionPayload]])
@@ -198,30 +203,38 @@ async def get_risk_decisions(
     request: Request, limit: int = 50
 ) -> ApiEnvelope[List[RiskDecisionPayload]]:
     ctx = _context(request)
-    try:
+
+    def _read_decisions() -> List[RiskDecisionPayload]:
         decisions = ctx.portfolio.get_decisions(limit=limit)
-        payload = [_serialize_decision(record) for record in decisions]
-        return ApiEnvelope(data=payload, error=None)
-    except Exception as exc:  # pragma: no cover - defensive
-        logger.exception(
-            "Failed to fetch risk decisions",
-            extra=build_request_log_extra(request, event="risk_decisions_failed"),
-        )
-        return ApiEnvelope(data=None, error=str(exc))
+        return [_serialize_decision(record) for record in decisions]
+
+    return await run_bounded_route_read(
+        request,
+        route_key="risk.decisions",
+        reader=_read_decisions,
+        logger=logger,
+        busy_error="Risk decisions refresh is already in progress.",
+        timeout_error="Risk decisions request timed out.",
+        failure_event="risk_decisions_failed",
+    )
 
 
 @router.get("/config", response_model=ApiEnvelope[RiskConfigPayload])
 async def get_risk_config(request: Request) -> ApiEnvelope[RiskConfigPayload]:
     ctx = _context(request)
-    try:
-        data = RiskConfigPayload(**ctx.config.risk.__dict__)
-        return ApiEnvelope(data=data, error=None)
-    except Exception as exc:  # pragma: no cover - defensive
-        logger.exception(
-            "Failed to fetch risk config",
-            extra=build_request_log_extra(request, event="risk_config_fetch_failed"),
-        )
-        return ApiEnvelope(data=None, error=str(exc))
+
+    def _read_config() -> RiskConfigPayload:
+        return RiskConfigPayload(**ctx.config.risk.__dict__)
+
+    return await run_bounded_route_read(
+        request,
+        route_key="risk.config",
+        reader=_read_config,
+        logger=logger,
+        busy_error="Risk configuration refresh is already in progress.",
+        timeout_error="Risk configuration request timed out.",
+        failure_event="risk_config_fetch_failed",
+    )
 
 
 @router.patch("/config", response_model=ApiEnvelope[RiskConfigPayload])

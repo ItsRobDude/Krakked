@@ -18,6 +18,7 @@ from krakked.ui.models import (
     PositionPayload,
     StrategyExposureBreakdown,
 )
+from krakked.ui.route_runtime import run_bounded_route_read
 
 logger = logging.getLogger(__name__)
 
@@ -74,31 +75,40 @@ def _build_position_payload(
 @router.get("/summary", response_model=ApiEnvelope[PortfolioSummary])
 async def get_portfolio_summary(request: Request) -> ApiEnvelope[PortfolioSummary]:
     ctx = _context(request)
-    try:
+
+    def _read_summary() -> PortfolioSummary:
         equity = ctx.portfolio.get_equity()
-        latest_snapshot = ctx.portfolio.get_latest_snapshot()
-        data = PortfolioSummary(
+        portfolio_state = getattr(ctx.portfolio, "portfolio", None)
+        last_snapshot_ts = getattr(portfolio_state, "_last_snapshot_ts", 0) or None
+        if last_snapshot_ts is None:
+            latest_snapshot = ctx.portfolio.get_latest_snapshot()
+            last_snapshot_ts = latest_snapshot.timestamp if latest_snapshot else None
+        return PortfolioSummary(
             equity_usd=equity.equity_base,
             cash_usd=equity.cash_base,
             realized_pnl_usd=equity.realized_pnl_base_total,
             unrealized_pnl_usd=equity.unrealized_pnl_base_total,
             drift_flag=equity.drift_flag,
-            last_snapshot_ts=latest_snapshot.timestamp if latest_snapshot else None,
+            last_snapshot_ts=last_snapshot_ts,
             portfolio_baseline=getattr(ctx.portfolio, "baseline_source", None),
         )
-        return ApiEnvelope(data=data, error=None)
-    except Exception as exc:  # pragma: no cover - defensive
-        logger.exception(
-            "Failed to fetch portfolio summary",
-            extra=build_request_log_extra(request, event="portfolio_summary_failed"),
-        )
-        return ApiEnvelope(data=None, error=str(exc))
+
+    return await run_bounded_route_read(
+        request,
+        route_key="portfolio.summary",
+        reader=_read_summary,
+        logger=logger,
+        busy_error="Portfolio summary refresh is already in progress.",
+        timeout_error="Portfolio summary timed out.",
+        failure_event="portfolio_summary_failed",
+    )
 
 
 @router.get("/positions", response_model=ApiEnvelope[List[PositionPayload]])
 async def get_positions(request: Request) -> ApiEnvelope[List[PositionPayload]]:
     ctx = _context(request)
-    try:
+
+    def _read_positions() -> List[PositionPayload]:
         positions: List[PositionPayload] = []
         for position in ctx.portfolio.get_positions():
             price = None
@@ -125,19 +135,24 @@ async def get_positions(request: Request) -> ApiEnvelope[List[PositionPayload]]:
 
             positions.append(_build_position_payload(position, price, metadata))
 
-        return ApiEnvelope(data=positions, error=None)
-    except Exception as exc:  # pragma: no cover - defensive
-        logger.exception(
-            "Failed to fetch positions",
-            extra=build_request_log_extra(request, event="positions_fetch_failed"),
-        )
-        return ApiEnvelope(data=None, error=str(exc))
+        return positions
+
+    return await run_bounded_route_read(
+        request,
+        route_key="portfolio.positions",
+        reader=_read_positions,
+        logger=logger,
+        busy_error="Position refresh is already in progress.",
+        timeout_error="Positions request timed out.",
+        failure_event="positions_fetch_failed",
+    )
 
 
 @router.get("/exposure", response_model=ApiEnvelope[ExposureBreakdown])
 async def get_exposure(request: Request) -> ApiEnvelope[ExposureBreakdown]:
     ctx = _context(request)
-    try:
+
+    def _read_exposure() -> ExposureBreakdown:
         by_asset = [
             AssetExposureBreakdown(
                 asset=exp.asset,
@@ -156,15 +171,17 @@ async def get_exposure(request: Request) -> ApiEnvelope[ExposureBreakdown]:
             )
             for sid, pct in (risk_status.per_strategy_exposure_pct or {}).items()
         ]
+        return ExposureBreakdown(by_asset=by_asset, by_strategy=exposure_by_strategy)
 
-        data = ExposureBreakdown(by_asset=by_asset, by_strategy=exposure_by_strategy)
-        return ApiEnvelope(data=data, error=None)
-    except Exception as exc:  # pragma: no cover - defensive
-        logger.exception(
-            "Failed to fetch exposure",
-            extra=build_request_log_extra(request, event="exposure_fetch_failed"),
-        )
-        return ApiEnvelope(data=None, error=str(exc))
+    return await run_bounded_route_read(
+        request,
+        route_key="portfolio.exposure",
+        reader=_read_exposure,
+        logger=logger,
+        busy_error="Exposure refresh is already in progress.",
+        timeout_error="Exposure request timed out.",
+        failure_event="exposure_fetch_failed",
+    )
 
 
 @router.get("/trades", response_model=ApiEnvelope[List[Dict[str, Any]]])

@@ -65,15 +65,28 @@ Implemented or substantially in place:
 - Strategy weighting support in the runtime
 - Crash-safe ML checkpoint/resume foundations
 - Backup, export, import, and upgrade-oriented operator tooling
+- Operator cockpit shell that now prefers partial rendering and local panel degradation over global loading deadlocks
+- Paper-mode balance baseline sourced from live exchange balances instead of an implicit fake bankroll
 
 Still needing real-world validation or product work:
 
 - Docker smoke testing on an actual deployment host
 - More polished strategy-management and attribution UX
+- Faster backend reads for active cockpit panels such as health, summary, exposure, strategy refresh, and risk status
+- A cleaner startup/unlock/session lifecycle model so first-run and reinitialization states stay explicit and predictable
 - Simple/Advanced UI presentation split
 - ML operator controls beyond the checkpoint/resume foundation
 - Live-trading readiness drills and operator runbooks
 - Commercial packaging, licensing, and legal/business review
+
+## Current Operator Reality
+
+Krakked is now closer to an operator-facing control room than a hobby bot shell, but the current product still has some honest gaps:
+
+- Paper mode is Kraken-connected validate-only execution.
+- Paper balances are currently an exchange-reference baseline, not an isolated simulated wallet.
+- The active dashboard now renders its shell quickly and fails fast on slow panel reads, but some backend routes still need performance work to avoid repeated degraded states.
+- Startup, unlock, and session-start flows have improved significantly, but they still need a tighter lifecycle model before the product feels fully polished for a first-time operator.
 
 ## UX Recommendation
 
@@ -132,6 +145,7 @@ The next milestones are product-facing rather than architecture-facing:
 
 2. Operator UX
    - Improve strategy toggles, weights, and per-strategy attribution in the UI.
+   - Remove remaining active-cockpit degraded states by fixing the slow backend reads behind summary, health, risk, and strategy panels.
    - Introduce a clearer Simple vs Advanced presentation model.
    - Surface ML status and training/checkpoint information more directly.
 
@@ -139,6 +153,7 @@ The next milestones are product-facing rather than architecture-facing:
    - Formalize operational runbooks and pre-live checklists.
    - Tighten live-mode guidance, safety prompts, and emergency control flows.
    - Practice rollback, restore, and upgrade drills on realistic deployments.
+   - Make the startup/unlock/session lifecycle trustworthy enough that operators can confidently distinguish slow warmup from a real fault.
 
 4. Commercial Packaging
    - Define the self-hosted licensing/update model.

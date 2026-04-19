@@ -6,6 +6,13 @@ This guide is for the first-time operator who wants Krakked running without havi
 
 Start in paper mode with Docker Desktop or Docker Engine, get the UI reachable, and make one backup before you experiment further.
 
+Important current behavior:
+
+- paper mode is validate-only execution against Kraken, not a fake bankroll simulator
+- the paper dashboard uses current exchange balances as its baseline when available
+- old live trade history is not replayed into starting paper PnL/cash
+- during startup or portfolio sync, some dashboard panels may show local degraded or pending states instead of blocking the whole UI
+
 ## What You Need
 
 - Docker Desktop (Windows/macOS) or Docker Engine (Linux)
@@ -66,6 +73,8 @@ docker compose up -d
 - the config is mounted from `deploy/config`
 - the database appears in `deploy/state`
 - the bot is still in paper mode
+- the paper overview shows exchange-reference balances rather than a hard-coded simulated bankroll
+- the session can reach the active cockpit even if some panels are still warming up or timing out locally
 
 ## First Safety Habit
 
@@ -83,9 +92,17 @@ docker compose run --rm krakked export-install \
 ## Beginner-Friendly Operating Rhythm
 
 - stay in paper mode while validating strategy weights and UI controls
+- treat paper balances as a reference view of your Kraken account, not isolated play money
 - keep image tags pinned to a known version
 - export before upgrades
 - only move toward live trading after you trust the logs, metrics, and risk settings
+
+## What To Expect In The UI Today
+
+- `Paper Trading Overview` should load as the main operator cockpit after unlock and session start
+- if a slow backend read stalls, the UI should now fail fast and show a local degraded message instead of hanging on a full-page loading screen
+- strategy, risk, and portfolio panels may still show temporary timeout/degraded states while the active session is warming up
+- if those degraded states persist, treat that as an operator issue to investigate before relying on the dashboard for trading decisions
 
 ## When To Use Advanced Features
 

@@ -3,6 +3,10 @@ export type ApiEnvelope<T> = {
   error: string | null;
 };
 
+export type ApiRequestOptions = RequestInit & {
+  timeoutMs?: number;
+};
+
 export type PortfolioSummary = {
   equity_usd: number | null;
   cash_usd: number | null;
@@ -220,13 +224,40 @@ export type ProfileCreateResponse = {
 const API_BASE = (import.meta.env.VITE_API_BASE || '/api').replace(/\/$/, '');
 const API_TOKEN = import.meta.env.VITE_API_TOKEN;
 
-async function fetchJson<T>(path: string, options: RequestInit = {}): Promise<T | null> {
+const DEFAULT_API_TIMEOUT_MS = 4000;
+
+function mergeSignals(signal?: AbortSignal | null, timeoutMs = DEFAULT_API_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort('timeout'), timeoutMs);
+  const parentSignal = signal ?? undefined;
+
+  const abortFromParent = () => controller.abort(parentSignal?.reason);
+  if (parentSignal) {
+    if (parentSignal.aborted) {
+      controller.abort(parentSignal.reason);
+    } else {
+      parentSignal.addEventListener('abort', abortFromParent, { once: true });
+    }
+  }
+
+  const cleanup = () => {
+    window.clearTimeout(timeoutId);
+    if (parentSignal) {
+      parentSignal.removeEventListener('abort', abortFromParent);
+    }
+  };
+
+  return { signal: controller.signal, cleanup };
+}
+
+async function fetchJson<T>(path: string, options: ApiRequestOptions = {}): Promise<T | null> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (API_TOKEN) headers.Authorization = `Bearer ${API_TOKEN}`;
   if (options.headers) Object.assign(headers, options.headers as Record<string, string>);
+  const { signal, cleanup } = mergeSignals(options.signal, options.timeoutMs);
 
   try {
-    const response = await fetch(`${API_BASE}${path}`, { ...options, headers });
+    const response = await fetch(`${API_BASE}${path}`, { ...options, headers, signal });
     if (!response.ok) {
       throw new Error(`Request failed: ${response.status}`);
     }
@@ -240,58 +271,70 @@ async function fetchJson<T>(path: string, options: RequestInit = {}): Promise<T 
   } catch (error) {
     console.warn(`Falling back to placeholders for ${path}`, error);
     return null;
+  } finally {
+    cleanup();
   }
 }
 
-async function fetchJsonStrict<T>(path: string, options: RequestInit = {}): Promise<T> {
+async function fetchJsonStrict<T>(path: string, options: ApiRequestOptions = {}): Promise<T> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (API_TOKEN) headers.Authorization = `Bearer ${API_TOKEN}`;
   if (options.headers) Object.assign(headers, options.headers as Record<string, string>);
+  const { signal, cleanup } = mergeSignals(options.signal, options.timeoutMs);
 
-  const response = await fetch(`${API_BASE}${path}`, { ...options, headers });
-  const payload = (await response.json()) as ApiEnvelope<T>;
+  try {
+    const response = await fetch(`${API_BASE}${path}`, { ...options, headers, signal });
+    const payload = (await response.json()) as ApiEnvelope<T>;
 
-  if (!response.ok) {
-    throw new Error(payload.error || `Request failed: ${response.status}`);
+    if (!response.ok) {
+      throw new Error(payload.error || `Request failed: ${response.status}`);
+    }
+
+    if (payload.error) {
+      throw new Error(payload.error);
+    }
+
+    if (payload.data === null) {
+      throw new Error('Empty response');
+    }
+
+    return payload.data;
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw new Error(`Request timed out for ${path}`);
+    }
+    throw error;
+  } finally {
+    cleanup();
   }
-
-  if (payload.error) {
-    throw new Error(payload.error);
-  }
-
-  if (payload.data === null) {
-    throw new Error('Empty response');
-  }
-
-  return payload.data;
 }
 
-export async function fetchPortfolioSummary(): Promise<PortfolioSummary | null> {
-  return fetchJson<PortfolioSummary>('/portfolio/summary');
+export async function fetchPortfolioSummary(options: ApiRequestOptions = {}): Promise<PortfolioSummary | null> {
+  return fetchJson<PortfolioSummary>('/portfolio/summary', options);
 }
 
-export async function fetchPositions(): Promise<PositionPayload[] | null> {
-  return fetchJson<PositionPayload[]>('/portfolio/positions');
+export async function fetchPositions(options: ApiRequestOptions = {}): Promise<PositionPayload[] | null> {
+  return fetchJson<PositionPayload[]>('/portfolio/positions', options);
 }
 
-export async function fetchExposure(): Promise<ExposureBreakdown | null> {
-  return fetchJson<ExposureBreakdown>('/portfolio/exposure');
+export async function fetchExposure(options: ApiRequestOptions = {}): Promise<ExposureBreakdown | null> {
+  return fetchJson<ExposureBreakdown>('/portfolio/exposure', options);
 }
 
-export async function fetchRecentExecutions(): Promise<RecentExecution[] | null> {
-  return fetchJson<RecentExecution[]>('/execution/recent_executions');
+export async function fetchRecentExecutions(options: ApiRequestOptions = {}): Promise<RecentExecution[] | null> {
+  return fetchJson<RecentExecution[]>('/execution/recent_executions', options);
 }
 
-export async function fetchSystemHealth(): Promise<SystemHealth | null> {
-  return fetchJson<SystemHealth>('/system/health');
+export async function fetchSystemHealth(options: ApiRequestOptions = {}): Promise<SystemHealth | null> {
+  return fetchJson<SystemHealth>('/system/health', options);
 }
 
 export async function fetchSystemMetrics(): Promise<SystemMetrics | null> {
   return fetchJson<SystemMetrics>('/system/metrics');
 }
 
-export async function fetchSessionState(): Promise<SessionStateResponse | null> {
-  return fetchJson<SessionStateResponse>('/system/session');
+export async function fetchSessionState(options: ApiRequestOptions = {}): Promise<SessionStateResponse | null> {
+  return fetchJson<SessionStateResponse>('/system/session', options);
 }
 
 export async function startSession(): Promise<SessionStateResponse | null> {
@@ -320,20 +363,20 @@ export async function fetchProfiles(): Promise<ProfileSummary[]> {
   return profiles ?? [];
 }
 
-export async function fetchStrategies(): Promise<StrategyState[] | null> {
-  return fetchJson<StrategyState[]>('/strategies');
+export async function fetchStrategies(options: ApiRequestOptions = {}): Promise<StrategyState[] | null> {
+  return fetchJson<StrategyState[]>('/strategies', options);
 }
 
-export async function fetchStrategyPerformance(): Promise<StrategyPerformance[] | null> {
-  return fetchJson<StrategyPerformance[]>('/strategies/performance');
+export async function fetchStrategyPerformance(options: ApiRequestOptions = {}): Promise<StrategyPerformance[] | null> {
+  return fetchJson<StrategyPerformance[]>('/strategies/performance', options);
 }
 
-export async function fetchRiskConfig(): Promise<RiskConfig | null> {
-  return fetchJson<RiskConfig>('/risk/config');
+export async function fetchRiskConfig(options: ApiRequestOptions = {}): Promise<RiskConfig | null> {
+  return fetchJson<RiskConfig>('/risk/config', options);
 }
 
-export async function fetchRiskDecisions(limit = 50): Promise<RiskDecision[] | null> {
-  return fetchJson<RiskDecision[]>(`/risk/decisions?limit=${limit}`);
+export async function fetchRiskDecisions(limit = 50, options: ApiRequestOptions = {}): Promise<RiskDecision[] | null> {
+  return fetchJson<RiskDecision[]>(`/risk/decisions?limit=${limit}`, options);
 }
 
 export async function updateRiskConfig(patch: Partial<RiskConfig>): Promise<RiskConfig | null> {
@@ -382,8 +425,8 @@ export function getKillSwitchState(health: SystemHealth | null): boolean | null 
   return health?.kill_switch_active ?? null;
 }
 
-export async function getRiskStatus(): Promise<RiskStatus | null> {
-  return fetchJson<RiskStatus>('/risk/status');
+export async function getRiskStatus(options: ApiRequestOptions = {}): Promise<RiskStatus | null> {
+  return fetchJson<RiskStatus>('/risk/status', options);
 }
 
 export async function setKillSwitch(active: boolean): Promise<RiskStatus | null> {

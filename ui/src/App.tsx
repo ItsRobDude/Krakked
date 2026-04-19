@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { KpiGrid, Kpi } from './components/KpiGrid';
 import { Layout } from './components/Layout';
 import { RiskPanel } from './components/RiskPanel';
@@ -59,6 +59,8 @@ import { RISK_PRESET_META, formatPresetSummary } from './constants/riskPresets';
 
 const DASHBOARD_REFRESH_MS = Number(import.meta.env.VITE_REFRESH_DASHBOARD_MS ?? 5000) || 5000;
 const ORDERS_REFRESH_MS = Number(import.meta.env.VITE_REFRESH_ORDERS_MS ?? 5000) || 5000;
+const ACTIVE_DASHBOARD_REFRESH_MS = Math.min(DASHBOARD_REFRESH_MS, ORDERS_REFRESH_MS);
+const ACTIVE_RESOURCE_TIMEOUT_MS = 3500;
 type SystemMessage = { tone: 'info' | 'error' | 'success'; message: string };
 type DashboardAlert = { id: string; tone: 'danger' | 'warning' | 'info'; title: string; message: string };
 
@@ -244,6 +246,9 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
 
   const [showLiveModal, setShowLiveModal] = useState(false);
   const [pendingLiveStart, setPendingLiveStart] = useState<SessionConfigRequest | null>(null);
+  const dashboardRefreshInFlightRef = useRef(false);
+  const dashboardAbortRef = useRef<AbortController | null>(null);
+  const requestInFlightRef = useRef<Record<string, boolean>>({});
 
   const mlEnabled = session?.ml_enabled ?? false;
   const startupReloading = Boolean(session?.reloading && !session?.active);
@@ -260,18 +265,36 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
     });
   };
 
+  const requestDashboardResource = async <T,>(
+    key: string,
+    controller: AbortController,
+    loader: (options: { signal: AbortSignal; timeoutMs: number }) => Promise<T | null>,
+  ) => {
+    if (requestInFlightRef.current[key]) {
+      return null;
+    }
+
+    requestInFlightRef.current[key] = true;
+    try {
+      return await loader({ signal: controller.signal, timeoutMs: ACTIVE_RESOURCE_TIMEOUT_MS });
+    } finally {
+      requestInFlightRef.current[key] = false;
+    }
+  };
+
   const loadSession = async () => {
-    const [sessionState, profileSummaries, systemHealth, systemConfig] = await Promise.all([
-      fetchSessionState(),
-      fetchProfiles(),
-      fetchSystemHealth(),
-      fetchSystemConfig().catch(() => null),
-    ]);
+    const sessionState = await fetchSessionState({ timeoutMs: ACTIVE_RESOURCE_TIMEOUT_MS });
 
     if (sessionState) {
       setSession(sessionState);
       setLoopIntervalDraft(sessionState.loop_interval_sec);
     }
+
+    const [profileSummaries, systemHealth, systemConfig] = await Promise.all([
+      fetchProfiles(),
+      fetchSystemHealth({ timeoutMs: ACTIVE_RESOURCE_TIMEOUT_MS }),
+      fetchSystemConfig().catch(() => null),
+    ]);
 
     if (systemHealth) {
       setHealth(systemHealth);
@@ -327,60 +350,196 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
     if (!session?.active) return;
 
     let cancelled = false;
-
-    const loadDashboard = async () => {
-      const [portfolioSummary, exposure, systemHealth, riskStatus] = await Promise.all([
-        fetchPortfolioSummary(),
-        fetchExposure(),
-        fetchSystemHealth(),
-        getRiskStatus(),
-      ]);
-      if (cancelled) return;
-
-      const failures: string[] = [];
-
-      if (portfolioSummary) {
-        setSummary(portfolioSummary);
-        setKpis(buildKpis(portfolioSummary));
-      } else {
-        failures.push('portfolio summary');
+    const loadActiveDashboard = async () => {
+      if (dashboardRefreshInFlightRef.current) {
+        return;
       }
 
-      if (systemHealth) {
-        setHealth(systemHealth);
-        setConnectionState(getConnectionStateFromHealth(systemHealth));
-      } else {
-        failures.push('system health');
-        setConnectionState('degraded');
-      }
+      dashboardRefreshInFlightRef.current = true;
+      const controller = new AbortController();
+      dashboardAbortRef.current = controller;
 
-      if (riskStatus) {
-        setRisk(riskStatus);
-      } else {
-        failures.push('risk status');
-      }
+      try {
+        const [
+          portfolioSummary,
+          exposureData,
+          systemHealth,
+          riskStatus,
+          riskConfigData,
+          positionsData,
+          strategiesData,
+          perf,
+          executions,
+          decisions,
+        ] = await Promise.all([
+          requestDashboardResource('portfolio-summary', controller, fetchPortfolioSummary),
+          requestDashboardResource('portfolio-exposure', controller, fetchExposure),
+          requestDashboardResource('system-health', controller, fetchSystemHealth),
+          requestDashboardResource('risk-status', controller, getRiskStatus),
+          requestDashboardResource('risk-config', controller, fetchRiskConfig),
+          requestDashboardResource('portfolio-positions', controller, fetchPositions),
+          requestDashboardResource('strategy-state', controller, fetchStrategies),
+          requestDashboardResource('strategy-performance', controller, fetchStrategyPerformance),
+          requestDashboardResource('recent-executions', controller, fetchRecentExecutions),
+          requestDashboardResource('risk-decisions', controller, (options) => fetchRiskDecisions(50, options)),
+        ]);
 
-      if (exposure) {
-        setExposure(exposure);
-      } else {
-        failures.push('exposure');
-      }
+        if (cancelled || controller.signal.aborted) return;
 
-      if (failures.length > 0) {
-        updateRefreshIssue(
-          'dashboard',
-          `Dashboard refresh degraded: ${failures.join(', ')} unavailable. Showing the last successful data where possible.`,
-        );
-      } else {
-        updateRefreshIssue('dashboard', null);
+        const dashboardFailures: string[] = [];
+
+        if (portfolioSummary) {
+          setSummary(portfolioSummary);
+          setKpis(buildKpis(portfolioSummary));
+        } else {
+          dashboardFailures.push('portfolio summary');
+        }
+
+        if (systemHealth) {
+          setHealth(systemHealth);
+          setConnectionState(getConnectionStateFromHealth(systemHealth));
+          updateRefreshIssue('session-health', null);
+        } else {
+          dashboardFailures.push('system health');
+          setConnectionState('degraded');
+          updateRefreshIssue(
+            'session-health',
+            'System health is unavailable. Showing the last successful status where possible.',
+          );
+        }
+
+        if (riskStatus) {
+          setRisk(riskStatus);
+          updateRefreshIssue('risk-status', null);
+        } else {
+          dashboardFailures.push('risk status');
+          updateRefreshIssue(
+            'risk-status',
+            'Risk status refresh failed. Dashboard risk indicators may be stale.',
+          );
+        }
+
+        if (exposureData) {
+          setExposure(exposureData);
+          updateRefreshIssue('exposure', null);
+        } else {
+          dashboardFailures.push('exposure');
+          updateRefreshIssue(
+            'exposure',
+            'Exposure refresh failed. Exposure panels may be showing the last successful data.',
+          );
+        }
+
+        if (riskConfigData) {
+          setRiskConfig(riskConfigData);
+          updateRefreshIssue('risk-config', null);
+        } else {
+          updateRefreshIssue(
+            'risk-config',
+            'Risk configuration refresh failed. Edits may be working against stale values.',
+          );
+        }
+
+        if (positionsData) {
+          const active = positionsData.filter((position) => !position.is_dust);
+          const dust = positionsData.filter((position) => position.is_dust);
+          setActivePositions(transformPositions(active));
+          setDustPositions(transformPositions(dust));
+          updateRefreshIssue('positions', null);
+        } else {
+          updateRefreshIssue(
+            'positions',
+            'Positions refresh failed. Position tables may be showing the last successful snapshot.',
+          );
+        }
+
+        if (strategiesData) {
+          setStrategies(strategiesData);
+          setStrategyRisk((previous) => {
+            const next = { ...previous };
+            strategiesData.forEach((strategy) => {
+              const riskProfile = strategy.params?.risk_profile;
+              if (isRiskProfile(riskProfile)) {
+                next[strategy.strategy_id] = riskProfile;
+              } else if (!next[strategy.strategy_id]) {
+                next[strategy.strategy_id] = 'balanced';
+              }
+            });
+            return next;
+          });
+          setStrategyLearning((previous) => {
+            const next = { ...previous };
+            strategiesData.forEach((strategy) => {
+              const learning = strategy.params?.continuous_learning;
+              if (typeof learning === 'boolean') {
+                next[strategy.strategy_id] = learning;
+              } else if (next[strategy.strategy_id] === undefined) {
+                next[strategy.strategy_id] = true;
+              }
+            });
+            return next;
+          });
+          updateRefreshIssue('strategies', null);
+        } else {
+          updateRefreshIssue(
+            'strategies',
+            'Strategy refresh failed. Strategy toggles and weights may be showing stale data.',
+          );
+        }
+
+        if (perf) {
+          const byId: Record<string, StrategyPerformance> = {};
+          perf.forEach((entry) => {
+            byId[entry.strategy_id] = entry;
+          });
+          setStrategyPerformance(byId);
+          updateRefreshIssue('strategy-performance', null);
+        } else {
+          updateRefreshIssue(
+            'strategy-performance',
+            'Strategy performance refresh failed. Performance metrics may be stale.',
+          );
+        }
+
+        if (executions || decisions) {
+          const executionLogs = executions ? transformLogs(executions) : [];
+          const decisionLogs = decisions ? transformRiskDecisions(decisions) : [];
+          const merged = [...executionLogs, ...decisionLogs].sort(
+            (a, b) => (b.sortKey ?? 0) - (a.sortKey ?? 0),
+          );
+          setLogs(merged);
+          updateRefreshIssue('activity', null);
+        } else {
+          updateRefreshIssue(
+            'activity',
+            'Recent activity refresh failed. Execution and risk logs may be stale.',
+          );
+        }
+
+        if (dashboardFailures.length > 0) {
+          updateRefreshIssue(
+            'dashboard',
+            `Dashboard refresh degraded: ${dashboardFailures.join(', ')} unavailable. Showing the last successful data where possible.`,
+          );
+        } else {
+          updateRefreshIssue('dashboard', null);
+        }
+      } finally {
+        if (dashboardAbortRef.current === controller) {
+          dashboardAbortRef.current = null;
+        }
+        dashboardRefreshInFlightRef.current = false;
       }
     };
 
-    loadDashboard();
-    const interval = setInterval(loadDashboard, DASHBOARD_REFRESH_MS);
+    void loadActiveDashboard();
+    const interval = setInterval(() => {
+      void loadActiveDashboard();
+    }, ACTIVE_DASHBOARD_REFRESH_MS);
 
     return () => {
       cancelled = true;
+      dashboardAbortRef.current?.abort();
       clearInterval(interval);
     };
   }, [session?.active]);
@@ -406,133 +565,6 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
   }, [health, summary]);
 
   useEffect(() => {
-    if (!session?.active) return;
-
-    let cancelled = false;
-
-    const loadRiskConfig = async () => {
-      const config = await fetchRiskConfig();
-      if (cancelled) return;
-      if (config) {
-        setRiskConfig(config);
-        updateRefreshIssue('risk-config', null);
-      } else {
-        updateRefreshIssue(
-          'risk-config',
-          'Risk configuration refresh failed. Edits may be working against stale values.',
-        );
-      }
-    };
-
-    loadRiskConfig();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [session?.active]);
-
-  useEffect(() => {
-    if (!session?.active) return;
-
-    let cancelled = false;
-
-    const loadPositions = async () => {
-      const data = await fetchPositions();
-      if (cancelled) return;
-      if (data) {
-         const active = data.filter(p => !p.is_dust);
-         const dust = data.filter(p => p.is_dust);
-         setActivePositions(transformPositions(active));
-         setDustPositions(transformPositions(dust));
-         updateRefreshIssue('positions', null);
-      } else {
-         updateRefreshIssue(
-           'positions',
-           'Positions refresh failed. Position tables may be showing the last successful snapshot.',
-         );
-      }
-    };
-
-    loadPositions();
-    const interval = setInterval(loadPositions, DASHBOARD_REFRESH_MS);
-
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-    };
-  }, [session?.active]);
-
-  useEffect(() => {
-    if (!session?.active) return;
-
-    let cancelled = false;
-
-    const loadStrategies = async () => {
-      const [data, perf] = await Promise.all([
-        fetchStrategies(),
-        fetchStrategyPerformance(),
-      ]);
-      if (cancelled) return;
-
-      if (data) {
-        setStrategies(data);
-        setStrategyRisk((previous) => {
-          const next = { ...previous };
-          data.forEach((strategy) => {
-            const riskProfile = strategy.params?.risk_profile;
-            if (isRiskProfile(riskProfile)) {
-              next[strategy.strategy_id] = riskProfile;
-            } else if (!next[strategy.strategy_id]) {
-              next[strategy.strategy_id] = 'balanced';
-            }
-          });
-          return next;
-        });
-        setStrategyLearning((previous) => {
-          const next = { ...previous };
-          data.forEach((strategy) => {
-            const learning = strategy.params?.continuous_learning;
-            if (typeof learning === 'boolean') {
-              next[strategy.strategy_id] = learning;
-            } else if (next[strategy.strategy_id] === undefined) {
-              next[strategy.strategy_id] = true;
-            }
-          });
-          return next;
-        });
-        updateRefreshIssue('strategies', null);
-      } else {
-        updateRefreshIssue(
-          'strategies',
-          'Strategy refresh failed. Strategy toggles and weights may be showing stale data.',
-        );
-      }
-
-      if (perf) {
-        const byId: Record<string, StrategyPerformance> = {};
-        perf.forEach((entry) => {
-          byId[entry.strategy_id] = entry;
-        });
-        setStrategyPerformance(byId);
-        updateRefreshIssue('strategy-performance', null);
-      } else {
-        updateRefreshIssue(
-          'strategy-performance',
-          'Strategy performance refresh failed. Performance metrics may be stale.',
-        );
-      }
-    };
-
-    loadStrategies();
-    const interval = setInterval(loadStrategies, DASHBOARD_REFRESH_MS);
-
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-    };
-  }, [session?.active]);
-
-  useEffect(() => {
     if (health?.ui_read_only) {
       setRiskFeedback({ tone: 'info', message: 'Backend is read-only. Kill switch changes are disabled.' });
       setStrategyFeedback('Backend is read-only. Strategy controls are disabled.');
@@ -553,7 +585,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
   const waitForExecutionMode = async (target: ExecutionMode, timeoutMs = 15000) => {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
-      const latest = await fetchSystemHealth();
+      const latest = await fetchSystemHealth({ timeoutMs: ACTIVE_RESOURCE_TIMEOUT_MS });
       if (
         latest &&
         resolveExecutionMode(latest) === target &&
@@ -569,7 +601,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
   const waitForSessionActivation = async (timeoutMs = 20000) => {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
-      const latest = await fetchSessionState();
+      const latest = await fetchSessionState({ timeoutMs: ACTIVE_RESOURCE_TIMEOUT_MS });
       if (latest?.active) {
         return latest;
       }
@@ -583,8 +615,8 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
     setLoopIntervalDraft(next.loop_interval_sec);
 
     const [systemHealth, riskStatus] = await Promise.all([
-      fetchSystemHealth(),
-      getRiskStatus(),
+      fetchSystemHealth({ timeoutMs: ACTIVE_RESOURCE_TIMEOUT_MS }),
+      getRiskStatus({ timeoutMs: ACTIVE_RESOURCE_TIMEOUT_MS }),
     ]);
 
     if (systemHealth) {
@@ -615,7 +647,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
         return;
       }
 
-      const fallback = await fetchSystemHealth();
+      const fallback = await fetchSystemHealth({ timeoutMs: ACTIVE_RESOURCE_TIMEOUT_MS });
       if (fallback) {
         setHealth(fallback);
         setConnectionState(getConnectionStateFromHealth(fallback));
@@ -1225,36 +1257,6 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
       setRiskConfigBusy(false);
     }
   };
-
-  useEffect(() => {
-    if (!session?.active) return;
-
-    let cancelled = false;
-
-    const loadExecutions = async () => {
-      const [executions, decisions] = await Promise.all([
-        fetchRecentExecutions(),
-        fetchRiskDecisions(50),
-      ]);
-      if (cancelled) return;
-
-      const executionLogs = executions ? transformLogs(executions) : [];
-      const decisionLogs = decisions ? transformRiskDecisions(decisions) : [];
-      const merged = [...executionLogs, ...decisionLogs].sort(
-        (a, b) => (b.sortKey ?? 0) - (a.sortKey ?? 0),
-      );
-
-      setLogs(merged);
-    };
-
-    loadExecutions();
-    const interval = setInterval(loadExecutions, ORDERS_REFRESH_MS);
-
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-    };
-  }, [session?.active]);
 
   if (sessionLoading) {
     return (

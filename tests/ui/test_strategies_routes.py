@@ -6,6 +6,7 @@ from starlette.testclient import TestClient
 
 from krakked.config import StrategyConfig
 from krakked.strategy.models import StrategyState
+from krakked.ui.route_runtime import _route_guard
 
 
 @pytest.fixture
@@ -55,6 +56,22 @@ def test_get_strategies_without_trailing_slash(client, strategy_context):
     payload = response.json()
     assert payload["error"] is None
     assert payload["data"][0]["strategy_id"] == "trend_core"
+
+
+def test_get_strategies_returns_busy_when_refresh_in_progress(client):
+    guard = _route_guard("strategies.state")
+    acquired = guard.acquire(blocking=False)
+    assert acquired is True
+
+    try:
+        response = client.get("/api/strategies")
+    finally:
+        guard.release()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["data"] is None
+    assert payload["error"] == "Strategy refresh is already in progress."
 
 
 @pytest.mark.parametrize("ui_read_only", [False])

@@ -18,6 +18,7 @@ from krakked.ui.models import (
     ExecutionResultPayload,
     OpenOrderPayload,
 )
+from krakked.ui.route_runtime import run_bounded_route_read
 
 logger = logging.getLogger(__name__)
 
@@ -106,18 +107,22 @@ async def get_recent_executions(
     request: Request,
 ) -> ApiEnvelope[List[ExecutionResultPayload]]:
     ctx = _context(request)
-    try:
-        executions = [
+
+    def _read_recent_executions() -> List[ExecutionResultPayload]:
+        return [
             _serialize_execution_result(result)
             for result in ctx.execution_service.get_recent_executions()
         ]
-        return ApiEnvelope(data=executions, error=None)
-    except Exception as exc:  # pragma: no cover - defensive
-        logger.exception(
-            "Failed to fetch recent executions",
-            extra=build_request_log_extra(request, event="recent_executions_failed"),
-        )
-        return ApiEnvelope(data=None, error=str(exc))
+
+    return await run_bounded_route_read(
+        request,
+        route_key="execution.recent_executions",
+        reader=_read_recent_executions,
+        logger=logger,
+        busy_error="Recent executions refresh is already in progress.",
+        timeout_error="Recent executions request timed out.",
+        failure_event="recent_executions_failed",
+    )
 
 
 @router.post("/cancel_all", response_model=ApiEnvelope[bool])
