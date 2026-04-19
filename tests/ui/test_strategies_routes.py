@@ -16,7 +16,7 @@ def strategy_context(client: TestClient):
 
 def test_get_strategies_enveloped(client, strategy_context):
     now = datetime.now(UTC)
-    strategy_context.strategy_engine.get_strategy_state.return_value = [
+    strategy_context.strategy_engine.get_cached_strategy_state.return_value = [
         StrategyState(
             strategy_id="trend_core",
             enabled=True,
@@ -39,7 +39,7 @@ def test_get_strategies_enveloped(client, strategy_context):
 
 def test_get_strategies_without_trailing_slash(client, strategy_context):
     now = datetime.now(UTC)
-    strategy_context.strategy_engine.get_strategy_state.return_value = [
+    strategy_context.strategy_engine.get_cached_strategy_state.return_value = [
         StrategyState(
             strategy_id="trend_core",
             enabled=True,

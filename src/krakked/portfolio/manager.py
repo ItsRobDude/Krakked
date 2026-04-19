@@ -13,7 +13,17 @@ from krakked.market_data.api import MarketDataAPI
 from krakked.strategy.performance import compute_strategy_performance
 
 from .balance_engine import BalanceEngine, classify_cashflow, rebuild_balances
-from .models import AssetBalance, BalanceSnapshot, CashFlowRecord, LedgerEntry, PortfolioSnapshot
+from .models import (
+    AssetBalance,
+    AssetExposure,
+    BalanceSnapshot,
+    CashFlowRecord,
+    DriftStatus,
+    EquityView,
+    LedgerEntry,
+    PortfolioSnapshot,
+    SpotPosition,
+)
 from .portfolio import Portfolio
 from .store import PortfolioStore, SQLitePortfolioStore
 
@@ -71,6 +81,11 @@ class PortfolioService:
             if getattr(config.execution, "mode", "paper") == "paper"
             else "ledger_history"
         )
+        self._cached_equity: Optional[EquityView] = None
+        self._cached_positions: List[SpotPosition] = []
+        self._cached_asset_exposure: List[AssetExposure] = []
+        self._cached_drift_status: Optional[DriftStatus] = None
+        self._cached_last_snapshot_ts: Optional[int] = None
 
     @property
     def last_sync_ok(self) -> bool:
@@ -111,6 +126,20 @@ class PortfolioService:
             extra=structured_log_extra(event="portfolio_ready"),
         )
 
+    def _refresh_cached_views(self) -> None:
+        self._cached_positions = list(self.portfolio.get_positions())
+        self._cached_equity = self.portfolio.equity_view()
+        self._cached_asset_exposure = self.portfolio.get_asset_exposure()
+        self._cached_drift_status = self.portfolio.get_drift_status()
+        self._cached_last_snapshot_ts = (
+            getattr(self.portfolio, "_last_snapshot_ts", 0) or None
+        )
+        if self._cached_last_snapshot_ts is None:
+            latest_snapshot = self.portfolio.get_latest_snapshot()
+            self._cached_last_snapshot_ts = (
+                latest_snapshot.timestamp if latest_snapshot else None
+            )
+
     def _bootstrap_from_store(self):
         if self._bootstrapped:
             return
@@ -122,6 +151,7 @@ class PortfolioService:
             self.portfolio.realized_pnl_history.clear()
             self.portfolio.realized_pnl_base_by_pair.clear()
             self.portfolio.fees_paid_base_by_pair.clear()
+            self._refresh_cached_views()
             self._bootstrapped = True
             return
 
@@ -143,6 +173,7 @@ class PortfolioService:
         if trades:
             self.portfolio.ingest_trades(trades, persist=False)
 
+        self._refresh_cached_views()
         self._bootstrapped = True
 
     def sync(self) -> Dict[str, int]:
@@ -189,6 +220,7 @@ class PortfolioService:
 
             # 3. Reconcile
             self._reconcile()
+            self._refresh_cached_views()
             self._last_sync_ok = True
             self._last_sync_reason = None
             self._last_sync_at = datetime.now(timezone.utc)
@@ -223,6 +255,7 @@ class PortfolioService:
         self.portfolio.reconcile(balance_resp)
         self._save_balance_snapshot(now)
         self.portfolio.maybe_snapshot(now=int(now.timestamp()))
+        self._refresh_cached_views()
 
         self._last_sync_ok = True
         self._last_sync_reason = None
@@ -524,11 +557,28 @@ class PortfolioService:
     def get_equity(self, include_manual: Optional[bool] = None):
         return self.portfolio.equity_view(include_manual=include_manual)
 
+    def get_cached_equity(self) -> EquityView:
+        if self._cached_equity is None:
+            self._refresh_cached_views()
+        assert self._cached_equity is not None
+        return self._cached_equity
+
     def get_positions(self):
         return self.portfolio.get_positions()
 
+    def get_cached_positions(self) -> List[SpotPosition]:
+        if self._cached_equity is None:
+            self._refresh_cached_views()
+        return list(self._cached_positions)
+
     def get_drift_status(self):
         return self.portfolio.get_drift_status()
+
+    def get_cached_drift_status(self) -> DriftStatus:
+        if self._cached_drift_status is None:
+            self._refresh_cached_views()
+        assert self._cached_drift_status is not None
+        return self._cached_drift_status
 
     def get_position(self, pair: str):
         return self.portfolio.get_position(pair)
@@ -563,6 +613,11 @@ class PortfolioService:
     def get_asset_exposure(self, include_manual: Optional[bool] = None):
         return self.portfolio.get_asset_exposure(include_manual=include_manual)
 
+    def get_cached_asset_exposure(self) -> List[AssetExposure]:
+        if self._cached_equity is None:
+            self._refresh_cached_views()
+        return list(self._cached_asset_exposure)
+
     def get_realized_pnl_by_strategy(
         self, include_manual: Optional[bool] = None
     ) -> Dict[str, float]:
@@ -575,7 +630,9 @@ class PortfolioService:
         return compute_strategy_performance(self.portfolio, window)
 
     def create_snapshot(self) -> PortfolioSnapshot:
-        return self.portfolio.snapshot()
+        snapshot = self.portfolio.snapshot()
+        self._cached_last_snapshot_ts = snapshot.timestamp
+        return snapshot
 
     def get_snapshots(
         self, since: Optional[int] = None, limit: Optional[int] = None
@@ -584,6 +641,11 @@ class PortfolioService:
 
     def get_latest_snapshot(self) -> Optional[PortfolioSnapshot]:
         return self.portfolio.get_latest_snapshot()
+
+    def get_cached_last_snapshot_ts(self) -> Optional[int]:
+        if self._cached_equity is None:
+            self._refresh_cached_views()
+        return self._cached_last_snapshot_ts
 
     def _create_ledger_entry(self, lid: str, info: Dict[str, Any]) -> LedgerEntry:
         """Helper to instantiate LedgerEntry from raw API response."""

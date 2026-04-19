@@ -290,8 +290,8 @@ def _run_loop_iteration(
     md_health = (
         getattr(data_status, "health", None) if data_status is not None else None
     )
-    market_data_ok = bool(md_health == "healthy")
-    market_data_stale = bool(md_health == "stale")
+    market_data_ok = bool(md_health in {"healthy", "streaming"})
+    market_data_stale = bool(md_health in {"stale", "degraded"})
     market_data_unavailable = bool(data_status is None or md_health == "unavailable")
 
     if market_data_stale:
@@ -308,11 +308,13 @@ def _run_loop_iteration(
     metrics.update_market_data_status(
         ok=market_data_ok,
         stale=market_data_stale,
+        status=md_health,
         reason=getattr(
             data_status, "reason", "unknown" if data_status is None else None
         ),
         max_staleness=getattr(data_status, "max_staleness", None),
     )
+    strategy_engine.refresh_runtime_snapshots()
 
     drift_status = _get_portfolio_drift(portfolio)
     if drift_status:
@@ -515,6 +517,7 @@ class BotController:
 
         session_state = SessionState(
             active=False,
+            lifecycle="locked",
             mode=config.session.mode,
             loop_interval_sec=config.session.loop_interval_sec,
             profile_name=config.session.profile_name,
@@ -611,6 +614,7 @@ class BotController:
             metrics = SystemMetrics()
             session_state = SessionState(
                 active=False,
+                lifecycle="ready",
                 mode=config.session.mode,
                 loop_interval_sec=config.session.loop_interval_sec,
                 profile_name=config.session.profile_name,

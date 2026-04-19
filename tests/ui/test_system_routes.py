@@ -139,22 +139,22 @@ def test_system_health_enveloped(client, system_context):
 def test_system_health_reports_config_and_risk_flags(client, system_context):
     metrics = SystemMetrics()
     metrics.update_market_data_status(
-        ok=False, stale=True, reason="stream delay", max_staleness=12.5
+        ok=False, stale=True, status="degraded", reason="stream delay", max_staleness=12.5
     )
     system_context.metrics = metrics
 
     system_context.config.execution.mode = "paper"
     system_context.config.ui.read_only = True
 
-    system_context.market_data.get_data_status.return_value = SimpleNamespace(
+    system_context.market_data.get_cached_data_status.return_value = SimpleNamespace(
         rest_api_reachable=False,
         websocket_connected=True,
         streaming_pairs=2,
         stale_pairs=1,
         subscription_errors=0,
     )
-    system_context.market_data.get_health_status.return_value = MarketDataStatus(
-        health="stale", max_staleness=12.5, reason="stream delay"
+    system_context.market_data.get_cached_health_status.return_value = MarketDataStatus(
+        health="degraded", max_staleness=12.5, reason="stream delay"
     )
     system_context.strategy_engine.get_risk_status.return_value = SimpleNamespace(
         kill_switch_active=True
@@ -173,7 +173,7 @@ def test_system_health_reports_config_and_risk_flags(client, system_context):
     assert payload["execution_mode"] == "paper"
     assert payload["current_mode"] == "paper"
     assert payload["ui_read_only"] is True
-    assert payload["market_data_status"] == "stale"
+    assert payload["market_data_status"] == "degraded"
     assert payload["market_data_reason"] == "stream delay"
     assert payload["market_data_ok"] is False
     assert payload["market_data_stale"] is True
@@ -198,7 +198,7 @@ def test_system_health_reports_execution_not_ok_when_live_is_blocked(
     system_context.config.execution.validate_only = False
     system_context.config.execution.allow_live_trading = True
     system_context.config.execution.paper_tests_completed = False
-    system_context.market_data.get_data_status.return_value = SimpleNamespace(
+    system_context.market_data.get_cached_data_status.return_value = SimpleNamespace(
         rest_api_reachable=True,
         websocket_connected=True,
         streaming_pairs=5,
@@ -215,18 +215,18 @@ def test_system_health_reports_execution_not_ok_when_live_is_blocked(
 
 
 def test_system_health_prefers_metrics_snapshot_even_when_false(client, system_context):
-    system_context.market_data.get_data_status.return_value = SimpleNamespace(
+    system_context.market_data.get_cached_data_status.return_value = SimpleNamespace(
         rest_api_reachable=True,
         websocket_connected=True,
         streaming_pairs=5,
         stale_pairs=0,
         subscription_errors=0,
     )
-    system_context.market_data.get_health_status.return_value = None
+    system_context.market_data.get_cached_health_status.return_value = None
 
     metrics = SystemMetrics()
     metrics.update_market_data_status(
-        ok=False, stale=False, reason=None, max_staleness=None
+        ok=False, stale=False, status="unavailable", reason=None, max_staleness=None
     )
     system_context.metrics = metrics
 
@@ -300,7 +300,7 @@ def test_system_metrics_reports_snapshot_payload(client, system_context):
     )
     metrics.record_drift(True, "drift detected")
     metrics.update_market_data_status(
-        ok=True, stale=False, reason=None, max_staleness=1.25
+        ok=True, stale=False, status="streaming", reason=None, max_staleness=1.25
     )
 
     system_context.metrics = metrics

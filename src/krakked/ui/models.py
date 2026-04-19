@@ -235,6 +235,10 @@ class SystemHealthPayload(BaseModel):
         None,
         description="execution_mode reflects the configured trading mode: dry-run, paper, or live.",
     )
+    lifecycle: str = Field(
+        ...,
+        description="Normalized runtime lifecycle: locked, initializing, ready, starting_session, active, or stopping_session.",
+    )
     rest_api_reachable: bool
     websocket_connected: bool
     streaming_pairs: int

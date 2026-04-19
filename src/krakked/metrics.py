@@ -29,6 +29,7 @@ class SystemMetrics:
         self.market_data_status_updated = False
         self.market_data_ok = False
         self.market_data_stale = False
+        self.market_data_status = "unavailable"
         self.market_data_reason: Optional[str] = None
         self.market_data_max_staleness: Optional[float] = None
 
@@ -104,6 +105,7 @@ class SystemMetrics:
         *,
         ok: bool,
         stale: bool,
+        status: Optional[str],
         reason: Optional[str],
         max_staleness: Optional[float],
     ) -> None:
@@ -112,6 +114,9 @@ class SystemMetrics:
         with self._lock:
             self.market_data_ok = ok
             self.market_data_stale = stale
+            self.market_data_status = status or (
+                "streaming" if ok else ("degraded" if stale else "unavailable")
+            )
             self.market_data_reason = reason
             self.market_data_max_staleness = max_staleness
             self.market_data_status_updated = True
@@ -137,6 +142,7 @@ class SystemMetrics:
                 "market_data_status_updated": self.market_data_status_updated,
                 "market_data_ok": self.market_data_ok,
                 "market_data_stale": self.market_data_stale,
+                "market_data_status": self.market_data_status,
                 "market_data_reason": self.market_data_reason,
                 "market_data_max_staleness": self.market_data_max_staleness,
             }

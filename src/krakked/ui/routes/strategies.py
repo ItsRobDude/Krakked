@@ -48,7 +48,7 @@ async def get_strategies(request: Request) -> ApiEnvelope[list[StrategyStatePayl
     def _read_strategies() -> list[StrategyStatePayload]:
         return [
             StrategyStatePayload(label=_strategy_label(ctx, state.strategy_id), **state.__dict__)
-            for state in ctx.strategy_engine.get_strategy_state()
+            for state in ctx.strategy_engine.get_cached_strategy_state()
         ]
 
     return await run_bounded_route_read(

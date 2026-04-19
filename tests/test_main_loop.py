@@ -823,7 +823,7 @@ def test_system_metrics_snapshot_contains_all_recent_updates():
     )
     metrics.record_drift(True, "drift detected")
     metrics.update_market_data_status(
-        ok=False, stale=True, reason="stale", max_staleness=12.5
+        ok=False, stale=True, status="degraded", reason="stale", max_staleness=12.5
     )
 
     snapshot = metrics.snapshot()

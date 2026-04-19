@@ -94,8 +94,13 @@ const formatDateTime = (timestamp: string | null | undefined) => {
   });
 };
 
-const getConnectionStateFromHealth = (state: SystemHealth | null): 'connected' | 'degraded' =>
-  state?.market_data_ok && state?.execution_ok && state?.portfolio_sync_ok ? 'connected' : 'degraded';
+const getConnectionStateFromHealth = (state: SystemHealth | null): 'connected' | 'degraded' => {
+  if (!state) return 'degraded';
+  if (state.market_data_status === 'warming_up') {
+    return state.execution_ok && state.portfolio_sync_ok ? 'connected' : 'degraded';
+  }
+  return state.market_data_ok && state.execution_ok && state.portfolio_sync_ok ? 'connected' : 'degraded';
+};
 
 const isRiskProfile = (value: unknown): value is StrategyRiskProfile =>
   value === 'conservative' || value === 'balanced' || value === 'aggressive';
@@ -128,7 +133,7 @@ const buildKpis = (summary: PortfolioSummary) => {
       tone: 'neutral' as const,
       hint: exchangeBalanceBaseline
         ? 'Reference equity from current exchange balances'
-        : (summary.last_snapshot_ts ? `Last snapshot ${formatTimestamp(summary.last_snapshot_ts)}` : 'Snapshot pending'),
+        : (summary.last_snapshot_ts ? `Last snapshot ${formatTimestamp(summary.last_snapshot_ts)}` : 'Awaiting the first snapshot'),
     },
     {
       label: 'Unrealized PnL',
@@ -251,7 +256,9 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
   const requestInFlightRef = useRef<Record<string, boolean>>({});
 
   const mlEnabled = session?.ml_enabled ?? false;
-  const startupReloading = Boolean(session?.reloading && !session?.active);
+  const startupReloading = Boolean(
+    !session?.active && (session?.reloading || session?.lifecycle === 'initializing'),
+  );
 
   const updateRefreshIssue = (key: string, message: string | null) => {
     setRefreshIssues((current) => {
@@ -293,7 +300,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
     const [profileSummaries, systemHealth, systemConfig] = await Promise.all([
       fetchProfiles(),
       fetchSystemHealth({ timeoutMs: ACTIVE_RESOURCE_TIMEOUT_MS }),
-      fetchSystemConfig().catch(() => null),
+      fetchSystemConfig({ timeoutMs: ACTIVE_RESOURCE_TIMEOUT_MS }).catch(() => null),
     ]);
 
     if (systemHealth) {
@@ -551,8 +558,14 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
     const extra: Kpi[] = [
       {
         label: 'Market data',
-        value: health.market_data_ok ? 'OK' : 'Degraded',
-        hint: health.market_data_reason ?? '',
+        value:
+          health.market_data_status === 'warming_up'
+            ? 'Warming up'
+            : (health.market_data_ok ? 'OK' : 'Degraded'),
+        hint:
+          health.market_data_status === 'warming_up'
+            ? 'Awaiting fresh startup ticks'
+            : (health.market_data_reason ?? ''),
       },
       {
         label: 'Execution',
@@ -761,7 +774,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
 
       const [systemHealth, systemConfig] = await Promise.all([
         fetchSystemHealth(),
-        fetchSystemConfig().catch(() => null),
+        fetchSystemConfig({ timeoutMs: ACTIVE_RESOURCE_TIMEOUT_MS }).catch(() => null),
       ]);
 
       if (systemHealth) {
@@ -774,7 +787,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
     } catch (error) {
       const [systemHealth, systemConfig] = await Promise.all([
         fetchSystemHealth(),
-        fetchSystemConfig().catch(() => null),
+        fetchSystemConfig({ timeoutMs: ACTIVE_RESOURCE_TIMEOUT_MS }).catch(() => null),
       ]);
 
       if (systemHealth) {
@@ -864,7 +877,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
 
       const [systemHealth, systemConfig, profileSummaries] = await Promise.all([
         fetchSystemHealth(),
-        fetchSystemConfig().catch(() => null),
+        fetchSystemConfig({ timeoutMs: ACTIVE_RESOURCE_TIMEOUT_MS }).catch(() => null),
         fetchProfiles(),
       ]);
 
@@ -1311,9 +1324,18 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
   if (health && !health.market_data_ok) {
     dashboardAlerts.push({
       id: 'market-data',
-      tone: health.market_data_stale ? 'warning' : 'danger',
-      title: 'Market data degraded',
-      message: health.market_data_reason || 'Streaming or REST market data is degraded.',
+      tone:
+        health.market_data_status === 'warming_up'
+          ? 'info'
+          : (health.market_data_stale ? 'warning' : 'danger'),
+      title:
+        health.market_data_status === 'warming_up'
+          ? 'Market data warming up'
+          : 'Market data degraded',
+      message:
+        health.market_data_status === 'warming_up'
+          ? 'Streaming is online, but Krakked is still waiting for fresh startup data.'
+          : (health.market_data_reason || 'Streaming or REST market data is degraded.'),
     });
   }
   if (health?.drift_detected) {
@@ -1359,9 +1381,18 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
   const systemStatusItems = [
     {
       label: 'Connection',
-      value: connectionState === 'connected' ? 'Online' : 'Degraded',
-      tone: connectionState === 'connected' ? 'ok' as const : 'warning' as const,
-      hint: health?.rest_api_reachable ? 'REST reachable' : 'REST degraded',
+      value:
+        health?.lifecycle === 'initializing'
+          ? 'Initializing'
+          : (connectionState === 'connected' ? 'Online' : 'Degraded'),
+      tone:
+        health?.lifecycle === 'initializing'
+          ? 'warning' as const
+          : (connectionState === 'connected' ? 'ok' as const : 'warning' as const),
+      hint:
+        health?.lifecycle === 'initializing'
+          ? 'Krakked is reloading runtime services'
+          : (health?.rest_api_reachable ? 'REST reachable' : 'REST degraded'),
     },
     {
       label: 'Mode',
@@ -1395,9 +1426,18 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
     },
     {
       label: 'Market Data',
-      value: health?.market_data_ok ? 'Healthy' : (health?.market_data_stale ? 'Stale' : 'Unavailable'),
-      tone: health?.market_data_ok ? 'ok' as const : (health?.market_data_stale ? 'warning' as const : 'danger' as const),
-      hint: health?.market_data_reason || `${health?.streaming_pairs ?? 0} pairs streaming`,
+      value:
+        health?.market_data_status === 'warming_up'
+          ? 'Warming up'
+          : (health?.market_data_ok ? 'Healthy' : (health?.market_data_stale ? 'Degraded' : 'Unavailable')),
+      tone:
+        health?.market_data_status === 'warming_up'
+          ? 'warning' as const
+          : (health?.market_data_ok ? 'ok' as const : (health?.market_data_stale ? 'warning' as const : 'danger' as const)),
+      hint:
+        health?.market_data_status === 'warming_up'
+          ? 'Streaming is online; waiting for fresh startup data'
+          : (health?.market_data_reason || `${health?.streaming_pairs ?? 0} pairs streaming`),
     },
     {
       label: 'Drift',
@@ -1459,7 +1499,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
               ? 'Trading paused'
               : risk?.kill_switch_active === false
                 ? 'Trading active'
-                : 'Trading status pending'}
+                : (session.lifecycle === 'starting_session' ? 'Starting session' : 'Trading status unavailable')}
           </span>
 
           {currentPreset && (
@@ -1526,7 +1566,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
             hint={
               session.mode === 'paper' && isExchangeBalanceBaseline(summary?.portfolio_baseline)
                 ? 'Reference balances drive paper equity. Tracked paper positions appear here only after Krakked records them locally.'
-                : (summary?.last_snapshot_ts ? `Snapshot ${formatDateTime(summary.last_snapshot_ts)}` : 'Portfolio snapshot pending')
+                : (summary?.last_snapshot_ts ? `Snapshot ${formatDateTime(summary.last_snapshot_ts)}` : 'Awaiting the first portfolio snapshot')
             }
             emptyMessage={
               session.mode === 'paper' && isExchangeBalanceBaseline(summary?.portfolio_baseline)
@@ -1568,11 +1608,21 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
             </div>
             <div className="integrity-panel__item">
               <p className="integrity-panel__label">Market data</p>
-              <p className={`integrity-panel__value${health?.market_data_ok ? ' text--success' : ' text--danger'}`}>
-                {health?.market_data_ok ? 'Healthy' : (health?.market_data_stale ? 'Stale' : 'Unavailable')}
+              <p
+                className={`integrity-panel__value${
+                  health?.market_data_status === 'warming_up'
+                    ? ''
+                    : (health?.market_data_ok ? ' text--success' : ' text--danger')
+                }`}
+              >
+                {health?.market_data_status === 'warming_up'
+                  ? 'Warming up'
+                  : (health?.market_data_ok ? 'Healthy' : (health?.market_data_stale ? 'Degraded' : 'Unavailable'))}
               </p>
               <p className="integrity-panel__hint">
-                {health?.market_data_reason || `${health?.streaming_pairs ?? 0} pairs streaming`}
+                {health?.market_data_status === 'warming_up'
+                  ? 'Streaming is online; waiting for fresh startup data'
+                  : (health?.market_data_reason || `${health?.streaming_pairs ?? 0} pairs streaming`)}
               </p>
             </div>
             <div className="integrity-panel__item">
@@ -1606,7 +1656,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
             </div>
           </div>
           {strategySummary.length === 0 ? (
-            <div className="panel__empty">No active strategy state reported yet.</div>
+            <div className="panel__empty">No configured strategies are active for this profile yet.</div>
           ) : (
             <div className="summary-table summary-table--strategies" role="table" aria-label="Strategy summary">
               <div className="summary-table__head" role="row">

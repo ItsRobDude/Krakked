@@ -106,6 +106,7 @@ class SetupStatusPayload(BaseModel):
     configured: bool
     secrets_exist: bool
     unlocked: bool
+    lifecycle: str
 
 
 def _merge_setup_defaults(target: dict, defaults: dict) -> dict:
@@ -179,6 +180,7 @@ class SessionStatePayload(BaseModel):
     """Response payload describing the current session state."""
 
     active: bool
+    lifecycle: str
     reloading: bool = False
     mode: str
     loop_interval_sec: float
@@ -296,10 +298,22 @@ def _redacted_config(config) -> dict:
     return config_dict
 
 
+def _resolve_lifecycle(ctx) -> str:
+    if getattr(ctx, "is_setup_mode", False):
+        return "initializing" if ctx.reinitialize_event.is_set() else "locked"
+    if getattr(ctx.reinitialize_event, "is_set", lambda: False)():
+        return "initializing"
+    if getattr(ctx.session, "active", False):
+        return "active"
+    lifecycle = getattr(ctx.session, "lifecycle", None)
+    return lifecycle or "ready"
+
+
 def _session_payload(ctx) -> SessionStatePayload:
     session = ctx.session
     return SessionStatePayload(
         active=session.active,
+        lifecycle=_resolve_lifecycle(ctx),
         reloading=bool(ctx.reinitialize_event.is_set()),
         mode=session.mode,
         loop_interval_sec=session.loop_interval_sec,
@@ -384,7 +398,10 @@ async def setup_status(request: Request) -> ApiEnvelope[SetupStatusPayload]:
 
     return ApiEnvelope(
         data=SetupStatusPayload(
-            configured=configured, secrets_exist=secrets_exist, unlocked=unlocked
+            configured=configured,
+            secrets_exist=secrets_exist,
+            unlocked=unlocked,
+            lifecycle=_resolve_lifecycle(ctx),
         ),
         error=None,
     )
@@ -949,6 +966,7 @@ async def system_health(request: Request) -> ApiEnvelope[SystemHealthPayload]:
                 data=SystemHealthPayload(
                     app_version=APP_VERSION,
                     execution_mode="setup",
+                    lifecycle=_resolve_lifecycle(ctx),
                     rest_api_reachable=False,
                     websocket_connected=False,
                     streaming_pairs=0,
@@ -972,10 +990,10 @@ async def system_health(request: Request) -> ApiEnvelope[SystemHealthPayload]:
                 error=None,
             )
 
-        data_status = ctx.market_data.get_data_status()
         metrics_snapshot = ctx.metrics.snapshot()
         execution_config = ctx.config.execution
-        market_data_health = ctx.market_data.get_health_status()
+        data_status = ctx.market_data.get_cached_data_status()
+        market_data_health = ctx.market_data.get_cached_health_status()
         if not isinstance(market_data_health, MarketDataStatus):
             market_data_health = None
 
@@ -985,8 +1003,14 @@ async def system_health(request: Request) -> ApiEnvelope[SystemHealthPayload]:
         market_data_max_staleness = None
 
         if market_data_health:
-            market_data_ok = getattr(market_data_health, "health", "") == "healthy"
-            market_data_stale = getattr(market_data_health, "health", "") == "stale"
+            market_data_ok = getattr(market_data_health, "health", "") in {
+                "healthy",
+                "streaming",
+            }
+            market_data_stale = getattr(market_data_health, "health", "") in {
+                "stale",
+                "degraded",
+            }
             market_data_reason = getattr(market_data_health, "reason", None)
             market_data_max_staleness = getattr(
                 market_data_health, "max_staleness", None
@@ -1024,9 +1048,15 @@ async def system_health(request: Request) -> ApiEnvelope[SystemHealthPayload]:
                 "market_data_max_staleness", market_data_max_staleness
             )
 
-        market_data_status = "healthy"
-        if not market_data_ok:
-            market_data_status = "stale" if market_data_stale else "unavailable"
+        market_data_status = metrics_snapshot.get(
+            "market_data_status",
+            getattr(market_data_health, "health", None)
+            or (
+                "streaming"
+                if market_data_ok
+                else ("degraded" if market_data_stale else "unavailable")
+            ),
+        )
 
         execution_ok = (
             execution_config.mode != "live"
@@ -1040,6 +1070,7 @@ async def system_health(request: Request) -> ApiEnvelope[SystemHealthPayload]:
         health_payload = SystemHealthPayload(
             app_version=APP_VERSION,
             execution_mode=getattr(execution_config, "mode", None),
+            lifecycle=_resolve_lifecycle(ctx),
             rest_api_reachable=data_status.rest_api_reachable,
             websocket_connected=data_status.websocket_connected,
             streaming_pairs=data_status.streaming_pairs,
@@ -1153,6 +1184,7 @@ async def update_session_config(
     ctx.session.profile_name = next_profile
     ctx.session.mode = next_mode
     ctx.session.loop_interval_sec = next_loop
+    ctx.session.lifecycle = "ready"
     # ML enabled status is just reflecting current config state in memory, not set here
 
     ctx.session.active = False  # Ensure remains false
@@ -1219,7 +1251,9 @@ async def start_session(request: Request) -> ApiEnvelope[SessionStatePayload]:
     ctx.session.ml_enabled = ctx.config.ml.enabled
 
     # Activate Memory Only
+    ctx.session.lifecycle = "starting_session"
     ctx.session.active = True
+    ctx.session.lifecycle = "active"
     # ctx.config.session.active stays False to prevent auto-resume on restart
     # No disk writes here
 
@@ -1250,7 +1284,9 @@ async def stop_session(request: Request) -> ApiEnvelope[SessionStatePayload]:
     if ctx.config.ui.read_only:
         return ApiEnvelope(data=None, error="UI is in read-only mode")
 
+    ctx.session.lifecycle = "stopping_session"
     ctx.session.active = False
+    ctx.session.lifecycle = "ready"
     # No disk writes here
 
     logger.info(

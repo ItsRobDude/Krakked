@@ -96,6 +96,7 @@ export type RecentExecution = {
 export type SystemHealth = {
   app_version?: string | null;
   execution_mode?: string | null;
+  lifecycle: 'locked' | 'initializing' | 'ready' | 'starting_session' | 'active' | 'stopping_session';
   rest_api_reachable: boolean;
   websocket_connected: boolean;
   streaming_pairs: number;
@@ -183,6 +184,7 @@ export type StrategyPerformance = {
 
 export type SessionStateResponse = {
   active: boolean;
+  lifecycle: 'locked' | 'initializing' | 'ready' | 'starting_session' | 'active' | 'stopping_session';
   reloading: boolean;
   mode: SessionMode;
   loop_interval_sec: number;
@@ -207,6 +209,7 @@ export type SetupStatus = {
   configured: boolean;
   secrets_exist: boolean;
   unlocked: boolean;
+  lifecycle: 'locked' | 'initializing' | 'ready' | 'starting_session' | 'active' | 'stopping_session';
 };
 
 export type ExecutionModeUpdate = {
@@ -531,8 +534,8 @@ export async function createProfile(name: string, description = ''): Promise<Pro
 
 // --- Config persistence ---
 
-export async function fetchSystemConfig(): Promise<Record<string, unknown>> {
-  return fetchJsonStrict<Record<string, unknown>>('/system/config');
+export async function fetchSystemConfig(options: ApiRequestOptions = {}): Promise<Record<string, unknown>> {
+  return fetchJsonStrict<Record<string, unknown>>('/system/config', options);
 }
 
 export async function applyConfig(config: Record<string, unknown>, dry_run = false): Promise<void> {

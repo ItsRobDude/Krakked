@@ -33,7 +33,7 @@ ASSET_ALIASES = {
 class MarketDataStatus:
     """Aggregated health indicator for market data streams."""
 
-    health: str  # healthy | stale | unavailable
+    health: str  # streaming | warming_up | degraded | unavailable
     max_staleness: Optional[float] = None
     reason: Optional[str] = None
     stale_pairs: Optional[List[str]] = None
@@ -147,6 +147,20 @@ class MarketDataAPI:
             "stale_tolerance_seconds", 60
         )
         self._backfill_thread: Optional[threading.Thread] = None
+        self._initialized_at = time.time()
+        self._last_rest_check_at = 0.0
+        self._last_rest_reachable = False
+        self._last_connection_status = ConnectionStatus(
+            rest_api_reachable=False,
+            websocket_connected=False,
+            streaming_pairs=0,
+            stale_pairs=0,
+            subscription_errors=0,
+        )
+        self._last_health_status = MarketDataStatus(
+            health="warming_up", reason="initializing"
+        )
+        self._startup_grace_seconds = max(float(self._ws_stale_tolerance) * 2.0, 120.0)
 
         # Instance-specific cache for normalize_pair to avoid global state
         # and support proper cache clearing per instance.
@@ -160,6 +174,7 @@ class MarketDataAPI:
         client, and optionally backfills historical data.
         """
         logger.info("Initializing MarketDataAPI...")
+        self._initialized_at = time.time()
         assert self._rest_client is not None
         # 1. Build the pair universe
         self.refresh_universe()
@@ -216,6 +231,12 @@ class MarketDataAPI:
 
         self._backfill_thread = threading.Thread(target=_run, daemon=True)
         self._backfill_thread.start()
+
+    def get_cached_data_status(self) -> ConnectionStatus:
+        return self._last_connection_status
+
+    def get_cached_health_status(self) -> MarketDataStatus:
+        return self._last_health_status
 
     def _on_candle_closed(
         self, pair: str, timeframe: str, candle_data: Dict[str, Any]
@@ -638,17 +659,18 @@ class MarketDataAPI:
         return None
 
     def get_data_status(self) -> ConnectionStatus:
-        from krakked.config import ConnectionStatus
-
         # 1. Check REST API reachability
-        rest_ok = False
+        rest_ok = self._last_rest_reachable
         assert self._rest_client is not None
-        try:
-            # A lightweight endpoint to check connectivity
-            self._rest_client.get_public("SystemStatus")
-            rest_ok = True
-        except Exception:
-            rest_ok = False
+        now = time.time()
+        if now - self._last_rest_check_at >= 10.0:
+            try:
+                self._rest_client.get_public("SystemStatus")
+                rest_ok = True
+            except Exception:
+                rest_ok = False
+            self._last_rest_check_at = now
+            self._last_rest_reachable = rest_ok
 
         # 2. Check WebSocket status
         ws_connected = self._ws_client.is_connected if self._ws_client else False
@@ -672,13 +694,15 @@ class MarketDataAPI:
                     if status_record.get("status") != "subscribed":
                         subscription_errors += 1
 
-        return ConnectionStatus(
+        status = ConnectionStatus(
             rest_api_reachable=rest_ok,
             websocket_connected=ws_connected,
             streaming_pairs=streaming_count,
             stale_pairs=stale_count,
             subscription_errors=subscription_errors,
         )
+        self._last_connection_status = status
+        return status
 
     def get_health_status(self) -> MarketDataStatus:
         """Summarize market data freshness into a simple health indicator."""
@@ -687,14 +711,20 @@ class MarketDataAPI:
             connection_status = self.get_data_status()
         except Exception as exc:  # pragma: no cover - defensive logging
             logger.error("Failed to fetch market data connection status: %s", exc)
-            return MarketDataStatus(health="unavailable", reason=str(exc))
+            status = MarketDataStatus(health="unavailable", reason=str(exc))
+            self._last_health_status = status
+            return status
 
         if not connection_status.rest_api_reachable:
-            return MarketDataStatus(health="unavailable", reason="rest_unreachable")
+            status = MarketDataStatus(health="unavailable", reason="rest_unreachable")
+            self._last_health_status = status
+            return status
         if not connection_status.websocket_connected:
-            return MarketDataStatus(
+            status = MarketDataStatus(
                 health="unavailable", reason="websocket_disconnected"
             )
+            self._last_health_status = status
+            return status
 
         max_staleness: Optional[float] = None
         stale_detected = False
@@ -712,15 +742,44 @@ class MarketDataAPI:
                 stale_detected = True
                 stale_pairs.append(pair_meta.canonical)
 
-        if stale_detected:
-            return MarketDataStatus(
-                health="stale",
+        in_startup_grace = (time.time() - self._initialized_at) < self._startup_grace_seconds
+        backfill_active = bool(self._backfill_thread and self._backfill_thread.is_alive())
+        awaiting_first_ticks = connection_status.streaming_pairs == 0 and bool(self._universe)
+
+        if awaiting_first_ticks and (in_startup_grace or backfill_active):
+            status = MarketDataStatus(
+                health="warming_up",
                 max_staleness=max_staleness,
-                reason="data_stale",
+                reason="awaiting_first_ticks",
+                stale_pairs=stale_pairs or None,
+            )
+            self._last_health_status = status
+            return status
+
+        if stale_detected:
+            status_name = (
+                "warming_up"
+                if (in_startup_grace or backfill_active)
+                and bool(self._universe)
+                and len(stale_pairs) == len(self._universe)
+                else "degraded"
+            )
+            status = MarketDataStatus(
+                health=status_name,
+                max_staleness=max_staleness,
+                reason="data_stale" if status_name == "degraded" else "warming_up",
                 stale_pairs=stale_pairs,
             )
+            self._last_health_status = status
+            return status
 
-        return MarketDataStatus(health="healthy", max_staleness=max_staleness or 0.0)
+        status = MarketDataStatus(
+            health="streaming",
+            max_staleness=max_staleness or 0.0,
+            reason="streaming",
+        )
+        self._last_health_status = status
+        return status
 
     def get_subscription_status(self) -> Dict[str, Dict[str, Dict[str, Any]]]:
         """Exposes the current WebSocket subscription status map."""

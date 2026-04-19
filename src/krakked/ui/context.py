@@ -19,6 +19,7 @@ class SessionState:
     """Runtime session state controlling the trading loop and mode."""
 
     active: bool = False
+    lifecycle: str = "ready"
     mode: str = "paper"
     loop_interval_sec: float = 15.0
     profile_name: Optional[str] = None
@@ -93,6 +94,7 @@ def build_app_context(allow_interactive_setup: bool = True) -> AppContext:
 
     session = SessionState(
         active=False,
+        lifecycle="ready",
         mode=config.session.mode,
         loop_interval_sec=config.session.loop_interval_sec,
         profile_name=config.session.profile_name,

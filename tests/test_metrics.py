@@ -119,6 +119,7 @@ def test_update_market_data_status(metrics: SystemMetrics):
     metrics.update_market_data_status(
         ok=True,
         stale=False,
+        status="streaming",
         reason="Fresh data",
         max_staleness=1.5,
     )
@@ -127,6 +128,7 @@ def test_update_market_data_status(metrics: SystemMetrics):
 
     assert snapshot["market_data_ok"] is True
     assert snapshot["market_data_stale"] is False
+    assert snapshot["market_data_status"] == "streaming"
     assert snapshot["market_data_reason"] == "Fresh data"
     assert snapshot["market_data_max_staleness"] == 1.5
 
@@ -150,6 +152,7 @@ def test_snapshot_keys_match_payload(metrics: SystemMetrics):
         "market_data_status_updated",
         "market_data_ok",
         "market_data_stale",
+        "market_data_status",
         "market_data_reason",
         "market_data_max_staleness",
     }
@@ -171,7 +174,7 @@ def test_system_metrics_payload_accepts_snapshot(metrics: SystemMetrics):
     )
     metrics.record_drift(True, "Portfolio drift detected")
     metrics.update_market_data_status(
-        ok=False, stale=True, reason="stale_data", max_staleness=5.5
+        ok=False, stale=True, status="degraded", reason="stale_data", max_staleness=5.5
     )
 
     snapshot = metrics.snapshot()

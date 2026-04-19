@@ -139,14 +139,28 @@ def build_test_context(
     market_data = MagicMock(name="market_data")
     market_data.get_latest_price.return_value = None
     market_data.get_data_status.return_value = _mock_data_status()
+    market_data.get_cached_data_status.return_value = _mock_data_status()
+    market_data.get_health_status.return_value = None
+    market_data.get_cached_health_status.return_value = None
 
     portfolio = MagicMock(name="portfolio_service")
     portfolio.get_equity.return_value = _mock_equity()
+    portfolio.get_cached_equity.return_value = _mock_equity()
     portfolio.get_latest_snapshot.return_value = None
+    portfolio.get_cached_last_snapshot_ts.return_value = None
     portfolio.get_positions.return_value = []
+    portfolio.get_cached_positions.return_value = []
     portfolio.get_asset_exposure.return_value = []
+    portfolio.get_cached_asset_exposure.return_value = []
     portfolio.get_trade_history.return_value = []
     portfolio.create_snapshot.return_value = _mock_snapshot()
+    portfolio.get_cached_drift_status.return_value = SimpleNamespace(
+        drift_flag=False,
+        expected_position_value_base=0.0,
+        actual_balance_value_base=0.0,
+        tolerance_base=0.0,
+        mismatched_assets=[],
+    )
     portfolio.last_sync_ok = True
     portfolio.last_sync_reason = None
     portfolio.last_sync_at = None
@@ -155,6 +169,7 @@ def build_test_context(
     strategy_engine = MagicMock(name="strategy_engine")
     strategy_engine.get_risk_status.return_value = _mock_risk_status()
     strategy_engine.get_strategy_state.return_value = []
+    strategy_engine.get_cached_strategy_state.return_value = []
     strategy_engine.strategy_states = {}
     strategy_engine.risk_engine = MagicMock()
     strategy_engine.risk_engine.config = config.risk

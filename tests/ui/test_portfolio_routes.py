@@ -15,17 +15,14 @@ def portfolio_context(client: TestClient):
 
 
 def test_portfolio_summary_enveloped(client, portfolio_context):
-    portfolio_context.portfolio.get_equity.return_value = EquityView(
+    portfolio_context.portfolio.get_cached_equity.return_value = EquityView(
         equity_base=1000.0,
         cash_base=500.0,
         realized_pnl_base_total=50.0,
         unrealized_pnl_base_total=25.0,
         drift_flag=True,
     )
-    portfolio_context.portfolio.portfolio._last_snapshot_ts = 0
-    portfolio_context.portfolio.get_latest_snapshot.return_value = SimpleNamespace(
-        timestamp=123456
-    )
+    portfolio_context.portfolio.get_cached_last_snapshot_ts.return_value = 123456
 
     response = client.get("/api/portfolio/summary")
 
@@ -38,16 +35,14 @@ def test_portfolio_summary_enveloped(client, portfolio_context):
 
 
 def test_portfolio_summary_reports_exchange_balance_baseline(client, portfolio_context):
-    portfolio_context.portfolio.get_equity.return_value = EquityView(
+    portfolio_context.portfolio.get_cached_equity.return_value = EquityView(
         equity_base=42.0,
         cash_base=10.0,
         realized_pnl_base_total=0.0,
         unrealized_pnl_base_total=1.5,
         drift_flag=False,
     )
-    portfolio_context.portfolio.get_latest_snapshot.return_value = SimpleNamespace(
-        timestamp=987654
-    )
+    portfolio_context.portfolio.get_cached_last_snapshot_ts.return_value = 987654
     portfolio_context.portfolio.baseline_source = "exchange_balances"
 
     response = client.get("/api/portfolio/summary")
@@ -71,7 +66,7 @@ def test_portfolio_summary_times_out_fast(client, portfolio_context, monkeypatch
             drift_flag=False,
         )
 
-    portfolio_context.portfolio.get_equity.side_effect = _slow_equity
+    portfolio_context.portfolio.get_cached_equity.side_effect = _slow_equity
 
     started = time.perf_counter()
     response = client.get("/api/portfolio/summary")
@@ -104,7 +99,11 @@ def test_positions_shape_matches_payload(client, portfolio_context):
     mock_meta.volume_decimals = 8
     portfolio_context.market_data.get_pair_metadata.return_value = mock_meta
 
-    portfolio_context.portfolio.get_positions.return_value = [position]
+    position.current_value_base = price * position.base_size
+    position.unrealized_pnl_base = (
+        position.current_value_base - (position.base_size * position.avg_entry_price)
+    )
+    portfolio_context.portfolio.get_cached_positions.return_value = [position]
 
     response = client.get("/api/portfolio/positions")
 
@@ -119,7 +118,7 @@ def test_positions_shape_matches_payload(client, portfolio_context):
 
 
 def test_exposure_breakdown_enveloped(client, portfolio_context):
-    portfolio_context.portfolio.get_asset_exposure.return_value = [
+    portfolio_context.portfolio.get_cached_asset_exposure.return_value = [
         AssetExposure(
             asset="BTC", amount=1.0, value_base=100.0, percentage_of_equity=0.1
         )

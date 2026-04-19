@@ -84,6 +84,16 @@ class StrategyEngine:
 
         self.strategies: Dict[str, Strategy] = {}
         self.strategy_states: Dict[str, StrategyState] = {}
+        self._cached_risk_status = RiskStatus(
+            kill_switch_active=False,
+            daily_drawdown_pct=0.0,
+            drift_flag=False,
+            total_exposure_pct=0.0,
+            manual_exposure_pct=0.0,
+            per_asset_exposure_pct={},
+            per_strategy_exposure_pct={},
+        )
+        self._cached_strategy_state: List[StrategyState] = []
 
     def initialize(self) -> None:
         logger.info(
@@ -135,6 +145,7 @@ class StrategyEngine:
             ),
         )
         self.refresh_strategy_weight_state()
+        self.refresh_runtime_snapshots()
 
     def _is_strategy_active(self, strat_cfg: StrategyConfig) -> bool:
         return bool(
@@ -231,6 +242,96 @@ class StrategyEngine:
             state.effective_weight_pct = active_weights.get(strategy_id)
             if not state.enabled and state.effective_weight_pct is None:
                 state.effective_weight_pct = None
+
+    def refresh_runtime_snapshots(self) -> None:
+        self.refresh_strategy_weight_state()
+        cached_equity = self.portfolio.get_cached_equity()
+        cached_exposures = self.portfolio.get_cached_asset_exposure()
+        cached_positions = self.portfolio.get_cached_positions()
+        drift_status = self.portfolio.get_cached_drift_status()
+        realized_by_strategy = self.portfolio.get_realized_pnl_by_strategy(
+            include_manual=False
+        )
+
+        per_strategy_exposure_pct: Dict[str, float] = {}
+        manual_exposure_pct = 0.0
+        total_exposure_pct = 0.0
+        drawdown_pct = 0.0
+
+        if cached_equity.equity_base:
+            for position in cached_positions:
+                current_value = abs(getattr(position, "current_value_base", 0.0) or 0.0)
+                if current_value <= 0:
+                    continue
+                strategy_key = position.strategy_tag or "manual"
+                pct = (current_value / cached_equity.equity_base) * 100.0
+                if strategy_key == "manual":
+                    manual_exposure_pct += pct
+                else:
+                    per_strategy_exposure_pct[strategy_key] = (
+                        per_strategy_exposure_pct.get(strategy_key, 0.0) + pct
+                    )
+
+            total_exposure_pct = sum(
+                max((exp.percentage_of_equity or 0.0), 0.0) * 100.0
+                for exp in cached_exposures
+                if exp.asset != self.portfolio.config.base_currency
+            )
+
+        for strategy_id, state in self.strategy_states.items():
+            state.pnl_summary = {
+                "realized_pnl_usd": realized_by_strategy.get(strategy_id, 0.0),
+                "exposure_pct": per_strategy_exposure_pct.get(strategy_id, 0.0),
+            }
+
+        now_ts = int(datetime.now(timezone.utc).timestamp())
+        day_ago = now_ts - 86400
+        snapshots = self.portfolio.store.get_snapshots(since=day_ago)
+        current_equity = cached_equity.equity_base
+        max_equity_24h = (
+            max([current_equity] + [snapshot.equity_base for snapshot in snapshots])
+            if snapshots
+            else current_equity
+        )
+        if max_equity_24h > 0:
+            drawdown_pct = ((max_equity_24h - current_equity) / max_equity_24h) * 100.0
+
+        self._cached_risk_status = RiskStatus(
+            kill_switch_active=self.risk_engine._kill_switch_active
+            or self.risk_engine._manual_kill_switch_active,
+            daily_drawdown_pct=drawdown_pct,
+            drift_flag=bool(cached_equity.drift_flag or drift_status.drift_flag),
+            total_exposure_pct=total_exposure_pct,
+            manual_exposure_pct=manual_exposure_pct,
+            per_asset_exposure_pct={
+                exp.asset: (exp.percentage_of_equity or 0.0) * 100.0
+                for exp in cached_exposures
+            },
+            per_strategy_exposure_pct=per_strategy_exposure_pct,
+            drift_info={
+                "expected_position_value_base": drift_status.expected_position_value_base,
+                "actual_balance_value_base": drift_status.actual_balance_value_base,
+                "tolerance_base": drift_status.tolerance_base,
+                "mismatched_assets": [
+                    asdict(asset) for asset in drift_status.mismatched_assets
+                ],
+            },
+        )
+        self._cached_strategy_state = [
+            StrategyState(
+                strategy_id=state.strategy_id,
+                enabled=state.enabled,
+                last_intents_at=state.last_intents_at,
+                last_actions_at=state.last_actions_at,
+                current_positions=list(state.current_positions),
+                pnl_summary=dict(state.pnl_summary),
+                last_intents=list(state.last_intents) if state.last_intents else None,
+                params=dict(state.params),
+                configured_weight=state.configured_weight,
+                effective_weight_pct=state.effective_weight_pct,
+            )
+            for state in self.strategy_states.values()
+        ]
 
     def _collect_intents(
         self,
@@ -466,6 +567,7 @@ class StrategyEngine:
         )
 
         self._persist_plan(plan)
+        self.refresh_runtime_snapshots()
         logger.info(
             "Execution plan created",
             extra=structured_log_extra(
@@ -622,7 +724,7 @@ class StrategyEngine:
             )
 
     def get_risk_status(self) -> RiskStatus:
-        return self.risk_engine.get_status()
+        return self._cached_risk_status
 
     def build_emergency_flatten_plan(
         self, positions: Sequence[SpotPosition], reason: str = "Manual flatten all"
@@ -711,8 +813,24 @@ class StrategyEngine:
         return plan
 
     def get_strategy_state(self) -> List[StrategyState]:
-        self.refresh_strategy_weight_state()
-        return list(self.strategy_states.values())
+        return self.get_cached_strategy_state()
+
+    def get_cached_strategy_state(self) -> List[StrategyState]:
+        return [
+            StrategyState(
+                strategy_id=state.strategy_id,
+                enabled=state.enabled,
+                last_intents_at=state.last_intents_at,
+                last_actions_at=state.last_actions_at,
+                current_positions=list(state.current_positions),
+                pnl_summary=dict(state.pnl_summary),
+                last_intents=list(state.last_intents) if state.last_intents else None,
+                params=dict(state.params),
+                configured_weight=state.configured_weight,
+                effective_weight_pct=state.effective_weight_pct,
+            )
+            for state in self._cached_strategy_state
+        ]
 
     def set_strategy_enabled(self, strategy_id: str, enabled: bool) -> None:
         strat_cfg = self.config.strategies.configs.get(strategy_id)
@@ -739,12 +857,15 @@ class StrategyEngine:
             state.enabled = False
 
         self.refresh_strategy_weight_state()
+        self.refresh_runtime_snapshots()
 
     def set_manual_kill_switch(self, active: bool) -> None:
         self.risk_engine.set_manual_kill_switch(active)
+        self.refresh_runtime_snapshots()
 
     def clear_manual_kill_switch(self) -> None:
         self.risk_engine.clear_manual_kill_switch()
+        self.refresh_runtime_snapshots()
 
 
 # Backwards compatibility alias

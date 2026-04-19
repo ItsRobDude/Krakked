@@ -32,12 +32,14 @@ def _context(request: Request):
 def _build_position_payload(
     position: SpotPosition, price: float | None, metadata: Any | None
 ) -> PositionPayload:
-    current_value: float | None = None
-    unrealized: float | None = None
+    current_value: float | None = getattr(position, "current_value_base", None)
+    unrealized: float | None = getattr(position, "unrealized_pnl_base", None)
 
     if price is not None:
         current_value = position.base_size * price
         unrealized = current_value - (position.base_size * position.avg_entry_price)
+    elif current_value is not None and abs(position.base_size) > 1e-12:
+        price = current_value / position.base_size
 
     is_dust = False
     min_order_size = None
@@ -77,12 +79,8 @@ async def get_portfolio_summary(request: Request) -> ApiEnvelope[PortfolioSummar
     ctx = _context(request)
 
     def _read_summary() -> PortfolioSummary:
-        equity = ctx.portfolio.get_equity()
-        portfolio_state = getattr(ctx.portfolio, "portfolio", None)
-        last_snapshot_ts = getattr(portfolio_state, "_last_snapshot_ts", 0) or None
-        if last_snapshot_ts is None:
-            latest_snapshot = ctx.portfolio.get_latest_snapshot()
-            last_snapshot_ts = latest_snapshot.timestamp if latest_snapshot else None
+        equity = ctx.portfolio.get_cached_equity()
+        last_snapshot_ts = ctx.portfolio.get_cached_last_snapshot_ts()
         return PortfolioSummary(
             equity_usd=equity.equity_base,
             cash_usd=equity.cash_base,
@@ -110,18 +108,13 @@ async def get_positions(request: Request) -> ApiEnvelope[List[PositionPayload]]:
 
     def _read_positions() -> List[PositionPayload]:
         positions: List[PositionPayload] = []
-        for position in ctx.portfolio.get_positions():
-            price = None
+        for position in ctx.portfolio.get_cached_positions():
+            price = (
+                (position.current_value_base / position.base_size)
+                if abs(position.base_size) > 1e-12 and position.current_value_base
+                else None
+            )
             metadata = None
-            try:
-                price = ctx.market_data.get_latest_price(position.pair)
-            except Exception:
-                logger.debug(
-                    "Price lookup failed",
-                    extra=build_request_log_extra(
-                        request, event="price_lookup_failed", pair=position.pair
-                    ),
-                )
 
             try:
                 metadata = ctx.market_data.get_pair_metadata(position.pair)
@@ -159,7 +152,7 @@ async def get_exposure(request: Request) -> ApiEnvelope[ExposureBreakdown]:
                 value_usd=exp.value_base,
                 pct_of_equity=exp.percentage_of_equity,
             )
-            for exp in ctx.portfolio.get_asset_exposure()
+            for exp in ctx.portfolio.get_cached_asset_exposure()
         ]
 
         risk_status = ctx.strategy_engine.get_risk_status()
