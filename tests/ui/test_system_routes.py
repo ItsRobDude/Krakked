@@ -432,6 +432,36 @@ def test_setup_config_updates_existing_bootstrap_config(
     assert config_data["execution"]["mode"] == "paper"
     assert config_data["session"]["account_id"] == "default"
     assert config_data["ml"]["enabled"] is True
+    assert config_data["market_data"]["backfill_timeframes"] == ["1h", "4h"]
+    assert config_data["market_data"]["ws_timeframes"] == ["1m", "5m"]
+
+
+def test_setup_config_uses_starter_universe_when_none_provided(
+    monkeypatch, client, temp_config_dir
+):
+    monkeypatch.setattr(
+        "krakked.ui.routes.system.get_config_dir", lambda: temp_config_dir
+    )
+
+    response = client.post(
+        "/api/system/setup/config",
+        json={"region_code": "US", "universe_pairs": []},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["error"] is None
+
+    config_data = yaml.safe_load((temp_config_dir / "config.yaml").read_text())
+    assert config_data["universe"]["include_pairs"] == [
+        "BTC/USD",
+        "ETH/USD",
+        "SOL/USD",
+        "ADA/USD",
+    ]
+    assert config_data["universe"]["min_24h_volume_usd"] == 100000.0
+    assert config_data["market_data"]["backfill_timeframes"] == ["1h", "4h"]
+    assert config_data["market_data"]["ws_timeframes"] == ["1m", "5m"]
 
 
 def test_setup_config_preserves_existing_custom_sections(
@@ -469,6 +499,45 @@ def test_setup_config_preserves_existing_custom_sections(
     assert config_data["session"]["account_id"] == "custom"
     assert config_data["ml"]["enabled"] is False
     assert config_data["risk"]["max_open_positions"] == 7
+
+
+def test_setup_config_upgrades_legacy_bootstrap_defaults(
+    monkeypatch, client, temp_config_dir
+):
+    (temp_config_dir / "config.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "region": {"code": "US_CA", "default_quote": "USD"},
+                "universe": {
+                    "include_pairs": [],
+                    "exclude_pairs": [],
+                    "min_24h_volume_usd": 0.0,
+                },
+                "execution": {"mode": "paper"},
+                "session": {"account_id": "default"},
+                "ml": {"enabled": True},
+            }
+        )
+    )
+    monkeypatch.setattr(
+        "krakked.ui.routes.system.get_config_dir", lambda: temp_config_dir
+    )
+
+    response = client.post(
+        "/api/system/setup/config",
+        json={"region_code": "US", "universe_pairs": []},
+    )
+
+    assert response.status_code == 200
+    config_data = yaml.safe_load((temp_config_dir / "config.yaml").read_text())
+    assert config_data["universe"]["include_pairs"] == [
+        "BTC/USD",
+        "ETH/USD",
+        "SOL/USD",
+        "ADA/USD",
+    ]
+    assert config_data["universe"]["min_24h_volume_usd"] == 100000.0
+    assert config_data["market_data"]["backfill_timeframes"] == ["1h", "4h"]
 
 
 @pytest.mark.parametrize("ui_read_only", [False])

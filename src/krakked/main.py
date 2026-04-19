@@ -16,6 +16,7 @@ from krakked import APP_VERSION
 from krakked.bootstrap import CredentialBootstrapError, bootstrap
 from krakked.config_loader import (
     dump_runtime_overrides,
+    get_default_ohlc_store_config,
     get_config_dir,
     get_initial_ui_config,
     load_config,
@@ -43,6 +44,8 @@ from krakked.ui.api import create_api
 from krakked.ui.context import AppContext, SessionState
 
 logger = logging.getLogger(__name__)
+
+STARTER_BOOTSTRAP_PAIRS = ["BTC/USD", "ETH/USD", "SOL/USD", "ADA/USD"]
 
 
 def _coerce_interval(value: Optional[int], default: int, name: str) -> int:
@@ -478,9 +481,15 @@ class BotController:
                 {
                     "region": {"code": "US_CA", "default_quote": "USD"},
                     "universe": {
-                        "include_pairs": [],
+                        "include_pairs": STARTER_BOOTSTRAP_PAIRS,
                         "exclude_pairs": [],
-                        "min_24h_volume_usd": 0.0,
+                        "min_24h_volume_usd": 100000.0,
+                    },
+                    "market_data": {
+                        "ws": {},
+                        "ohlc_store": get_default_ohlc_store_config(),
+                        "backfill_timeframes": ["1h", "4h"],
+                        "ws_timeframes": ["1m", "5m"],
                     },
                     "execution": {
                         "mode": "paper",
@@ -641,9 +650,15 @@ class BotController:
                     {
                         "region": {"code": "US_CA", "default_quote": "USD"},
                         "universe": {
-                            "include_pairs": [],
+                            "include_pairs": STARTER_BOOTSTRAP_PAIRS,
                             "exclude_pairs": [],
-                            "min_24h_volume_usd": 0.0,
+                            "min_24h_volume_usd": 100000.0,
+                        },
+                        "market_data": {
+                            "ws": {},
+                            "ohlc_store": get_default_ohlc_store_config(),
+                            "backfill_timeframes": ["1h", "4h"],
+                            "ws_timeframes": ["1m", "5m"],
                         },
                         "execution": {
                             "mode": "paper",

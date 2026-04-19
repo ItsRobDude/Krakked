@@ -25,6 +25,7 @@ from krakked.config import dump_runtime_overrides, get_config_dir
 from krakked.config_loader import (
     _load_yaml_mapping,
     _resolve_effective_env,
+    get_default_ohlc_store_config,
     get_initial_ui_config,
     parse_app_config,
     write_initial_config,
@@ -61,6 +62,11 @@ from krakked.utils.io import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+STARTER_SETUP_PAIRS = ["BTC/USD", "ETH/USD", "SOL/USD", "ADA/USD"]
+STARTER_SETUP_MIN_LIQUIDITY_USD = 100000.0
+STARTER_SETUP_BACKFILL_TIMEFRAMES = ["1h", "4h"]
+STARTER_SETUP_WS_TIMEFRAMES = ["1m", "5m"]
 
 
 class CredentialPayload(BaseModel):
@@ -114,6 +120,33 @@ def _merge_setup_defaults(target: dict, defaults: dict) -> dict:
         else:
             target.setdefault(key, value)
     return target
+
+
+def _build_setup_config_data(
+    region_code: str, universe_pairs: list[str] | None = None
+) -> dict:
+    starter_pairs = universe_pairs or STARTER_SETUP_PAIRS
+    return {
+        "region": {"code": region_code, "default_quote": "USD"},
+        "universe": {
+            "include_pairs": starter_pairs,
+            "exclude_pairs": [],
+            "min_24h_volume_usd": STARTER_SETUP_MIN_LIQUIDITY_USD,
+        },
+        "market_data": {
+            "ws": {},
+            "ohlc_store": get_default_ohlc_store_config(),
+            "backfill_timeframes": STARTER_SETUP_BACKFILL_TIMEFRAMES,
+            "ws_timeframes": STARTER_SETUP_WS_TIMEFRAMES,
+        },
+        # Default minimal structure
+        "execution": {"mode": "paper"},
+        "ui": get_initial_ui_config(),
+        # Initialize with default session account
+        "session": {"account_id": "default"},
+        # Default ML config
+        "ml": {"enabled": True},
+    }
 
 
 class ModeChangePayload(BaseModel):
@@ -363,18 +396,7 @@ async def setup_config(
     try:
         config_dir = get_config_dir()
         config_path = config_dir / "config.yaml"
-        ui_defaults = get_initial_ui_config()
-        config_data = {
-            "region": {"code": payload.region_code, "default_quote": "USD"},
-            "universe": {"include_pairs": payload.universe_pairs},
-            # Default minimal structure
-            "execution": {"mode": "paper"},
-            "ui": ui_defaults,
-            # Initialize with default session account
-            "session": {"account_id": "default"},
-            # Default ML config
-            "ml": {"enabled": True},
-        }
+        config_data = _build_setup_config_data(payload.region_code, payload.universe_pairs)
 
         if config_path.exists():
             existing = _load_yaml_mapping(config_path)
@@ -383,7 +405,16 @@ async def setup_config(
 
             existing = _merge_setup_defaults(existing, config_data)
             existing["region"]["code"] = payload.region_code
-            existing["universe"]["include_pairs"] = payload.universe_pairs
+            existing["universe"]["include_pairs"] = (
+                payload.universe_pairs or STARTER_SETUP_PAIRS
+            )
+            existing["universe"].setdefault("exclude_pairs", [])
+            if float(existing["universe"].get("min_24h_volume_usd", 0.0) or 0.0) <= 0:
+                existing["universe"]["min_24h_volume_usd"] = (
+                    STARTER_SETUP_MIN_LIQUIDITY_USD
+                )
+            if not isinstance(existing.get("market_data"), dict):
+                existing["market_data"] = config_data["market_data"]
 
             atomic_write(config_path, existing, dump_func=yaml.safe_dump)
         else:
