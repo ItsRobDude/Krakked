@@ -102,6 +102,20 @@ class SetupStatusPayload(BaseModel):
     unlocked: bool
 
 
+def _merge_setup_defaults(target: dict, defaults: dict) -> dict:
+    """Recursively fill missing setup defaults without overwriting user config."""
+
+    for key, value in defaults.items():
+        if isinstance(value, dict):
+            existing = target.get(key)
+            if not isinstance(existing, dict):
+                existing = {}
+            target[key] = _merge_setup_defaults(existing, value)
+        else:
+            target.setdefault(key, value)
+    return target
+
+
 class ModeChangePayload(BaseModel):
     """Payload for toggling the execution mode."""
 
@@ -347,6 +361,8 @@ async def setup_config(
 ) -> ApiEnvelope[dict]:
     """Writes the initial configuration file."""
     try:
+        config_dir = get_config_dir()
+        config_path = config_dir / "config.yaml"
         ui_defaults = get_initial_ui_config()
         config_data = {
             "region": {"code": payload.region_code, "default_quote": "USD"},
@@ -359,10 +375,22 @@ async def setup_config(
             # Default ML config
             "ml": {"enabled": True},
         }
-        write_initial_config(config_data)
+
+        if config_path.exists():
+            existing = _load_yaml_mapping(config_path)
+            if not isinstance(existing, dict):
+                existing = {}
+
+            existing = _merge_setup_defaults(existing, config_data)
+            existing["region"]["code"] = payload.region_code
+            existing["universe"]["include_pairs"] = payload.universe_pairs
+
+            atomic_write(config_path, existing, dump_func=yaml.safe_dump)
+        else:
+            write_initial_config(config_data, config_dir=config_dir)
 
         # Also ensure default account exists in registry
-        ensure_default_account()
+        ensure_default_account(config_dir)
 
         logger.info(
             "Initial configuration written",

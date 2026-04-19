@@ -1571,8 +1571,10 @@ function App() {
   const [setupStatus, setSetupStatus] = useState<SetupStatus | null>(null);
   const [startupLoading, setStartupLoading] = useState(true);
   const [startupError, setStartupError] = useState<string | null>(null);
+  const [startupStage, setStartupStage] = useState<'checking' | 'unlocking'>('checking');
 
   const checkStatus = async () => {
+    setStartupStage('checking');
     setStartupLoading(true);
     setStartupError(null);
 
@@ -1588,19 +1590,58 @@ function App() {
     }
   };
 
+  const waitForUnlock = async () => {
+    setStartupStage('unlocking');
+    setStartupLoading(true);
+    setStartupError(null);
+
+    const deadline = Date.now() + 5 * 60 * 1000;
+    let lastStatus: SetupStatus | null = null;
+
+    try {
+      while (Date.now() < deadline) {
+        const status = await fetchSetupStatus();
+        lastStatus = status;
+        setSetupStatus(status);
+
+        if (status.unlocked || !status.configured || !status.secrets_exist) {
+          return;
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+      }
+
+      throw new Error(
+        'Unlock succeeded, but Krakked is still initializing. First-time startup can take a few minutes. Please wait and retry if the dashboard does not appear.',
+      );
+    } catch (error) {
+      console.error('Failed while waiting for unlock', error);
+      setSetupStatus(lastStatus);
+      throw error;
+    } finally {
+      setStartupLoading(false);
+    }
+  };
+
   useEffect(() => {
     checkStatus();
   }, []);
 
   if (startupLoading) {
+    const loadingTitle = startupStage === 'unlocking' ? 'Initializing Krakked…' : 'Connecting…';
+    const loadingSubtitle =
+      startupStage === 'unlocking'
+        ? 'Unlock succeeded. Krakked is loading services and market data. First-time startup can take a few minutes.'
+        : 'Loading system status.';
+
     return (
       <div className="startup">
         <div className="startup__panel">
           <div className="startup__brand">
             <div>
               <p className="eyebrow">Krakked</p>
-              <h1>Connecting…</h1>
-              <p className="subtitle">Loading system status.</p>
+              <h1>{loadingTitle}</h1>
+              <p className="subtitle">{loadingSubtitle}</p>
             </div>
           </div>
         </div>
@@ -1631,11 +1672,11 @@ function App() {
   }
 
   if (setupStatus && (!setupStatus.configured || !setupStatus.secrets_exist)) {
-    return <SetupWizard onComplete={checkStatus} />;
+    return <SetupWizard onComplete={waitForUnlock} />;
   }
 
   if (setupStatus && !setupStatus.unlocked) {
-    return <PasswordScreen onUnlock={checkStatus} />;
+    return <PasswordScreen onUnlock={waitForUnlock} />;
   }
 
   return <DashboardShell onLogout={() => window.location.reload()} />;

@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+import yaml
 from starlette.testclient import TestClient
 
 import krakked.connection.validation as validation_mod
@@ -405,6 +406,69 @@ def test_config_redacts_auth_token(client, system_context):
     payload = response.json()
     assert payload["error"] is None
     assert payload["data"]["ui"]["auth"]["token"] == "***"
+
+
+def test_setup_config_updates_existing_bootstrap_config(
+    monkeypatch, client, temp_config_dir
+):
+    monkeypatch.setattr(
+        "krakked.ui.routes.system.get_config_dir", lambda: temp_config_dir
+    )
+
+    response = client.post(
+        "/api/system/setup/config",
+        json={"region_code": "EU", "universe_pairs": ["BTC/USD"]},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["error"] is None
+    assert payload["data"]["success"] is True
+
+    config_data = yaml.safe_load((temp_config_dir / "config.yaml").read_text())
+    assert config_data["region"]["code"] == "EU"
+    assert config_data["region"]["default_quote"] == "USD"
+    assert config_data["universe"]["include_pairs"] == ["BTC/USD"]
+    assert config_data["execution"]["mode"] == "paper"
+    assert config_data["session"]["account_id"] == "default"
+    assert config_data["ml"]["enabled"] is True
+
+
+def test_setup_config_preserves_existing_custom_sections(
+    monkeypatch, client, temp_config_dir
+):
+    (temp_config_dir / "config.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "region": {"code": "US_CA", "default_quote": "USD"},
+                "universe": {"include_pairs": [], "exclude_pairs": []},
+                "execution": {"mode": "paper", "validate_only": False},
+                "session": {"account_id": "custom", "mode": "paper"},
+                "ml": {"enabled": False},
+                "risk": {"max_open_positions": 7},
+            }
+        )
+    )
+    monkeypatch.setattr(
+        "krakked.ui.routes.system.get_config_dir", lambda: temp_config_dir
+    )
+
+    response = client.post(
+        "/api/system/setup/config",
+        json={"region_code": "GB", "universe_pairs": ["ETH/USD"]},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["error"] is None
+
+    config_data = yaml.safe_load((temp_config_dir / "config.yaml").read_text())
+    assert config_data["region"]["code"] == "GB"
+    assert config_data["universe"]["include_pairs"] == ["ETH/USD"]
+    assert config_data["execution"]["validate_only"] is False
+    assert config_data["session"]["account_id"] == "custom"
+    assert config_data["ml"]["enabled"] is False
+    assert config_data["risk"]["max_open_positions"] == 7
 
 
 @pytest.mark.parametrize("ui_read_only", [False])

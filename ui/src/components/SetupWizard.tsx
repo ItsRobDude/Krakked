@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { performSetupConfig, performSetupCredentials, performUnlock } from '../services/api';
 
 type SetupWizardProps = {
-  onComplete: () => void;
+  onComplete: () => Promise<void>;
 };
 
 export function SetupWizard({ onComplete }: SetupWizardProps) {
@@ -35,9 +35,7 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
       await performSetupCredentials(apiKey, apiSecret, password, region);
       await performUnlock(password);
 
-      // Give the backend time to re-bootstrap after unlock.
-      await new Promise((resolve) => setTimeout(resolve, 1500));
-      onComplete();
+      await onComplete();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Setup failed');
       setBusy(false);
@@ -101,10 +99,13 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              placeholder="Encrypts your API keys"
+              placeholder="Encrypts your API keys and unlocks Krakked later"
               required
               disabled={busy}
             />
+            <p className="field__hint">
+              You&apos;ll use this same Master Password to unlock Krakked on future launches.
+            </p>
           </div>
 
           <div className="field">
@@ -120,7 +121,7 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
 
           <div className="startup__actions">
             <button type="submit" className="primary-button" disabled={busy} aria-busy={busy}>
-              {busy ? 'Initializing System…' : 'Complete Setup'}
+              {busy ? 'Saving credentials and initializing Krakked…' : 'Complete Setup'}
             </button>
           </div>
         </form>

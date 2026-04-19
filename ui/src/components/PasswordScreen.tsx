@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { performUnlock } from '../services/api';
 
-export function PasswordScreen({ onUnlock }: { onUnlock: () => void }) {
+export function PasswordScreen({ onUnlock }: { onUnlock: () => Promise<void> }) {
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -13,7 +13,7 @@ export function PasswordScreen({ onUnlock }: { onUnlock: () => void }) {
 
     try {
       await performUnlock(password);
-      onUnlock();
+      await onUnlock();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Invalid password');
       setBusy(false);
@@ -27,7 +27,10 @@ export function PasswordScreen({ onUnlock }: { onUnlock: () => void }) {
           <div>
             <p className="eyebrow">Welcome Back</p>
             <h1>Unlock Krakked</h1>
-            <p className="subtitle">Enter your Master Password to decrypt credentials.</p>
+            <p className="subtitle">
+              Enter the same Master Password you created during setup to decrypt your
+              credentials.
+            </p>
           </div>
         </div>
 
@@ -43,10 +46,13 @@ export function PasswordScreen({ onUnlock }: { onUnlock: () => void }) {
               autoFocus
               disabled={busy}
             />
+            <p className="field__hint">
+              This is the password you created to encrypt your API keys during setup.
+            </p>
           </div>
 
           <button type="submit" className="primary-button" disabled={busy} aria-busy={busy}>
-            {busy ? 'Unlocking…' : 'Unlock'}
+            {busy ? 'Unlock accepted. Initializing Krakked…' : 'Unlock'}
           </button>
 
           {error && <div className="feedback feedback--error">{error}</div>}
