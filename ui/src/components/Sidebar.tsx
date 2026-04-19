@@ -3,6 +3,7 @@ export type SidebarItem = {
   description?: string;
   active?: boolean;
   badge?: string;
+  planned?: boolean;
 };
 
 export type SidebarProps = {
@@ -10,6 +11,7 @@ export type SidebarProps = {
   footer?: {
     label: string;
     value: string;
+    note?: string;
   };
 };
 
@@ -27,12 +29,23 @@ export function Sidebar({ items, footer }: SidebarProps) {
       <nav aria-label="Dashboard sections">
         <ul className="sidebar__list">
           {items.map((item) => (
-            <li key={item.label} className={item.active ? 'sidebar__item sidebar__item--active' : 'sidebar__item'}>
+            <li
+              key={item.label}
+              className={[
+                'sidebar__item',
+                item.active ? 'sidebar__item--active' : '',
+                item.planned ? 'sidebar__item--planned' : '',
+              ].filter(Boolean).join(' ')}
+            >
               <div>
                 <p className="sidebar__label">{item.label}</p>
                 {item.description ? <p className="sidebar__description">{item.description}</p> : null}
               </div>
-              {item.badge ? <span className="sidebar__badge">{item.badge}</span> : null}
+              {item.badge ? (
+                <span className={`sidebar__badge${item.planned ? ' sidebar__badge--planned' : ''}`}>
+                  {item.badge}
+                </span>
+              ) : null}
             </li>
           ))}
         </ul>
@@ -42,6 +55,7 @@ export function Sidebar({ items, footer }: SidebarProps) {
         <div className="sidebar__footer">
           <p className="sidebar__footer-label">{footer.label}</p>
           <p className="sidebar__footer-value">{footer.value}</p>
+          {footer.note ? <p className="sidebar__footer-note">{footer.note}</p> : null}
         </div>
       ) : null}
     </div>

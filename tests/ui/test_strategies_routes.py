@@ -17,7 +17,7 @@ def test_get_strategies_enveloped(client, strategy_context):
     now = datetime.now(UTC)
     strategy_context.strategy_engine.get_strategy_state.return_value = [
         StrategyState(
-            strategy_id="alpha",
+            strategy_id="trend_core",
             enabled=True,
             last_intents_at=now,
             last_actions_at=None,
@@ -31,7 +31,8 @@ def test_get_strategies_enveloped(client, strategy_context):
     assert response.status_code == 200
     payload = response.json()
     assert payload["error"] is None
-    assert payload["data"][0]["strategy_id"] == "alpha"
+    assert payload["data"][0]["strategy_id"] == "trend_core"
+    assert payload["data"][0]["label"] == "Trend Core"
     assert payload["data"][0]["configured_weight"] == 100
 
 
@@ -171,3 +172,33 @@ def test_update_strategy_config_updates_risk_profile(client, strategy_context):
         "alpha"
     ] == pytest.approx(20.0)
     assert payload["data"]["params"]["risk_profile"] == "aggressive"
+
+
+@pytest.mark.parametrize("ui_read_only", [False])
+def test_update_strategy_config_updates_continuous_learning(client, strategy_context):
+    strategy_context.config.strategies.configs["alpha"] = StrategyConfig(
+        name="Alpha",
+        type="machine_learning",
+        enabled=True,
+        params={"continuous_learning": True},
+    )
+    strategy_context.strategy_engine.strategy_states["alpha"] = SimpleNamespace(
+        configured_weight=100,
+        params={"continuous_learning": True},
+    )
+
+    response = client.patch(
+        "/api/strategies/alpha/config",
+        json={"params": {"continuous_learning": False}},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["error"] is None
+    assert payload["data"]["params"]["continuous_learning"] is False
+    assert (
+        strategy_context.strategy_engine.strategy_states["alpha"].params[
+            "continuous_learning"
+        ]
+        is False
+    )

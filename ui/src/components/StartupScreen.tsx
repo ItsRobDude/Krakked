@@ -173,7 +173,7 @@ export function StartupScreen({
         <div className="startup__brand">
           <div className="startup__mark" />
           <div>
-            <p className="eyebrow">Krakked v3</p>
+            <p className="eyebrow">Krakked</p>
             <h1>Start a session</h1>
             <p className="subtitle">Pick a profile, mode, and loop cadence before trading begins.</p>
           </div>
@@ -256,8 +256,15 @@ export function StartupScreen({
                 disabled={readOnly || modeBusy || !activeProfileName}
                 onChange={(event) => handleMlToggle(event.target.checked)}
               />
-              Enable machine learning strategies
+              Enable ML strategies for this profile
             </label>
+            <p className="field__hint">
+              Profile-level switch. It applies the next time a stopped session reloads or starts.
+            </p>
+            <p className="field__hint">
+              Turning it off removes ML strategies from the enabled strategy list. Per-strategy Learning only controls
+              continuous training inside enabled ML strategies.
+            </p>
             {!activeProfileName && (
               <p className="field__hint field__hint--warn">Select and activate a profile to change ML settings.</p>
             )}
@@ -272,7 +279,7 @@ export function StartupScreen({
             disabled={busy || modeBusy || readOnly || !selectedProfile}
             aria-busy={busy}
           >
-            {busy ? 'Starting…' : 'Start bot'}
+            {busy ? 'Starting…' : 'Start session'}
           </button>
 
           <button

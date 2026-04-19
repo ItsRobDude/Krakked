@@ -8,6 +8,7 @@ from fastapi import APIRouter, Request
 from pydantic import ValidationError
 
 from krakked.config import dump_runtime_overrides
+from krakked.strategy.catalog import CANONICAL_STRATEGIES
 from krakked.strategy.risk_profiles import profile_to_definition
 from krakked.ui.logging import build_request_log_extra
 from krakked.ui.models import (
@@ -26,12 +27,24 @@ def _context(request: Request):
     return request.app.state.context
 
 
+def _strategy_label(ctx, strategy_id: str) -> str:
+    canonical = CANONICAL_STRATEGIES.get(strategy_id)
+    if canonical:
+        return canonical.label
+
+    strat_cfg = ctx.config.strategies.configs.get(strategy_id)
+    if strat_cfg and strat_cfg.name and strat_cfg.name != strategy_id:
+        return strat_cfg.name
+
+    return strategy_id.replace("_", " ").replace("-", " ").title()
+
+
 @router.get("/", response_model=ApiEnvelope[list[StrategyStatePayload]])
 async def get_strategies(request: Request) -> ApiEnvelope[list[StrategyStatePayload]]:
     ctx = _context(request)
     try:
         strategies = [
-            StrategyStatePayload(**state.__dict__)
+            StrategyStatePayload(label=_strategy_label(ctx, state.strategy_id), **state.__dict__)
             for state in ctx.strategy_engine.get_strategy_state()
         ]
         return ApiEnvelope(data=strategies, error=None)
@@ -180,6 +193,18 @@ async def update_strategy_config(
 
             updated_fields["risk_profile"] = profile
             updated_fields["max_per_strategy_pct"] = rp.max_per_strategy_pct
+
+        if payload.params and payload.params.continuous_learning is not None:
+            strat_cfg.params["continuous_learning"] = payload.params.continuous_learning
+            updated_fields.setdefault("params", {})
+            if isinstance(updated_fields["params"], dict):
+                updated_fields["params"]["continuous_learning"] = (
+                    payload.params.continuous_learning
+                )
+            if strategy_id in ctx.strategy_engine.strategy_states:
+                ctx.strategy_engine.strategy_states[strategy_id].params[
+                    "continuous_learning"
+                ] = payload.params.continuous_learning
 
         ctx.strategy_engine.refresh_strategy_weight_state()
         dump_runtime_overrides(ctx.config)

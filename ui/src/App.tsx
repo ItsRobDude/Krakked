@@ -202,13 +202,13 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
 
   const sidebarItems = [
     { label: 'Overview', description: 'KPIs & positions', active: true, badge: 'Live' },
-    { label: 'Signals', description: 'Strategy stream', badge: 'Soon' },
-    { label: 'Backtests', description: 'Historical runs' },
+    { label: 'Signals', description: 'Planned strategy stream. Not available in this build.', badge: 'Planned', planned: true },
+    { label: 'Backtests', description: 'Planned historical analysis. Not available in this build.', badge: 'Planned', planned: true },
     { label: 'Settings', description: 'API keys & risk' },
   ];
 
   const hotkeys = [
-    { keys: 'R', description: 'Restart the bot service' },
+    { keys: 'R', description: 'Restart the trading runtime' },
     { keys: 'Shift + C', description: 'Cancel all working orders' },
     { keys: 'L', description: 'Toggle live log streaming' },
     { keys: 'G', description: 'Refresh balances and positions' },
@@ -884,37 +884,6 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
     }
   };
 
-  const handleMlToggle = async (enabled: boolean) => {
-    if (health?.ui_read_only) {
-      setStrategyFeedback('Backend is read-only. Strategy controls are disabled.');
-      return;
-    }
-
-    if (session?.active) {
-      setStrategyFeedback('ML settings cannot be changed while session is active.');
-      return;
-    }
-
-    if (!session?.profile_name) {
-      setStrategyFeedback('Active profile required to change ML settings.');
-      return;
-    }
-
-    setStrategyFeedback(null);
-    setStrategyBusyState("ml_toggle", true);
-
-    try {
-      await applyConfig({ ml: { enabled } });
-      setStrategyFeedback(`Machine learning strategies ${enabled ? 'enabled' : 'disabled'}. reloading...`);
-      // Reload session/config to reflect changes
-      await loadSession();
-    } catch (error) {
-      setStrategyFeedback(error instanceof Error ? error.message : 'Unable to update ML settings.');
-    } finally {
-      setStrategyBusyState("ml_toggle", false);
-    }
-  };
-
   const handlePerStrategyBudgetChange = async (strategyId: string, valuePct: number) => {
     if (health?.ui_read_only) {
       setRiskConfigError('Backend is read-only. Risk config changes are disabled.');
@@ -1223,10 +1192,10 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
             }
           >
             {risk?.kill_switch_active === true
-              ? 'Bot stopped'
+              ? 'Trading paused'
               : risk?.kill_switch_active === false
-                ? 'Bot running'
-                : 'Bot status pending'}
+                ? 'Trading active'
+                : 'Trading status pending'}
           </span>
 
           {currentPreset && (
@@ -1252,7 +1221,11 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
       sidebar={
         <Sidebar
           items={sidebarItems}
-          footer={{ label: 'Session', value: connectionState === 'connected' ? 'Connected' : 'Degraded' }}
+          footer={{
+            label: 'Session',
+            value: connectionState === 'connected' ? 'Connected' : 'Degraded',
+            note: 'Planned sections are roadmap surfaces, not live UI pages.',
+          }}
         />
       }
       actions={
@@ -1267,8 +1240,8 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
             {riskBusy
               ? 'Updating…'
               : risk?.kill_switch_active
-                ? 'Start bot'
-                : 'Stop bot'}
+                ? 'Resume trading'
+                : 'Pause trading'}
           </button>
           <button
             type="button"
@@ -1569,10 +1542,6 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
         onWeightChange={handleStrategyWeightChange}
         onRiskProfileChange={handleRiskProfileChange}
         onLearningToggle={handleLearningToggle}
-        mlEnabled={mlEnabled}
-        onMlToggle={handleMlToggle}
-        sessionActive={session.active}
-        hasActiveProfile={Boolean(session.profile_name)}
       />
 
       <KpiGrid items={kpis} />
@@ -1629,7 +1598,7 @@ function App() {
         <div className="startup__panel">
           <div className="startup__brand">
             <div>
-              <p className="eyebrow">Krakked UI</p>
+              <p className="eyebrow">Krakked</p>
               <h1>Connecting…</h1>
               <p className="subtitle">Loading system status.</p>
             </div>
@@ -1645,7 +1614,7 @@ function App() {
         <div className="startup__panel">
           <div className="startup__brand">
             <div>
-              <p className="eyebrow">Krakked UI</p>
+              <p className="eyebrow">Krakked</p>
               <h1>Unable to connect</h1>
               <p className="subtitle">{startupError}</p>
             </div>

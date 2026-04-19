@@ -151,6 +151,7 @@ export type StrategyParams = {
 
 export type StrategyState = {
   strategy_id: string;
+  label: string;
   enabled: boolean;
   last_intents_at: string | null;
   last_actions_at: string | null;

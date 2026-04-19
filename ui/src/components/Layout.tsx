@@ -20,7 +20,7 @@ export function Layout({ title, subtitle, sidebar, actions, children, footer }: 
         <div className="layout__main">
           <header className="layout__header">
             <div>
-              <p className="eyebrow">Kraken Bot</p>
+              <p className="eyebrow">Krakked</p>
               <h1 className="title">{title}</h1>
               {subtitle ? <div className="subtitle">{subtitle}</div> : null}
             </div>

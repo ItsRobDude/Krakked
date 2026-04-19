@@ -146,6 +146,7 @@ class StrategyConfigParamsPatchPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     risk_profile: Optional[str] = None
+    continuous_learning: Optional[bool] = None
 
 
 class StrategyConfigPatchPayload(BaseModel):
@@ -172,6 +173,7 @@ class StrategyPosition(BaseModel):
 
 class StrategyStatePayload(BaseModel):
     strategy_id: str
+    label: str
     enabled: bool
     last_intents_at: Optional[datetime]
     last_actions_at: Optional[datetime]

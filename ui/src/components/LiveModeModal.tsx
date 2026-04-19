@@ -61,7 +61,7 @@ export function LiveModeModal({ isOpen, onClose, onConfirm }: LiveModeModalProps
           <h2>⚠ Enable Live Trading</h2>
         </div>
         <p className="panel__description">
-          You are about to switch to <strong>Live Money</strong> execution. The bot will have authority to place real
+          You are about to switch to <strong>Live Money</strong> execution. Krakked will have authority to place real
           orders on your Kraken account.
         </p>
         <p className="panel__description">

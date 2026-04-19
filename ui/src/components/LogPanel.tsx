@@ -21,7 +21,7 @@ export function LogPanel({ entries }: LogPanelProps) {
     <div className="panel log-panel">
       <div className="panel__header">
         <h2>Recent Logs</h2>
-        <p className="panel__hint">Feed from the bot process</p>
+        <p className="panel__hint">Feed from the trading runtime</p>
       </div>
       <ul className="log-panel__list" aria-live="polite">
         {entries.map((entry) => (

@@ -26,12 +26,6 @@ export type StrategiesPanelProps = {
   onWeightChange: (strategyId: string, weight: number) => void;
   onRiskProfileChange: (strategyId: string, profile: StrategyRiskProfile) => void;
   onLearningToggle: (strategyId: string, enabled: boolean) => void;
-  mlEnabled: boolean;
-  onMlToggle: (enabled: boolean) => void;
-  // Indicates if the session is currently active
-  sessionActive: boolean;
-  // Indicates if there is an active profile
-  hasActiveProfile: boolean;
 };
 
 export function StrategiesPanel({
@@ -46,10 +40,6 @@ export function StrategiesPanel({
   onWeightChange,
   onRiskProfileChange,
   onLearningToggle,
-  mlEnabled,
-  onMlToggle,
-  sessionActive,
-  hasActiveProfile,
 }: StrategiesPanelProps) {
   const formatPnl = (value?: number) => {
     if (value === undefined) return '—';
@@ -80,24 +70,10 @@ export function StrategiesPanel({
           <h2>Strategies</h2>
           <p className="panel__hint">Toggle strategies, set a 1-100 weight, and pick a risk posture</p>
         </div>
-        <div className="strategy-ml-group">
-          <label className="strategy-toggle__label" title={sessionActive ? "ML settings cannot be changed while session is active" : (hasActiveProfile ? "Toggle ML for active profile" : "Active profile required for ML settings")}>
-            <input
-              type="checkbox"
-              className="strategy-toggle"
-              checked={mlEnabled}
-              // Disabled if read-only, session is active (applyConfig is stopped-only), OR no active profile
-              disabled={readOnly || sessionActive || !hasActiveProfile}
-              onChange={(event) => onMlToggle(event.target.checked)}
-            />
-            <span className={`pill ${sessionActive || !hasActiveProfile ? 'pill--muted' : 'pill--info'}`}>
-              {mlEnabled ? 'ML: On' : 'ML: Off'}
-            </span>
-          </label>
-        </div>
       </div>
       <p className="panel__description">
-        Enable or pause each strategy, choose a simple relative weight, and set its risk profile. Changes respect backend read-only mode.
+        Enable or pause each strategy, choose a simple relative weight, and set its risk profile. The profile-level ML
+        switch lives in session setup. Learning here only controls continuous training for enabled ML strategies.
       </p>
 
       <div className="table table--strategies" role="table" aria-label="Strategy controls">
@@ -127,7 +103,8 @@ export function StrategiesPanel({
             return (
               <div key={strategy.strategy_id} className="table__row" role="row">
                 <span role="cell" className="strategy__label">
-                  <span className="strategy__name">{strategy.strategy_id}</span>
+                  <span className="strategy__name" title={strategy.strategy_id}>{strategy.label}</span>
+                  <span className="strategy__id">{strategy.strategy_id}</span>
                   {STRATEGY_TAGS[strategy.strategy_id] ? (
                     <span className="pill pill--muted strategy__tag">
                       {STRATEGY_TAGS[strategy.strategy_id]}
