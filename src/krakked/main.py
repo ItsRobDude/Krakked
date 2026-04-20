@@ -15,6 +15,7 @@ import uvicorn
 from krakked import APP_VERSION
 from krakked.bootstrap import CredentialBootstrapError, bootstrap
 from krakked.config_loader import (
+    cleanup_active_config_chain,
     dump_runtime_overrides,
     get_default_ohlc_store_config,
     get_default_starter_risk_config,
@@ -513,6 +514,8 @@ class BotController:
                 config_dir=config_dir,
             )
 
+        cleanup_active_config_chain(config_dir)
+
         # Load config but DO NOT bootstrap credentials
         config = load_config(config_path=config_path)
         self.is_setup_mode = True
@@ -547,6 +550,7 @@ class BotController:
         Returns a fresh AppContext or a setup-mode context if credentials fail.
         """
         try:
+            cleanup_active_config_chain(get_config_dir())
             # We disable interactive setup in headless/daemon mode to force
             # CredentialBootstrapError if keys are missing.
             client, config, rate_limiter = bootstrap(
@@ -684,6 +688,8 @@ class BotController:
                     },
                     config_dir=config_dir,
                 )
+
+            cleanup_active_config_chain(config_dir)
 
             # If credentials are missing/locked we still want to load config and expose setup endpoints.
             config = load_config(config_path=config_path)

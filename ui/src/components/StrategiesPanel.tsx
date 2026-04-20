@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import type {
   StrategyPerformance,
   StrategyRiskProfile,
@@ -21,6 +22,7 @@ export type StrategiesPanelProps = {
   learningSelections: Record<string, boolean>;
   busy: Set<string>;
   readOnly: boolean;
+  liveMode?: boolean;
   feedback?: string | null;
   onToggle: (strategyId: string, enabled: boolean) => void;
   onWeightChange: (strategyId: string, weight: number) => void;
@@ -35,12 +37,25 @@ export function StrategiesPanel({
   learningSelections,
   busy,
   readOnly,
+  liveMode = false,
   feedback,
   onToggle,
   onWeightChange,
   onRiskProfileChange,
   onLearningToggle,
 }: StrategiesPanelProps) {
+  const [weightDrafts, setWeightDrafts] = useState<Record<string, number>>({});
+
+  useEffect(() => {
+    setWeightDrafts((current) => {
+      const next: Record<string, number> = {};
+      strategies.forEach((strategy) => {
+        next[strategy.strategy_id] = current[strategy.strategy_id] ?? strategy.configured_weight ?? 100;
+      });
+      return next;
+    });
+  }, [strategies]);
+
   const formatPnl = (value?: number) => {
     if (value === undefined) return '—';
     return value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -75,6 +90,36 @@ export function StrategiesPanel({
     return { label: 'Stable', tone: 'pill--info' as const };
   };
 
+  const setWeightDraft = (strategyId: string, value: number) => {
+    setWeightDrafts((current) => ({ ...current, [strategyId]: value }));
+  };
+
+  const commitWeightDraft = (strategyId: string) => {
+    const strategy = strategies.find((entry) => entry.strategy_id === strategyId);
+    if (!strategy) return;
+
+    const clampedWeight = Math.min(100, Math.max(1, weightDrafts[strategyId] ?? strategy.configured_weight ?? 100));
+    const currentWeight = strategy.configured_weight ?? 100;
+
+    if (clampedWeight !== currentWeight) {
+      if (liveMode) {
+        const confirmed = window.confirm(
+          `Change ${strategyId} weight from ${currentWeight} to ${clampedWeight} in the active live session? Weight changes affect effective share and conflict winners immediately.`,
+        );
+        if (!confirmed) {
+          setWeightDraft(strategyId, currentWeight);
+          return;
+        }
+      }
+
+      setWeightDraft(strategyId, clampedWeight);
+      onWeightChange(strategyId, clampedWeight);
+      return;
+    }
+
+    setWeightDraft(strategyId, clampedWeight);
+  };
+
   return (
     <section className="panel strategy-panel" aria-live="polite">
       <div className="panel__header">
@@ -88,6 +133,12 @@ export function StrategiesPanel({
         switch lives in Startup strategy setup while the session is stopped. Learning here only controls continuous
         training for enabled ML strategies.
       </p>
+      {liveMode ? (
+        <div className="feedback feedback--warning strategy-panel__warning">
+          Live strategy changes apply to the active session immediately. Confirm toggles and committed weight changes
+          carefully, because they can change conflict winners and capital share on the fly.
+        </div>
+      ) : null}
 
       <div className="table table--strategies" role="table" aria-label="Strategy controls">
         <div className="table__head" role="row">
@@ -134,6 +185,9 @@ export function StrategiesPanel({
                       className="strategy-toggle"
                       checked={strategy.enabled}
                       disabled={readOnly || isBusy}
+                      title={liveMode
+                        ? 'Live change: enabling or disabling this strategy affects the active session immediately.'
+                        : 'Toggle this strategy on or off for the current session.'}
                       onChange={(event) => onToggle(strategy.strategy_id, event.target.checked)}
                     />
                     <span className="pill pill--info">{strategy.enabled ? 'On' : 'Off'}</span>
@@ -145,14 +199,28 @@ export function StrategiesPanel({
                       type="number"
                       min={1}
                       max={100}
-                      value={strategy.configured_weight ?? 100}
+                      value={weightDrafts[strategy.strategy_id] ?? strategy.configured_weight ?? 100}
                       disabled={readOnly || isBusy}
-                      onChange={(event) =>
-                        onWeightChange(
-                          strategy.strategy_id,
-                          Math.min(100, Math.max(1, Number(event.target.value) || 1)),
-                        )
-                      }
+                      title={liveMode
+                        ? 'Live change: commit a new weight to change effective share and conflict winners.'
+                        : 'Set the relative weight used to calculate this strategy’s effective share.'}
+                      onChange={(event) => {
+                        const nextWeight = Math.min(100, Math.max(1, Number(event.target.value) || 1));
+                        setWeightDraft(strategy.strategy_id, nextWeight);
+                        if (!liveMode) {
+                          onWeightChange(strategy.strategy_id, nextWeight);
+                        }
+                      }}
+                      onBlur={() => {
+                        if (liveMode) {
+                          commitWeightDraft(strategy.strategy_id);
+                        }
+                      }}
+                      onKeyDown={(event) => {
+                        if (liveMode && event.key === 'Enter') {
+                          event.currentTarget.blur();
+                        }
+                      }}
                     />
                     <span className="pill pill--muted">
                       Share {typeof strategy.effective_weight_pct === 'number'
@@ -217,6 +285,7 @@ export function StrategiesPanel({
                         className="strategy-toggle"
                         checked={learningSelections[strategy.strategy_id] ?? true}
                         disabled={readOnly || isBusy}
+                        title="Per-strategy learning only controls continuous training. It does not replace the global ML master switch in Startup."
                         onChange={(event) => onLearningToggle(strategy.strategy_id, event.target.checked)}
                       />
                       <span className="pill pill--info">

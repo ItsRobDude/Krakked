@@ -246,6 +246,33 @@ def test_system_health_prefers_metrics_snapshot_even_when_false(client, system_c
     assert payload["market_data_status"] == "unavailable"
 
 
+def test_system_health_uses_cached_warmup_before_metrics_update(client, system_context):
+    system_context.market_data.get_cached_data_status.return_value = SimpleNamespace(
+        rest_api_reachable=True,
+        websocket_connected=True,
+        streaming_pairs=0,
+        stale_pairs=0,
+        subscription_errors=0,
+    )
+    system_context.market_data.get_cached_health_status.return_value = MarketDataStatus(
+        health="warming_up",
+        reason="initializing",
+        detail="Streaming is connected and waiting for the first fresh ticks.",
+    )
+
+    metrics = SystemMetrics()
+    system_context.metrics = metrics
+
+    response = client.get("/api/system/health")
+
+    assert response.status_code == 200
+    payload = response.json()["data"]
+    assert payload["market_data_status"] == "warming_up"
+    assert payload["market_data_reason"] == "initializing"
+    assert payload["market_data_ok"] is False
+    assert payload["market_data_stale"] is False
+
+
 def test_system_metrics_endpoint(client, system_context):
     metrics = system_context.metrics
     metrics.record_plan(blocked_actions=2)

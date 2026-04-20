@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { KpiGrid, Kpi } from './components/KpiGrid';
 import { Layout } from './components/Layout';
 import { RiskPanel } from './components/RiskPanel';
@@ -296,8 +296,9 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
   const startupReloading = Boolean(
     !session?.active && (session?.reloading || session?.lifecycle === 'initializing'),
   );
+  const liveStrategyGuardrails = Boolean(session?.active && session.mode === 'live');
 
-  const updateRefreshIssue = (key: string, message: string | null) => {
+  const updateRefreshIssue = useCallback((key: string, message: string | null) => {
     setRefreshIssues((current) => {
       const next = { ...current };
       if (message) {
@@ -307,7 +308,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
       }
       return next;
     });
-  };
+  }, []);
 
   const requestDashboardResource = async <T,>(
     key: string,
@@ -326,7 +327,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
     }
   };
 
-  const loadSession = async () => {
+  const loadSession = useCallback(async () => {
     const sessionState = await fetchSessionState({ timeoutMs: ACTIVE_RESOURCE_TIMEOUT_MS });
 
     if (sessionState) {
@@ -355,7 +356,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
     setProfiles(profileSummaries);
     setStartupMlEnabled(extractMlEnabledFromConfig(systemConfig, sessionState?.ml_enabled ?? true));
     setSessionLoading(false);
-  };
+  }, [updateRefreshIssue]);
 
   useEffect(() => {
     let cancelled = false;
@@ -365,7 +366,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [loadSession]);
 
   useEffect(() => {
     if (session?.loop_interval_sec) {
@@ -388,7 +389,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
       cancelled = true;
       clearInterval(interval);
     };
-  }, [startupReloading]);
+  }, [startupReloading, loadSession]);
 
   useEffect(() => {
     if (!session?.active) return;
@@ -586,7 +587,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
       dashboardAbortRef.current?.abort();
       clearInterval(interval);
     };
-  }, [session?.active]);
+  }, [session?.active, updateRefreshIssue]);
 
   useEffect(() => {
     if (!health || !summary) return;
@@ -1058,9 +1059,25 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
     });
   };
 
+  const confirmLiveStrategyChange = (message: string) => {
+    if (!liveStrategyGuardrails) {
+      return true;
+    }
+    return window.confirm(message);
+  };
+
   const handleStrategyToggle = async (strategyId: string, enabled: boolean) => {
     if (health?.ui_read_only) {
       setStrategyFeedback('Backend is read-only. Strategy controls are disabled.');
+      return;
+    }
+
+    const confirmed = confirmLiveStrategyChange(
+      enabled
+        ? `Enable ${strategyId} in the active live session? This takes effect immediately and can change which strategy wins on overlapping signals.`
+        : `Disable ${strategyId} in the active live session? This removes one current signal source immediately and can change active conflict outcomes.`,
+    );
+    if (!confirmed) {
       return;
     }
 
@@ -1172,11 +1189,14 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
       return;
     }
 
-    setStrategyFeedback(null);
-    setStrategyBusyState(strategyId, true);
-
     const previousWeight =
       strategies.find((strategy) => strategy.strategy_id === strategyId)?.configured_weight ?? 100;
+    if (previousWeight === weight) {
+      return;
+    }
+
+    setStrategyFeedback(null);
+    setStrategyBusyState(strategyId, true);
 
     setStrategies((current) =>
       current.map((strategy) =>
@@ -1219,6 +1239,13 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
     );
     if (existingStarterIds.length === 0) {
       setStrategyFeedback('Starter strategies are not available on this profile yet.');
+      return;
+    }
+
+    const confirmed = confirmLiveStrategyChange(
+      'Restore the starter strategy pack? This re-enables the default starter strategies and resets each starter weight to 100 in the active session.',
+    );
+    if (!confirmed) {
       return;
     }
 
@@ -1744,6 +1771,9 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
                 className="ghost-button"
                 onClick={handleRestoreStarterStrategies}
                 disabled={Boolean(health?.ui_read_only)}
+                title={liveStrategyGuardrails
+                  ? 'Live change: restore the default starter pack and reset starter weights to 100.'
+                  : 'Re-enable the default beginner starter strategy pack.'}
               >
                 Restore starter pack
               </button>
@@ -1850,6 +1880,9 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
                 className="ghost-button"
                 onClick={handleRestoreStarterStrategies}
                 disabled={Boolean(health?.ui_read_only)}
+                title={liveStrategyGuardrails
+                  ? 'Live change: re-enable the starter pack and reset starter weights to 100.'
+                  : 'Re-enable the default beginner starter strategy pack.'}
               >
                 Re-enable starter pack
               </button>
@@ -1919,6 +1952,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
           learningSelections={strategyLearning}
           busy={strategyBusy}
           readOnly={Boolean(health?.ui_read_only)}
+          liveMode={liveStrategyGuardrails}
           feedback={strategyFeedback}
           onToggle={handleStrategyToggle}
           onWeightChange={handleStrategyWeightChange}

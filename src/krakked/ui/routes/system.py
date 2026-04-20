@@ -1053,15 +1053,22 @@ async def system_health(request: Request) -> ApiEnvelope[SystemHealthPayload]:
                 "market_data_max_staleness", market_data_max_staleness
             )
 
-        market_data_status = metrics_snapshot.get(
-            "market_data_status",
-            getattr(market_data_health, "health", None)
-            or (
+        if metrics_has_update:
+            market_data_status = metrics_snapshot.get(
+                "market_data_status",
+                getattr(market_data_health, "health", None)
+                or (
+                    "streaming"
+                    if market_data_ok
+                    else ("degraded" if market_data_stale else "unavailable")
+                ),
+            )
+        else:
+            market_data_status = getattr(market_data_health, "health", None) or (
                 "streaming"
                 if market_data_ok
                 else ("degraded" if market_data_stale else "unavailable")
-            ),
-        )
+            )
 
         execution_ok = (
             execution_config.mode != "live"

@@ -227,6 +227,12 @@ export function StartupScreen({
               <option value="live">Live</option>
             </select>
             <p className="field__hint">Trading remains paused until you hit Start.</p>
+            {mode === 'live' ? (
+              <p className="field__hint field__hint--warn">
+                Live is meant for cautious rollout. The shipped live example starts from a smaller enabled strategy set,
+                even though the full starter pack remains available later.
+              </p>
+            ) : null}
           </div>
 
           <div className="field">

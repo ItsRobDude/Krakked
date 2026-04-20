@@ -53,6 +53,9 @@ Krakked now boots with a conservative operator-first starter profile unless you 
   * `vol_breakout`
   * `majors_mean_rev`
   * `rs_rotation`
+* The shipped examples intentionally split defaults by environment:
+  * `paper` enables the full 4-strategy starter pack
+  * `live` keeps the same 4 starter strategies configured, but enables only `trend_core` and `majors_mean_rev` by default
 * ML is disabled by default until the operator explicitly opts in.
 * First-run risk defaults are explicit and conservative:
   * `max_open_positions: 4`

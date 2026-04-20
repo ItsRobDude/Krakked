@@ -11,13 +11,11 @@ portfolio:
 ui:
   read_only: true
 
-# In live env, keep the same starter pack, but remain validate-only by default.
+# In live env, keep the full starter pack available, but start from a smaller enabled set.
 strategies:
   enabled:
     - "trend_core"
-    - "vol_breakout"
     - "majors_mean_rev"
-    - "rs_rotation"
 
 ml:
   enabled: false

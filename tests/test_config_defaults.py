@@ -8,6 +8,7 @@ from krakked.config_loader import (
     DEFAULT_STARTER_PAIRS,
     DEFAULT_STARTER_STRATEGY_IDS,
     DEFAULT_STARTER_WS_TIMEFRAMES,
+    cleanup_active_config_chain,
 )
 
 
@@ -139,3 +140,98 @@ def test_load_config_ignores_empty_runtime_strategy_override_when_bootstrapping(
 
     assert app_config.strategies.enabled == DEFAULT_STARTER_STRATEGY_IDS
     assert "trend_core" in app_config.strategies.configs
+
+
+def test_cleanup_active_config_chain_normalizes_bootstrap_residue(
+    monkeypatch, tmp_path: Path
+):
+    config_dir = tmp_path / "config"
+    data_dir = tmp_path / "data"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    (config_dir / "config.yaml").write_text(
+        """
+execution:
+  mode: paper
+market_data:
+  ws_timeframes:
+  - 1m
+  - 5m
+ml:
+  enabled: true
+profiles:
+  Rob:
+    config_path: profiles\\Rob.yaml
+session:
+  profile_name: Rob
+""".strip()
+    )
+    (config_dir / "profiles").mkdir(parents=True, exist_ok=True)
+    (config_dir / "profiles" / "Rob.yaml").write_text(
+        """
+execution:
+  mode: paper
+ml:
+  enabled: true
+""".strip()
+    )
+    profile_runtime_dir = config_dir / "profiles" / "Rob"
+    profile_runtime_dir.mkdir(parents=True, exist_ok=True)
+    (profile_runtime_dir / "config.runtime.yaml").write_text(
+        """
+risk:
+  dynamic_allocation_enabled: false
+  dynamic_allocation_lookback_hours: 72
+  include_manual_positions: true
+  kill_switch_on_drift: true
+  max_daily_drawdown_pct: 10.0
+  max_open_positions: 10
+  max_per_asset_pct: 5.0
+  max_per_strategy_pct: {}
+  max_portfolio_risk_pct: 10.0
+  max_risk_per_trade_pct: 1.0
+  max_strategy_weight_pct: 50.0
+  min_liquidity_24h_usd: 100000.0
+  min_strategy_weight_pct: 0.0
+  volatility_lookback_bars: 20
+session:
+  profile_name: Rob
+strategies:
+  configs: {}
+  enabled: []
+""".strip()
+    )
+
+    monkeypatch.setattr(appdirs, "user_config_dir", lambda appname: config_dir)
+    monkeypatch.setattr(appdirs, "user_data_dir", lambda appname: data_dir)
+
+    first = cleanup_active_config_chain(config_dir)
+    second = cleanup_active_config_chain(config_dir)
+    app_config = load_config()
+
+    assert first == {"changed": True, "main": True, "profile": True, "runtime": True}
+    assert second == {
+        "changed": False,
+        "main": False,
+        "profile": False,
+        "runtime": False,
+    }
+
+    cleaned_main = load_config()
+    cleaned_profile = (config_dir / "profiles" / "Rob.yaml").read_text()
+    assert cleaned_main.ml.enabled is False
+    assert cleaned_main.market_data.ws_timeframes == DEFAULT_STARTER_WS_TIMEFRAMES
+    assert "enabled: true" not in cleaned_profile
+
+    runtime_path = profile_runtime_dir / "config.runtime.yaml"
+    runtime_text = runtime_path.read_text()
+    assert "strategies:" not in runtime_text
+    assert "risk:" not in runtime_text
+    assert "profile_name: Rob" in runtime_text
+
+    assert app_config.ml.enabled is False
+    assert app_config.market_data.ws_timeframes == DEFAULT_STARTER_WS_TIMEFRAMES
+    assert app_config.strategies.enabled == DEFAULT_STARTER_STRATEGY_IDS
+    assert app_config.risk.max_open_positions == 4
+    assert app_config.risk.max_per_strategy_pct["trend_core"] == 5.0

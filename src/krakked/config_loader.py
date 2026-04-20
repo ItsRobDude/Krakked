@@ -29,6 +29,7 @@ from krakked.config_models import (
 )
 from krakked.logging_config import get_log_environment, structured_log_extra
 from krakked.strategy.catalog import CANONICAL_STRATEGIES
+from krakked.utils.io import atomic_write, backup_file
 
 RUNTIME_OVERRIDES_FILENAME = "config.runtime.yaml"
 DEFAULT_STARTER_STRATEGY_IDS = [
@@ -179,6 +180,204 @@ def _load_yaml_mapping(path: Path) -> dict:
     if not isinstance(data, dict):
         return {}
     return data
+
+
+def _strategy_types_from_config(config_data: dict[str, Any]) -> set[str]:
+    strategies = config_data.get("strategies")
+    if not isinstance(strategies, dict):
+        return set()
+
+    configs = strategies.get("configs")
+    if not isinstance(configs, dict):
+        return set()
+
+    strategy_types: set[str] = set()
+    for strategy_cfg in configs.values():
+        if isinstance(strategy_cfg, dict):
+            strategy_type = strategy_cfg.get("type")
+            if isinstance(strategy_type, str) and strategy_type:
+                strategy_types.add(strategy_type)
+    return strategy_types
+
+
+def _uses_ml_strategies(*config_layers: dict[str, Any]) -> bool:
+    for config_layer in config_layers:
+        for strategy_type in _strategy_types_from_config(config_layer):
+            if strategy_type.startswith("machine_learning"):
+                return True
+    return False
+
+
+def _is_legacy_ws_timeframes(value: Any) -> bool:
+    if not isinstance(value, list):
+        return False
+    normalized = [str(item) for item in value]
+    return normalized == ["1m", "5m"]
+
+
+def _is_empty_strategy_override(value: Any) -> bool:
+    if not isinstance(value, dict):
+        return False
+    enabled = value.get("enabled")
+    configs = value.get("configs")
+    return isinstance(enabled, list) and len(enabled) == 0 and isinstance(configs, dict)
+
+
+def _is_bootstrap_risk_override(value: Any) -> bool:
+    if not isinstance(value, dict):
+        return False
+
+    expected = {
+        "dynamic_allocation_enabled": False,
+        "dynamic_allocation_lookback_hours": 72,
+        "include_manual_positions": True,
+        "kill_switch_on_drift": True,
+        "max_daily_drawdown_pct": 10.0,
+        "max_open_positions": 10,
+        "max_per_asset_pct": 5.0,
+        "max_per_strategy_pct": {},
+        "max_portfolio_risk_pct": 10.0,
+        "max_risk_per_trade_pct": 1.0,
+        "max_strategy_weight_pct": 50.0,
+        "min_liquidity_24h_usd": 100000.0,
+        "min_strategy_weight_pct": 0.0,
+        "volatility_lookback_bars": 20,
+    }
+    return value == expected
+
+
+def normalize_bootstrap_residue(
+    main_config: dict[str, Any],
+    profile_config: Optional[dict[str, Any]] = None,
+    runtime_overrides: Optional[dict[str, Any]] = None,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], bool]:
+    """Normalize clearly stale first-run residue back to the current starter defaults."""
+
+    normalized_main = dict(main_config or {})
+    normalized_profile = dict(profile_config or {})
+    normalized_overrides = dict(runtime_overrides or {})
+    changed = False
+
+    if (
+        isinstance(normalized_main.get("ml"), dict)
+        and normalized_main["ml"].get("enabled") is True
+        and not _uses_ml_strategies(normalized_main, normalized_profile, normalized_overrides)
+        and not _has_nonempty_strategy_config(normalized_main)
+        and not _has_nonempty_strategy_config(normalized_profile)
+    ):
+        normalized_main = dict(normalized_main)
+        normalized_main["ml"] = dict(normalized_main["ml"])
+        normalized_main["ml"]["enabled"] = False
+        changed = True
+
+    if (
+        isinstance(normalized_profile.get("ml"), dict)
+        and normalized_profile["ml"].get("enabled") is True
+        and not _uses_ml_strategies(normalized_main, normalized_profile, normalized_overrides)
+        and not _has_nonempty_strategy_config(normalized_profile)
+    ):
+        normalized_profile = dict(normalized_profile)
+        normalized_profile["ml"] = dict(normalized_profile["ml"])
+        normalized_profile["ml"]["enabled"] = False
+        changed = True
+
+    market_data = normalized_main.get("market_data")
+    if isinstance(market_data, dict) and _is_legacy_ws_timeframes(
+        market_data.get("ws_timeframes")
+    ):
+        normalized_main = dict(normalized_main)
+        normalized_main["market_data"] = dict(market_data)
+        normalized_main["market_data"]["ws_timeframes"] = list(
+            DEFAULT_STARTER_WS_TIMEFRAMES
+        )
+        changed = True
+
+    if "strategies" not in normalized_main and not _has_nonempty_strategy_config(
+        normalized_profile
+    ):
+        normalized_main = dict(normalized_main)
+        normalized_main["strategies"] = get_default_starter_strategies_config()
+        changed = True
+
+    if "risk" not in normalized_main:
+        normalized_main = dict(normalized_main)
+        normalized_main["risk"] = get_default_starter_risk_config()
+        changed = True
+
+    if _is_empty_strategy_override(normalized_overrides.get("strategies")):
+        normalized_overrides = dict(normalized_overrides)
+        normalized_overrides.pop("strategies", None)
+        changed = True
+
+    if _is_bootstrap_risk_override(normalized_overrides.get("risk")):
+        normalized_overrides = dict(normalized_overrides)
+        normalized_overrides.pop("risk", None)
+        changed = True
+
+    return normalized_main, normalized_profile, normalized_overrides, changed
+
+
+def cleanup_active_config_chain(
+    config_dir: Optional[Path] = None,
+) -> dict[str, Any]:
+    """Persist a safe cleanup of stale bootstrap residue for the active local config chain."""
+
+    target_dir = (config_dir or get_config_dir()).expanduser()
+    main_config_path = target_dir / "config.yaml"
+    main_config = _load_yaml_mapping(main_config_path)
+    if not main_config:
+        return {"changed": False, "main": False, "profile": False, "runtime": False}
+
+    session_data = main_config.get("session") or {}
+    profile_name = session_data.get("profile_name")
+    profiles_registry = main_config.get("profiles") or {}
+
+    profile_config_path: Optional[Path] = None
+    profile_config: dict[str, Any] = {}
+    if profile_name and profile_name in profiles_registry:
+        profile_entry = profiles_registry.get(profile_name) or {}
+        profile_path_str = profile_entry.get("config_path")
+        if isinstance(profile_path_str, str) and profile_path_str.strip():
+            profile_config_path = Path(profile_path_str)
+            if not profile_config_path.is_absolute():
+                profile_config_path = target_dir / profile_config_path
+            profile_config = _load_yaml_mapping(profile_config_path)
+
+    runtime_path = (
+        target_dir / "profiles" / profile_name / RUNTIME_OVERRIDES_FILENAME
+        if profile_name
+        else target_dir / RUNTIME_OVERRIDES_FILENAME
+    )
+    runtime_overrides = _load_yaml_mapping(runtime_path)
+
+    normalized_main, normalized_profile, normalized_runtime, changed = (
+        normalize_bootstrap_residue(main_config, profile_config, runtime_overrides)
+    )
+    if not changed:
+        return {"changed": False, "main": False, "profile": False, "runtime": False}
+
+    writes = {"changed": True, "main": False, "profile": False, "runtime": False}
+
+    if normalized_main != main_config:
+        backup_file(main_config_path)
+        atomic_write(main_config_path, normalized_main, dump_func=yaml.safe_dump)
+        writes["main"] = True
+
+    if profile_config_path and normalized_profile != profile_config:
+        backup_file(profile_config_path)
+        atomic_write(profile_config_path, normalized_profile, dump_func=yaml.safe_dump)
+        writes["profile"] = True
+
+    if normalized_runtime != runtime_overrides:
+        if runtime_overrides:
+            backup_file(runtime_path)
+        if normalized_runtime:
+            atomic_write(runtime_path, normalized_runtime, dump_func=yaml.safe_dump)
+        elif runtime_path.exists():
+            runtime_path.unlink()
+        writes["runtime"] = True
+
+    return writes
 
 
 def _coerce_strategy_weight(
