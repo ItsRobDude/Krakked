@@ -71,11 +71,13 @@ def test_get_data_status(
 
     # --- Test Case 2: REST API fails ---
     api._rest_client.get_public.side_effect = Exception("Connection failed")
+    api._last_rest_check_at = 0.0
     status = api.get_data_status()
     assert status.rest_api_reachable is False
 
     # --- Test Case 3: WebSocket is disconnected ---
     api._rest_client.get_public.side_effect = None  # Reset side effect
+    api._last_rest_check_at = 0.0
     type(mock_ws_instance).is_connected = PropertyMock(return_value=False)
     status = api.get_data_status()
     assert status.websocket_connected is False
@@ -88,11 +90,95 @@ def test_get_data_status(
     # Set the last update to be older than the tolerance
     mock_ws_instance.last_ticker_update_ts = {"XBTUSD": time.monotonic() - 120}
     mock_ws_instance.subscription_status = {"XBTUSD": {"ticker": {"status": "error"}}}
+    api._last_rest_check_at = 0.0
     status = api.get_data_status()
     assert status.websocket_connected is True
     assert status.streaming_pairs == 0
     assert status.stale_pairs == 1
     assert status.subscription_errors == 1
+
+
+@patch("krakked.market_data.api.build_universe")
+@patch("krakked.market_data.api.KrakenWSClientV2")
+@patch("krakked.market_data.api.FileOHLCStore")
+def test_get_data_status_treats_fresh_ohlc_as_active_stream(
+    mock_store, mock_ws_client_class, mock_build_universe, mock_config
+):
+    mock_pair = MagicMock()
+    mock_pair.canonical = "ADAUSD"
+    mock_build_universe.return_value = [mock_pair]
+
+    api = MarketDataAPI(mock_config)
+    api.initialize(backfill=False)
+    api._rest_client = MagicMock()
+    api._rest_client.get_public.return_value = {}
+
+    mock_ws_instance = mock_ws_client_class.return_value
+    type(mock_ws_instance).is_connected = PropertyMock(return_value=True)
+    mock_ws_instance.last_ticker_update_ts = {"ADAUSD": time.monotonic() - 120}
+    mock_ws_instance.last_ohlc_update_ts = {"ADAUSD": {"1m": time.monotonic()}}
+    mock_ws_instance.subscription_status = {}
+    mock_ws_instance._live_ohlc_timeframes = ["1m"]
+    api._ws_client = mock_ws_instance
+
+    status = api.get_data_status()
+
+    assert status.streaming_pairs == 1
+    assert status.stale_pairs == 0
+
+
+def test_get_health_status_uses_live_ohlc_to_avoid_false_stale(mock_config):
+    api = MarketDataAPI(mock_config)
+    pair = MagicMock()
+    pair.canonical = "ADAUSD"
+    pair.ws_symbol = "ADA/USD"
+    api._universe = [pair]
+    api._universe_map = {"ADAUSD": pair}
+
+    api._rest_client = MagicMock()
+    api._rest_client.get_public.return_value = {}
+    api._last_rest_reachable = True
+    api._last_rest_check_at = time.time()
+
+    mock_ws = MagicMock()
+    type(mock_ws).is_connected = PropertyMock(return_value=True)
+    mock_ws.last_ticker_update_ts = {"ADAUSD": time.monotonic() - 120}
+    mock_ws.last_ohlc_update_ts = {"ADAUSD": {"1m": time.monotonic()}}
+    mock_ws.subscription_status = {}
+    mock_ws._live_ohlc_timeframes = ["1m"]
+    api._ws_client = mock_ws
+
+    status = api.get_health_status()
+
+    assert status.health == "streaming"
+    assert status.reason == "streaming"
+
+
+def test_get_health_status_allows_minute_ohlc_jitter_within_two_candles(mock_config):
+    api = MarketDataAPI(mock_config)
+    pair = MagicMock()
+    pair.canonical = "ADAUSD"
+    pair.ws_symbol = "ADA/USD"
+    api._universe = [pair]
+    api._universe_map = {"ADAUSD": pair}
+
+    api._rest_client = MagicMock()
+    api._rest_client.get_public.return_value = {}
+    api._last_rest_reachable = True
+    api._last_rest_check_at = time.time()
+
+    mock_ws = MagicMock()
+    type(mock_ws).is_connected = PropertyMock(return_value=True)
+    mock_ws.last_ticker_update_ts = {"ADAUSD": time.monotonic() - 150}
+    mock_ws.last_ohlc_update_ts = {"ADAUSD": {"1m": time.monotonic() - 75}}
+    mock_ws.subscription_status = {}
+    mock_ws._live_ohlc_timeframes = ["1m"]
+    api._ws_client = mock_ws
+
+    status = api.get_health_status()
+
+    assert status.health == "streaming"
+    assert status.reason == "streaming"
 
 
 @patch("krakked.market_data.api.build_universe")

@@ -566,6 +566,68 @@ class MarketDataAPI:
 
         return True, stale_time
 
+    def _ohlc_freshness(self, pair: str) -> Tuple[bool, float]:
+        """
+        Returns whether any configured live OHLC stream for the pair is fresh
+        alongside the freshest observed staleness value. A missing client or
+        missing update yields a staleness of -1.
+        """
+        if not self._ws_client:
+            return False, -1
+
+        live_timeframes = getattr(self._ws_client, "_live_ohlc_timeframes", None) or []
+        freshest_stale_time = -1.0
+
+        for timeframe in live_timeframes:
+            last_update = self._ws_client.last_ohlc_update_ts.get(pair, {}).get(timeframe)
+            if not last_update:
+                continue
+
+            stale_time = time.monotonic() - last_update
+            timeframe_tolerance = max(
+                self._ws_stale_tolerance, self._timeframe_seconds(timeframe) * 2.0
+            )
+            freshest_stale_time = (
+                stale_time
+                if freshest_stale_time < 0
+                else min(freshest_stale_time, stale_time)
+            )
+            if stale_time <= timeframe_tolerance:
+                return True, stale_time
+
+        return False, freshest_stale_time
+
+    def _timeframe_seconds(self, timeframe: str) -> float:
+        if timeframe.endswith("m"):
+            return float(int(timeframe[:-1]) * 60)
+        if timeframe.endswith("h"):
+            return float(int(timeframe[:-1]) * 3600)
+        if timeframe.endswith("d"):
+            return float(int(timeframe[:-1]) * 86400)
+        return float(self._ws_stale_tolerance)
+
+    def _pair_stream_freshness(self, pair: str) -> Tuple[bool, float]:
+        """
+        Returns whether any live market-data stream for a pair is still fresh.
+
+        We prefer ticker freshness when available, but a fresh live OHLC stream
+        is also enough to treat the pair as active. This avoids classifying a
+        pair as stale when only the ticker channel is lagging.
+        """
+        ticker_fresh, ticker_stale = self._ticker_freshness(pair)
+        if ticker_fresh:
+            return True, ticker_stale
+
+        ohlc_fresh, ohlc_stale = self._ohlc_freshness(pair)
+        if ohlc_fresh:
+            return True, ohlc_stale
+
+        stale_candidates = [value for value in (ticker_stale, ohlc_stale) if value >= 0]
+        if not stale_candidates:
+            return False, -1
+
+        return False, min(stale_candidates)
+
     def _check_ticker_staleness(self, pair: str):
         # pair is expected to be canonical when calling this internal helper from normalized public methods
         is_fresh, stale_time = self._ticker_freshness(pair)
@@ -687,10 +749,10 @@ class MarketDataAPI:
         subscription_errors = 0
         if ws_connected:
             for pair_meta in self._universe:
-                try:
-                    self._check_ticker_staleness(pair_meta.canonical)
+                is_fresh, _ = self._pair_stream_freshness(pair_meta.canonical)
+                if is_fresh:
                     streaming_count += 1
-                except DataStaleError:
+                else:
                     stale_count += 1
         else:
             stale_count = len(self._universe)
@@ -739,7 +801,7 @@ class MarketDataAPI:
         market_data_detail: Optional[str] = None
 
         for pair_meta in self._universe:
-            is_fresh, stale_time = self._ticker_freshness(pair_meta.canonical)
+            is_fresh, stale_time = self._pair_stream_freshness(pair_meta.canonical)
             if stale_time >= 0:
                 max_staleness = (
                     stale_time

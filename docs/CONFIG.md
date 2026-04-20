@@ -40,6 +40,27 @@ PY)"/
 
 You can keep all files side by side in the config directory; the loader will automatically read the base file plus the environment-specific overlay.
 
+## Current operator defaults
+
+Krakked now boots with a conservative operator-first starter profile unless you override it:
+
+* Execution defaults to `paper` with validate-only order handling.
+* The starter universe is limited to `BTC/USD`, `ETH/USD`, `SOL/USD`, and `ADA/USD`.
+* Historical backfill defaults to `1h` and `4h`.
+* Live websocket OHLC defaults to a single `1m` stream.
+* The enabled starter strategy pack is:
+  * `trend_core`
+  * `vol_breakout`
+  * `majors_mean_rev`
+  * `rs_rotation`
+* ML is disabled by default until the operator explicitly opts in.
+* First-run risk defaults are explicit and conservative:
+  * `max_open_positions: 4`
+  * `max_risk_per_trade_pct: 1.0`
+  * `max_portfolio_risk_pct: 10.0`
+  * `max_per_asset_pct: 5.0`
+  * `max_per_strategy_pct: 5.0` for each starter strategy
+
 ## Environment selection
 
 Set `KRAKKED_ENV` to choose which overlay is applied:

@@ -3,7 +3,12 @@ from pathlib import Path
 import appdirs  # type: ignore[import-untyped]
 
 from krakked.config import get_config_dir, load_config
-from krakked.config_loader import DEFAULT_STARTER_STRATEGY_IDS
+from krakked.config_loader import (
+    DEFAULT_STARTER_BACKFILL_TIMEFRAMES,
+    DEFAULT_STARTER_PAIRS,
+    DEFAULT_STARTER_STRATEGY_IDS,
+    DEFAULT_STARTER_WS_TIMEFRAMES,
+)
 
 
 def test_load_config_sets_default_ohlc_store(monkeypatch, tmp_path: Path):
@@ -98,6 +103,13 @@ def test_load_config_applies_default_starter_strategies_when_missing(
     assert app_config.strategies.enabled == DEFAULT_STARTER_STRATEGY_IDS
     assert set(app_config.strategies.configs) == set(DEFAULT_STARTER_STRATEGY_IDS)
     assert app_config.strategies.configs["trend_core"].enabled is True
+    assert app_config.ml.enabled is False
+    assert app_config.universe.include_pairs == DEFAULT_STARTER_PAIRS
+    assert app_config.universe.min_24h_volume_usd == 100000.0
+    assert app_config.market_data.backfill_timeframes == DEFAULT_STARTER_BACKFILL_TIMEFRAMES
+    assert app_config.market_data.ws_timeframes == DEFAULT_STARTER_WS_TIMEFRAMES
+    assert app_config.risk.max_open_positions == 4
+    assert app_config.risk.max_per_strategy_pct["trend_core"] == 5.0
 
 
 def test_load_config_ignores_empty_runtime_strategy_override_when_bootstrapping(

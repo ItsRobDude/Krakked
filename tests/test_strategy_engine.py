@@ -11,6 +11,7 @@ from krakked.portfolio.manager import PortfolioService
 from krakked.portfolio.models import EquityView, SpotPosition
 from krakked.strategy.base import Strategy
 from krakked.strategy.engine import StrategyRiskEngine
+from krakked.strategy.strategies.demo_strategy import TrendFollowingStrategy
 from krakked.strategy.models import (
     DecisionRecord,
     RiskAdjustedAction,
@@ -64,6 +65,11 @@ def test_engine_cycle():
     portfolio.store.get_snapshots.return_value = []
     portfolio.get_positions.return_value = []
     portfolio.get_asset_exposure.return_value = []
+    portfolio.get_cached_equity.return_value = portfolio.get_equity.return_value
+    portfolio.get_cached_asset_exposure.return_value = []
+    portfolio.get_cached_positions.return_value = []
+    portfolio.get_cached_drift_status.return_value = None
+    portfolio.config = SimpleNamespace(base_currency="USD")
 
     # Mock OHLC for strategy
     from dataclasses import dataclass
@@ -167,6 +173,18 @@ def test_data_stale_error_skips_timeframe():
     portfolio = MagicMock(spec=PortfolioService)
     portfolio.record_execution_plan = MagicMock()
     portfolio.store = MagicMock()
+    portfolio.store.get_snapshots.return_value = []
+    portfolio.get_cached_equity.return_value = EquityView(
+        equity_base=10000.0,
+        cash_base=10000.0,
+        realized_pnl_base_total=0.0,
+        unrealized_pnl_base_total=0.0,
+        drift_flag=False,
+    )
+    portfolio.get_cached_asset_exposure.return_value = []
+    portfolio.get_cached_positions.return_value = []
+    portfolio.get_cached_drift_status.return_value = None
+    portfolio.config = SimpleNamespace(base_currency="USD")
 
     engine = StrategyRiskEngine(app_config, market, portfolio)
     engine._data_ready = MagicMock(return_value=True)
@@ -214,6 +232,50 @@ def test_data_stale_error_skips_timeframe():
     assert state.pnl_summary["realized_pnl_usd"] == 0.0
 
 
+def test_trend_following_ignores_missing_liquidity_metadata():
+    strat_config = StrategyConfig(
+        name="trend_core",
+        type="trend_following",
+        enabled=True,
+        params={"timeframes": ["1h"], "ma_fast": 5, "ma_slow": 10},
+    )
+    strategy = TrendFollowingStrategy(strat_config)
+
+    market = MagicMock(spec=MarketDataAPI)
+    market.get_pair_metadata.return_value = MagicMock(liquidity_24h_usd=None)
+
+    from dataclasses import dataclass
+
+    @dataclass
+    class MockBar:
+        close: float
+
+    prices = [100 + i for i in range(20)]
+    market.get_ohlc.side_effect = [
+        [MockBar(close=p) for p in prices],
+        [MockBar(close=p) for p in prices],
+    ]
+
+    portfolio = MagicMock(spec=PortfolioService)
+    portfolio.app_config = MagicMock()
+    portfolio.app_config.risk = RiskConfig(min_liquidity_24h_usd=100000.0)
+    portfolio.get_positions.return_value = []
+
+    ctx = SimpleNamespace(
+        timeframe="1h",
+        universe=["XBTUSD"],
+        market_data=market,
+        portfolio=portfolio,
+        regime=None,
+        now=datetime.now(timezone.utc),
+    )
+
+    intents = strategy.generate_intents(ctx)
+
+    assert len(intents) == 1
+    assert intents[0].pair == "XBTUSD"
+
+
 def test_actions_inherit_userref_and_persist_in_execution_plan():
     class FakeStrategy(Strategy):
         def warmup(self, market_data, portfolio):
@@ -259,6 +321,18 @@ def test_actions_inherit_userref_and_persist_in_execution_plan():
     portfolio.record_execution_plan = MagicMock()
     portfolio.record_decision = MagicMock()
     portfolio.store = MagicMock()
+    portfolio.store.get_snapshots.return_value = []
+    portfolio.get_cached_equity.return_value = EquityView(
+        equity_base=10000.0,
+        cash_base=10000.0,
+        realized_pnl_base_total=0.0,
+        unrealized_pnl_base_total=0.0,
+        drift_flag=False,
+    )
+    portfolio.get_cached_asset_exposure.return_value = []
+    portfolio.get_cached_positions.return_value = []
+    portfolio.get_cached_drift_status.return_value = None
+    portfolio.config = SimpleNamespace(base_currency="USD")
 
     engine = StrategyRiskEngine(app_config, market, portfolio)
     engine._data_ready = MagicMock(return_value=True)

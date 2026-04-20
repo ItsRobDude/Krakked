@@ -37,6 +37,15 @@ DEFAULT_STARTER_STRATEGY_IDS = [
     "majors_mean_rev",
     "rs_rotation",
 ]
+DEFAULT_STARTER_PAIRS = ["BTC/USD", "ETH/USD", "SOL/USD", "ADA/USD"]
+DEFAULT_STARTER_BACKFILL_TIMEFRAMES = ["1h", "4h"]
+DEFAULT_STARTER_WS_TIMEFRAMES = ["1m"]
+DEFAULT_STARTER_STRATEGY_LIMITS: Dict[str, float] = {
+    "trend_core": 5.0,
+    "vol_breakout": 5.0,
+    "majors_mean_rev": 5.0,
+    "rs_rotation": 5.0,
+}
 
 logger = logging.getLogger(__name__)
 
@@ -120,6 +129,23 @@ def get_default_starter_strategies_config() -> Dict[str, Any]:
     return {
         "enabled": list(DEFAULT_STARTER_STRATEGY_IDS),
         "configs": configs,
+    }
+
+
+def get_default_starter_risk_config() -> Dict[str, Any]:
+    """Return explicit first-run risk defaults for the starter pack."""
+
+    return {
+        "max_risk_per_trade_pct": 1.0,
+        "max_portfolio_risk_pct": 10.0,
+        "max_open_positions": 4,
+        "max_per_asset_pct": 5.0,
+        "max_per_strategy_pct": dict(DEFAULT_STARTER_STRATEGY_LIMITS),
+        "max_daily_drawdown_pct": 10.0,
+        "kill_switch_on_drift": True,
+        "include_manual_positions": True,
+        "volatility_lookback_bars": 20,
+        "min_liquidity_24h_usd": 100000.0,
     }
 
 
@@ -571,6 +597,7 @@ def parse_app_config(
         )
         capabilities_data = {}
 
+    risk_declared = "risk" in raw_config
     risk_data = raw_config.get("risk") or {}
     if not isinstance(risk_data, dict):
         logger.warning(
@@ -578,6 +605,15 @@ def parse_app_config(
             extra={"event": "config_invalid_risk", "config_path": str(config_path)},
         )
         risk_data = {}
+    if not risk_declared:
+        risk_data = get_default_starter_risk_config()
+        logger.info(
+            "No risk block found; applying starter risk defaults",
+            extra={
+                "event": "config_default_starter_risk",
+                "config_path": str(config_path),
+            },
+        )
 
     # Parsing Strategies Config
     strategies_declared = "strategies" in raw_config
@@ -694,8 +730,8 @@ def parse_app_config(
     # ML Enablement Precedence:
     # 1. ml.enabled (if present in config)
     # 2. session.ml_enabled (legacy fallback)
-    # 3. default True
-    ml_enabled_value: bool = True
+    # 3. default False
+    ml_enabled_value: bool = False
     if "enabled" in ml_data:
         ml_enabled_value = bool(ml_data["enabled"])
     elif "ml_enabled" in session_data:
@@ -1137,17 +1173,21 @@ def parse_app_config(
             ),
         ),
         universe=UniverseConfig(
-            include_pairs=universe_data.get("include_pairs", []),
+            include_pairs=universe_data.get(
+                "include_pairs", list(DEFAULT_STARTER_PAIRS)
+            ),
             exclude_pairs=universe_data.get("exclude_pairs", []),
-            min_24h_volume_usd=universe_data.get("min_24h_volume_usd", 0.0),
+            min_24h_volume_usd=universe_data.get("min_24h_volume_usd", 100000.0),
         ),
         market_data=MarketDataConfig(
             ws=market_data.get("ws", {}),
             ohlc_store=merged_ohlc_store,
             backfill_timeframes=market_data.get(
-                "backfill_timeframes", ["1d", "4h", "1h"]
+                "backfill_timeframes", list(DEFAULT_STARTER_BACKFILL_TIMEFRAMES)
             ),
-            ws_timeframes=market_data.get("ws_timeframes", ["1m"]),
+            ws_timeframes=market_data.get(
+                "ws_timeframes", list(DEFAULT_STARTER_WS_TIMEFRAMES)
+            ),
             metadata_path=market_data.get("metadata_path"),
         ),
         portfolio=portfolio_config,

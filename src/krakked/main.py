@@ -17,6 +17,8 @@ from krakked.bootstrap import CredentialBootstrapError, bootstrap
 from krakked.config_loader import (
     dump_runtime_overrides,
     get_default_ohlc_store_config,
+    get_default_starter_risk_config,
+    get_default_starter_strategies_config,
     get_config_dir,
     get_initial_ui_config,
     load_config,
@@ -491,7 +493,7 @@ class BotController:
                         "ws": {},
                         "ohlc_store": get_default_ohlc_store_config(),
                         "backfill_timeframes": ["1h", "4h"],
-                        "ws_timeframes": ["1m", "5m"],
+                        "ws_timeframes": ["1m"],
                     },
                     "execution": {
                         "mode": "paper",
@@ -504,9 +506,9 @@ class BotController:
                         "loop_interval_sec": 15.0,
                         "profile_name": None,
                     },
-                    "ml": {
-                        "enabled": True,
-                    },
+                    "ml": {"enabled": False},
+                    "risk": get_default_starter_risk_config(),
+                    "strategies": get_default_starter_strategies_config(),
                 },
                 config_dir=config_dir,
             )
@@ -663,7 +665,7 @@ class BotController:
                             "ws": {},
                             "ohlc_store": get_default_ohlc_store_config(),
                             "backfill_timeframes": ["1h", "4h"],
-                            "ws_timeframes": ["1m", "5m"],
+                            "ws_timeframes": ["1m"],
                         },
                         "execution": {
                             "mode": "paper",
@@ -676,9 +678,9 @@ class BotController:
                             "loop_interval_sec": 15.0,
                             "profile_name": None,
                         },
-                        "ml": {
-                            "enabled": True,
-                        },
+                        "ml": {"enabled": False},
+                        "risk": get_default_starter_risk_config(),
+                        "strategies": get_default_starter_strategies_config(),
                     },
                     config_dir=config_dir,
                 )

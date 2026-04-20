@@ -463,9 +463,11 @@ def test_setup_config_updates_existing_bootstrap_config(
     assert config_data["universe"]["include_pairs"] == ["BTC/USD"]
     assert config_data["execution"]["mode"] == "paper"
     assert config_data["session"]["account_id"] == "default"
-    assert config_data["ml"]["enabled"] is True
+    assert config_data["ml"]["enabled"] is False
+    assert config_data["risk"]["max_open_positions"] == 4
+    assert config_data["risk"]["max_per_strategy_pct"]["trend_core"] == 5.0
     assert config_data["market_data"]["backfill_timeframes"] == ["1h", "4h"]
-    assert config_data["market_data"]["ws_timeframes"] == ["1m", "5m"]
+    assert config_data["market_data"]["ws_timeframes"] == ["1m"]
 
 
 def test_setup_config_uses_starter_universe_when_none_provided(
@@ -518,7 +520,7 @@ def test_setup_config_preserves_ws_style_pairs(
     assert config_data["universe"]["include_pairs"] == ["BTC/USD", "ETH/USD"]
     assert config_data["universe"]["min_24h_volume_usd"] == 100000.0
     assert config_data["market_data"]["backfill_timeframes"] == ["1h", "4h"]
-    assert config_data["market_data"]["ws_timeframes"] == ["1m", "5m"]
+    assert config_data["market_data"]["ws_timeframes"] == ["1m"]
 
 
 def test_setup_config_preserves_existing_custom_sections(
@@ -572,7 +574,7 @@ def test_setup_config_upgrades_legacy_bootstrap_defaults(
                 },
                 "execution": {"mode": "paper"},
                 "session": {"account_id": "default"},
-                "ml": {"enabled": True},
+                "ml": {"enabled": False},
             }
         )
     )
@@ -595,6 +597,8 @@ def test_setup_config_upgrades_legacy_bootstrap_defaults(
     ]
     assert config_data["universe"]["min_24h_volume_usd"] == 100000.0
     assert config_data["market_data"]["backfill_timeframes"] == ["1h", "4h"]
+    assert config_data["market_data"]["ws_timeframes"] == ["1m"]
+    assert config_data["ml"]["enabled"] is False
 
 
 @pytest.mark.parametrize("ui_read_only", [False])

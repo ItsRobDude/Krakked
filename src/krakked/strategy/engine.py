@@ -288,6 +288,13 @@ class StrategyEngine:
         day_ago = now_ts - 86400
         snapshots = self.portfolio.store.get_snapshots(since=day_ago)
         current_equity = cached_equity.equity_base
+        drift_flag = bool(cached_equity.drift_flag)
+        drift_info = {
+            "expected_position_value_base": None,
+            "actual_balance_value_base": None,
+            "tolerance_base": None,
+            "mismatched_assets": [],
+        }
         max_equity_24h = (
             max([current_equity] + [snapshot.equity_base for snapshot in snapshots])
             if snapshots
@@ -296,11 +303,27 @@ class StrategyEngine:
         if max_equity_24h > 0:
             drawdown_pct = ((max_equity_24h - current_equity) / max_equity_24h) * 100.0
 
+        if drift_status is not None:
+            drift_flag = bool(drift_flag or getattr(drift_status, "drift_flag", False))
+            drift_info = {
+                "expected_position_value_base": getattr(
+                    drift_status, "expected_position_value_base", None
+                ),
+                "actual_balance_value_base": getattr(
+                    drift_status, "actual_balance_value_base", None
+                ),
+                "tolerance_base": getattr(drift_status, "tolerance_base", None),
+                "mismatched_assets": [
+                    asdict(asset)
+                    for asset in (getattr(drift_status, "mismatched_assets", []) or [])
+                ],
+            }
+
         self._cached_risk_status = RiskStatus(
             kill_switch_active=self.risk_engine._kill_switch_active
             or self.risk_engine._manual_kill_switch_active,
             daily_drawdown_pct=drawdown_pct,
-            drift_flag=bool(cached_equity.drift_flag or drift_status.drift_flag),
+            drift_flag=drift_flag,
             total_exposure_pct=total_exposure_pct,
             manual_exposure_pct=manual_exposure_pct,
             per_asset_exposure_pct={
@@ -308,14 +331,7 @@ class StrategyEngine:
                 for exp in cached_exposures
             },
             per_strategy_exposure_pct=per_strategy_exposure_pct,
-            drift_info={
-                "expected_position_value_base": drift_status.expected_position_value_base,
-                "actual_balance_value_base": drift_status.actual_balance_value_base,
-                "tolerance_base": drift_status.tolerance_base,
-                "mismatched_assets": [
-                    asdict(asset) for asset in drift_status.mismatched_assets
-                ],
-            },
+            drift_info=drift_info,
         )
         self._cached_strategy_state = [
             StrategyState(

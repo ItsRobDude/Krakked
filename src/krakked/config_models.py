@@ -200,7 +200,7 @@ class StrategiesConfig:
 
 @dataclass
 class MLConfig:
-    enabled: bool = True
+    enabled: bool = False
     training_window_examples: int = 5000
     catch_up_max_days: int = 7
     catch_up_max_bars: int = 500

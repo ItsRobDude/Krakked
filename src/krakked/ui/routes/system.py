@@ -26,6 +26,7 @@ from krakked.config_loader import (
     _load_yaml_mapping,
     _resolve_effective_env,
     get_default_ohlc_store_config,
+    get_default_starter_risk_config,
     get_default_starter_strategies_config,
     get_initial_ui_config,
     parse_app_config,
@@ -67,7 +68,7 @@ router = APIRouter()
 STARTER_SETUP_PAIRS = ["BTC/USD", "ETH/USD", "SOL/USD", "ADA/USD"]
 STARTER_SETUP_MIN_LIQUIDITY_USD = 100000.0
 STARTER_SETUP_BACKFILL_TIMEFRAMES = ["1h", "4h"]
-STARTER_SETUP_WS_TIMEFRAMES = ["1m", "5m"]
+STARTER_SETUP_WS_TIMEFRAMES = ["1m"]
 
 
 class CredentialPayload(BaseModel):
@@ -146,8 +147,8 @@ def _build_setup_config_data(
         "ui": get_initial_ui_config(),
         # Initialize with default session account
         "session": {"account_id": "default"},
-        # Default ML config
-        "ml": {"enabled": True},
+        "ml": {"enabled": False},
+        "risk": get_default_starter_risk_config(),
         "strategies": get_default_starter_strategies_config(),
     }
 

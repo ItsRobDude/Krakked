@@ -8,9 +8,12 @@ region:
   default_quote: "USD"
 
 universe:
-  # Empty list (or omit) means let universe discovery include everything that
-  # meets the liquidity filter for the region/profile.
-  include_pairs: []
+  # Default operator starter universe. Expand later once you are comfortable.
+  include_pairs:
+    - "BTC/USD"
+    - "ETH/USD"
+    - "SOL/USD"
+    - "ADA/USD"
 
   # Keep empty for US_CA if you want the broadest possible coverage.
   exclude_pairs: []
@@ -27,7 +30,6 @@ market_data:
     - "4h"
   ws_timeframes:
     - "1m"
-    - "5m"
   metadata_path: "~/.local/share/krakked/metadata.json"
 
 portfolio:
@@ -64,17 +66,13 @@ execution:
 risk:
   max_risk_per_trade_pct: 1.0
   max_portfolio_risk_pct: 10.0
-  max_open_positions: 10
+  max_open_positions: 4
   max_per_asset_pct: 5.0
   max_per_strategy_pct:
-    trend_core: 40.0
-    dca_overlay: 20.0
-    vol_breakout: 10.0
-    majors_mean_rev: 10.0
-    rs_rotation: 20.0
-    ai_predictor: 10.0
-    ai_predictor_alt: 5.0
-    ai_regression: 5.0
+    trend_core: 5.0
+    vol_breakout: 5.0
+    majors_mean_rev: 5.0
+    rs_rotation: 5.0
     manual: 20.0
   max_daily_drawdown_pct: 10.0
   kill_switch_on_drift: true
@@ -85,12 +83,9 @@ risk:
 strategies:
   enabled:
     - "trend_core"
-    - "dca_overlay"
     - "vol_breakout"
     - "majors_mean_rev"
-    - "ai_predictor"
-    # - "ai_predictor_alt"
-    # - "ai_regression"
+    - "rs_rotation"
   configs:
     trend_core:
       name: "trend_core"
@@ -107,55 +102,40 @@ strategies:
         min_trend_strength_bps: 15
       userref: 1001
 
-    dca_overlay:
-      name: "dca_overlay"
-      type: "dca_rebalance"
-      enabled: true
-      params:
-        pairs: ["BTC/USD", "ETH/USD"]
-        target_weights:
-          "BTC/USD": 0.6
-          "ETH/USD": 0.4
-        rebalance_threshold_pct: 5.0
-        dca_interval_minutes: 240
-        dca_notional_usd: 100.0
-      userref: 1002
-
     vol_breakout:
       name: "vol_breakout"
       type: "vol_breakout"
-      enabled: false   # off by default; user can turn on later
+      enabled: true
       params:
-        pairs: []                # full universe
+        pairs: ["BTC/USD", "ETH/USD", "SOL/USD", "ADA/USD"]
         timeframes: ["15m", "1h"]
         lookback_bars: 20
         min_compression_bps: 10.0
         breakout_multiple: 1.5
-      userref: 1003
+      userref: 1002
 
     majors_mean_rev:
       name: "majors_mean_rev"
       type: "mean_reversion"
-      enabled: false
+      enabled: true
       params:
         pairs: ["BTC/USD", "ETH/USD"]
         timeframe: "1h"
         lookback_bars: 50
         band_width_bps: 150
+      userref: 1003
 
-    ai_predictor:
-      name: "ai_predictor"
-      type: "machine_learning"
+    rs_rotation:
+      name: "rs_rotation"
+      type: "relative_strength"
       enabled: true
       params:
-        pairs: []                # full discovered universe
-        timeframe: "1h"
-        lookback_bars: 60
-        short_window: 5
-        long_window: 20
-        target_exposure_usd: null
-        continuous_learning: true
-        max_positions: 2            # per-strategy cap; risk.max_open_positions still applies
+        pairs: ["BTC/USD", "ETH/USD", "SOL/USD", "ADA/USD"]
+        lookback_bars: 42
+        timeframe: "4h"
+        rebalance_interval_hours: 24
+        top_n: 2
+        total_allocation_pct: 20.0
       userref: 1004
 
     ai_predictor_alt:
@@ -188,19 +168,6 @@ strategies:
         max_positions: 2            # per-strategy cap; risk.max_open_positions still applies
       userref: 1102
 
-    rs_rotation:
-      name: "rs_rotation"
-      type: "relative_strength"
-      enabled: false
-      params:
-        pairs: ["BTC/USD", "ETH/USD", "SOL/USD", "ADA/USD"]
-        lookback_bars: 42
-        timeframe: "4h"
-        rebalance_interval_hours: 24
-        top_n: 2
-        total_allocation_pct: 20.0
-      userref: 1005
-
 ui:
   enabled: true
   host: "127.0.0.1"
@@ -214,3 +181,6 @@ ui:
     dashboard_ms: 5000
     orders_ms: 5000
     strategies_ms: 10000
+
+ml:
+  enabled: false
