@@ -1,3 +1,4 @@
+import json
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
@@ -382,6 +383,104 @@ def test_system_metrics_reports_snapshot_payload(client, system_context):
     assert payload["market_data_stale"] is False
     assert payload["market_data_reason"] is None
     assert payload["market_data_max_staleness"] == 1.25
+
+
+def test_latest_replay_endpoint_reports_unavailable_when_missing(
+    client, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    import krakked.ui.routes.system as system_routes
+
+    monkeypatch.setattr(system_routes, "get_config_dir", lambda: tmp_path)
+
+    response = client.get("/api/system/replay/latest")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["error"] is None
+    assert payload["data"]["available"] is False
+
+
+def test_latest_replay_endpoint_returns_compact_summary(
+    client, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    import krakked.ui.routes.system as system_routes
+
+    monkeypatch.setattr(system_routes, "get_config_dir", lambda: tmp_path)
+    report_path = tmp_path / "reports" / "backtests" / "latest.json"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(
+        json.dumps(
+            {
+                "report_version": 1,
+                "generated_at": "2026-04-20T20:00:00Z",
+                "summary": {
+                    "ending_equity_usd": 10120.0,
+                    "absolute_pnl_usd": 120.0,
+                    "return_pct": 1.2,
+                    "max_drawdown_pct": 4.5,
+                    "filled_orders": 3,
+                    "blocked_actions": 1,
+                    "execution_errors": 0,
+                    "blocked_reason_counts": {"Max open positions reached (1)": 1},
+                    "cost_model": "Immediate candle-close fills using configured slippage and flat taker fees.",
+                    "trust_level": "limited",
+                    "trust_note": "Limited signal: some strategy actions were blocked by guardrails.",
+                    "notable_warnings": ["Most strategy actions were blocked by guardrails."],
+                    "usable_series_count": 1,
+                    "missing_series": [],
+                    "partial_series": ["BTC/USD@1h"],
+                    "per_strategy": {"majors_mean_rev": {"realized_pnl_usd": 60.0}},
+                    "replay_inputs": {
+                        "start": "2026-04-01T00:00:00Z",
+                        "end": "2026-04-20T00:00:00Z",
+                        "enabled_strategies": ["majors_mean_rev"],
+                        "fee_bps": 25.0,
+                        "slippage_bps": 50.0,
+                    },
+                },
+                "preflight": {
+                    "status": "limited",
+                    "usable_series_count": 1,
+                    "missing_series": [],
+                    "partial_series": ["BTC/USD@1h"],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    response = client.get("/api/system/replay/latest")
+
+    assert response.status_code == 200
+    payload = response.json()["data"]
+    assert payload["available"] is True
+    assert payload["generated_at"] == "2026-04-20T20:00:00Z"
+    assert payload["trust_level"] == "limited"
+    assert payload["end_equity_usd"] == 10120.0
+    assert payload["pnl_usd"] == 120.0
+    assert payload["fills"] == 3
+    assert payload["coverage_status"] == "limited"
+    assert payload["blocked_reason_counts"]["Max open positions reached (1)"] == 1
+    assert payload["replay_inputs"]["enabled_strategies"] == ["majors_mean_rev"]
+    assert payload["report_path"].endswith("reports\\backtests\\latest.json")
+
+
+def test_latest_replay_endpoint_hides_invalid_report(
+    client, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    import krakked.ui.routes.system as system_routes
+
+    monkeypatch.setattr(system_routes, "get_config_dir", lambda: tmp_path)
+    report_path = tmp_path / "reports" / "backtests" / "latest.json"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(json.dumps({"report_version": 2, "summary": {}}), encoding="utf-8")
+
+    response = client.get("/api/system/replay/latest")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["error"] is None
+    assert payload["data"]["available"] is False
 
 
 def test_start_session_reads_ml_from_config(client, system_context):

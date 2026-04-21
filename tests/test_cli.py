@@ -607,6 +607,199 @@ def test_backtest_subcommand_save_report_writes_json(
     assert payload["provenance"]["app_version"] == cli.APP_VERSION
 
 
+def test_backtest_subcommand_publish_latest_is_opt_in(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    start = datetime(2026, 4, 1, tzinfo=UTC)
+    end = datetime(2026, 4, 2, tzinfo=UTC)
+
+    def _fake_run_backtest(*args: Any, **kwargs: Any) -> BacktestResult:  # noqa: ARG001
+        return BacktestResult(
+            plans=[],
+            executions=[],
+            preflight=BacktestPreflight(
+                coverage=[],
+                usable_series_count=1,
+                missing_series=[],
+                partial_series=[],
+                status="ready",
+                summary_note="Coverage looks complete for the requested replay window.",
+                warnings=[],
+            ),
+            summary=BacktestSummary(
+                start=start,
+                end=end,
+                starting_cash_usd=10_000.0,
+                ending_equity_usd=10_100.0,
+                absolute_pnl_usd=100.0,
+                return_pct=1.0,
+                max_drawdown_pct=0.5,
+                realized_pnl_usd=60.0,
+                unrealized_pnl_usd=40.0,
+                pairs=["BTC/USD"],
+                timeframes=["1h"],
+                total_cycles=24,
+                total_actions=3,
+                blocked_actions=0,
+                total_orders=2,
+                filled_orders=1,
+                rejected_orders=0,
+                execution_errors=0,
+                fee_bps=25.0,
+                slippage_bps=50.0,
+                cost_model="Immediate candle-close fills using configured slippage and flat taker fees.",
+                usable_series_count=1,
+                missing_series=[],
+                partial_series=[],
+                coverage=[],
+                per_strategy={},
+                replay_inputs={
+                    "start": start.isoformat(),
+                    "end": end.isoformat(),
+                    "pairs": ["BTC/USD"],
+                    "timeframes": ["1h"],
+                    "enabled_strategies": ["majors_mean_rev"],
+                    "starting_cash_usd": 10_000.0,
+                    "fee_bps": 25.0,
+                    "slippage_bps": 50.0,
+                    "strict_data": False,
+                },
+                trust_level="decision_helpful",
+                trust_note="Decision-helpful: coverage was complete and the replay produced filled trades.",
+                notable_warnings=[],
+                blocked_reason_counts={},
+                assumptions=["Synthetic fills only."],
+            ),
+        )
+
+    monkeypatch.setattr(cli, "run_backtest", _fake_run_backtest)
+    monkeypatch.setattr(cli, "get_config_dir", lambda: tmp_path)
+
+    latest_path = tmp_path / "reports" / "backtests" / "latest.json"
+
+    exit_code = cli.main(
+        [
+            "backtest",
+            "--start",
+            "2026-04-01T00:00:00Z",
+            "--end",
+            "2026-04-02T00:00:00Z",
+        ]
+    )
+
+    assert exit_code == 0
+    assert not latest_path.exists()
+
+    exit_code = cli.main(
+        [
+            "backtest",
+            "--start",
+            "2026-04-01T00:00:00Z",
+            "--end",
+            "2026-04-02T00:00:00Z",
+            "--publish-latest",
+        ]
+    )
+
+    assert exit_code == 0
+    payload = json.loads(latest_path.read_text(encoding="utf-8"))
+    assert payload["report_version"] == 1
+    assert payload["summary"]["ending_equity_usd"] == pytest.approx(10_100.0)
+
+
+def test_backtest_subcommand_can_save_and_publish_latest(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    start = datetime(2026, 4, 1, tzinfo=UTC)
+    end = datetime(2026, 4, 2, tzinfo=UTC)
+
+    def _fake_run_backtest(*args: Any, **kwargs: Any) -> BacktestResult:  # noqa: ARG001
+        return BacktestResult(
+            plans=[],
+            executions=[],
+            preflight=BacktestPreflight(
+                coverage=[],
+                usable_series_count=1,
+                missing_series=[],
+                partial_series=[],
+                status="ready",
+                summary_note="Coverage looks complete for the requested replay window.",
+                warnings=[],
+            ),
+            summary=BacktestSummary(
+                start=start,
+                end=end,
+                starting_cash_usd=10_000.0,
+                ending_equity_usd=10_050.0,
+                absolute_pnl_usd=50.0,
+                return_pct=0.5,
+                max_drawdown_pct=0.3,
+                realized_pnl_usd=35.0,
+                unrealized_pnl_usd=15.0,
+                pairs=["BTC/USD"],
+                timeframes=["1h"],
+                total_cycles=24,
+                total_actions=2,
+                blocked_actions=0,
+                total_orders=2,
+                filled_orders=2,
+                rejected_orders=0,
+                execution_errors=0,
+                fee_bps=25.0,
+                slippage_bps=50.0,
+                cost_model="Immediate candle-close fills using configured slippage and flat taker fees.",
+                usable_series_count=1,
+                missing_series=[],
+                partial_series=[],
+                coverage=[],
+                per_strategy={},
+                replay_inputs={
+                    "start": start.isoformat(),
+                    "end": end.isoformat(),
+                    "pairs": ["BTC/USD"],
+                    "timeframes": ["1h"],
+                    "enabled_strategies": ["majors_mean_rev"],
+                    "starting_cash_usd": 10_000.0,
+                    "fee_bps": 25.0,
+                    "slippage_bps": 50.0,
+                    "strict_data": False,
+                },
+                trust_level="decision_helpful",
+                trust_note="Decision-helpful: coverage was complete and the replay produced filled trades.",
+                notable_warnings=[],
+                blocked_reason_counts={},
+                assumptions=["Synthetic fills only."],
+            ),
+        )
+
+    monkeypatch.setattr(cli, "run_backtest", _fake_run_backtest)
+    monkeypatch.setattr(cli, "get_config_dir", lambda: tmp_path)
+
+    report_path = tmp_path / "custom-report.json"
+    latest_path = tmp_path / "reports" / "backtests" / "latest.json"
+
+    exit_code = cli.main(
+        [
+            "backtest",
+            "--start",
+            "2026-04-01T00:00:00Z",
+            "--end",
+            "2026-04-02T00:00:00Z",
+            "--save-report",
+            str(report_path),
+            "--publish-latest",
+            "--json",
+        ]
+    )
+
+    assert exit_code == 0
+    assert report_path.exists()
+    assert latest_path.exists()
+    assert json.loads(report_path.read_text(encoding="utf-8")) == json.loads(
+        latest_path.read_text(encoding="utf-8")
+    )
+
+
 def test_backtest_preflight_command_prints_summary(
     monkeypatch: pytest.MonkeyPatch, capsys: Any
 ) -> None:

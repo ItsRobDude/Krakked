@@ -307,3 +307,25 @@ class SystemMetricsPayload(BaseModel):
     market_data_stale: bool
     market_data_reason: Optional[str] = None
     market_data_max_staleness: Optional[float] = None
+
+
+class ReplayLatestPayload(BaseModel):
+    available: bool
+    generated_at: Optional[str] = None
+    trust_level: Optional[str] = None
+    trust_note: Optional[str] = None
+    notable_warnings: List[str] = Field(default_factory=list)
+    end_equity_usd: Optional[float] = None
+    pnl_usd: Optional[float] = None
+    return_pct: Optional[float] = None
+    fills: Optional[int] = None
+    blocked_actions: Optional[int] = None
+    execution_errors: Optional[int] = None
+    coverage_status: Optional[str] = None
+    usable_series_count: Optional[int] = None
+    missing_series: List[str] = Field(default_factory=list)
+    partial_series: List[str] = Field(default_factory=list)
+    blocked_reason_counts: Dict[str, int] = Field(default_factory=dict)
+    cost_model: Optional[str] = None
+    replay_inputs: Dict[str, Any] = Field(default_factory=dict)
+    report_path: Optional[str] = None

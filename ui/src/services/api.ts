@@ -140,6 +140,28 @@ export type SystemMetrics = {
   market_data_max_staleness: number | null;
 };
 
+export type ReplayLatestSummary = {
+  available: boolean;
+  generated_at: string | null;
+  trust_level: string | null;
+  trust_note: string | null;
+  notable_warnings: string[];
+  end_equity_usd: number | null;
+  pnl_usd: number | null;
+  return_pct: number | null;
+  fills: number | null;
+  blocked_actions: number | null;
+  execution_errors: number | null;
+  coverage_status: string | null;
+  usable_series_count: number | null;
+  missing_series: string[];
+  partial_series: string[];
+  blocked_reason_counts: Record<string, number>;
+  cost_model: string | null;
+  replay_inputs: Record<string, unknown>;
+  report_path?: string | null;
+};
+
 export type ExecutionMode = 'paper' | 'live';
 export type StrategyRiskProfile = 'conservative' | 'balanced' | 'aggressive';
 export type RiskPresetName = 'conservative' | 'balanced' | 'aggressive' | 'degen';
@@ -342,6 +364,10 @@ export async function fetchSystemHealth(options: ApiRequestOptions = {}): Promis
 
 export async function fetchSystemMetrics(): Promise<SystemMetrics | null> {
   return fetchJson<SystemMetrics>('/system/metrics');
+}
+
+export async function fetchLatestReplay(options: ApiRequestOptions = {}): Promise<ReplayLatestSummary | null> {
+  return fetchJson<ReplayLatestSummary>('/system/replay/latest', options);
 }
 
 export async function fetchSessionState(options: ApiRequestOptions = {}): Promise<SessionStateResponse | null> {

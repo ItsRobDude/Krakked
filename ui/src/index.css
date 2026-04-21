@@ -599,6 +599,18 @@ p {
   border-color: rgba(59, 130, 246, 0.4);
 }
 
+.pill--success {
+  background: rgba(16, 185, 129, 0.15);
+  color: #bbf7d0;
+  border-color: rgba(16, 185, 129, 0.35);
+}
+
+.pill--muted {
+  background: rgba(148, 163, 184, 0.12);
+  color: #d5dfeb;
+  border-color: rgba(148, 163, 184, 0.22);
+}
+
 .status-pill {
   padding: 0.4rem 0.85rem;
   border-radius: 999px;
@@ -1553,6 +1565,102 @@ body {
 .alert-strip {
   display: grid;
   gap: 0.65rem;
+}
+
+.replay-panel {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.replay-panel__header,
+.replay-panel__controls {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.65rem;
+  flex-wrap: wrap;
+}
+
+.replay-panel__content,
+.replay-panel__advanced {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.replay-panel__headline,
+.replay-panel__warnings {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.replay-panel__window {
+  color: #f8fafc;
+  font-weight: 800;
+}
+
+.replay-panel__trust-note,
+.replay-panel__warning,
+.replay-panel__hint-code {
+  color: #8ea2b7;
+}
+
+.replay-panel__hint-code {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 0.84rem;
+  white-space: pre-wrap;
+}
+
+.replay-panel__warning {
+  padding-left: 0.9rem;
+  position: relative;
+}
+
+.replay-panel__warning::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0.62rem;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: #facc15;
+}
+
+.replay-panel__stats,
+.replay-panel__advanced-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0.7rem;
+}
+
+.replay-panel__stat,
+.replay-panel__advanced-item {
+  padding: 0.85rem 0.9rem;
+  border-radius: 12px;
+  border: 1px solid rgba(146, 162, 183, 0.12);
+  background: rgba(16, 24, 35, 0.78);
+}
+
+.replay-panel__label {
+  display: block;
+  color: #91a4b8;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.replay-panel__stat strong,
+.replay-panel__advanced-item strong {
+  display: block;
+  margin-top: 0.24rem;
+  color: #f8fafc;
+}
+
+.replay-panel__advanced-list ul {
+  margin: 0.4rem 0 0;
+  padding-left: 1rem;
+  color: #d5dfeb;
 }
 
 .alert-card {

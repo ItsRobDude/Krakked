@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { KpiGrid, Kpi } from './components/KpiGrid';
 import { Layout } from './components/Layout';
 import { RiskPanel } from './components/RiskPanel';
+import { ReplaySummaryPanel } from './components/ReplaySummaryPanel';
 import { LogEntry, LogPanel } from './components/LogPanel';
 import { PositionRow, PositionsTable } from './components/PositionsTable';
 import { Sidebar } from './components/Sidebar';
@@ -15,6 +16,7 @@ import {
   fetchPortfolioSummary,
   fetchPositions,
   fetchRecentExecutions,
+  fetchLatestReplay,
   fetchRiskDecisions,
   fetchSystemHealth,
   fetchSessionState,
@@ -28,6 +30,7 @@ import {
   ExposureBreakdown,
   PortfolioSummary,
   PositionPayload,
+  ReplayLatestSummary,
   RiskConfig,
   RiskStatus,
   RecentExecution,
@@ -56,6 +59,7 @@ import {
   updateSessionConfig,
 } from './services/api';
 import { RISK_PRESET_META, formatPresetSummary } from './constants/riskPresets';
+import { getRuntimeTrust, takeImportantWarnings } from './utils/operatorTrust';
 
 const DASHBOARD_REFRESH_MS = Number(import.meta.env.VITE_REFRESH_DASHBOARD_MS ?? 5000) || 5000;
 const ORDERS_REFRESH_MS = Number(import.meta.env.VITE_REFRESH_ORDERS_MS ?? 5000) || 5000;
@@ -262,6 +266,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
   const [connectionState, setConnectionState] = useState<'connected' | 'degraded'>('degraded');
   const [health, setHealth] = useState<SystemHealth | null>(null);
   const [summary, setSummary] = useState<PortfolioSummary | null>(null);
+  const [latestReplay, setLatestReplay] = useState<ReplayLatestSummary | null>(null);
   const [risk, setRisk] = useState<RiskStatus | null>(null);
   const [riskBusy, setRiskBusy] = useState(false);
   const [riskFeedback, setRiskFeedback] = useState<{ tone: 'info' | 'error' | 'success'; message: string } | null>(null);
@@ -416,6 +421,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
           perf,
           executions,
           decisions,
+          latestReplaySummary,
         ] = await Promise.all([
           requestDashboardResource('portfolio-summary', controller, fetchPortfolioSummary),
           requestDashboardResource('portfolio-exposure', controller, fetchExposure),
@@ -427,6 +433,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
           requestDashboardResource('strategy-performance', controller, fetchStrategyPerformance),
           requestDashboardResource('recent-executions', controller, fetchRecentExecutions),
           requestDashboardResource('risk-decisions', controller, (options) => fetchRiskDecisions(50, options)),
+          requestDashboardResource('latest-replay', controller, fetchLatestReplay),
         ]);
 
         if (cancelled || controller.signal.aborted) return;
@@ -495,6 +502,16 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
           updateRefreshIssue(
             'positions',
             'Positions refresh failed. Position tables may be showing the last successful snapshot.',
+          );
+        }
+
+        if (latestReplaySummary) {
+          setLatestReplay(latestReplaySummary);
+          updateRefreshIssue('latest-replay', null);
+        } else {
+          updateRefreshIssue(
+            'latest-replay',
+            'Latest replay summary refresh failed. Showing the last published replay where possible.',
           );
         }
 
@@ -1464,6 +1481,20 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
       message: 'Urgent controls stay visible, but configuration changes are blocked while the backend is read-only.',
     });
   }
+  const replayWarnings = takeImportantWarnings(latestReplay?.notable_warnings, 2);
+  if (latestReplay?.available && replayWarnings.length > 0) {
+    dashboardAlerts.push({
+      id: 'latest-replay',
+      tone:
+        latestReplay.trust_level === 'decision_helpful'
+          ? 'info'
+          : latestReplay.trust_level === 'limited'
+            ? 'warning'
+            : 'danger',
+      title: 'Latest replay warning',
+      message: replayWarnings.join(' '),
+    });
+  }
 
   const topAsset = exposure?.by_asset
     ?.filter((asset) => typeof asset.pct_of_equity === 'number')
@@ -1484,22 +1515,14 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
       STARTER_STRATEGY_IDS.includes(strategy.strategy_id as (typeof STARTER_STRATEGY_IDS)[number]) && strategy.enabled,
   ).length;
   const noActiveStrategies = strategies.every((strategy) => !strategy.enabled);
+  const runtimeTrust = getRuntimeTrust(health, connectionState);
 
   const systemStatusItems = [
     {
-      label: 'Connection',
-      value:
-        health?.lifecycle === 'initializing'
-          ? 'Initializing'
-          : (connectionState === 'connected' ? 'Online' : 'Degraded'),
-      tone:
-        health?.lifecycle === 'initializing'
-          ? 'warning' as const
-          : (connectionState === 'connected' ? 'ok' as const : 'warning' as const),
-      hint:
-        health?.lifecycle === 'initializing'
-          ? 'Krakked is reloading runtime services'
-          : (health?.rest_api_reachable ? 'REST reachable' : 'REST degraded'),
+      label: 'Runtime trust',
+      value: runtimeTrust.label,
+      tone: runtimeTrust.sidebarTone,
+      hint: runtimeTrust.hint,
     },
     {
       label: 'Mode',
@@ -1589,6 +1612,16 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
         <div className="layout__status-row">
           {session.profile_name ? <span className="pill pill--muted">Profile: {session.profile_name}</span> : null}
           <span className="pill pill--muted">Mode: {session.mode === 'live' ? 'Live' : 'Paper'}</span>
+          <span className={`pill ${
+            runtimeTrust.sidebarTone === 'ok'
+              ? 'pill--success'
+              : runtimeTrust.sidebarTone === 'danger'
+                ? 'pill--danger'
+                : 'pill--warning'
+          }`}
+          >
+            Runtime trust: {runtimeTrust.label}
+          </span>
           {session.mode === 'paper' && isExchangeBalanceBaseline(health?.portfolio_baseline) ? (
             <span className="pill pill--info">Portfolio: Exchange reference</span>
           ) : null}
@@ -1660,6 +1693,8 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
           ))}
         </section>
       ) : null}
+
+      <ReplaySummaryPanel replay={latestReplay} />
 
       <section id="overview" className="dashboard-anchor">
         <KpiGrid items={kpis} />

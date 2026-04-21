@@ -21,6 +21,11 @@ from krakked.accounts import (
     resolve_secrets_path,
     save_accounts,
 )
+from krakked.backtest import (
+    get_latest_backtest_report_path,
+    load_backtest_report,
+    summarize_latest_backtest_report,
+)
 from krakked.config import ProfileConfig, dump_runtime_overrides, get_config_dir
 from krakked.config_loader import (
     _load_yaml_mapping,
@@ -53,7 +58,12 @@ from krakked.secrets import (
     unlock_secrets,
 )
 from krakked.ui.logging import build_request_log_extra
-from krakked.ui.models import ApiEnvelope, SystemHealthPayload, SystemMetricsPayload
+from krakked.ui.models import (
+    ApiEnvelope,
+    ReplayLatestPayload,
+    SystemHealthPayload,
+    SystemMetricsPayload,
+)
 from krakked.utils.io import (
     atomic_write,
     backup_file,
@@ -1502,6 +1512,36 @@ async def system_metrics(request: Request) -> ApiEnvelope[SystemMetricsPayload]:
             extra=build_request_log_extra(request, event="system_metrics_failed"),
         )
         return ApiEnvelope(data=None, error=str(exc))
+
+
+@router.get("/replay/latest", response_model=ApiEnvelope[ReplayLatestPayload])
+async def latest_replay_report(
+    request: Request,
+) -> ApiEnvelope[ReplayLatestPayload]:
+    """Return the canonical latest published replay report for the operator UI."""
+
+    ctx = _context(request)
+    _check_setup_mode(ctx)
+
+    report_path = get_latest_backtest_report_path(get_config_dir())
+    if not report_path.exists():
+        return ApiEnvelope(data=ReplayLatestPayload(available=False), error=None)
+
+    try:
+        payload = load_backtest_report(report_path)
+        summary = summarize_latest_backtest_report(payload, resolved_path=report_path)
+        return ApiEnvelope(data=ReplayLatestPayload(**summary), error=None)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "Latest replay report is unavailable",
+            extra=build_request_log_extra(
+                request,
+                event="latest_replay_unavailable",
+                report_path=str(report_path),
+                error=str(exc),
+            ),
+        )
+        return ApiEnvelope(data=ReplayLatestPayload(available=False), error=None)
 
 
 @router.get("/config", response_model=ApiEnvelope[dict])

@@ -249,10 +249,11 @@ poetry run krakked backtest \
   --start 2026-04-01T00:00:00Z \
   --end 2026-04-20T00:00:00Z \
   --starting-cash-usd 10000 \
-  --save-report backtest-report.json
+  --save-report backtest-report.json \
+  --publish-latest
 ```
 
-Start with `backtest-preflight` if you want a quick local coverage check before running the strategy stack. Add `--fee-bps` to tune the flat taker-fee assumption, `--strict-data` to hard-fail on missing or partial coverage, and `--db-path backtest.db` if you want to keep the SQLite decisions/orders/results after the run. Use `poetry run krakked compare-backtests --baseline a.json --candidate b.json` to compare two saved reports without rerunning. See [`docs/simulation.md`](docs/simulation.md) for the current assumptions and limits.
+Start with `backtest-preflight` if you want a quick local coverage check before running the strategy stack. Add `--fee-bps` to tune the flat taker-fee assumption, `--strict-data` to hard-fail on missing or partial coverage, `--db-path backtest.db` if you want to keep the SQLite decisions/orders/results after the run, and `--publish-latest` when you want the operator dashboard to read the latest validated replay summary. Use `poetry run krakked compare-backtests --baseline a.json --candidate b.json` to compare two saved reports without rerunning. See [`docs/simulation.md`](docs/simulation.md) for the current assumptions, limits, and replay smoke scenarios.
 
 ### ▶️ Running the bot
 

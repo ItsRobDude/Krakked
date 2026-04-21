@@ -14,11 +14,14 @@ from pathlib import Path
 from typing import Any, Callable
 
 from krakked import APP_VERSION, secrets
-from krakked.backtest.runner import (
+from krakked.backtest import (
     BacktestPreflightResult,
     BacktestResult,
     build_backtest_preflight,
+    load_backtest_report,
+    publish_latest_backtest_report,
     run_backtest,
+    write_backtest_report,
 )
 from krakked.connection.exceptions import (
     AuthError,
@@ -26,12 +29,7 @@ from krakked.connection.exceptions import (
     RateLimitError,
     ServiceUnavailableError,
 )
-from krakked.config import (
-    AppConfig,
-    get_config_dir,
-    get_default_ohlc_store_config,
-    load_config,
-)
+from krakked.config import AppConfig, get_config_dir, get_default_ohlc_store_config, load_config
 from krakked.connection.rest_client import KrakenRESTClient
 from krakked.credentials import CredentialResult, CredentialStatus
 from krakked.main import run as run_orchestrator
@@ -351,67 +349,11 @@ def _print_backtest_summary(
 
 
 def _write_backtest_report(payload: dict[str, Any], report_path: str) -> str:
-    resolved = Path(report_path).expanduser().resolve()
-    resolved.parent.mkdir(parents=True, exist_ok=True)
-    resolved.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-    return str(resolved)
-
-
-def _validate_backtest_report_payload(
-    payload: dict[str, Any], *, resolved_path: Path
-) -> dict[str, Any]:
-    if payload.get("report_version") != 1:
-        raise ValueError(
-            f"Unsupported report version in {resolved_path}: {payload.get('report_version')}"
-        )
-
-    summary = payload.get("summary")
-    if not isinstance(summary, dict):
-        raise ValueError(f"Report is missing a summary payload: {resolved_path}")
-
-    required_fields = {
-        "ending_equity_usd",
-        "return_pct",
-        "max_drawdown_pct",
-        "filled_orders",
-        "blocked_actions",
-        "execution_errors",
-        "per_strategy",
-        "replay_inputs",
-    }
-    missing_fields = sorted(field for field in required_fields if field not in summary)
-    if missing_fields:
-        raise ValueError(
-            f"Report summary is missing required fields in {resolved_path}: {', '.join(missing_fields)}"
-        )
-
-    if not isinstance(summary.get("per_strategy"), dict):
-        raise ValueError(f"Report per_strategy is invalid in {resolved_path}")
-    if not isinstance(summary.get("replay_inputs"), dict):
-        raise ValueError(f"Report replay_inputs is invalid in {resolved_path}")
-
-    preflight = payload.get("preflight")
-    if preflight is not None and not isinstance(preflight, dict):
-        raise ValueError(f"Report preflight payload is invalid in {resolved_path}")
-    provenance = payload.get("provenance")
-    if provenance is not None and not isinstance(provenance, dict):
-        raise ValueError(f"Report provenance payload is invalid in {resolved_path}")
-
-    return payload
+    return str(write_backtest_report(payload, report_path))
 
 
 def _load_backtest_report(report_path: str) -> dict[str, Any]:
-    resolved = Path(report_path).expanduser().resolve()
-    try:
-        payload = json.loads(resolved.read_text(encoding="utf-8"))
-    except FileNotFoundError as exc:
-        raise ValueError(f"Report not found: {resolved}") from exc
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"Report is not valid JSON: {resolved}") from exc
-
-    if not isinstance(payload, dict):
-        raise ValueError(f"Report root payload is invalid: {resolved}")
-    return _validate_backtest_report_payload(payload, resolved_path=resolved)
+    return load_backtest_report(report_path)
 
 
 def _print_backtest_preflight(result: BacktestPreflightResult) -> None:
@@ -627,6 +569,15 @@ def _backtest_command(args: argparse.Namespace) -> int:
         except Exception as exc:  # noqa: BLE001
             return _print_error(f"Backtest report write failed: {exc}")
 
+    published_report_path: str | None = None
+    if args.publish_latest:
+        try:
+            published_report_path = str(
+                publish_latest_backtest_report(payload, config_dir=get_config_dir())
+            )
+        except Exception as exc:  # noqa: BLE001
+            return _print_error(f"Backtest latest-report publish failed: {exc}")
+
     if args.json:
         print(json.dumps(payload, indent=2))
     else:
@@ -636,8 +587,10 @@ def _backtest_command(args: argparse.Namespace) -> int:
         _print_backtest_summary(
             result,
             persist_db_path=persist_db_path,
-            report_path=saved_report_path,
+            report_path=saved_report_path or published_report_path,
         )
+        if saved_report_path and published_report_path:
+            print(f"Published latest replay: {published_report_path}")
 
     return 0
 
@@ -1191,6 +1144,11 @@ def _build_parser() -> argparse.ArgumentParser:
     backtest_parser.add_argument(
         "--save-report",
         help="Optional JSON path for a durable backtest report artifact",
+    )
+    backtest_parser.add_argument(
+        "--publish-latest",
+        action="store_true",
+        help="Publish the validated replay summary to the canonical latest-report path for the operator UI",
     )
     backtest_parser.add_argument(
         "--strict-data",

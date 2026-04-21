@@ -11,7 +11,8 @@ poetry run krakked backtest \
   --start 2026-04-01T00:00:00Z \
   --end 2026-04-20T00:00:00Z \
   --starting-cash-usd 10000 \
-  --save-report backtest-report.json
+  --save-report backtest-report.json \
+  --publish-latest
 ```
 
 What it reuses:
@@ -45,6 +46,7 @@ Useful flags:
 - `--fee-bps 25`: apply a flat taker fee assumption to simulated fills
 - `--strict-data`: fail if any requested pair/timeframe is missing or only partially covered
 - `--save-report backtest-report.json`: save one durable JSON report with coverage, PnL, drawdown, and per-strategy totals
+- `--publish-latest`: publish the validated replay summary to the canonical operator path at `<config_dir>/reports/backtests/latest.json`
 - `--db-path backtest.db`: keep the SQLite decisions/orders/results for inspection after the run
 - `--json`: print the replay summary as JSON
 
@@ -78,3 +80,67 @@ Suggested workflow:
 4. Start with the simple replay trust note and important warnings before looking at deeper details.
 5. Save a JSON report when you want a durable artifact or an A/B comparison point.
 6. If needed, rerun with `--db-path` and inspect the stored decisions and orders.
+
+## Replay Smoke Scenarios
+
+### 1. Sanity replay
+
+Use this when you want to prove the offline seam still runs end to end and publish one operator-facing summary:
+
+```bash
+poetry run krakked backtest-preflight \
+  --start 2026-04-01T00:00:00Z \
+  --end 2026-04-20T00:00:00Z
+
+poetry run krakked backtest \
+  --start 2026-04-01T00:00:00Z \
+  --end 2026-04-20T00:00:00Z \
+  --starting-cash-usd 10000 \
+  --publish-latest
+```
+
+Healthy enough:
+
+- preflight reports at least one usable series
+- replay completes without execution errors
+- trust is not empty and the operator panel can read the published report
+
+Weak or untrustworthy:
+
+- preflight is fully missing or strict-data fails
+- replay shows `weak_signal` because there were no actions, no orders, or no fills
+- execution errors occur during the run
+
+### 2. Cost-check replay
+
+Use this when you want a lightweight honesty check that costs reduce reported outcome:
+
+```bash
+poetry run krakked backtest \
+  --start 2026-04-01T00:00:00Z \
+  --end 2026-04-20T00:00:00Z \
+  --starting-cash-usd 10000 \
+  --fee-bps 0 \
+  --save-report runs/zero-cost.json
+
+poetry run krakked backtest \
+  --start 2026-04-01T00:00:00Z \
+  --end 2026-04-20T00:00:00Z \
+  --starting-cash-usd 10000 \
+  --fee-bps 25 \
+  --save-report runs/with-costs.json
+
+poetry run krakked compare-backtests \
+  --baseline runs/zero-cost.json \
+  --candidate runs/with-costs.json
+```
+
+Healthy enough:
+
+- the higher-cost candidate ends with lower or equal equity than the zero-cost baseline
+- compare output shows the expected deltas for return, fills, blocked actions, and execution errors
+
+Weak or untrustworthy:
+
+- both runs have zero fills, so the cost model did not get exercised
+- missing or partial data dominates the replay window
