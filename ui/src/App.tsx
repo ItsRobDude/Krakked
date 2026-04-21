@@ -59,7 +59,7 @@ import {
   updateSessionConfig,
 } from './services/api';
 import { RISK_PRESET_META, formatPresetSummary } from './constants/riskPresets';
-import { getRuntimeTrust, takeImportantWarnings } from './utils/operatorTrust';
+import { getRuntimeTrust } from './utils/operatorTrust';
 
 const DASHBOARD_REFRESH_MS = Number(import.meta.env.VITE_REFRESH_DASHBOARD_MS ?? 5000) || 5000;
 const ORDERS_REFRESH_MS = Number(import.meta.env.VITE_REFRESH_ORDERS_MS ?? 5000) || 5000;
@@ -126,7 +126,7 @@ const extractMlEnabledFromConfig = (
 
 const RISK_PRESET_OPTIONS: RiskPresetName[] = ['conservative', 'balanced', 'aggressive', 'degen'];
 
-const isExchangeBalanceBaseline = (baseline: string | null | undefined) => baseline === 'exchange_balances';
+const isPaperWalletBaseline = (baseline: string | null | undefined) => baseline === 'paper_wallet';
 
 const recomputeEffectiveWeights = (nextStrategies: StrategyState[]) => {
   const totalWeight = nextStrategies
@@ -165,36 +165,36 @@ const getStrategyMomentum = (strategy: StrategyState, performance?: StrategyPerf
 };
 
 const buildKpis = (summary: PortfolioSummary) => {
-  const exchangeBalanceBaseline = isExchangeBalanceBaseline(summary.portfolio_baseline);
+  const paperWalletBaseline = isPaperWalletBaseline(summary.portfolio_baseline);
 
   return [
     {
       label: 'Total Equity',
       value: formatCurrency(summary.equity_usd),
       tone: 'neutral' as const,
-      hint: exchangeBalanceBaseline
-        ? 'Reference equity from current exchange balances'
+      hint: paperWalletBaseline
+        ? 'Synthetic paper account equity'
         : (summary.last_snapshot_ts ? `Last snapshot ${formatTimestamp(summary.last_snapshot_ts)}` : 'Awaiting the first snapshot'),
     },
     {
       label: 'Unrealized PnL',
       value: formatCurrency(summary.unrealized_pnl_usd),
       tone: (summary.unrealized_pnl_usd ?? 0) < 0 ? 'danger' as const : 'success' as const,
-      hint: exchangeBalanceBaseline
-        ? 'Valued against current market prices'
+      hint: paperWalletBaseline
+        ? 'Local paper positions valued against current market prices'
         : (summary.drift_flag ? 'Drift detected' : 'Within expected range'),
     },
     {
       label: 'Session Realized',
       value: formatCurrency(summary.realized_pnl_usd),
       tone: (summary.realized_pnl_usd ?? 0) < 0 ? 'danger' as const : 'success' as const,
-      hint: exchangeBalanceBaseline ? 'Prior live trade history is not replayed into paper PnL' : 'Realized session result',
+      hint: paperWalletBaseline ? 'Realized result from the local paper account' : 'Realized session result',
     },
     {
       label: 'Available Cash',
       value: formatCurrency(summary.cash_usd),
       tone: 'neutral' as const,
-      hint: exchangeBalanceBaseline ? 'Reference cash from current exchange balances' : 'Deployable collateral',
+      hint: paperWalletBaseline ? 'Synthetic cash still available for paper entries' : 'Deployable collateral',
     },
   ];
 };
@@ -267,6 +267,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
   const [health, setHealth] = useState<SystemHealth | null>(null);
   const [summary, setSummary] = useState<PortfolioSummary | null>(null);
   const [latestReplay, setLatestReplay] = useState<ReplayLatestSummary | null>(null);
+  const [showReplayPanel, setShowReplayPanel] = useState(false);
   const [risk, setRisk] = useState<RiskStatus | null>(null);
   const [riskBusy, setRiskBusy] = useState(false);
   const [riskFeedback, setRiskFeedback] = useState<{ tone: 'info' | 'error' | 'success'; message: string } | null>(null);
@@ -285,6 +286,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
   const [systemMessage, setSystemMessage] = useState<SystemMessage | null>(null);
   const [refreshIssues, setRefreshIssues] = useState<Record<string, string>>({});
   const [modeBusy, setModeBusy] = useState(false);
+  const [showIntegrityAdvanced, setShowIntegrityAdvanced] = useState(false);
   const [session, setSession] = useState<SessionStateResponse | null>(null);
   const [sessionLoading, setSessionLoading] = useState(true);
   const [profiles, setProfiles] = useState<ProfileSummary[]>([]);
@@ -1432,14 +1434,6 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
       message: health.portfolio_sync_reason || 'Krakked could not complete the latest portfolio sync. Positions and balances may be stale.',
     });
   }
-  if (session.mode === 'paper' && isExchangeBalanceBaseline(health?.portfolio_baseline)) {
-    dashboardAlerts.push({
-      id: 'paper-baseline',
-      tone: 'info',
-      title: 'Paper mode uses exchange reference balances',
-      message: 'Krakked is validating orders against Kraken while showing current exchange balances as the paper baseline. No live orders are sent.',
-    });
-  }
   if (health && !health.market_data_ok) {
     dashboardAlerts.push({
       id: 'market-data',
@@ -1481,20 +1475,6 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
       message: 'Urgent controls stay visible, but configuration changes are blocked while the backend is read-only.',
     });
   }
-  const replayWarnings = takeImportantWarnings(latestReplay?.notable_warnings, 2);
-  if (latestReplay?.available && replayWarnings.length > 0) {
-    dashboardAlerts.push({
-      id: 'latest-replay',
-      tone:
-        latestReplay.trust_level === 'decision_helpful'
-          ? 'info'
-          : latestReplay.trust_level === 'limited'
-            ? 'warning'
-            : 'danger',
-      title: 'Latest replay warning',
-      message: replayWarnings.join(' '),
-    });
-  }
 
   const topAsset = exposure?.by_asset
     ?.filter((asset) => typeof asset.pct_of_equity === 'number')
@@ -1529,13 +1509,15 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
       value: session.mode === 'live' ? 'Live' : 'Paper',
       tone: session.mode === 'live' ? 'warning' as const : 'ok' as const,
       hint:
-        session.mode === 'paper' && isExchangeBalanceBaseline(health?.portfolio_baseline)
-          ? 'Validate-only with current exchange balances as reference'
+        session.mode === 'paper'
+          ? (session.profile_name ? `Synthetic paper account for profile ${session.profile_name}` : 'Synthetic paper account')
           : (session.profile_name ? `Profile ${session.profile_name}` : 'No active profile'),
     },
     {
       label: 'Trading',
-      value: risk?.kill_switch_active ? 'Paused' : 'Active',
+      value: risk?.kill_switch_active
+        ? (session.mode === 'paper' ? 'Paper session paused' : 'Live trading paused')
+        : (session.mode === 'paper' ? 'Paper session active' : 'Live trading active'),
       tone: risk?.kill_switch_active ? 'danger' as const : 'ok' as const,
       hint: `Loop ${session.loop_interval_sec.toFixed(1)}s`,
     },
@@ -1547,11 +1529,9 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
       value: health?.portfolio_sync_ok ? 'Healthy' : 'Degraded',
       tone: health?.portfolio_sync_ok ? 'ok' as const : 'danger' as const,
       hint: health?.portfolio_sync_ok
-        ? (
-          session.mode === 'paper' && isExchangeBalanceBaseline(health?.portfolio_baseline)
-            ? `Exchange balances loaded ${formatDateTime(health.portfolio_last_sync_at)}`
-            : `Last sync ${formatDateTime(health.portfolio_last_sync_at)}`
-        )
+        ? (session.mode === 'paper'
+          ? `Synthetic paper account last synced ${formatDateTime(health.portfolio_last_sync_at)}`
+          : `Last sync ${formatDateTime(health.portfolio_last_sync_at)}`)
         : (health?.portfolio_sync_reason || 'Latest sync failed'),
     },
     {
@@ -1622,9 +1602,6 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
           >
             Runtime trust: {runtimeTrust.label}
           </span>
-          {session.mode === 'paper' && isExchangeBalanceBaseline(health?.portfolio_baseline) ? (
-            <span className="pill pill--info">Portfolio: Exchange reference</span>
-          ) : null}
 
           <span
             className={
@@ -1636,9 +1613,9 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
             }
           >
             {risk?.kill_switch_active === true
-              ? 'Trading paused'
+              ? (session.mode === 'paper' ? 'Paper session paused' : 'Live trading paused')
               : risk?.kill_switch_active === false
-                ? 'Trading active'
+                ? (session.mode === 'paper' ? 'Paper session active' : 'Live trading active')
                 : (session.lifecycle === 'starting_session' ? 'Starting session' : 'Trading status unavailable')}
           </span>
 
@@ -1694,8 +1671,6 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
         </section>
       ) : null}
 
-      <ReplaySummaryPanel replay={latestReplay} />
-
       <section id="overview" className="dashboard-anchor">
         <KpiGrid items={kpis} />
       </section>
@@ -1706,13 +1681,13 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
             positions={activePositions}
             title="Positions"
             hint={
-              session.mode === 'paper' && isExchangeBalanceBaseline(summary?.portfolio_baseline)
-                ? 'Reference balances drive paper equity. Tracked paper positions appear here only after Krakked records them locally.'
+              session.mode === 'paper' && isPaperWalletBaseline(summary?.portfolio_baseline)
+                ? 'Local paper positions and cash live here. Exchange reference stays in Advanced only.'
                 : (summary?.last_snapshot_ts ? `Snapshot ${formatDateTime(summary.last_snapshot_ts)}` : 'Awaiting the first portfolio snapshot')
             }
             emptyMessage={
-              session.mode === 'paper' && isExchangeBalanceBaseline(summary?.portfolio_baseline)
-                ? 'No tracked paper positions yet. Reference balances still contribute to equity and exposure.'
+              session.mode === 'paper' && isPaperWalletBaseline(summary?.portfolio_baseline)
+                ? 'No paper positions yet. The synthetic paper account is funded and ready, but no local paper trades have filled yet.'
                 : 'No active positions right now.'
             }
           />
@@ -1731,6 +1706,15 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
               <h2>Portfolio Integrity</h2>
               <p className="panel__hint">Health based on sync state, drift, exposure, and live runtime status.</p>
             </div>
+            {session.mode === 'paper' ? (
+              <button
+                type="button"
+                className="ghost-button"
+                onClick={() => setShowIntegrityAdvanced((current) => !current)}
+              >
+                {showIntegrityAdvanced ? 'Hide advanced' : 'Advanced'}
+              </button>
+            ) : null}
           </div>
           <div className="integrity-panel__list">
             <div className="integrity-panel__item">
@@ -1740,11 +1724,9 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
               </p>
               <p className="integrity-panel__hint">
                 {health?.portfolio_sync_ok
-                  ? (
-                    session.mode === 'paper' && isExchangeBalanceBaseline(health?.portfolio_baseline)
-                      ? `Current exchange balances loaded ${formatDateTime(health?.portfolio_last_sync_at)}`
-                      : `Last successful sync ${formatDateTime(health?.portfolio_last_sync_at)}`
-                  )
+                  ? (session.mode === 'paper'
+                    ? `Synthetic paper account refreshed ${formatDateTime(health?.portfolio_last_sync_at)}`
+                    : `Last successful sync ${formatDateTime(health?.portfolio_last_sync_at)}`)
                   : (health?.portfolio_sync_reason || 'Latest sync failed')}
               </p>
             </div>
@@ -1786,6 +1768,30 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
               </p>
             </div>
           </div>
+          {session.mode === 'paper' && showIntegrityAdvanced ? (
+            <div className="integrity-panel__advanced">
+              <div className="integrity-panel__item">
+                <p className="integrity-panel__label">Paper account source</p>
+                <p className="integrity-panel__value">Persistent synthetic paper wallet</p>
+                <p className="integrity-panel__hint">
+                  Profile-scoped local paper state starts at $10,000 and persists across restarts.
+                </p>
+              </div>
+              <div className="integrity-panel__item">
+                <p className="integrity-panel__label">Exchange reference</p>
+                <p className="integrity-panel__value">
+                  {summary?.exchange_reference_equity_usd != null
+                    ? `${formatCurrency(summary.exchange_reference_equity_usd)} equity`
+                    : 'Unavailable'}
+                </p>
+                <p className="integrity-panel__hint">
+                  {summary?.exchange_reference_equity_usd != null
+                    ? `${formatCurrency(summary.exchange_reference_cash_usd)} cash as of ${formatDateTime(summary.exchange_reference_checked_at ?? null)}`
+                    : 'Optional comparison only. The paper account does not mirror these balances.'}
+                </p>
+              </div>
+            </div>
+          ) : null}
         </section>
       </div>
 
@@ -1964,6 +1970,25 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
           </div>
         </section>
       </div>
+
+      <section className="panel replay-toggle-panel">
+        <div className="panel__header replay-panel__header">
+          <div>
+            <h2>Latest Replay</h2>
+            <p className="panel__hint">
+              Optional offline learning context. Hidden by default so the active {session.mode === 'paper' ? 'paper' : 'runtime'} session stays primary.
+            </p>
+          </div>
+          <button
+            type="button"
+            className="ghost-button"
+            onClick={() => setShowReplayPanel((current) => !current)}
+          >
+            {showReplayPanel ? 'Hide latest replay' : 'Open latest replay'}
+          </button>
+        </div>
+        {showReplayPanel ? <ReplaySummaryPanel replay={latestReplay} /> : null}
+      </section>
 
       <section id="activity" className="dashboard-anchor">
         <LogPanel

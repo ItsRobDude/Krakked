@@ -58,11 +58,9 @@ def _pair_metadata(pair: str = "XBTUSD") -> PairMetadata:
     )
 
 
-def test_execution_service_uses_kraken_adapter_for_paper_mode(inactive_risk_status):
+def test_execution_service_uses_dry_run_adapter_for_paper_mode(inactive_risk_status):
     config = ExecutionConfig(mode="paper", validate_only=False)
     client = MagicMock()
-    # Paper mode validates the order (returns no error) but no txid if validate=1
-    client.add_order.return_value = {"error": []}
     market_data = MagicMock()
     market_data.get_best_bid_ask.return_value = {"bid": 30.0, "ask": 30.0}
     market_data.get_pair_metadata_or_raise.side_effect = lambda pair: _pair_metadata(
@@ -76,16 +74,15 @@ def test_execution_service_uses_kraken_adapter_for_paper_mode(inactive_risk_stat
         risk_status_provider=inactive_risk_status,
     )
 
-    assert isinstance(service.adapter, KrakenExecutionAdapter)
+    assert isinstance(service.adapter, DryRunExecutionAdapter)
 
     plan = _plan(_action("XBTUSD"))
     result = service.execute_plan(plan)
 
     assert result.success
-    # In validate-only mode (implied by paper), status is "validated"
-    assert result.orders[0].status == "validated"
-    client.add_order.assert_called_once()
-    assert result.orders[0].raw_request["validate"] == 1
+    assert result.orders[0].status == "filled"
+    assert result.orders[0].cumulative_base_filled == pytest.approx(1.0)
+    client.add_order.assert_not_called()
 
 
 def test_execution_service_uses_dry_run_adapter_for_dry_run_mode(inactive_risk_status):

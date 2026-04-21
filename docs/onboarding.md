@@ -8,9 +8,9 @@ Start in paper mode with Docker Desktop or Docker Engine, get the UI reachable, 
 
 Important current behavior:
 
-- paper mode is validate-only execution against Kraken, not a fake bankroll simulator
-- the paper dashboard uses current exchange balances as its baseline when available
-- old live trade history is not replayed into starting paper PnL/cash
+- paper mode is now a persistent synthetic paper account, not a mirror of your current Kraken balances
+- the paper account starts from a local $10,000 USD bankroll by default and persists by profile
+- live exchange balances are now optional reference context, not the main paper account baseline
 - during startup or portfolio sync, some dashboard panels may show local degraded or pending states instead of blocking the whole UI
 
 ## What You Need

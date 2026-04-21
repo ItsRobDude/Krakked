@@ -40,6 +40,7 @@ class StubPortfolioService:
             mismatched_assets=[],
         )
         self.last_sync_ok = True
+        self.ingested_results = []
 
     def initialize(self) -> None: ...
 
@@ -55,6 +56,12 @@ class StubPortfolioService:
 
     def get_drift_status(self) -> DriftStatus:
         return self.drift_status
+
+    def _is_paper_mode(self) -> bool:
+        return False
+
+    def ingest_filled_orders(self, result) -> None:
+        self.ingested_results.append(result)
 
 
 class StubAction:
@@ -77,6 +84,8 @@ class StubStrategyEngine:
         self.plan_counter = 0
 
     def initialize(self) -> None: ...
+
+    def refresh_runtime_snapshots(self) -> None: ...
 
     def run_cycle(self, now: datetime) -> StubPlan:
         self.calls.append(now)
@@ -110,6 +119,11 @@ class StubExecutionService:
 
     def refresh_open_orders(self) -> None: ...
     def reconcile_orders(self) -> None: ...
+
+
+class PaperStubPortfolioService(StubPortfolioService):
+    def _is_paper_mode(self) -> bool:
+        return True
 
 
 class StubMarketData:
@@ -300,6 +314,41 @@ def test_run_loop_iteration_updates_market_data_metrics_when_healthy():
     assert metrics.market_data_errors == 0
     assert metrics.market_data_error_messages == []
     assert metrics.drift_records[0] == (False, None)
+
+
+def test_run_loop_iteration_ingests_paper_fills_into_local_portfolio():
+    now = datetime(2024, 1, 2, tzinfo=timezone.utc)
+    portfolio = PaperStubPortfolioService()
+    strategy_engine = StubStrategyEngine()
+    execution_service = StubExecutionService()
+    execution_service.execute_plan = MagicMock(
+        return_value=StubExecutionResult(
+            errors=[],
+            orders=[SimpleNamespace(status="filled", last_error=None)],
+        )
+    )
+    market_data = StubMarketData()
+    metrics = StubSystemMetrics()
+
+    def refresh_metrics() -> None:
+        _refresh_metrics_state(portfolio, execution_service, metrics)
+
+    _run_loop_iteration(
+        now=now,
+        strategy_interval=1,
+        portfolio_interval=5,
+        last_strategy_cycle=now - timedelta(seconds=1),
+        last_portfolio_sync=now - timedelta(seconds=5),
+        portfolio=portfolio,
+        market_data=market_data,
+        strategy_engine=strategy_engine,
+        execution_service=execution_service,
+        metrics=metrics,
+        refresh_metrics_state=refresh_metrics,
+        session_active=True,
+    )
+
+    assert len(portfolio.ingested_results) == 1
 
 
 def test_run_loop_iteration_counts_kill_switch_rejections_as_blocked_actions():
@@ -684,6 +733,9 @@ class DriftAwareStrategyEngine:
     def set_manual_kill_switch(self, active: bool) -> None:
         self.kill_switch_calls.append(active)
         self.kill_switch_active = active
+
+    def refresh_runtime_snapshots(self) -> None:
+        return None
 
     def run_cycle(self, now: datetime):
         self.run_cycle_calls.append(now)

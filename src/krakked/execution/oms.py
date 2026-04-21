@@ -641,8 +641,8 @@ class ExecutionService:
 
     def register_order(self, order: LocalOrder) -> None:
         """Track an order locally and index it by Kraken order id when available."""
-        # Safety check: do not register validated orders
-        if order.status == "validated":
+        # Track only actively working orders.
+        if order.status not in {"pending", "open", "partially_filled"}:
             return
 
         self.open_orders[order.local_id] = order

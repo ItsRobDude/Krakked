@@ -81,6 +81,10 @@ async def get_portfolio_summary(request: Request) -> ApiEnvelope[PortfolioSummar
     def _read_summary() -> PortfolioSummary:
         equity = ctx.portfolio.get_cached_equity()
         last_snapshot_ts = ctx.portfolio.get_cached_last_snapshot_ts()
+        reference_reader = getattr(ctx.portfolio, "get_exchange_reference_summary", None)
+        reference_summary = (
+            reference_reader() if callable(reference_reader) else None
+        ) or {}
         return PortfolioSummary(
             equity_usd=equity.equity_base,
             cash_usd=equity.cash_base,
@@ -89,6 +93,9 @@ async def get_portfolio_summary(request: Request) -> ApiEnvelope[PortfolioSummar
             drift_flag=equity.drift_flag,
             last_snapshot_ts=last_snapshot_ts,
             portfolio_baseline=getattr(ctx.portfolio, "baseline_source", None),
+            exchange_reference_equity_usd=reference_summary.get("equity_usd"),
+            exchange_reference_cash_usd=reference_summary.get("cash_usd"),
+            exchange_reference_checked_at=reference_summary.get("checked_at"),
         )
 
     return await run_bounded_route_read(

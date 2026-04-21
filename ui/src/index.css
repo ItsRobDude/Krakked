@@ -1572,6 +1572,11 @@ body {
   gap: 0.9rem;
 }
 
+.replay-toggle-panel {
+  display: grid;
+  gap: 0.9rem;
+}
+
 .replay-panel__header,
 .replay-panel__controls {
   display: flex;
@@ -1661,6 +1666,14 @@ body {
   margin: 0.4rem 0 0;
   padding-left: 1rem;
   color: #d5dfeb;
+}
+
+.integrity-panel__advanced {
+  display: grid;
+  gap: 0.75rem;
+  margin-top: 0.9rem;
+  padding-top: 0.9rem;
+  border-top: 1px solid rgba(146, 162, 183, 0.12);
 }
 
 .alert-card {

@@ -6,14 +6,16 @@ import pytest
 
 from krakked.config import (
     AppConfig,
+    ExecutionConfig,
     MarketDataConfig,
     PortfolioConfig,
     RegionCapabilities,
     RegionProfile,
+    SessionConfig,
     UniverseConfig,
 )
 from krakked.portfolio.manager import PortfolioService
-from krakked.portfolio.models import SpotPosition
+from krakked.portfolio.models import AssetBalance, BalanceSnapshot, SpotPosition
 
 
 @pytest.fixture
@@ -225,6 +227,126 @@ def test_equity_uses_fallback_price(service):
     assert pos.current_value_base == pytest.approx(120.0)
     assert equity.unrealized_pnl_base_total == pytest.approx(20.0)
     assert equity.drift_flag is True
+
+
+def test_paper_bootstrap_seeds_synthetic_starting_cash(mock_market_data, tmp_path):
+    config = AppConfig(
+        region=RegionProfile("US", RegionCapabilities(False, False, False)),
+        universe=UniverseConfig([], [], 0),
+        market_data=MarketDataConfig({}, {}, [], []),
+        portfolio=PortfolioConfig(),
+        execution=ExecutionConfig(mode="paper", validate_only=False),
+        session=SessionConfig(mode="paper", profile_name="rob"),
+    )
+    service = PortfolioService(config, mock_market_data, str(tmp_path / "paper.db"))
+    service.rest_client = MagicMock()
+
+    service._bootstrap_from_store()
+
+    assert service.balances["USD"].total == pytest.approx(10000.0)
+    snapshot = service.store.get_latest_balance_snapshot()
+    assert snapshot is not None
+    assert snapshot.balances["USD"].total == pytest.approx(10000.0)
+
+
+def test_paper_bootstrap_preserves_local_paper_state_across_restart(
+    mock_market_data, tmp_path
+):
+    config = AppConfig(
+        region=RegionProfile("US", RegionCapabilities(False, False, False)),
+        universe=UniverseConfig([], [], 0),
+        market_data=MarketDataConfig({}, {}, [], []),
+        portfolio=PortfolioConfig(),
+        execution=ExecutionConfig(mode="paper", validate_only=False),
+        session=SessionConfig(mode="paper", profile_name="rob"),
+    )
+    db_path = tmp_path / "paper.db"
+
+    first = PortfolioService(config, mock_market_data, str(db_path))
+    first.rest_client = MagicMock()
+    first._bootstrap_from_store()
+    first.ingest_simulated_trades(
+        [
+            {
+                "id": "paper-trade-1",
+                "ordertxid": "order-1",
+                "pair": "XBTUSD",
+                "time": 1000,
+                "type": "buy",
+                "ordertype": "limit",
+                "price": 50000.0,
+                "cost": 5000.0,
+                "fee": 0.0,
+                "vol": 0.1,
+                "margin": 0.0,
+                "misc": "",
+            }
+        ]
+    )
+
+    second = PortfolioService(config, mock_market_data, str(db_path))
+    second.rest_client = MagicMock()
+    second._bootstrap_from_store()
+
+    assert second.balances["USD"].total == pytest.approx(5000.0)
+    assert second.balances["XBT"].total == pytest.approx(0.1)
+    assert second.positions["XBTUSD"].base_size == pytest.approx(0.1)
+
+
+def test_paper_bootstrap_resets_legacy_exchange_reference_snapshot(
+    mock_market_data, tmp_path
+):
+    config = AppConfig(
+        region=RegionProfile("US", RegionCapabilities(False, False, False)),
+        universe=UniverseConfig([], [], 0),
+        market_data=MarketDataConfig({}, {}, [], []),
+        portfolio=PortfolioConfig(),
+        execution=ExecutionConfig(mode="paper", validate_only=False),
+        session=SessionConfig(mode="paper", profile_name="rob"),
+    )
+    service = PortfolioService(config, mock_market_data, str(tmp_path / "paper.db"))
+    service.rest_client = MagicMock()
+    service.store.save_balance_snapshot(
+        BalanceSnapshot(
+            id=None,
+            time=1000.0,
+            last_ledger_id="",
+            balances={
+                "USD": AssetBalance("USD", 14.52, 0.0, 14.52),
+                "XBT": AssetBalance("XBT", 0.0001, 0.0, 0.0001),
+            },
+        )
+    )
+
+    service._bootstrap_from_store()
+
+    assert set(service.balances) == {"USD"}
+    assert service.balances["USD"].total == pytest.approx(10000.0)
+
+
+def test_paper_sync_keeps_local_wallet_and_refreshes_exchange_reference(
+    mock_market_data, tmp_path
+):
+    config = AppConfig(
+        region=RegionProfile("US", RegionCapabilities(False, False, False)),
+        universe=UniverseConfig([], [], 0),
+        market_data=MarketDataConfig({}, {}, [], []),
+        portfolio=PortfolioConfig(),
+        execution=ExecutionConfig(mode="paper", validate_only=False),
+        session=SessionConfig(mode="paper", profile_name="rob"),
+    )
+    service = PortfolioService(config, mock_market_data, str(tmp_path / "paper.db"))
+    service.rest_client = MagicMock()
+    service.rest_client.get_private.return_value = {"ZUSD": "14.52", "XXBT": "0.0001"}
+
+    service._bootstrap_from_store()
+    result = service.sync()
+
+    assert result == {"new_trades": 0, "new_cash_flows": 0}
+    assert service.balances["USD"].total == pytest.approx(10000.0)
+    reference = service.get_exchange_reference_summary()
+    assert reference is not None
+    assert reference["cash_usd"] == pytest.approx(14.52)
 
 
 def test_equity_sets_drift_when_no_price(service):

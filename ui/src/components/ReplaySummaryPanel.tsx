@@ -34,6 +34,20 @@ const formatDateTime = (timestamp: string | null | undefined) => {
   });
 };
 
+const formatUtcDateTime = (timestamp: string | null | undefined) => {
+  if (!timestamp) return 'Unknown UTC';
+  const parsed = new Date(timestamp);
+  if (Number.isNaN(parsed.getTime())) return 'Unknown UTC';
+  return parsed.toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    timeZone: 'UTC',
+    timeZoneName: 'short',
+  });
+};
+
 export function ReplaySummaryPanel({ replay }: ReplaySummaryPanelProps) {
   const [showAdvanced, setShowAdvanced] = useState(false);
   const trustBadge = getReplayTrustBadge(replay);
@@ -48,6 +62,8 @@ export function ReplaySummaryPanel({ replay }: ReplaySummaryPanelProps) {
   const blockedReasons = Object.entries(replay?.blocked_reason_counts ?? {})
     .sort((left, right) => right[1] - left[1])
     .slice(0, 3);
+  const hasReplayWindow =
+    typeof replayInputs.start === 'string' && typeof replayInputs.end === 'string';
 
   return (
     <section className="panel replay-panel" aria-label="Latest replay summary">
@@ -85,16 +101,22 @@ export function ReplaySummaryPanel({ replay }: ReplaySummaryPanelProps) {
         <div className="replay-panel__content">
           <div className="replay-panel__headline">
             <p className="replay-panel__window">
-              {typeof replayInputs.start === 'string' && typeof replayInputs.end === 'string'
-                ? `${formatDateTime(replayInputs.start)} -> ${formatDateTime(replayInputs.end)}`
+              {hasReplayWindow
+                ? `${formatDateTime(replayInputs.start as string)} to ${formatDateTime(replayInputs.end as string)}`
                 : `Published ${formatDateTime(replay.generated_at)}`}
             </p>
+            {hasReplayWindow ? (
+              <p className="panel__hint">
+                UTC window: {formatUtcDateTime(replayInputs.start as string)} to {formatUtcDateTime(replayInputs.end as string)}
+              </p>
+            ) : null}
             <p className="replay-panel__trust-note">{replay.trust_note || 'Replay trust unavailable.'}</p>
+            <p className="panel__hint">Offline replay only. Separate from the live or paper account.</p>
           </div>
 
           <div className="replay-panel__stats">
             <div className="replay-panel__stat">
-              <span className="replay-panel__label">End equity</span>
+              <span className="replay-panel__label">Synthetic replay ending equity</span>
               <strong>{formatCurrency(replay.end_equity_usd)}</strong>
             </div>
             <div className="replay-panel__stat">
@@ -139,7 +161,9 @@ export function ReplaySummaryPanel({ replay }: ReplaySummaryPanelProps) {
                 <div className="replay-panel__advanced-item">
                   <span className="replay-panel__label">Enabled strategies</span>
                   <strong>{enabledStrategies.length > 0 ? enabledStrategies.join(', ') : 'Unknown'}</strong>
-                  <p className="panel__hint">Generated {formatDateTime(replay.generated_at)}.</p>
+                  <p className="panel__hint">
+                    Generated {formatDateTime(replay.generated_at)} ({formatUtcDateTime(replay.generated_at)}).
+                  </p>
                 </div>
               </div>
 

@@ -44,7 +44,7 @@ You can keep all files side by side in the config directory; the loader will aut
 
 Krakked now boots with a conservative operator-first starter profile unless you override it:
 
-* Execution defaults to `paper` with validate-only order handling.
+* Execution defaults to `paper` with a persistent synthetic paper wallet and live submission still gated behind explicit opt-in.
 * The starter universe is limited to `BTC/USD`, `ETH/USD`, `SOL/USD`, and `ADA/USD`.
 * Historical backfill defaults to `1h` and `4h`.
 * Live websocket OHLC defaults to a single `1m` stream.

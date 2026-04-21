@@ -3,9 +3,10 @@
 import logging
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
-from krakked.config import AppConfig
+from krakked.config import AppConfig, get_config_dir
 from krakked.connection.rate_limiter import RateLimiter
 from krakked.connection.rest_client import KrakenRESTClient
 from krakked.logging_config import structured_log_extra
@@ -28,9 +29,37 @@ from .portfolio import Portfolio
 from .store import PortfolioStore, SQLitePortfolioStore
 
 if TYPE_CHECKING:  # pragma: no cover
+    from krakked.execution.models import ExecutionResult, LocalOrder
     from krakked.strategy.models import DecisionRecord
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_PAPER_STARTING_CASH_USD = 10_000.0
+DEFAULT_PORTFOLIO_DB_NAME = "portfolio.db"
+DEFAULT_PROFILE_PAPER_DB_NAME = "portfolio.paper.db"
+
+
+def resolve_portfolio_db_path(config: AppConfig, db_path: Optional[str] = None) -> str:
+    configured_path = db_path or getattr(config.portfolio, "db_path", DEFAULT_PORTFOLIO_DB_NAME)
+    if (
+        getattr(config.execution, "mode", None) == "paper"
+        and configured_path == DEFAULT_PORTFOLIO_DB_NAME
+        and getattr(config.session, "profile_name", None)
+    ):
+        profile_name = str(config.session.profile_name)
+        target = (
+            get_config_dir()
+            / "profiles"
+            / profile_name
+            / DEFAULT_PROFILE_PAPER_DB_NAME
+        )
+        target.parent.mkdir(parents=True, exist_ok=True)
+        return str(target)
+
+    resolved = Path(configured_path).expanduser()
+    if resolved.is_absolute():
+        return str(resolved)
+    return str(resolved)
 
 
 class PortfolioService:
@@ -45,9 +74,7 @@ class PortfolioService:
         self.config = config.portfolio
         self.app_config = config  # Keep full config if needed
         self.market_data = market_data
-        resolved_db_path = db_path or getattr(
-            config.portfolio, "db_path", "portfolio.db"
-        )
+        resolved_db_path = resolve_portfolio_db_path(config, db_path)
         self.store: PortfolioStore = SQLitePortfolioStore(
             db_path=resolved_db_path,
             auto_migrate_schema=self.config.auto_migrate_schema,
@@ -77,7 +104,7 @@ class PortfolioService:
         self._last_sync_at: Optional[datetime] = None
         self._last_sync_reason: Optional[str] = None
         self._baseline_source: str = (
-            "exchange_balances"
+            "paper_wallet"
             if getattr(config.execution, "mode", "paper") == "paper"
             else "ledger_history"
         )
@@ -86,6 +113,9 @@ class PortfolioService:
         self._cached_asset_exposure: List[AssetExposure] = []
         self._cached_drift_status: Optional[DriftStatus] = None
         self._cached_last_snapshot_ts: Optional[int] = None
+        self._exchange_reference_balances: Dict[str, AssetBalance] = {}
+        self._exchange_reference_checked_at: Optional[datetime] = None
+        self._exchange_reference_equity: Optional[EquityView] = None
 
     @property
     def last_sync_ok(self) -> bool:
@@ -146,11 +176,25 @@ class PortfolioService:
 
         if self._is_paper_mode():
             snapshot = self.store.get_latest_balance_snapshot()
-            self.portfolio.balances = dict(snapshot.balances) if snapshot else {}
+            trades = self.store.get_trades(limit=None)
+            should_seed_wallet = (
+                snapshot is None
+                or self._should_reset_legacy_paper_snapshot(snapshot, trades)
+            )
+            if should_seed_wallet:
+                self._seed_paper_wallet()
+                self._save_balance_snapshot(datetime.now(timezone.utc))
+            else:
+                self.portfolio.balances = dict(snapshot.balances)
+
             self.portfolio.positions.clear()
             self.portfolio.realized_pnl_history.clear()
             self.portfolio.realized_pnl_base_by_pair.clear()
             self.portfolio.fees_paid_base_by_pair.clear()
+            trades.sort(key=lambda t: t.get("time", 0))
+            if trades:
+                self.portfolio.ingest_trades(trades, persist=False)
+            self._baseline_source = "paper_wallet"
             self._refresh_cached_views()
             self._bootstrapped = True
             return
@@ -203,7 +247,7 @@ class PortfolioService:
 
         try:
             if self._is_paper_mode():
-                return self._sync_paper_reference_portfolio()
+                return self._sync_paper_wallet()
 
             # 1. Fetch and Save Trades
             latest_trades = self.store.get_trades(limit=1)  # ordered by time desc
@@ -237,22 +281,40 @@ class PortfolioService:
         execution_config = getattr(getattr(self, "app_config", None), "execution", None)
         return getattr(execution_config, "mode", None) == "paper"
 
-    def _sync_paper_reference_portfolio(self) -> Dict[str, int]:
-        """Use current exchange balances as the paper-mode portfolio baseline."""
+    def _seed_paper_wallet(self) -> None:
+        base_currency = getattr(self.config, "base_currency", "USD")
+        self.portfolio.balances = {
+            base_currency: AssetBalance(
+                asset=base_currency,
+                free=DEFAULT_PAPER_STARTING_CASH_USD,
+                reserved=0.0,
+                total=DEFAULT_PAPER_STARTING_CASH_USD,
+            )
+        }
 
-        balance_resp = self.rest_client.get_private("Balance")
+    def _should_reset_legacy_paper_snapshot(
+        self, snapshot: BalanceSnapshot, trades: List[Dict[str, Any]]
+    ) -> bool:
+        if trades:
+            return False
+
+        balances = dict(snapshot.balances)
+        if len(balances) != 1:
+            return True
+
+        base_currency = getattr(self.config, "base_currency", "USD")
+        base_balance = balances.get(base_currency)
+        if base_balance is None:
+            return True
+
+        return abs(base_balance.total - DEFAULT_PAPER_STARTING_CASH_USD) > 1e-9
+
+    def _sync_paper_wallet(self) -> Dict[str, int]:
+        """Persist local paper state without overwriting it from Kraken balances."""
+
         now = datetime.now(timezone.utc)
-        self._baseline_source = "exchange_balances"
-        self.portfolio.balances = self._balances_from_exchange(balance_resp)
-        self.portfolio.positions.clear()
-        self.portfolio.realized_pnl_history.clear()
-        self.portfolio.realized_pnl_base_by_pair.clear()
-        self.portfolio.fees_paid_base_by_pair.clear()
-
-        # Paper mode is a reference portfolio seeded from current balances, not
-        # a replayed history. Reconcile against the same exchange snapshot so
-        # integrity stays tied to the latest fetched baseline.
-        self.portfolio.reconcile(balance_resp)
+        self._baseline_source = "paper_wallet"
+        self._refresh_exchange_reference(now)
         self._save_balance_snapshot(now)
         self.portfolio.maybe_snapshot(now=int(now.timestamp()))
         self._refresh_cached_views()
@@ -261,6 +323,26 @@ class PortfolioService:
         self._last_sync_reason = None
         self._last_sync_at = now
         return {"new_trades": 0, "new_cash_flows": 0}
+
+    def _refresh_exchange_reference(self, now: datetime) -> None:
+        if self.rest_client is None:
+            return
+        try:
+            balance_resp = self.rest_client.get_private("Balance")
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logger.warning(
+                "Paper exchange reference refresh failed",
+                extra=structured_log_extra(
+                    event="paper_reference_refresh_failed",
+                    error=str(exc),
+                ),
+            )
+            return
+
+        balances = self._balances_from_exchange(balance_resp)
+        self._exchange_reference_balances = balances
+        self._exchange_reference_equity = self._equity_view_for_balances(balances)
+        self._exchange_reference_checked_at = now
 
     def _balances_from_exchange(
         self, balance_resp: Dict[str, str]
@@ -285,6 +367,29 @@ class PortfolioService:
 
         return balances
 
+    def _equity_view_for_balances(
+        self, balances: Dict[str, AssetBalance]
+    ) -> EquityView:
+        equity = 0.0
+        cash = 0.0
+        unvalued_assets: List[str] = []
+        for asset, balance in balances.items():
+            conversion = self.portfolio._convert_to_base_currency(balance.total, asset)
+            equity += conversion.value_base
+            if asset == self.config.base_currency:
+                cash += conversion.value_base
+            if conversion.status == "unvalued":
+                unvalued_assets.append(asset)
+
+        return EquityView(
+            equity_base=equity,
+            cash_base=cash,
+            realized_pnl_base_total=0.0,
+            unrealized_pnl_base_total=0.0,
+            drift_flag=False,
+            unvalued_assets=unvalued_assets,
+        )
+
     def _save_balance_snapshot(self, now: datetime) -> None:
         snapshot = BalanceSnapshot(
             id=None,
@@ -304,6 +409,104 @@ class PortfolioService:
         if latest_snapshot and latest_snapshot.balances == snapshot.balances:
             return
         self.store.save_balance_snapshot(snapshot)
+
+    def ingest_simulated_trades(self, trades: List[Dict[str, Any]]) -> None:
+        if not trades:
+            return
+
+        for trade in trades:
+            self._apply_simulated_trade_balances(trade)
+
+        self.portfolio.ingest_trades(trades, persist=True)
+        now = datetime.now(timezone.utc)
+        self._save_balance_snapshot(now)
+        self.portfolio.maybe_snapshot(now=int(now.timestamp()))
+        self._refresh_cached_views()
+
+    def _apply_simulated_trade_balances(self, trade: Dict[str, Any]) -> None:
+        pair_meta = self.market_data.get_pair_metadata(trade["pair"])
+        base_asset = self.market_data.normalize_asset(pair_meta.base)
+        quote_asset = self.market_data.normalize_asset(pair_meta.quote)
+        volume = float(trade.get("vol", 0.0))
+        cost = float(trade.get("cost", 0.0))
+        fee = float(trade.get("fee", 0.0))
+        side = str(trade.get("type", "")).lower()
+
+        base_balance = self.portfolio.balances.get(
+            base_asset, AssetBalance(base_asset, 0.0, 0.0, 0.0)
+        )
+        quote_balance = self.portfolio.balances.get(
+            quote_asset, AssetBalance(quote_asset, 0.0, 0.0, 0.0)
+        )
+
+        if side == "buy":
+            base_delta = volume
+            quote_delta = -(cost + fee)
+        else:
+            base_delta = -volume
+            quote_delta = cost - fee
+
+        base_balance.free += base_delta
+        base_balance.total += base_delta
+        quote_balance.free += quote_delta
+        quote_balance.total += quote_delta
+
+        self.portfolio.balances[base_asset] = base_balance
+        self.portfolio.balances[quote_asset] = quote_balance
+
+    def ingest_filled_orders(self, execution: "ExecutionResult", fee_bps: float = 0.0) -> None:
+        trades: List[Dict[str, Any]] = []
+        for order in getattr(execution, "orders", []):
+            trade = self._trade_from_filled_order(order, fee_bps=fee_bps)
+            if trade is not None:
+                trades.append(trade)
+
+        if trades:
+            self.ingest_simulated_trades(trades)
+
+    def _trade_from_filled_order(
+        self, order: "LocalOrder", fee_bps: float = 0.0
+    ) -> Optional[Dict[str, Any]]:
+        if getattr(order, "status", None) != "filled":
+            return None
+
+        price = getattr(order, "avg_fill_price", None) or getattr(
+            order, "requested_price", None
+        )
+        volume = getattr(order, "cumulative_base_filled", 0.0) or getattr(
+            order, "requested_base_size", 0.0
+        )
+        if price is None or float(volume) <= 0:
+            return None
+
+        price_value = float(price)
+        volume_value = float(volume)
+        notional = price_value * volume_value
+        fee = notional * max(float(fee_bps), 0.0) / 10_000.0
+        updated_at = getattr(order, "updated_at", datetime.now(timezone.utc))
+        timestamp = (
+            updated_at.timestamp()
+            if isinstance(updated_at, datetime)
+            else datetime.now(timezone.utc).timestamp()
+        )
+
+        return {
+            "id": f"paper-trade-{order.local_id}",
+            "ordertxid": getattr(order, "kraken_order_id", None) or order.local_id,
+            "pair": order.pair,
+            "time": timestamp,
+            "type": order.side,
+            "ordertype": order.order_type,
+            "price": price_value,
+            "cost": notional,
+            "fee": fee,
+            "vol": volume_value,
+            "margin": 0.0,
+            "misc": "",
+            "posstatus": None,
+            "strategy_tag": order.strategy_id,
+            "userref": order.userref,
+        }
 
     def _sync_trades_history(self, since_ts: Optional[float]) -> int:
         """Fetch, deduplicate, enrich, and persist new trades."""
@@ -549,6 +752,16 @@ class PortfolioService:
     @property
     def realized_pnl_history(self):
         return self.portfolio.realized_pnl_history
+
+    def get_exchange_reference_summary(self) -> Optional[Dict[str, Any]]:
+        if self._exchange_reference_equity is None:
+            return None
+
+        return {
+            "equity_usd": self._exchange_reference_equity.equity_base,
+            "cash_usd": self._exchange_reference_equity.cash_base,
+            "checked_at": self._exchange_reference_checked_at,
+        }
 
     @property
     def drift_flag(self) -> bool:

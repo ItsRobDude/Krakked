@@ -53,6 +53,32 @@ def test_portfolio_summary_reports_exchange_balance_baseline(client, portfolio_c
     assert payload["cash_usd"] == 10.0
 
 
+def test_portfolio_summary_includes_exchange_reference_details(client, portfolio_context):
+    portfolio_context.portfolio.get_cached_equity.return_value = EquityView(
+        equity_base=10000.0,
+        cash_base=10000.0,
+        realized_pnl_base_total=0.0,
+        unrealized_pnl_base_total=0.0,
+        drift_flag=False,
+    )
+    portfolio_context.portfolio.get_cached_last_snapshot_ts.return_value = 111111
+    portfolio_context.portfolio.baseline_source = "paper_wallet"
+    portfolio_context.portfolio.get_exchange_reference_summary.return_value = {
+        "equity_usd": 14.52,
+        "cash_usd": 14.52,
+        "checked_at": "2026-04-20T20:53:00Z",
+    }
+
+    response = client.get("/api/portfolio/summary")
+
+    assert response.status_code == 200
+    payload = response.json()["data"]
+    assert payload["portfolio_baseline"] == "paper_wallet"
+    assert payload["exchange_reference_equity_usd"] == 14.52
+    assert payload["exchange_reference_cash_usd"] == 14.52
+    assert payload["exchange_reference_checked_at"] == "2026-04-20T20:53:00Z"
+
+
 def test_portfolio_summary_times_out_fast(client, portfolio_context, monkeypatch):
     monkeypatch.setattr(route_runtime, "DEFAULT_UI_ROUTE_TIMEOUT_SECONDS", 0.01)
 

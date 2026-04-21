@@ -9,11 +9,23 @@ from krakked.portfolio.portfolio import Portfolio
 
 def _build_service(store, portfolio, api_client):
     service = PortfolioService.__new__(PortfolioService)
+    service.config = PortfolioConfig()
     service.store = store
     service.portfolio = portfolio
     service.rest_client = api_client
     service._bootstrapped = True
     service._last_sync_ok = True
+    service._last_sync_reason = None
+    service._last_sync_at = None
+    service._cached_equity = None
+    service._cached_positions = []
+    service._cached_asset_exposure = []
+    service._cached_drift_status = None
+    service._cached_last_snapshot_ts = None
+    service._exchange_reference_balances = {}
+    service._exchange_reference_checked_at = None
+    service._exchange_reference_equity = None
+    service._refresh_cached_views = Mock()
     service._reconcile = Mock()
     return service
 
@@ -151,18 +163,39 @@ def test_sync_does_not_persist_cash_flows_on_failure():
     assert service.last_sync_ok is False
 
 
-def test_paper_sync_uses_exchange_balances_without_trade_replay():
+def test_paper_sync_keeps_local_wallet_and_caches_exchange_reference():
     store = Mock()
     portfolio = Mock()
     api_client = Mock()
 
-    portfolio.balances = {}
+    portfolio.balances = {
+        "USD": SimpleNamespace(asset="USD", free=10000.0, reserved=0.0, total=10000.0)
+    }
     portfolio.positions = {}
     portfolio.realized_pnl_history = []
     portfolio.realized_pnl_base_by_pair = {}
     portfolio.fees_paid_base_by_pair = {}
     portfolio.maybe_snapshot = Mock()
-    portfolio.reconcile = Mock()
+    portfolio.get_positions.return_value = []
+    portfolio.equity_view.return_value = SimpleNamespace(
+        equity_base=10000.0,
+        cash_base=10000.0,
+        realized_pnl_base_total=0.0,
+        unrealized_pnl_base_total=0.0,
+        drift_flag=False,
+    )
+    portfolio.get_asset_exposure.return_value = []
+    portfolio.get_drift_status.return_value = SimpleNamespace(
+        drift_flag=False,
+        expected_position_value_base=0.0,
+        actual_balance_value_base=0.0,
+        tolerance_base=0.0,
+        mismatched_assets=[],
+    )
+    portfolio._convert_to_base_currency.side_effect = lambda amount, asset: SimpleNamespace(
+        value_base=float(amount) if asset == "USD" else float(amount) * 50000.0,
+        status="valued",
+    )
 
     api_client.get_private.return_value = {
         "ZUSD": "125.50",
@@ -180,11 +213,10 @@ def test_paper_sync_uses_exchange_balances_without_trade_replay():
 
     assert result == {"new_trades": 0, "new_cash_flows": 0}
     assert service.last_sync_ok is True
-    assert portfolio.balances["USD"].total == 125.50
-    assert portfolio.balances["XBT"].total == 0.01
-    portfolio.reconcile.assert_called_once()
+    assert portfolio.balances["USD"].total == 10000.0
     portfolio.maybe_snapshot.assert_called_once()
     store.save_balance_snapshot.assert_called_once()
+    assert service.get_exchange_reference_summary()["cash_usd"] == 125.50
 
 
 def test_portfolio_ingest_trades_skips_pairs_outside_active_universe():

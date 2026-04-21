@@ -1233,7 +1233,7 @@ def parse_app_config(
         max_slippage_bps=clamped_slippage_bps,
         time_in_force=execution_data.get("time_in_force", "GTC"),
         post_only=execution_data.get("post_only", False),
-        validate_only=execution_data.get("validate_only", True),
+        validate_only=execution_data.get("validate_only", False),
         allow_live_trading=execution_data.get("allow_live_trading", False),
         paper_tests_completed=execution_data.get("paper_tests_completed", False),
         dead_man_switch_seconds=execution_data.get("dead_man_switch_seconds", 600),
@@ -1342,6 +1342,15 @@ def parse_app_config(
                     "config_path": str(config_path),
                 },
             )
+    elif execution_config.mode == "paper" and execution_config.validate_only:
+        logger.info(
+            "Paper mode now uses a persistent synthetic wallet; forcing validate_only=False",
+            extra={
+                "event": "config_paper_validate_only_disabled",
+                "config_path": str(config_path),
+            },
+        )
+        execution_config.validate_only = False
 
     ui_data = raw_config.get("ui") or {}
     if not isinstance(ui_data, dict):

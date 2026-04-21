@@ -25,6 +25,9 @@ class PortfolioSummary(BaseModel):
     drift_flag: Optional[bool]
     last_snapshot_ts: Optional[int]
     portfolio_baseline: Optional[str] = None
+    exchange_reference_equity_usd: Optional[float] = None
+    exchange_reference_cash_usd: Optional[float] = None
+    exchange_reference_checked_at: Optional[datetime] = None
 
 
 class PositionPayload(BaseModel):

@@ -34,7 +34,7 @@ from krakked.logging_config import (
 from krakked.market_data.api import MarketDataAPI
 from krakked.metrics import SystemMetrics
 from krakked.portfolio.exceptions import PortfolioSchemaError
-from krakked.portfolio.manager import PortfolioService
+from krakked.portfolio.manager import PortfolioService, resolve_portfolio_db_path
 from krakked.portfolio.models import DriftStatus
 from krakked.portfolio.store import (
     CURRENT_SCHEMA_VERSION,
@@ -421,6 +421,14 @@ def _run_loop_iteration(
                 result: Optional[ExecutionResult] = None
                 if plan.actions:
                     result = execution_service.execute_plan(plan)
+                    is_paper_mode_reader = getattr(portfolio, "_is_paper_mode", None)
+                    is_paper_mode = (
+                        is_paper_mode_reader() if callable(is_paper_mode_reader) else False
+                    )
+                    if is_paper_mode is True:
+                        ingest_filled_orders = getattr(portfolio, "ingest_filled_orders", None)
+                        if callable(ingest_filled_orders):
+                            ingest_filled_orders(result)
                     kill_switch_rejections = [
                         order
                         for order in getattr(result, "orders", [])
@@ -498,7 +506,7 @@ class BotController:
                     },
                     "execution": {
                         "mode": "paper",
-                        "validate_only": True,
+                        "validate_only": False,
                         "allow_live_trading": False,
                     },
                     "ui": ui_defaults,
@@ -557,7 +565,9 @@ class BotController:
                 allow_interactive_setup=self.allow_interactive_setup
             )
 
-            db_path = getattr(config.portfolio, "db_path", "portfolio.db")
+            db_path = resolve_portfolio_db_path(
+                config, getattr(config.portfolio, "db_path", "portfolio.db")
+            )
             auto_migrate = config.portfolio.auto_migrate_schema
             execution_mode = getattr(config.execution, "mode", "unknown")
 
@@ -673,7 +683,7 @@ class BotController:
                         },
                         "execution": {
                             "mode": "paper",
-                            "validate_only": True,
+                            "validate_only": False,
                             "allow_live_trading": False,
                         },
                         "ui": ui_defaults,

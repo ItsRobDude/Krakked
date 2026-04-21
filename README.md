@@ -12,7 +12,7 @@ This repository includes working, test-covered implementations across the core t
 | **Phase 2: Market Data** | ✅ Implemented | Pair-universe discovery, OHLC backfill to a pluggable store, and WebSocket v2 streaming with staleness checks. |
 | **Phase 3: Portfolio** | ✅ Implemented | Portfolio service with SQLite persistence, weighted-average cost PnL, fee tracking, and cashflow detection. |
 | **Phase 4: Strategy & Risk** | ✅ Implemented with known follow-ups | Strategy loader with multi-timeframe scheduling, per-strategy/portfolio caps, liquidity gating, and staleness handling; order tagging/OMS wiring will land in Phase 5. |
-| **Phase 5: Execution** | ✅ Implemented | OMS with market-data-driven routing, retries/backoff, dead-man switch hooks, panic cancel, and SQLite persistence; paper/validate-only defaults with explicit allow_live_trading gate for live submission. |
+| **Phase 5: Execution** | ✅ Implemented | OMS with market-data-driven routing, retries/backoff, dead-man switch hooks, panic cancel, and SQLite persistence; paper now uses a persistent synthetic account by default, with explicit `allow_live_trading` gates for live submission. |
 | **Phase 6: UI/Control** | ✅ Implemented | CLI/web interface for monitoring and manual control. See [Phase 6 contract](docs/phases/phase6.md#status--todo) for the completed scope and API details. |
 | **Phase 7: Ops & Runtime** | ✅ Implemented with follow-up validation | Orchestrator, structured logging, metrics, schema guard, CI, packaging, release workflow, backup/export/import, and Docker deployment docs are in place. |
 | **Current Product Track** | 🚧 In progress | The main remaining work is deployment proof on a real Docker host, richer strategy/ML UX, live-readiness hardening, and commercial/distribution polish. |
@@ -41,7 +41,7 @@ The bot is organized into distinct modules:
 *   **`connection`**: Low-level API interaction (REST only today). Handles auth, signing, retries, and rate limits, plus encrypted credential setup.
 *   **`market_data`**: Abstracted data access. Builds the tradable universe, backfills OHLC, and exposes WebSocket v2 streaming caches with stale-data protection.
 *   **`portfolio`**: Accounting engine. Tracks balances, positions, WAC PnL, and cashflows in memory with SQLite persistence.
-*   **`strategy`**: Decision-making layer. Strategies emit intents that flow through the risk engine and into the OMS for execution or paper/validate-only routing.
+*   **`strategy`**: Decision-making layer. Strategies emit intents that flow through the risk engine and into the OMS for synthetic paper or live execution routing.
 
 ## 📦 Installation & Setup
 
@@ -261,7 +261,7 @@ Start with `backtest-preflight` if you want a quick local coverage check before 
 * **Non-interactive setup**: add `--allow-interactive-setup false` to block credential prompts in CI/servers while still booting the orchestrator.
 * **Execution knobs**: `execution.mode` selects `paper` vs. `live`, `execution.allow_live_trading` is the final gate for live submissions, and dead-man/kill switches remain available via the configured cancel-all hooks.
 
-Execution defaults stay conservative until you explicitly opt-in: `mode="paper"`, `validate_only=True`, and `allow_live_trading=False`, keeping all `krakked` entry points in paper/validate-only mode out of the box.【F:src/krakked/config.py†L29-L36】
+Execution defaults stay conservative until you explicitly opt-in: `mode="paper"`, `validate_only=False`, and `allow_live_trading=False`, which now gives you a persistent synthetic paper account out of the box while still keeping live submission gated off until you deliberately enable it.【F:src/krakked/config.py†L29-L36】
 
 To start the full orchestrator (market data WebSocket loop, portfolio sync scheduler, strategy cycles with execution, and the FastAPI UI in the same process):
 
@@ -278,7 +278,7 @@ CLI helpers default to the local `portfolio.db` SQLite file; pass `--db-path` to
 poetry run python -m krakked.execution.admin_cli list-open
 poetry run python -m krakked.execution.admin_cli recent-executions
 
-# Targeted or global cancels (remains safe in paper/validate-only mode)
+# Targeted or global cancels (remains safe in paper mode)
 poetry run python -m krakked.execution.admin_cli cancel --plan-id <id>
 poetry run python -m krakked.execution.admin_cli panic
 ```

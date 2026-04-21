@@ -41,7 +41,7 @@ class ExecutionConfig:
     max_slippage_bps: int = 50
     time_in_force: str = "GTC"
     post_only: bool = False
-    validate_only: bool = True
+    validate_only: bool = False
     allow_live_trading: bool = False
     paper_tests_completed: bool = False
     dead_man_switch_seconds: int = 600

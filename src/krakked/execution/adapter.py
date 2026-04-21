@@ -631,15 +631,7 @@ def get_execution_adapter(
         return KrakenExecutionAdapter(client=client, config=config)
 
     if config.mode == "paper":
-        if client is None:
-            # Paper mode now requires a client for validation calls.
-            # If strictly no client is available, one might fall back to dry-run,
-            # but that masks the user intent of 'paper' (verify with Kraken).
-            # We raise an error to enforce proper setup.
-            raise ExecutionError(
-                "Paper execution mode requires a KrakenRESTClient for validation calls."
-            )
-        return KrakenExecutionAdapter(client=client, config=config)
+        return DryRunExecutionAdapter(config=config, rate_limiter=rate_limiter)
 
     if config.mode == "simulation":
         return SimulationExecutionAdapter(config=config)

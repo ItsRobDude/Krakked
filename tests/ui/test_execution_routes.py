@@ -163,6 +163,8 @@ def test_flatten_all_executes_plan(client, exec_context):
     exec_context.execution_service.execute_plan.return_value = ExecutionResult(
         plan_id="flatten_1", started_at=datetime.now(UTC), success=True
     )
+    exec_context.portfolio._is_paper_mode.return_value = True
+    exec_context.portfolio.ingest_filled_orders.return_value = None
     # Satisfy safety gates
     exec_context.execution_service.cancel_all.return_value = None
     exec_context.execution_service.get_open_orders.return_value = []
@@ -179,6 +181,7 @@ def test_flatten_all_executes_plan(client, exec_context):
             exec_context.portfolio.get_positions.return_value
         )
         exec_context.execution_service.execute_plan.assert_called_once_with(plan)
+        exec_context.portfolio.ingest_filled_orders.assert_called_once()
         assert payload["error"] is None
         assert payload["data"]["plan_id"].startswith("flatten_")
         mock_dump.assert_called_once()

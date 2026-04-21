@@ -301,6 +301,14 @@ async def flatten_all_positions(
         dump_runtime_overrides(ctx.config, session=ctx.session, sections={"session"})
 
         result = ctx.execution_service.execute_plan(plan)
+        is_paper_mode_reader = getattr(ctx.portfolio, "_is_paper_mode", None)
+        is_paper_mode = (
+            is_paper_mode_reader() if callable(is_paper_mode_reader) else False
+        )
+        if is_paper_mode is True:
+            ingest_filled_orders = getattr(ctx.portfolio, "ingest_filled_orders", None)
+            if callable(ingest_filled_orders):
+                ingest_filled_orders(result)
 
         logger.info(
             "Flatten all triggered via API",

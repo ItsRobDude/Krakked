@@ -174,16 +174,16 @@ def test_apply_config_restricted_keys_stripped_if_same(
             "config": {
                 "execution": {
                     "mode": "paper",  # Same as current default
-                    "validate_only": True,  # Same as current default
+                    "validate_only": False,  # Same as current default
                 },
                 "ui": {"host": "127.0.0.1"},
             }
         }
 
         # Ensure context matches payload for this test
-        # ExecutionConfig defaults: validate_only=True, mode="paper"
+        # ExecutionConfig defaults: validate_only=False, mode="paper"
         safe_context.config.execution.mode = "paper"
-        safe_context.config.execution.validate_only = True
+        safe_context.config.execution.validate_only = False
 
         response = client.post("/api/config/apply", json=payload)
         assert response.status_code == 200

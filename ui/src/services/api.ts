@@ -15,6 +15,9 @@ export type PortfolioSummary = {
   drift_flag: boolean | null;
   last_snapshot_ts: string | null;
   portfolio_baseline?: string | null;
+  exchange_reference_equity_usd?: number | null;
+  exchange_reference_cash_usd?: number | null;
+  exchange_reference_checked_at?: string | null;
 };
 
 export type PositionPayload = {

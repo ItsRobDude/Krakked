@@ -288,7 +288,7 @@ def _persist_execution_settings(
 
     exec_sec = data.get("execution", {})
     exec_sec["mode"] = new_mode
-    exec_sec["validate_only"] = new_mode != "live"
+    exec_sec["validate_only"] = False
 
     if allow_live_trading is not None:
         exec_sec["allow_live_trading"] = allow_live_trading
@@ -1410,7 +1410,7 @@ async def create_profile(
 
         base_config["execution"]["mode"] = payload.default_mode
         base_config["execution"]["allow_live_trading"] = False
-        base_config["execution"]["validate_only"] = payload.default_mode != "live"
+        base_config["execution"]["validate_only"] = False
 
         if payload.default_mode == "live":
             return ApiEnvelope(
@@ -1663,7 +1663,7 @@ async def set_execution_mode(
     # Update in-memory state so subsequent calls reflect the change immediately
     # We do this AFTER successful persistence to avoid split-brain if write fails.
     execution_config.mode = new_mode
-    execution_config.validate_only = new_mode != "live"
+    execution_config.validate_only = False
     if new_mode == "live":
         execution_config.allow_live_trading = next_allow_live_trading
         execution_config.paper_tests_completed = next_paper_tests_completed
@@ -1677,7 +1677,7 @@ async def set_execution_mode(
         adapter_conf = getattr(ctx.execution_service.adapter, "config", None)
         if adapter_conf:
             adapter_conf.mode = new_mode
-            adapter_conf.validate_only = new_mode != "live"
+            adapter_conf.validate_only = False
             if new_mode == "live":
                 adapter_conf.allow_live_trading = next_allow_live_trading
                 adapter_conf.paper_tests_completed = next_paper_tests_completed

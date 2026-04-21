@@ -51,7 +51,7 @@ execution:
     app_config = load_config()
 
     assert app_config.execution.mode == "paper"
-    assert app_config.execution.validate_only is True
+    assert app_config.execution.validate_only is False
     assert app_config.execution.allow_live_trading is False
 
 
