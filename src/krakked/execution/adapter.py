@@ -553,10 +553,14 @@ class SimulationExecutionAdapter:
         self,
         config: Optional[ExecutionConfig] = None,
         fill_callback: Optional[Callable[[LocalOrder], None]] = None,
+        fill_price_resolver: Optional[
+            Callable[[LocalOrder, PairMetadata, Optional[float]], Optional[float]]
+        ] = None,
     ):
         self.config = config or ExecutionConfig()
         self.client: Optional[KrakenRESTClient] = None
         self._fill_callback = fill_callback
+        self._fill_price_resolver = fill_price_resolver
 
     def submit_order(
         self,
@@ -571,7 +575,10 @@ class SimulationExecutionAdapter:
         Useful for backtesting or integration tests where deterministic behavior
         is required.
         """
-        price = order.requested_price
+        if self._fill_price_resolver is not None:
+            price = self._fill_price_resolver(order, pair_metadata, latest_price)
+        else:
+            price = latest_price if latest_price is not None else order.requested_price
         order.kraken_order_id = order.kraken_order_id or f"sim-{order.local_id}"
         order.status = "filled"
         order.cumulative_base_filled = order.requested_base_size

@@ -1,12 +1,22 @@
 from __future__ import annotations
 
+import json
 import sqlite3
+from datetime import UTC, datetime
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
 from krakked import cli
+from krakked.backtest.runner import (
+    BacktestCoverageItem,
+    BacktestPreflight,
+    BacktestPreflightResult,
+    BacktestResult,
+    BacktestSummary,
+)
 from krakked.config import load_config
 from krakked.credentials import CredentialResult, CredentialStatus
 from krakked.portfolio.exceptions import PortfolioSchemaError
@@ -340,3 +350,413 @@ def test_migrate_db_subcommand_handles_migration_failure(
     assert exit_code == 1
     output = capsys.readouterr().out
     assert "Migration failed" in output
+
+
+def test_backtest_subcommand_prints_summary(
+    monkeypatch: pytest.MonkeyPatch, capsys: Any
+) -> None:
+    captured: dict[str, Any] = {}
+
+    def _fake_run_backtest(
+        config: Any,
+        start: Any,
+        end: Any,
+        timeframes: Any = None,
+        *,
+        starting_cash_usd: float,
+        fee_bps: float,
+        db_path: str | None = None,
+        strict_data: bool = False,
+    ) -> BacktestResult:
+        captured["config"] = config
+        captured["start"] = start
+        captured["end"] = end
+        captured["timeframes"] = timeframes
+        captured["starting_cash_usd"] = starting_cash_usd
+        captured["fee_bps"] = fee_bps
+        captured["db_path"] = db_path
+        captured["strict_data"] = strict_data
+        return BacktestResult(
+            plans=[],
+            executions=[],
+            preflight=BacktestPreflight(
+                coverage=[
+                    BacktestCoverageItem(
+                        pair="BTC/USD",
+                        timeframe="1h",
+                        bar_count=24,
+                        first_bar_at=start,
+                        last_bar_at=end,
+                        status="ok",
+                    ),
+                    BacktestCoverageItem(
+                        pair="BTC/USD",
+                        timeframe="4h",
+                        bar_count=0,
+                        first_bar_at=None,
+                        last_bar_at=None,
+                        status="missing",
+                    ),
+                ],
+                usable_series_count=1,
+                missing_series=["BTC/USD@4h"],
+                partial_series=[],
+            ),
+            summary=BacktestSummary(
+                start=start,
+                end=end,
+                starting_cash_usd=starting_cash_usd,
+                ending_equity_usd=10_250.0,
+                absolute_pnl_usd=250.0,
+                return_pct=2.5,
+                max_drawdown_pct=1.25,
+                realized_pnl_usd=100.0,
+                unrealized_pnl_usd=150.0,
+                pairs=["BTC/USD"],
+                timeframes=["1h"],
+                total_cycles=12,
+                total_actions=4,
+                blocked_actions=1,
+                total_orders=3,
+                filled_orders=2,
+                rejected_orders=1,
+                execution_errors=0,
+                fee_bps=25.0,
+                slippage_bps=50.0,
+                cost_model="Immediate candle-close fills using configured slippage and flat taker fees.",
+                usable_series_count=1,
+                missing_series=["BTC/USD@4h"],
+                partial_series=[],
+                coverage=[
+                    BacktestCoverageItem(
+                        pair="BTC/USD",
+                        timeframe="1h",
+                        bar_count=24,
+                        first_bar_at=start,
+                        last_bar_at=end,
+                        status="ok",
+                    )
+                ],
+                per_strategy={
+                    "majors_mean_rev": {
+                        "realized_pnl_usd": 100.0,
+                        "trade_count": 2,
+                        "winning_trades": 1,
+                        "losing_trades": 1,
+                    }
+                },
+                replay_inputs={
+                    "start": start.isoformat(),
+                    "end": end.isoformat(),
+                    "pairs": ["BTC/USD"],
+                    "timeframes": ["1h"],
+                    "enabled_strategies": ["majors_mean_rev"],
+                    "starting_cash_usd": starting_cash_usd,
+                    "fee_bps": fee_bps,
+                    "slippage_bps": 50.0,
+                    "strict_data": strict_data,
+                },
+                trust_level="limited",
+                trust_note="Limited signal: some strategy actions were blocked by guardrails.",
+                notable_warnings=["Most strategy actions were blocked by guardrails."],
+                blocked_reason_counts={"Max open positions reached (1)": 1},
+                assumptions=["Synthetic fills only."],
+            ),
+        )
+
+    monkeypatch.setattr(cli, "run_backtest", _fake_run_backtest)
+
+    exit_code = cli.main(
+        [
+            "backtest",
+            "--start",
+            "2026-04-01T00:00:00Z",
+            "--end",
+            "2026-04-02T00:00:00Z",
+            "--pair",
+            "BTC/USD",
+            "--timeframe",
+            "1h",
+            "--starting-cash-usd",
+            "10000",
+        ]
+    )
+
+    assert exit_code == 0
+    assert captured["starting_cash_usd"] == 10_000.0
+    assert captured["fee_bps"] == 25.0
+    assert captured["timeframes"] == ["1h"]
+    output = capsys.readouterr().out
+    assert "Backtest completed." in output
+    assert "Wallet: start $10,000.00 -> end $10,250.00 (+250.00, +2.50%)" in output
+    assert "Replay trust: Limited signal: some strategy actions were blocked by guardrails." in output
+    assert "Cost model: 50 bps slippage + 25.00 bps taker fee" in output
+    assert "Missing OHLC series:" in output
+    assert "Top blocked reason: Max open positions reached (1) (1)" in output
+
+
+def test_backtest_subcommand_save_report_writes_json(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    start = datetime(2026, 4, 1, tzinfo=UTC)
+    end = datetime(2026, 4, 2, tzinfo=UTC)
+
+    def _fake_run_backtest(*args: Any, **kwargs: Any) -> BacktestResult:  # noqa: ARG001
+        return BacktestResult(
+            plans=[],
+            executions=[],
+            preflight=BacktestPreflight(
+                coverage=[
+                    BacktestCoverageItem(
+                        pair="BTC/USD",
+                        timeframe="1h",
+                        bar_count=24,
+                        first_bar_at=start,
+                        last_bar_at=end,
+                        status="ok",
+                    )
+                ],
+                usable_series_count=1,
+                missing_series=[],
+                partial_series=[],
+            ),
+            summary=BacktestSummary(
+                start=start,
+                end=end,
+                starting_cash_usd=10_000.0,
+                ending_equity_usd=10_100.0,
+                absolute_pnl_usd=100.0,
+                return_pct=1.0,
+                max_drawdown_pct=0.5,
+                realized_pnl_usd=60.0,
+                unrealized_pnl_usd=40.0,
+                pairs=["BTC/USD"],
+                timeframes=["1h"],
+                total_cycles=24,
+                total_actions=3,
+                blocked_actions=1,
+                total_orders=2,
+                filled_orders=1,
+                rejected_orders=1,
+                execution_errors=0,
+                fee_bps=25.0,
+                slippage_bps=50.0,
+                cost_model="Immediate candle-close fills using configured slippage and flat taker fees.",
+                usable_series_count=1,
+                missing_series=[],
+                partial_series=[],
+                coverage=[
+                    BacktestCoverageItem(
+                        pair="BTC/USD",
+                        timeframe="1h",
+                        bar_count=24,
+                        first_bar_at=start,
+                        last_bar_at=end,
+                        status="ok",
+                    )
+                ],
+                per_strategy={
+                    "majors_mean_rev": {
+                        "realized_pnl_usd": 60.0,
+                        "trade_count": 1,
+                        "winning_trades": 1,
+                        "losing_trades": 0,
+                    }
+                },
+                replay_inputs={
+                    "start": start.isoformat(),
+                    "end": end.isoformat(),
+                    "pairs": ["BTC/USD"],
+                    "timeframes": ["1h"],
+                    "enabled_strategies": ["majors_mean_rev"],
+                    "starting_cash_usd": 10_000.0,
+                    "fee_bps": 25.0,
+                    "slippage_bps": 50.0,
+                    "strict_data": False,
+                },
+                trust_level="decision_helpful",
+                trust_note="Decision-helpful: coverage was complete and the replay produced filled trades.",
+                notable_warnings=[],
+                blocked_reason_counts={},
+                assumptions=["Synthetic fills only."],
+            ),
+        )
+
+    monkeypatch.setattr(cli, "run_backtest", _fake_run_backtest)
+
+    report_path = tmp_path / "report.json"
+    exit_code = cli.main(
+        [
+            "backtest",
+            "--start",
+            "2026-04-01T00:00:00Z",
+            "--end",
+            "2026-04-02T00:00:00Z",
+            "--save-report",
+            str(report_path),
+            "--json",
+        ]
+    )
+
+    assert exit_code == 0
+    payload = json.loads(report_path.read_text(encoding="utf-8"))
+    assert payload["report_version"] == 1
+    assert payload["summary"]["ending_equity_usd"] == pytest.approx(10_100.0)
+    assert payload["summary"]["replay_inputs"]["config_path"] is None
+    assert payload["preflight"]["usable_series_count"] == 1
+    assert payload["provenance"]["app_version"] == cli.APP_VERSION
+
+
+def test_backtest_preflight_command_prints_summary(
+    monkeypatch: pytest.MonkeyPatch, capsys: Any
+) -> None:
+    start = datetime(2026, 4, 1, tzinfo=UTC)
+    end = datetime(2026, 4, 2, tzinfo=UTC)
+
+    def _fake_build_backtest_preflight(*args: Any, **kwargs: Any) -> BacktestPreflightResult:  # noqa: ARG001
+        return BacktestPreflightResult(
+            start=start,
+            end=end,
+            pairs=["BTC/USD"],
+            timeframes=["1h"],
+            preflight=BacktestPreflight(
+                coverage=[
+                    BacktestCoverageItem(
+                        pair="BTC/USD",
+                        timeframe="1h",
+                        bar_count=24,
+                        first_bar_at=start,
+                        last_bar_at=end,
+                        status="ok",
+                    )
+                ],
+                usable_series_count=1,
+                missing_series=[],
+                partial_series=[],
+                status="ready",
+                summary_note="Coverage looks complete for the requested replay window.",
+                warnings=[],
+            ),
+        )
+
+    monkeypatch.setattr(cli, "build_backtest_preflight", _fake_build_backtest_preflight)
+
+    exit_code = cli.main(
+        [
+            "backtest-preflight",
+            "--start",
+            "2026-04-01T00:00:00Z",
+            "--end",
+            "2026-04-02T00:00:00Z",
+        ]
+    )
+
+    assert exit_code == 0
+    output = capsys.readouterr().out
+    assert "Backtest preflight" in output
+    assert "Coverage status: ready" in output
+    assert "Replay readiness: Coverage looks complete" in output
+
+
+def test_compare_backtests_prints_deltas(tmp_path: Path, capsys: Any) -> None:
+    baseline_path = tmp_path / "baseline.json"
+    candidate_path = tmp_path / "candidate.json"
+    baseline_path.write_text(
+        json.dumps(
+            {
+                "report_version": 1,
+                "summary": {
+                    "ending_equity_usd": 10_000.0,
+                    "return_pct": 0.0,
+                    "max_drawdown_pct": 5.0,
+                    "filled_orders": 2,
+                    "blocked_actions": 1,
+                    "execution_errors": 0,
+                    "replay_inputs": {},
+                    "per_strategy": {
+                        "majors_mean_rev": {"realized_pnl_usd": 25.0}
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    candidate_path.write_text(
+        json.dumps(
+            {
+                "report_version": 1,
+                "summary": {
+                    "ending_equity_usd": 10_120.0,
+                    "return_pct": 1.2,
+                    "max_drawdown_pct": 4.5,
+                    "filled_orders": 3,
+                    "blocked_actions": 0,
+                    "execution_errors": 0,
+                    "replay_inputs": {},
+                    "per_strategy": {
+                        "majors_mean_rev": {"realized_pnl_usd": 55.0}
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    exit_code = cli.main(
+        [
+            "compare-backtests",
+            "--baseline",
+            str(baseline_path),
+            "--candidate",
+            str(candidate_path),
+        ]
+    )
+
+    assert exit_code == 0
+    output = capsys.readouterr().out
+    assert "Backtest comparison" in output
+    assert "Ending equity USD: 10,000.00 -> 10,120.00 (+120.00)" in output
+    assert "Per-strategy realized PnL delta:" in output
+    assert "majors_mean_rev: 25.00 -> 55.00 (+30.00)" in output
+
+
+def test_compare_backtests_rejects_invalid_report_version(
+    tmp_path: Path, capsys: Any
+) -> None:
+    baseline_path = tmp_path / "baseline.json"
+    candidate_path = tmp_path / "candidate.json"
+    baseline_path.write_text(
+        json.dumps({"report_version": 2, "summary": {}}), encoding="utf-8"
+    )
+    candidate_path.write_text(
+        json.dumps(
+            {
+                "report_version": 1,
+                "summary": {
+                    "ending_equity_usd": 10_000.0,
+                    "return_pct": 0.0,
+                    "max_drawdown_pct": 0.0,
+                    "filled_orders": 0,
+                    "blocked_actions": 0,
+                    "execution_errors": 0,
+                    "per_strategy": {},
+                    "replay_inputs": {},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    exit_code = cli.main(
+        [
+            "compare-backtests",
+            "--baseline",
+            str(baseline_path),
+            "--candidate",
+            str(candidate_path),
+        ]
+    )
+
+    assert exit_code == 1
+    output = capsys.readouterr().out
+    assert "Unsupported report version" in output

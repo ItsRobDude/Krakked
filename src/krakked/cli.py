@@ -9,18 +9,29 @@ import sys
 import tempfile
 import time
 import zipfile
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Callable
 
 from krakked import APP_VERSION, secrets
+from krakked.backtest.runner import (
+    BacktestPreflightResult,
+    BacktestResult,
+    build_backtest_preflight,
+    run_backtest,
+)
 from krakked.connection.exceptions import (
     AuthError,
     KrakenAPIError,
     RateLimitError,
     ServiceUnavailableError,
 )
-from krakked.config import get_config_dir, get_default_ohlc_store_config
+from krakked.config import (
+    AppConfig,
+    get_config_dir,
+    get_default_ohlc_store_config,
+    load_config,
+)
 from krakked.connection.rest_client import KrakenRESTClient
 from krakked.credentials import CredentialResult, CredentialStatus
 from krakked.main import run as run_orchestrator
@@ -239,6 +250,396 @@ def _run_command(args: argparse.Namespace) -> int:
     """Start the long-running orchestrator with UI and scheduler loops."""
 
     return run_orchestrator(allow_interactive_setup=args.allow_interactive_setup)
+
+
+def _parse_datetime_arg(value: str) -> datetime:
+    normalized = value.strip()
+    if normalized.endswith("Z"):
+        normalized = normalized[:-1] + "+00:00"
+
+    parsed = datetime.fromisoformat(normalized)
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
+def _load_backtest_config(args: argparse.Namespace) -> AppConfig:
+    config_path = Path(args.config).expanduser().resolve() if args.config else None
+    config = load_config(config_path=config_path, env="paper")
+
+    if args.pair:
+        requested_pairs = [str(pair) for pair in args.pair]
+        requested_set = set(requested_pairs)
+        config.universe.include_pairs = requested_pairs
+        for strat_cfg in config.strategies.configs.values():
+            params = strat_cfg.params or {}
+            pair_values = params.get("pairs")
+            if isinstance(pair_values, list):
+                params["pairs"] = [
+                    pair for pair in pair_values if pair in requested_set
+                ]
+                strat_cfg.params = params
+
+    return config
+
+
+def _print_backtest_summary(
+    result: BacktestResult,
+    *,
+    persist_db_path: str | None = None,
+    report_path: str | None = None,
+) -> None:
+    summary = result.summary
+    if summary is None:
+        print("Backtest completed, but no summary was generated.")
+        return
+
+    print("Backtest completed.")
+    print(
+        f"Window: {summary.start.isoformat()} -> {summary.end.isoformat()} "
+        f"({summary.total_cycles} replay cycles)"
+    )
+    print(
+        f"Pairs: {', '.join(summary.pairs)} | Timeframes: {', '.join(summary.timeframes)}"
+    )
+    print(
+        f"Wallet: start ${summary.starting_cash_usd:,.2f} -> "
+        f"end ${summary.ending_equity_usd:,.2f} "
+        f"({summary.absolute_pnl_usd:+,.2f}, {summary.return_pct:+.2f}%)"
+    )
+    print(
+        f"PnL: realized ${summary.realized_pnl_usd:,.2f} | "
+        f"unrealized ${summary.unrealized_pnl_usd:,.2f} | "
+        f"max drawdown {summary.max_drawdown_pct:.2f}%"
+    )
+    print(f"Replay trust: {summary.trust_note}")
+    print(f"Actions: {summary.total_actions} total, {summary.blocked_actions} blocked")
+    print(
+        f"Orders: {summary.total_orders} total, {summary.filled_orders} filled, "
+        f"{summary.rejected_orders} rejected"
+    )
+    print(f"Execution errors: {summary.execution_errors}")
+    print(
+        f"Cost model: {summary.slippage_bps:.0f} bps slippage + "
+        f"{summary.fee_bps:.2f} bps taker fee"
+    )
+
+    if summary.missing_series:
+        print("Missing OHLC series:")
+        for series in summary.missing_series:
+            print(f"- {series}")
+    if summary.partial_series:
+        print("Partial-window OHLC series:")
+        for series in summary.partial_series:
+            print(f"- {series}")
+    if summary.notable_warnings:
+        print("Important warnings:")
+        for warning in summary.notable_warnings:
+            print(f"- {warning}")
+    if summary.blocked_reason_counts:
+        top_reason, count = next(iter(summary.blocked_reason_counts.items()))
+        print(f"Top blocked reason: {top_reason} ({count})")
+
+    print("Simulation limits:")
+    for assumption in summary.assumptions:
+        print(f"- {assumption}")
+
+    if persist_db_path:
+        print(f"SQLite output: {persist_db_path}")
+    if report_path:
+        print(f"Saved report: {report_path}")
+
+
+def _write_backtest_report(payload: dict[str, Any], report_path: str) -> str:
+    resolved = Path(report_path).expanduser().resolve()
+    resolved.parent.mkdir(parents=True, exist_ok=True)
+    resolved.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    return str(resolved)
+
+
+def _validate_backtest_report_payload(
+    payload: dict[str, Any], *, resolved_path: Path
+) -> dict[str, Any]:
+    if payload.get("report_version") != 1:
+        raise ValueError(
+            f"Unsupported report version in {resolved_path}: {payload.get('report_version')}"
+        )
+
+    summary = payload.get("summary")
+    if not isinstance(summary, dict):
+        raise ValueError(f"Report is missing a summary payload: {resolved_path}")
+
+    required_fields = {
+        "ending_equity_usd",
+        "return_pct",
+        "max_drawdown_pct",
+        "filled_orders",
+        "blocked_actions",
+        "execution_errors",
+        "per_strategy",
+        "replay_inputs",
+    }
+    missing_fields = sorted(field for field in required_fields if field not in summary)
+    if missing_fields:
+        raise ValueError(
+            f"Report summary is missing required fields in {resolved_path}: {', '.join(missing_fields)}"
+        )
+
+    if not isinstance(summary.get("per_strategy"), dict):
+        raise ValueError(f"Report per_strategy is invalid in {resolved_path}")
+    if not isinstance(summary.get("replay_inputs"), dict):
+        raise ValueError(f"Report replay_inputs is invalid in {resolved_path}")
+
+    preflight = payload.get("preflight")
+    if preflight is not None and not isinstance(preflight, dict):
+        raise ValueError(f"Report preflight payload is invalid in {resolved_path}")
+    provenance = payload.get("provenance")
+    if provenance is not None and not isinstance(provenance, dict):
+        raise ValueError(f"Report provenance payload is invalid in {resolved_path}")
+
+    return payload
+
+
+def _load_backtest_report(report_path: str) -> dict[str, Any]:
+    resolved = Path(report_path).expanduser().resolve()
+    try:
+        payload = json.loads(resolved.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise ValueError(f"Report not found: {resolved}") from exc
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Report is not valid JSON: {resolved}") from exc
+
+    if not isinstance(payload, dict):
+        raise ValueError(f"Report root payload is invalid: {resolved}")
+    return _validate_backtest_report_payload(payload, resolved_path=resolved)
+
+
+def _print_backtest_preflight(result: BacktestPreflightResult) -> None:
+    preflight = result.preflight
+    print("Backtest preflight")
+    print(
+        f"Window: {result.start.isoformat()} -> {result.end.isoformat()} "
+        f"| Pairs: {', '.join(result.pairs)} | Timeframes: {', '.join(result.timeframes)}"
+    )
+    print(
+        f"Coverage status: {preflight.status} "
+        f"({preflight.usable_series_count} usable, "
+        f"{len(preflight.partial_series)} partial, {len(preflight.missing_series)} missing)"
+    )
+    print(f"Replay readiness: {preflight.summary_note}")
+    if preflight.warnings:
+        print("Warnings:")
+        for warning in preflight.warnings:
+            print(f"- {warning}")
+    print("Series coverage:")
+    for item in preflight.coverage:
+        first_bar = item.first_bar_at.isoformat() if item.first_bar_at else "none"
+        last_bar = item.last_bar_at.isoformat() if item.last_bar_at else "none"
+        print(
+            f"- {item.series_key}: {item.status}, {item.bar_count} bars, "
+            f"first {first_bar}, last {last_bar}"
+        )
+
+
+def _format_delta(label: str, baseline: float, candidate: float, suffix: str = "") -> str:
+    delta = candidate - baseline
+    return (
+        f"{label}: {baseline:,.2f}{suffix} -> {candidate:,.2f}{suffix} "
+        f"({delta:+,.2f}{suffix})"
+    )
+
+
+def _compare_backtests_command(args: argparse.Namespace) -> int:
+    try:
+        baseline = _load_backtest_report(args.baseline)
+        candidate = _load_backtest_report(args.candidate)
+    except ValueError as exc:
+        return _print_error(f"Compare-backtests failed: {exc}")
+
+    baseline_summary = baseline["summary"]
+    candidate_summary = candidate["summary"]
+
+    print("Backtest comparison")
+    print(f"Baseline: {Path(args.baseline).expanduser().resolve()}")
+    print(f"Candidate: {Path(args.candidate).expanduser().resolve()}")
+    print(
+        _format_delta(
+            "Ending equity USD",
+            float(baseline_summary.get("ending_equity_usd", 0.0)),
+            float(candidate_summary.get("ending_equity_usd", 0.0)),
+        )
+    )
+    print(
+        _format_delta(
+            "Total return pct",
+            float(baseline_summary.get("return_pct", 0.0)),
+            float(candidate_summary.get("return_pct", 0.0)),
+            suffix="%",
+        )
+    )
+    print(
+        _format_delta(
+            "Max drawdown pct",
+            float(baseline_summary.get("max_drawdown_pct", 0.0)),
+            float(candidate_summary.get("max_drawdown_pct", 0.0)),
+            suffix="%",
+        )
+    )
+    print(
+        _format_delta(
+            "Filled orders",
+            float(baseline_summary.get("filled_orders", 0.0)),
+            float(candidate_summary.get("filled_orders", 0.0)),
+        )
+    )
+    print(
+        _format_delta(
+            "Blocked actions",
+            float(baseline_summary.get("blocked_actions", 0.0)),
+            float(candidate_summary.get("blocked_actions", 0.0)),
+        )
+    )
+    print(
+        _format_delta(
+            "Execution errors",
+            float(baseline_summary.get("execution_errors", 0.0)),
+            float(candidate_summary.get("execution_errors", 0.0)),
+        )
+    )
+
+    baseline_per_strategy = baseline_summary.get("per_strategy") or {}
+    candidate_per_strategy = candidate_summary.get("per_strategy") or {}
+    overlapping = sorted(set(baseline_per_strategy) & set(candidate_per_strategy))
+    if overlapping:
+        print("Per-strategy realized PnL delta:")
+        for strategy_id in overlapping:
+            baseline_pnl = float(
+                (baseline_per_strategy.get(strategy_id) or {}).get(
+                    "realized_pnl_usd", 0.0
+                )
+            )
+            candidate_pnl = float(
+                (candidate_per_strategy.get(strategy_id) or {}).get(
+                    "realized_pnl_usd", 0.0
+                )
+            )
+            delta = candidate_pnl - baseline_pnl
+            print(
+                f"- {strategy_id}: {baseline_pnl:,.2f} -> "
+                f"{candidate_pnl:,.2f} ({delta:+,.2f})"
+            )
+
+    return 0
+
+
+def _backtest_preflight_command(args: argparse.Namespace) -> int:
+    try:
+        start = _parse_datetime_arg(args.start)
+        end = _parse_datetime_arg(args.end)
+    except ValueError as exc:
+        return _print_error(f"Invalid backtest datetime: {exc}")
+
+    try:
+        config = _load_backtest_config(args)
+        result = build_backtest_preflight(
+            config,
+            start=start,
+            end=end,
+            timeframes=args.timeframe,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _print_error(f"Backtest preflight failed: {exc}")
+
+    if args.strict_data and (
+        result.preflight.missing_series or result.preflight.partial_series
+    ):
+        return _print_error(
+            "Backtest preflight failed in strict mode: "
+            + "; ".join(
+                part
+                for part in [
+                    (
+                        "missing: " + ", ".join(result.preflight.missing_series)
+                        if result.preflight.missing_series
+                        else ""
+                    ),
+                    (
+                        "partial: " + ", ".join(result.preflight.partial_series)
+                        if result.preflight.partial_series
+                        else ""
+                    ),
+                ]
+                if part
+            )
+        )
+
+    payload = result.to_dict()
+    if args.json:
+        print(json.dumps(payload, indent=2))
+    else:
+        _print_backtest_preflight(result)
+    return 0
+
+
+def _backtest_command(args: argparse.Namespace) -> int:
+    """Replay stored OHLC data through the strategy/risk/execution stack."""
+
+    try:
+        start = _parse_datetime_arg(args.start)
+        end = _parse_datetime_arg(args.end)
+    except ValueError as exc:
+        return _print_error(f"Invalid backtest datetime: {exc}")
+
+    try:
+        config = _load_backtest_config(args)
+        result = run_backtest(
+            config,
+            start=start,
+            end=end,
+            timeframes=args.timeframe,
+            starting_cash_usd=float(args.starting_cash_usd),
+            fee_bps=float(args.fee_bps),
+            db_path=args.db_path,
+            strict_data=bool(args.strict_data),
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _print_error(f"Backtest failed: {exc}")
+
+    payload = result.to_report_dict()
+    if result.summary is not None:
+        payload["summary"]["replay_inputs"]["config_path"] = (
+            str(Path(args.config).expanduser().resolve()) if args.config else None
+        )
+    payload["provenance"] = {
+        "app_version": APP_VERSION,
+        "config_path": (
+            str(Path(args.config).expanduser().resolve()) if args.config else None
+        ),
+        "generated_by": "krakked backtest",
+    }
+    if args.db_path:
+        payload["sqlite_output"] = str(Path(args.db_path).expanduser().resolve())
+
+    saved_report_path: str | None = None
+    if args.save_report:
+        try:
+            saved_report_path = _write_backtest_report(payload, args.save_report)
+        except Exception as exc:  # noqa: BLE001
+            return _print_error(f"Backtest report write failed: {exc}")
+
+    if args.json:
+        print(json.dumps(payload, indent=2))
+    else:
+        persist_db_path = (
+            str(Path(args.db_path).expanduser().resolve()) if args.db_path else None
+        )
+        _print_backtest_summary(
+            result,
+            persist_db_path=persist_db_path,
+            report_path=saved_report_path,
+        )
+
+    return 0
 
 
 def _get_schema_version(db_path: str) -> int | None:
@@ -564,7 +965,9 @@ def _export_install_command(args: argparse.Namespace) -> int:
                 )
 
                 for config_file in _iter_files_for_archive(config_dir):
-                    archive_member = Path("config") / config_file.relative_to(config_dir)
+                    archive_member = Path("config") / config_file.relative_to(
+                        config_dir
+                    )
                     _write_archive_file(archive, config_file, archive_member)
 
                 _write_archive_file(archive, db_copy_path, Path("state/portfolio.db"))
@@ -629,7 +1032,9 @@ def _import_install_command(args: argparse.Namespace) -> int:
                     existing_conflicts.append(target_path)
 
             if existing_conflicts:
-                conflict_lines = "\n".join(f"- {path}" for path in existing_conflicts[:10])
+                conflict_lines = "\n".join(
+                    f"- {path}" for path in existing_conflicts[:10]
+                )
                 return _print_error(
                     "Import would overwrite existing files. Re-run with --force.\n"
                     + conflict_lines
@@ -698,6 +1103,122 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Prompt for credentials if they are not already configured",
     )
     run_parser.set_defaults(func=_run_command)
+
+    backtest_preflight_parser = subparsers.add_parser(
+        "backtest-preflight",
+        help="Check local historical coverage for an offline replay without running strategies",
+    )
+    backtest_preflight_parser.add_argument(
+        "--start",
+        required=True,
+        help="Preflight start time in ISO-8601 form",
+    )
+    backtest_preflight_parser.add_argument(
+        "--end",
+        required=True,
+        help="Preflight end time in ISO-8601 form",
+    )
+    backtest_preflight_parser.add_argument(
+        "--config",
+        help="Optional path to the base config.yaml to inspect",
+    )
+    backtest_preflight_parser.add_argument(
+        "--pair",
+        action="append",
+        help="Limit the preflight to one pair; repeat to include multiple pairs",
+    )
+    backtest_preflight_parser.add_argument(
+        "--timeframe",
+        action="append",
+        help="Limit the preflight to one timeframe; repeat to include multiple timeframes",
+    )
+    backtest_preflight_parser.add_argument(
+        "--strict-data",
+        action="store_true",
+        help="Fail if any requested pair/timeframe is missing or only partially covered",
+    )
+    backtest_preflight_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print the preflight payload as JSON",
+    )
+    backtest_preflight_parser.set_defaults(func=_backtest_preflight_command)
+
+    backtest_parser = subparsers.add_parser(
+        "backtest",
+        help="Replay stored OHLC data offline through the strategy, risk, and execution layers",
+    )
+    backtest_parser.add_argument(
+        "--start",
+        required=True,
+        help="Backtest start time in ISO-8601 form (for example 2026-04-01 or 2026-04-01T00:00:00Z)",
+    )
+    backtest_parser.add_argument(
+        "--end",
+        required=True,
+        help="Backtest end time in ISO-8601 form (for example 2026-04-20 or 2026-04-20T00:00:00Z)",
+    )
+    backtest_parser.add_argument(
+        "--config",
+        help="Optional path to the base config.yaml to use for the replay",
+    )
+    backtest_parser.add_argument(
+        "--pair",
+        action="append",
+        help="Limit the replay to one pair; repeat to include multiple pairs",
+    )
+    backtest_parser.add_argument(
+        "--timeframe",
+        action="append",
+        help="Limit the replay to one timeframe; repeat to include multiple timeframes",
+    )
+    backtest_parser.add_argument(
+        "--starting-cash-usd",
+        type=float,
+        default=10_000.0,
+        help="Synthetic starting USD wallet balance for the offline replay",
+    )
+    backtest_parser.add_argument(
+        "--fee-bps",
+        type=float,
+        default=25.0,
+        help="Flat taker fee in basis points applied to simulated fills",
+    )
+    backtest_parser.add_argument(
+        "--db-path",
+        help="Optional SQLite path to persist decisions, orders, and execution results",
+    )
+    backtest_parser.add_argument(
+        "--save-report",
+        help="Optional JSON path for a durable backtest report artifact",
+    )
+    backtest_parser.add_argument(
+        "--strict-data",
+        action="store_true",
+        help="Fail the run if any requested pair/timeframe is missing or only partially covered",
+    )
+    backtest_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print the backtest summary as JSON",
+    )
+    backtest_parser.set_defaults(func=_backtest_command)
+
+    compare_backtests_parser = subparsers.add_parser(
+        "compare-backtests",
+        help="Compare two saved backtest JSON reports without rerunning simulations",
+    )
+    compare_backtests_parser.add_argument(
+        "--baseline",
+        required=True,
+        help="Path to the baseline saved report JSON",
+    )
+    compare_backtests_parser.add_argument(
+        "--candidate",
+        required=True,
+        help="Path to the candidate saved report JSON",
+    )
+    compare_backtests_parser.set_defaults(func=_compare_backtests_command)
 
     # Consolidated Migration Command
     migrate_parser = subparsers.add_parser(

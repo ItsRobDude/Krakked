@@ -32,6 +32,8 @@ See [`docs/docker.md`](docs/docker.md) for the preferred self-hosted deployment 
 
 See [`docs/onboarding.md`](docs/onboarding.md) for a beginner-friendly first-run path, [`docs/releases.md`](docs/releases.md) for the Docker/image release flow, [`docs/upgrades.md`](docs/upgrades.md) for update steps, [`docs/backup-restore.md`](docs/backup-restore.md) for backup/export/import, [`docs/unraid.md`](docs/unraid.md) for an Unraid-oriented deployment sketch, and [`docs/distribution.md`](docs/distribution.md) for the current distribution/commercial recommendation.
 
+See [`docs/simulation.md`](docs/simulation.md) for the current offline replay / backtesting seam and its explicit limits.
+
 ## 🏗️ Architecture
 
 The bot is organized into distinct modules:
@@ -234,6 +236,24 @@ To run a single synchronous cycle:
 poetry run krakked run-once
 ```
 
+### 📉 Offline Replay Quickstart
+
+`krakked backtest` replays stored OHLC through the existing strategy, risk, router, and OMS layers without Kraken network calls. It uses an explicit synthetic USD bankroll and now leads with a simple trust/readiness readout so average users do not have to parse the whole report to see whether a run is decision-helpful.
+
+```bash
+poetry run krakked backtest-preflight \
+  --start 2026-04-01T00:00:00Z \
+  --end 2026-04-20T00:00:00Z
+
+poetry run krakked backtest \
+  --start 2026-04-01T00:00:00Z \
+  --end 2026-04-20T00:00:00Z \
+  --starting-cash-usd 10000 \
+  --save-report backtest-report.json
+```
+
+Start with `backtest-preflight` if you want a quick local coverage check before running the strategy stack. Add `--fee-bps` to tune the flat taker-fee assumption, `--strict-data` to hard-fail on missing or partial coverage, and `--db-path backtest.db` if you want to keep the SQLite decisions/orders/results after the run. Use `poetry run krakked compare-backtests --baseline a.json --candidate b.json` to compare two saved reports without rerunning. See [`docs/simulation.md`](docs/simulation.md) for the current assumptions and limits.
+
 ### ▶️ Running the bot
 
 * **Full orchestrator**: `poetry run krakked run` starts the WebSocket loop, scheduler, strategies, execution, and FastAPI UI.
@@ -279,6 +299,9 @@ Use the packaged console script for the common workflows:
 
 * `poetry run krakked run` — long-lived orchestrator with scheduler, OMS, and UI enabled.
 * `poetry run krakked run-once` — single paper/validate-only cycle for quick safety checks.
+* `poetry run krakked backtest-preflight --start <iso> --end <iso>` — check historical pair/timeframe coverage and replay readiness without running strategies.
+* `poetry run krakked backtest --start <iso> --end <iso>` — offline replay over stored OHLC using the live strategy/risk/execution stack with slippage/fee-aware simulation fills, coverage preflight, and optional saved JSON reports.
+* `poetry run krakked compare-backtests --baseline <report.json> --candidate <report.json>` — compare two saved replay reports without rerunning the strategy stack.
 * `poetry run krakked migrate --db-path <path>` — create or migrate the SQLite portfolio store (defaults to `portfolio.db`).
 * `poetry run krakked db-schema-version --db-path <path>` — inspect the current schema version recorded in the store.
 * `poetry run krakked db-backup --db-path <path>` / `db-info` / `db-check` — backup and inspect the portfolio database before upgrades.
