@@ -22,7 +22,11 @@ from krakked.market_data.models import ConnectionStatus, OHLCBar, PairMetadata
 from krakked.market_data.ohlc_store import FileOHLCStore
 from krakked.portfolio.manager import PortfolioService
 from krakked.portfolio.models import AssetBalance
-from krakked.strategy.engine import StrategyEngine
+from krakked.strategy.engine import (
+    StrategyEngine,
+    build_strategy,
+    resolve_strategy_required_timeframes,
+)
 from krakked.strategy.models import ExecutionPlan
 
 logger = logging.getLogger(__name__)
@@ -854,16 +858,24 @@ def _default_backtest_timeframes(config: AppConfig) -> List[str]:
         strat_cfg = config.strategies.configs.get(strategy_id)
         if strat_cfg is None:
             continue
+        strategy = build_strategy(strat_cfg)
+        if strategy is not None:
+            discovered.extend(resolve_strategy_required_timeframes(strategy))
+            continue
+
         params = strat_cfg.params or {}
         value = params.get("timeframes")
         if isinstance(value, (list, tuple)):
             discovered.extend(str(item) for item in value if item)
         elif value:
             discovered.append(str(value))
+        elif params.get("timeframe"):
+            discovered.append(str(params["timeframe"]))
+        else:
+            discovered.append("1h")
 
-        for key in ("timeframe", "regime_timeframe"):
-            if params.get(key):
-                discovered.append(str(params[key]))
+        if params.get("regime_timeframe"):
+            discovered.append(str(params["regime_timeframe"]))
 
     for timeframe in getattr(config.market_data, "backfill_timeframes", []) or []:
         discovered.append(str(timeframe))

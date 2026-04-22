@@ -46,7 +46,7 @@ Krakked now boots with a conservative operator-first starter profile unless you 
 
 * Execution defaults to `paper` with a persistent synthetic paper wallet and live submission still gated behind explicit opt-in.
 * The starter universe is limited to `BTC/USD`, `ETH/USD`, `SOL/USD`, and `ADA/USD`.
-* Historical backfill defaults to `1h` and `4h`.
+* Historical backfill defaults to `1h`, `4h`, and `1d`.
 * Live websocket OHLC defaults to a single `1m` stream.
 * The enabled starter strategy pack is:
   * `trend_core`

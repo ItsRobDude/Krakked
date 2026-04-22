@@ -232,6 +232,98 @@ def test_data_stale_error_skips_timeframe():
     assert state.pnl_summary["realized_pnl_usd"] == 0.0
 
 
+def test_engine_uses_parsed_default_timeframe_when_config_omits_it():
+    class FakeStrategy(Strategy):
+        def warmup(self, market_data, portfolio):
+            return None
+
+        def generate_intents(self, ctx):
+            return [
+                StrategyIntent(
+                    strategy_id=self.id,
+                    pair="XBTUSD",
+                    side="long",
+                    intent_type="enter",
+                    desired_exposure_usd=1000.0,
+                    confidence=0.8,
+                    timeframe=ctx.timeframe,
+                    generated_at=ctx.now,
+                )
+            ]
+
+    strat_config = StrategyConfig(name="fake", type="fake", enabled=True, params={})
+    strategies_cfg = StrategiesConfig(enabled=["fake"], configs={"fake": strat_config})
+
+    app_config = MagicMock(spec=AppConfig)
+    app_config.strategies = strategies_cfg
+    app_config.risk = RiskConfig()
+    app_config.universe = MagicMock()
+    app_config.universe.include_pairs = ["XBTUSD"]
+
+    market = MagicMock(spec=MarketDataAPI)
+    market.get_data_status.return_value = MagicMock(
+        rest_api_reachable=True,
+        websocket_connected=True,
+        stale_pairs=0,
+    )
+
+    portfolio = MagicMock(spec=PortfolioService)
+    portfolio.record_execution_plan = MagicMock()
+    portfolio.record_decision = MagicMock()
+    portfolio.store = MagicMock()
+    portfolio.store.get_snapshots.return_value = []
+    portfolio.get_cached_equity.return_value = EquityView(
+        equity_base=10000.0,
+        cash_base=10000.0,
+        realized_pnl_base_total=0.0,
+        unrealized_pnl_base_total=0.0,
+        drift_flag=False,
+    )
+    portfolio.get_cached_asset_exposure.return_value = []
+    portfolio.get_cached_positions.return_value = []
+    portfolio.get_cached_drift_status.return_value = None
+    portfolio.get_realized_pnl_by_strategy.return_value = {}
+    portfolio.config = SimpleNamespace(base_currency="USD")
+
+    engine = StrategyRiskEngine(app_config, market, portfolio)
+    engine._data_ready = MagicMock(return_value=True)
+    engine.risk_engine = MagicMock()
+    engine.risk_engine.process_intents.return_value = []
+    engine.risk_engine.get_status.return_value = RiskStatus(
+        kill_switch_active=False,
+        daily_drawdown_pct=0.0,
+        drift_flag=False,
+        total_exposure_pct=0.0,
+        manual_exposure_pct=0.0,
+        per_asset_exposure_pct={},
+        per_strategy_exposure_pct={},
+    )
+    engine.risk_engine.build_risk_context.return_value = SimpleNamespace(
+        per_strategy_exposure_pct={}
+    )
+
+    fake_strategy = FakeStrategy(strat_config)
+    fake_strategy.params = SimpleNamespace(timeframe="4h")
+    engine.strategies = {"fake": fake_strategy}
+    engine.strategy_states = {
+        "fake": StrategyState(
+            strategy_id="fake",
+            enabled=True,
+            last_intents_at=None,
+            last_actions_at=None,
+            current_positions=[],
+            pnl_summary={},
+        )
+    }
+
+    engine.run_cycle(datetime.now(timezone.utc))
+
+    engine.risk_engine.process_intents.assert_called_once()
+    processed_intents = engine.risk_engine.process_intents.call_args[0][0]
+    assert len(processed_intents) == 1
+    assert processed_intents[0].timeframe == "4h"
+
+
 def test_trend_following_ignores_missing_liquidity_metadata():
     strat_config = StrategyConfig(
         name="trend_core",

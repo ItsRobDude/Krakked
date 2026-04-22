@@ -592,7 +592,7 @@ def test_setup_config_updates_existing_bootstrap_config(
     assert config_data["ml"]["enabled"] is False
     assert config_data["risk"]["max_open_positions"] == 4
     assert config_data["risk"]["max_per_strategy_pct"]["trend_core"] == 5.0
-    assert config_data["market_data"]["backfill_timeframes"] == ["1h", "4h"]
+    assert config_data["market_data"]["backfill_timeframes"] == ["1h", "4h", "1d"]
     assert config_data["market_data"]["ws_timeframes"] == ["1m"]
 
 
@@ -645,7 +645,7 @@ def test_setup_config_preserves_ws_style_pairs(
     config_data = yaml.safe_load((temp_config_dir / "config.yaml").read_text())
     assert config_data["universe"]["include_pairs"] == ["BTC/USD", "ETH/USD"]
     assert config_data["universe"]["min_24h_volume_usd"] == 100000.0
-    assert config_data["market_data"]["backfill_timeframes"] == ["1h", "4h"]
+    assert config_data["market_data"]["backfill_timeframes"] == ["1h", "4h", "1d"]
     assert config_data["market_data"]["ws_timeframes"] == ["1m"]
 
 
@@ -722,7 +722,7 @@ def test_setup_config_upgrades_legacy_bootstrap_defaults(
         "ADA/USD",
     ]
     assert config_data["universe"]["min_24h_volume_usd"] == 100000.0
-    assert config_data["market_data"]["backfill_timeframes"] == ["1h", "4h"]
+    assert config_data["market_data"]["backfill_timeframes"] == ["1h", "4h", "1d"]
     assert config_data["market_data"]["ws_timeframes"] == ["1m"]
     assert config_data["ml"]["enabled"] is False
 

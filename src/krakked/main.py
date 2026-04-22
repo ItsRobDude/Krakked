@@ -501,7 +501,7 @@ class BotController:
                     "market_data": {
                         "ws": {},
                         "ohlc_store": get_default_ohlc_store_config(),
-                        "backfill_timeframes": ["1h", "4h"],
+                        "backfill_timeframes": ["1h", "4h", "1d"],
                         "ws_timeframes": ["1m"],
                     },
                     "execution": {
@@ -678,7 +678,7 @@ class BotController:
                         "market_data": {
                             "ws": {},
                             "ohlc_store": get_default_ohlc_store_config(),
-                            "backfill_timeframes": ["1h", "4h"],
+                            "backfill_timeframes": ["1h", "4h", "1d"],
                             "ws_timeframes": ["1m"],
                         },
                         "execution": {

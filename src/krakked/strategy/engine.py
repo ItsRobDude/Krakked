@@ -59,6 +59,73 @@ def _strategy_registry() -> Dict[str, Type[Strategy]]:
     }
 
 
+def build_strategy(strategy_config: StrategyConfig) -> Strategy | None:
+    """Instantiate a strategy from config without warming it up."""
+
+    strat_class = _strategy_registry().get(strategy_config.type)
+    if strat_class is None:
+        return None
+    return strat_class(strategy_config)
+
+
+def resolve_strategy_timeframes(strategy: Strategy) -> List[str]:
+    """Resolve the effective decision-cycle timeframes for a strategy."""
+
+    params = strategy.config.params or {}
+    ordered: List[str] = []
+
+    configured_timeframes = params.get("timeframes")
+    if isinstance(configured_timeframes, (list, tuple)):
+        for timeframe in configured_timeframes:
+            if timeframe:
+                ordered.append(str(timeframe))
+    elif configured_timeframes:
+        ordered.append(str(configured_timeframes))
+    elif params.get("timeframe"):
+        ordered.append(str(params["timeframe"]))
+
+    parsed_params = getattr(strategy, "params", None)
+    if not ordered and parsed_params is not None:
+        parsed_timeframes = getattr(parsed_params, "timeframes", None)
+        if isinstance(parsed_timeframes, (list, tuple)):
+            for timeframe in parsed_timeframes:
+                if timeframe:
+                    ordered.append(str(timeframe))
+        else:
+            parsed_timeframe = getattr(parsed_params, "timeframe", None)
+            if parsed_timeframe:
+                ordered.append(str(parsed_timeframe))
+
+    if not ordered:
+        ordered.append("1h")
+
+    resolved: List[str] = []
+    for timeframe in ordered:
+        if timeframe not in resolved:
+            resolved.append(timeframe)
+    return resolved
+
+
+def resolve_strategy_required_timeframes(strategy: Strategy) -> List[str]:
+    """Resolve all replay data timeframes a strategy depends on."""
+
+    resolved = list(resolve_strategy_timeframes(strategy))
+    params = strategy.config.params or {}
+    parsed_params = getattr(strategy, "params", None)
+
+    supplemental: List[str] = []
+    regime_timeframe = params.get("regime_timeframe")
+    if not regime_timeframe and parsed_params is not None:
+        regime_timeframe = getattr(parsed_params, "regime_timeframe", None)
+    if regime_timeframe:
+        supplemental.append(str(regime_timeframe))
+
+    for timeframe in supplemental:
+        if timeframe not in resolved:
+            resolved.append(timeframe)
+    return resolved
+
+
 class StrategyEngine:
     """Loads configured strategies, routes intents through risk, and persists plans."""
 
@@ -446,14 +513,7 @@ class StrategyEngine:
                 )
                 continue
 
-            configured_timeframes = strategy.config.params.get("timeframes")
-            if isinstance(configured_timeframes, (list, tuple)):
-                timeframes = list(configured_timeframes)
-            elif configured_timeframes is not None:
-                timeframes = [configured_timeframes]
-            else:
-                single_timeframe = strategy.config.params.get("timeframe")
-                timeframes = [single_timeframe] if single_timeframe else ["1h"]
+            timeframes = resolve_strategy_timeframes(strategy)
 
             for timeframe in timeframes:
                 context = self._build_context(

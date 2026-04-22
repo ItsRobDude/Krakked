@@ -392,3 +392,13 @@ def test_build_backtest_preflight_reports_readiness(tmp_path: Path) -> None:
     assert result.preflight.status == "ready"
     assert "complete" in result.preflight.summary_note
     assert result.pairs == ["BTC/USD"]
+
+
+def test_default_backtest_timeframes_include_strategy_defaults_and_dependencies() -> None:
+    config = load_config(config_path=Path("config_examples/config.yaml"), env="paper")
+    config.market_data.backfill_timeframes = []
+    config.strategies.enabled = ["trend_core", "rs_rotation"]
+    config.strategies.configs["trend_core"].params = {}
+    config.strategies.configs["rs_rotation"].params = {}
+
+    assert runner._default_backtest_timeframes(config) == ["1h", "1d", "4h"]
