@@ -113,6 +113,45 @@ def test_load_config_applies_default_starter_strategies_when_missing(
     assert app_config.risk.max_per_strategy_pct["trend_core"] == 5.0
 
 
+def test_load_config_unwraps_strategy_params(monkeypatch, tmp_path: Path):
+    config_dir = tmp_path / "config"
+    data_dir = tmp_path / "data"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    (config_dir / "config.yaml").write_text(
+        """
+strategies:
+  enabled:
+    - dca_overlay
+  configs:
+    dca_overlay:
+      name: dca_overlay
+      type: dca_rebalance
+      enabled: true
+      params:
+        dca_interval_minutes: 240
+        dca_notional_usd: 100.0
+        pairs:
+          - BTC/USD
+          - ETH/USD
+        target_weights:
+          BTC/USD: 0.6
+          ETH/USD: 0.4
+""".strip()
+    )
+
+    monkeypatch.setattr(appdirs, "user_config_dir", lambda appname: config_dir)
+    monkeypatch.setattr(appdirs, "user_data_dir", lambda appname: data_dir)
+
+    app_config = load_config()
+    params = app_config.strategies.configs["dca_overlay"].params
+
+    assert "params" not in params
+    assert params["pairs"] == ["BTC/USD", "ETH/USD"]
+    assert params["target_weights"] == {"BTC/USD": 0.6, "ETH/USD": 0.4}
+
+
 def test_load_config_ignores_empty_runtime_strategy_override_when_bootstrapping(
     monkeypatch, tmp_path: Path
 ):

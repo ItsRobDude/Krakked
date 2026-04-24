@@ -131,6 +131,56 @@ def test_engine_stale_data():
     assert "error" in plan.metadata
 
 
+def test_invalid_strategy_config_does_not_block_engine_startup():
+    bad_dca = StrategyConfig(
+        name="dca_overlay",
+        type="dca_rebalance",
+        enabled=True,
+        params={"dca_interval_minutes": 240, "dca_notional_usd": 100.0},
+    )
+    trend = StrategyConfig(
+        name="trend_core",
+        type="trend_following",
+        enabled=True,
+        params={"timeframes": ["1h"], "ma_fast": 10, "ma_slow": 20},
+    )
+    strategies_cfg = StrategiesConfig(
+        enabled=["dca_overlay", "trend_core"],
+        configs={"dca_overlay": bad_dca, "trend_core": trend},
+    )
+
+    app_config = MagicMock(spec=AppConfig)
+    app_config.strategies = strategies_cfg
+    app_config.risk = RiskConfig()
+    app_config.universe = MagicMock()
+    app_config.universe.include_pairs = ["XBTUSD"]
+
+    market = MagicMock(spec=MarketDataAPI)
+    portfolio = MagicMock(spec=PortfolioService)
+    portfolio.get_realized_pnl_by_strategy.return_value = {}
+    portfolio.get_cached_equity.return_value = EquityView(
+        equity_base=10000.0,
+        cash_base=10000.0,
+        realized_pnl_base_total=0.0,
+        unrealized_pnl_base_total=0.0,
+        drift_flag=False,
+    )
+    portfolio.get_cached_asset_exposure.return_value = []
+    portfolio.get_cached_positions.return_value = []
+    portfolio.get_cached_drift_status.return_value = None
+    portfolio.store = MagicMock()
+    portfolio.store.get_snapshots.return_value = []
+    portfolio.config = SimpleNamespace(base_currency="USD")
+
+    engine = StrategyRiskEngine(app_config, market, portfolio)
+
+    engine.initialize()
+
+    assert "dca_overlay" not in engine.strategies
+    assert engine.strategy_states["dca_overlay"].enabled is False
+    assert engine.strategy_states["trend_core"].enabled is True
+
+
 def test_data_stale_error_skips_timeframe():
     class FakeStrategy(Strategy):
         def warmup(self, market_data, portfolio):

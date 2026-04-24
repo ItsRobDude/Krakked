@@ -6,17 +6,19 @@ COMPOSE_FILE="${KRAKKED_UNRAID_COMPOSE_FILE:-compose.unraid.yaml}"
 MODE="source"
 START_STACK="false"
 FORCE="false"
+RECREATE="false"
 
 usage() {
   cat <<'USAGE'
 Krakked Unraid bootstrap
 
 Usage:
-  bash scripts/unraid_bootstrap.sh [--start] [--force] [--mode source|image]
+  bash scripts/unraid_bootstrap.sh [--start] [--recreate] [--force] [--mode source|image]
 
 Defaults:
   --mode source   Build from this checkout.
   --start         Also start the container after writing files.
+  --recreate      Replace the existing container without overwriting config files.
   --force         Overwrite generated compose/.env and seeded config files.
 
 Environment overrides:
@@ -32,6 +34,9 @@ while [ "$#" -gt 0 ]; do
       ;;
     --force)
       FORCE="true"
+      ;;
+    --recreate)
+      RECREATE="true"
       ;;
     --mode)
       shift
@@ -144,12 +149,12 @@ run_docker_start() {
   fi
 
   if docker container inspect krakked >/dev/null 2>&1; then
-    if [ "$FORCE" = "true" ]; then
+    if [ "$FORCE" = "true" ] || [ "$RECREATE" = "true" ]; then
       docker rm -f krakked
     else
-      echo "Existing krakked container found; starting it without replacing it."
-      echo "To rebuild/recreate the container, rerun with --force --start."
-      docker start krakked >/dev/null
+      echo "Existing krakked container found; restarting it without replacing it."
+      echo "To rebuild/recreate the container while keeping config, rerun with --recreate --start."
+      docker restart krakked >/dev/null
       return
     fi
   fi
@@ -199,6 +204,50 @@ seed_file() {
   echo "Seeded $target"
 }
 
+normalize_container_config() {
+  local config_path="$APPDATA_DIR/config/config.yaml"
+
+  [ -e "$config_path" ] || return
+
+  local stamp
+  stamp="$(date +%Y%m%d-%H%M%S)"
+  cp "$config_path" "$config_path.pre-container-fix-$stamp.bak"
+
+  awk '
+    BEGIN { in_portfolio = 0; saw_db_path = 0 }
+    /^portfolio:[[:space:]]*$/ {
+      in_portfolio = 1
+      saw_db_path = 0
+      print
+      next
+    }
+    in_portfolio && /^  db_path:/ {
+      saw_db_path = 1
+      print "  db_path: /krakked/state/portfolio.db"
+      next
+    }
+    in_portfolio && /^[^[:space:]]/ {
+      if (!saw_db_path) {
+        print "  db_path: /krakked/state/portfolio.db"
+      }
+      in_portfolio = 0
+    }
+    {
+      gsub(/^  metadata_path: .*/, "  metadata_path: /krakked/data/metadata.json")
+      gsub(/^    root_dir: .*/, "    root_dir: /krakked/data/ohlc")
+      gsub(/^  host: 127\\.0\\.0\\.1$/, "  host: 0.0.0.0")
+      print
+    }
+    END {
+      if (in_portfolio && !saw_db_path) {
+        print "  db_path: /krakked/state/portfolio.db"
+      }
+    }
+  ' "$config_path" > "$config_path.tmp"
+  mv "$config_path.tmp" "$config_path"
+  echo "Normalized $config_path for container networking and persistent state"
+}
+
 say "Checking that this is the Krakked repo"
 for required in .env.example compose.yaml compose.dev.yaml Dockerfile config_examples/config.yaml config_examples/config.paper.yaml config_examples/config.live.yaml; do
   [ -e "$required" ] || fail "Missing $required. cd into the real Krakked checkout first."
@@ -242,6 +291,7 @@ fi
 
 seed_file "config_examples/config.paper.yaml" "$APPDATA_DIR/config/config.paper.yaml"
 seed_file "config_examples/config.live.yaml" "$APPDATA_DIR/config/config.live.yaml"
+normalize_container_config
 
 say "Writing Unraid Compose file"
 if [ "$MODE" = "source" ]; then

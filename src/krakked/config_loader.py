@@ -902,7 +902,22 @@ def parse_app_config(
         strategy_weight = _coerce_strategy_weight(
             cfg_copy.pop("strategy_weight", 100), cfg_name, config_path
         )
-        params = cfg_copy
+        explicit_params = cfg_copy.pop("params", {})
+        if explicit_params is None:
+            explicit_params = {}
+        if not isinstance(explicit_params, dict):
+            logger.warning(
+                "Strategy %s params is not a mapping; using empty params",
+                cfg_name,
+                extra={
+                    "event": "config_invalid_strategy_params",
+                    "config_path": str(config_path),
+                    "strategy_id": cfg_name,
+                },
+            )
+            explicit_params = {}
+        params = dict(cfg_copy)
+        params.update(explicit_params)
 
         strategy_configs[cfg_name] = StrategyConfig(
             name=cfg_name,

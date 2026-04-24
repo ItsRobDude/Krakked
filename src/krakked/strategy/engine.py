@@ -199,22 +199,21 @@ class StrategyEngine:
             )
             return False
 
-        strategy = strat_class(strat_cfg)
-        self.strategies[strategy_id] = strategy
-
         try:
+            strategy = strat_class(strat_cfg)
             strategy.warmup(self.market_data, self.portfolio)
         except Exception as exc:  # pragma: no cover - defensive
             logger.error(
-                "Error warming up strategy %s: %s",
+                "Error activating strategy %s: %s",
                 strategy_id,
                 exc,
                 extra=structured_log_extra(
-                    event="strategy_warmup_error", strategy_id=strategy_id
+                    event="strategy_activation_error", strategy_id=strategy_id
                 ),
             )
             return False
 
+        self.strategies[strategy_id] = strategy
         return True
 
     def _compute_manual_strategy_weights(self) -> StrategyWeights | None:

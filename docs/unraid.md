@@ -45,6 +45,9 @@ docker compose -f compose.unraid.yaml down
 
 # Start again
 docker compose -f compose.unraid.yaml up -d
+
+# Rebuild/recreate after code changes, keeping existing config files
+bash scripts/unraid_bootstrap.sh --recreate --start
 ```
 
 If your Unraid install uses the older Compose command, replace `docker compose` with `docker-compose`. If Compose is not installed at all, the bootstrap helper falls back to plain `docker build` / `docker run`.
