@@ -53,7 +53,7 @@ class ExecutionAdapter(Protocol):
 
         Depending on the adapter implementation and configuration, this may:
         - Send a live order to Kraken (Live mode)
-        - Send a validate-only order to Kraken (Paper mode)
+        - Fill synthetic orders locally (Paper mode)
         - Simulate an order fill locally (Dry Run / Simulation)
 
         Args:
@@ -92,11 +92,11 @@ class ExecutionAdapter(Protocol):
 
 
 class KrakenExecutionAdapter:
-    """Adapter for live and paper execution against the Kraken API.
+    """Adapter for live or explicit validate-only execution against Kraken.
 
     Handles:
       - Live execution: Real orders with ``validate=0`` (if allowed).
-      - Paper execution: Validation calls with ``validate=1``.
+      - Validate-only execution: Kraken validation calls with ``validate=1``.
       - Retry logic, backoff, and error mapping.
       - Dead-man switch heartbeat handling.
     """
@@ -132,8 +132,8 @@ class KrakenExecutionAdapter:
         REST call is handled here. Validates volume and notional constraints
         before submission.
 
-        In 'paper' mode (or validate_only=True), the order is sent with validate=True.
-        In 'live' mode, the order is executed if allow_live_trading is enabled.
+        When validate_only=True, the order is sent to Kraken with validate=True.
+        In live mode, the order is executed only if allow_live_trading is enabled.
         """
         payload: Dict[str, Any] = build_order_payload(order, self.config, pair_metadata)
         order.raw_request = payload
@@ -619,7 +619,7 @@ def get_execution_adapter(
 
     Mapping:
       - mode='live'     -> KrakenExecutionAdapter (real orders)
-      - mode='paper'    -> KrakenExecutionAdapter (validate-only orders)
+      - mode='paper'    -> DryRunExecutionAdapter (local synthetic fills)
       - mode='dry_run'  -> DryRunExecutionAdapter (offline)
       - mode='simulation' -> SimulationExecutionAdapter (with callback hooks)
 

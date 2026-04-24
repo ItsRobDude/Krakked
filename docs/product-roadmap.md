@@ -66,7 +66,7 @@ Implemented or substantially in place:
 - Crash-safe ML checkpoint/resume foundations
 - Backup, export, import, and upgrade-oriented operator tooling
 - Operator cockpit shell that now prefers partial rendering and local panel degradation over global loading deadlocks
-- Paper-mode balance baseline sourced from live exchange balances instead of an implicit fake bankroll
+- Paper mode now uses a profile-scoped persistent synthetic wallet, with live exchange balances kept only as optional reference context
 
 Still needing real-world validation or product work:
 
@@ -83,8 +83,8 @@ Still needing real-world validation or product work:
 
 Krakked is now closer to an operator-facing control room than a hobby bot shell, but the current product still has some honest gaps:
 
-- Paper mode is Kraken-connected validate-only execution.
-- Paper balances are currently an exchange-reference baseline, not an isolated simulated wallet.
+- Paper mode is a local persistent synthetic wallet that can exercise the strategy, risk, OMS, and portfolio loops without transmitting live orders.
+- Exchange balances are now optional reference context in paper mode, not the paper account baseline.
 - The active dashboard now renders its shell quickly and fails fast on slow panel reads, but some backend routes still need performance work to avoid repeated degraded states.
 - Startup, unlock, and session-start flows have improved significantly, but they still need a tighter lifecycle model before the product feels fully polished for a first-time operator.
 

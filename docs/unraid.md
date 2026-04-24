@@ -1,71 +1,103 @@
 # Unraid Deployment Notes
 
-This guide is a practical translation of Krakked's Docker flow for an Unraid-style home server. It does not replace [`docs/docker.md`](docker.md); it simply maps the same deployment to the directories and habits that are common on Unraid.
+This is the low-terminal path for Krakked on an Unraid-style home server. The goal is one copy/paste command, then plain output that tells you what happened.
 
-## Recommended Shape
+## Easiest Path
 
-Use a dedicated appdata-style location for Krakked so config, state, and cached data survive container restarts and image upgrades.
+Open the Unraid terminal, get into the Krakked repo checkout, then run:
 
-Example host layout:
+```bash
+bash scripts/unraid_bootstrap.sh --start
+```
 
-- `/mnt/user/appdata/krakked/config`
-- `/mnt/user/appdata/krakked/data`
-- `/mnt/user/appdata/krakked/state`
+That helper does the fussy parts for you:
 
-Keep your compose file, `.env`, and any release notes in a small project folder that is easy to back up separately.
+- verifies you are in the real Krakked checkout before doing setup
+- creates `/mnt/user/appdata/krakked/config`, `/data`, and `/state`
+- seeds paper/live config files with container-safe paths
+- writes `compose.unraid.yaml` with Unraid appdata volume mounts
+- writes a simple `.env`
+- validates the Compose file when Compose is installed, or falls back to plain Docker when it is not
+- starts Krakked in paper mode when `--start` is present
 
-## Suggested First Pass
+Open the UI after it starts:
 
-1. Create the directories above on the Unraid host.
-2. Copy in:
-   - `compose.yaml`
-   - `.env.example` as `.env`
-   - the seed config files from `config_examples/`
-3. Set a pinned image tag in `.env`:
+```text
+http://<your-unraid-ip>:8088
+```
+
+## The Only Commands You Should Need
+
+From the Krakked repo folder on Unraid:
+
+```bash
+# First setup and start
+bash scripts/unraid_bootstrap.sh --start
+
+# See whether the container is running
+docker compose -f compose.unraid.yaml ps
+
+# See the latest logs
+docker compose -f compose.unraid.yaml logs --tail=100 krakked
+
+# Stop
+docker compose -f compose.unraid.yaml down
+
+# Start again
+docker compose -f compose.unraid.yaml up -d
+```
+
+If your Unraid install uses the older Compose command, replace `docker compose` with `docker-compose`. If Compose is not installed at all, the bootstrap helper falls back to plain `docker build` / `docker run`.
+
+## If You Need To Reset The Generated Files
+
+This overwrites the generated `.env`, `compose.unraid.yaml`, and seeded appdata config files:
+
+```bash
+bash scripts/unraid_bootstrap.sh --force --start
+```
+
+Use this only when you intentionally want the helper to recreate the starter files.
+
+## Published Image Mode
+
+The default helper mode builds from the local checkout because that is easiest while the product is still being proven. Later, for a pinned release image:
+
+```bash
+bash scripts/unraid_bootstrap.sh --mode image --start
+```
+
+Then edit `.env` if the image tag should be something other than the starter value:
 
 ```dotenv
-KRAKKED_IMAGE=ghcr.io/<owner>/krakked
+KRAKKED_IMAGE=ghcr.io/itsrobdude/krakked
 KRAKKED_IMAGE_TAG=v0.1.0
 ```
 
-4. Update the volume mappings in `compose.yaml` from the repo-local `./deploy/...` paths to your Unraid paths.
+Keep image tags pinned. Do not rely on `latest` for a home server you want to trust.
 
-A typical translation looks like:
+## First Good Backup
 
-```yaml
-volumes:
-  - /mnt/user/appdata/krakked/config:/krakked/config
-  - /mnt/user/appdata/krakked/data:/krakked/data
-  - /mnt/user/appdata/krakked/state:/krakked/state
-```
-
-5. Merge the container path overrides from `config_examples/config.container.yaml` into your running `config.yaml`.
-6. Start in paper mode first.
-
-## Why This Layout Works Well
-
-- appdata-style paths are persistent across container recreation
-- backups are straightforward because config, cached data, and SQLite state live in predictable places
-- upgrades stay simple because you generally only change the image tag and restart
-
-## Operational Commands
-
-Once the container is running, the same helper commands from the Docker docs still apply:
+After the UI boots successfully, make one export before experimenting:
 
 ```bash
-docker compose run --rm krakked db-info --db-path /krakked/state/portfolio.db
-docker compose run --rm krakked db-backup --db-path /krakked/state/portfolio.db
-docker compose run --rm krakked export-install \
+docker compose -f compose.unraid.yaml run --rm krakked export-install \
   --config-dir /krakked/config \
   --db-path /krakked/state/portfolio.db \
   --data-dir /krakked/data \
   --include-data \
-  --output /krakked/state/krakked-export.zip
+  --output /krakked/state/krakked-first-backup.zip
+```
+
+The export lands under:
+
+```text
+/mnt/user/appdata/krakked/state/krakked-first-backup.zip
 ```
 
 ## Cautions
 
-- Keep the image tag pinned; don't rely on `latest` for a home server you want to trust.
-- Export before upgrades.
-- Start with paper mode even on the server; treat live mode as a later operational decision, not a first boot default.
-- I have not container-smoke-tested this on your Unraid box from here, so use this as a prepared path, not a claim of verified host compatibility.
+- Start in paper mode on the server. Live mode is a later operational decision.
+- The helper will not overwrite existing config unless you pass `--force`.
+- If the helper warns that the git remote does not look like `ItsRobDude/krakked`, stop and check the folder before continuing.
+- This streamlines the Unraid terminal path, but the actual Unraid host smoke test still needs to be run on your box.

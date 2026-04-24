@@ -24,9 +24,9 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 RUN pip install --no-cache-dir "poetry==${POETRY_VERSION}"
 COPY pyproject.toml poetry.lock ./
-RUN poetry install --no-ansi --without dev --extras tui
 COPY src ./src
 COPY README.md ./README.md
+RUN poetry install --no-ansi --without dev --extras tui
 RUN poetry build
 
 # Final runtime image with only the packaged artifacts
@@ -40,9 +40,9 @@ ENV PYTHONUNBUFFERED=1 \
     KRAKKED_UI_PORT="8080" \
     UI_DIST_DIR="/app/ui-dist"
 WORKDIR /app
-COPY --from=python-builder /app/dist/*.whl /tmp/krakked.whl
-RUN pip install --no-cache-dir /tmp/krakked.whl \
-    && rm /tmp/krakked.whl
+COPY --from=python-builder /app/dist/*.whl /tmp/
+RUN pip install --no-cache-dir /tmp/*.whl \
+    && rm /tmp/*.whl
 COPY --from=ui-builder /ui/dist ${UI_DIST_DIR}
 EXPOSE 8080
 ENTRYPOINT ["krakked"]
