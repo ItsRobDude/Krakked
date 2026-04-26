@@ -96,6 +96,35 @@ run_compose() {
   fi
 }
 
+run_compose_up() {
+  local -a args
+  args=(-f "$COMPOSE_FILE" up -d)
+
+  if [ "$MODE" = "source" ]; then
+    args+=(--build)
+  fi
+
+  if [ "$RECREATE" = "true" ]; then
+    args+=(--force-recreate)
+  fi
+
+  run_compose "${args[@]}"
+}
+
+compose_up_hint() {
+  local command="$COMPOSE_DISPLAY -f $COMPOSE_FILE up -d"
+
+  if [ "$MODE" = "source" ]; then
+    command="$command --build"
+  fi
+
+  if [ "$RECREATE" = "true" ]; then
+    command="$command --force-recreate"
+  fi
+
+  echo "$command"
+}
+
 env_value() {
   local key="$1"
   local default="$2"
@@ -370,10 +399,10 @@ if [ "$START_STACK" = "true" ]; then
   say "Starting Krakked"
   if [ "$RUNTIME_MODE" = "compose" ]; then
     if [ "$MODE" = "source" ]; then
-      run_compose -f "$COMPOSE_FILE" up -d --build
+      run_compose_up
     else
       run_compose -f "$COMPOSE_FILE" pull
-      run_compose -f "$COMPOSE_FILE" up -d
+      run_compose_up
     fi
   else
     run_docker_start
@@ -381,11 +410,11 @@ if [ "$START_STACK" = "true" ]; then
 else
   say "Ready"
   echo "Start when ready:"
-  if [ "$RUNTIME_MODE" = "compose" ] && [ "$MODE" = "source" ]; then
-    echo "  $COMPOSE_DISPLAY -f $COMPOSE_FILE up -d --build"
-  elif [ "$RUNTIME_MODE" = "compose" ]; then
-    echo "  $COMPOSE_DISPLAY -f $COMPOSE_FILE pull"
-    echo "  $COMPOSE_DISPLAY -f $COMPOSE_FILE up -d"
+  if [ "$RUNTIME_MODE" = "compose" ]; then
+    if [ "$MODE" != "source" ]; then
+      echo "  $COMPOSE_DISPLAY -f $COMPOSE_FILE pull"
+    fi
+    echo "  $(compose_up_hint)"
   else
     echo "  bash scripts/unraid_bootstrap.sh --start"
   fi

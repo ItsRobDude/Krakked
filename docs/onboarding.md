@@ -8,9 +8,9 @@ Start in paper mode with Docker Desktop or Docker Engine, get the UI reachable, 
 
 Important current behavior:
 
-- paper mode is now a persistent synthetic paper account, not a mirror of your current Kraken balances
-- the paper account starts from a local $10,000 USD bankroll by default and persists by profile
-- live exchange balances are now optional reference context, not the main paper account baseline
+- paper mode uses practice money in a local Krakked paper wallet, not your current Kraken balances
+- the paper wallet starts with a local $10,000 USD bankroll by default and persists by profile
+- live exchange balances are optional comparison context only, not the source of paper-mode funds
 - during startup or portfolio sync, some dashboard panels may show local degraded or pending states instead of blocking the whole UI
 
 ## What You Need
@@ -73,7 +73,7 @@ docker compose up -d
 - the config is mounted from `deploy/config`
 - the database appears in `deploy/state`
 - the bot is still in paper mode
-- the paper overview shows exchange-reference balances rather than a hard-coded simulated bankroll
+- the paper overview shows the local Krakked paper wallet balance and any optional exchange comparison separately
 - the session can reach the active cockpit even if some panels are still warming up or timing out locally
 
 ## First Safety Habit
@@ -92,7 +92,7 @@ docker compose run --rm krakked export-install \
 ## Beginner-Friendly Operating Rhythm
 
 - stay in paper mode while validating strategy weights and UI controls
-- treat paper balances as a reference view of your Kraken account, not isolated play money
+- treat paper balances as Krakked practice money for testing strategy behavior, not as a mirror of your Kraken account
 - keep image tags pinned to a known version
 - export before upgrades
 - only move toward live trading after you trust the logs, metrics, and risk settings
