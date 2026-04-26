@@ -60,8 +60,9 @@ def _write_ohlc_series(
     *,
     timestamps: list[int],
     closes: list[float],
+    timeframe: str = "1h",
 ) -> None:
-    bars_path = tmp_path / "ohlc" / "1h"
+    bars_path = tmp_path / "ohlc" / timeframe
     bars_path.mkdir(parents=True, exist_ok=True)
     frame = pd.DataFrame(
         [
@@ -392,3 +393,34 @@ def test_build_backtest_preflight_reports_readiness(tmp_path: Path) -> None:
     assert result.preflight.status == "ready"
     assert "complete" in result.preflight.summary_note
     assert result.pairs == ["BTC/USD"]
+
+
+def test_build_backtest_preflight_counts_closed_daily_boundary_as_ready(
+    tmp_path: Path,
+) -> None:
+    config = _build_backtest_config(tmp_path)
+    config.market_data.backfill_timeframes = ["1d"]
+    _seed_pair_metadata(config)
+
+    start = datetime(2026, 4, 7, tzinfo=UTC)
+    timestamps = [
+        int((start + timedelta(days=offset)).timestamp()) for offset in range(3)
+    ]
+    closes = [100.0, 101.0, 102.0]
+    _write_ohlc_series(
+        tmp_path,
+        timestamps=timestamps,
+        closes=closes,
+        timeframe="1d",
+    )
+
+    result = runner.build_backtest_preflight(
+        config,
+        start=start,
+        end=start + timedelta(days=3),
+        timeframes=["1d"],
+    )
+
+    assert result.preflight.status == "ready"
+    assert result.preflight.partial_series == []
+    assert result.preflight.coverage[0].status == "ok"

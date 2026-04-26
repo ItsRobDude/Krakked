@@ -27,6 +27,30 @@ from krakked.strategy.models import ExecutionPlan
 
 logger = logging.getLogger(__name__)
 
+_TIMEFRAME_UNIT_SECONDS = {
+    "m": 60,
+    "h": 60 * 60,
+    "d": 24 * 60 * 60,
+}
+
+
+def _timeframe_seconds(timeframe: str) -> int:
+    normalized = str(timeframe or "").strip().lower()
+    if len(normalized) < 2:
+        return 0
+
+    unit = normalized[-1]
+    multiplier = _TIMEFRAME_UNIT_SECONDS.get(unit)
+    if multiplier is None:
+        return 0
+
+    try:
+        magnitude = int(normalized[:-1])
+    except ValueError:
+        return 0
+
+    return magnitude * multiplier
+
 
 @dataclass
 class BacktestCoverageItem:
@@ -318,10 +342,12 @@ class BacktestMarketData(MarketDataAPI):
                     last_bar_at = datetime.fromtimestamp(
                         int(bounded[-1].timestamp), tz=UTC
                     )
+                    interval_seconds = _timeframe_seconds(timeframe)
+                    coverage_end_ts = int(bounded[-1].timestamp) + interval_seconds
                     status = (
                         "partial_window"
                         if int(bounded[0].timestamp) > self._start_ts
-                        or int(bounded[-1].timestamp) < self._end_ts
+                        or coverage_end_ts < self._end_ts
                         else "ok"
                     )
                 coverage.append(
