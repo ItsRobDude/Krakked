@@ -35,11 +35,15 @@ def _make_config(execution: ExecutionConfig) -> AppConfig:
 
 
 def test_safety_status_for_paper_mode():
-    status = check_safety(_make_config(ExecutionConfig()))
+    execution = ExecutionConfig()
+    assert execution.validate_only is False
+
+    status = check_safety(_make_config(execution))
 
     assert status == SafetyStatus(
         live_mode_enabled=False,
         validate_only=True,
+        live_order_submission_blocked=True,
         allow_live_trading=False,
         has_min_order_notional=True,
         has_max_pair_notional=False,
@@ -57,6 +61,7 @@ def test_safety_status_for_live_validate_only():
     assert status == SafetyStatus(
         live_mode_enabled=True,
         validate_only=True,
+        live_order_submission_blocked=True,
         allow_live_trading=False,
         has_min_order_notional=True,
         has_max_pair_notional=False,
@@ -79,6 +84,7 @@ def test_safety_status_for_fully_live():
     assert status == SafetyStatus(
         live_mode_enabled=True,
         validate_only=False,
+        live_order_submission_blocked=False,
         allow_live_trading=True,
         has_min_order_notional=True,
         has_max_pair_notional=True,

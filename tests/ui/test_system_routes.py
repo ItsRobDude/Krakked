@@ -538,10 +538,10 @@ def test_cockpit_snapshot_returns_expected_sections(client, system_context):
 
 def test_cockpit_snapshot_isolates_section_failures(client, system_context):
     system_context.portfolio.get_strategy_performance.side_effect = RuntimeError(
-        "performance cache busy"
+        "performance cache busy at C:\\secret\\portfolio.db"
     )
     system_context.execution_service.get_recent_executions.side_effect = RuntimeError(
-        "execution store busy"
+        "execution store busy at C:\\secret\\orders.db"
     )
 
     response = client.get("/api/system/cockpit")
@@ -552,10 +552,15 @@ def test_cockpit_snapshot_isolates_section_failures(client, system_context):
     assert data["strategies"]["performance"] is None
     assert data["activity"]["recent_executions"] is None
     assert data["activity"]["risk_decisions"] == []
-    assert data["section_errors"]["strategies.performance"] == "performance cache busy"
     assert (
-        data["section_errors"]["activity.recent_executions"] == "execution store busy"
+        data["section_errors"]["strategies.performance"]
+        == "Strategy performance unavailable"
     )
+    assert (
+        data["section_errors"]["activity.recent_executions"]
+        == "Recent executions unavailable"
+    )
+    assert "secret" not in str(data["section_errors"])
 
 
 def test_cockpit_snapshot_reports_safe_setup_lifecycle(client, system_context):

@@ -279,6 +279,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
   const [strategyFeedback, setStrategyFeedback] = useState<string | null>(null);
   const [systemMessage, setSystemMessage] = useState<SystemMessage | null>(null);
   const [refreshIssues, setRefreshIssues] = useState<Record<string, string>>({});
+  const [cockpitGeneratedAt, setCockpitGeneratedAt] = useState<string | null>(null);
   const [modeBusy, setModeBusy] = useState(false);
   const [showIntegrityAdvanced, setShowIntegrityAdvanced] = useState(false);
   const [session, setSession] = useState<SessionStateResponse | null>(null);
@@ -316,6 +317,11 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
     if (sessionState) {
       setSession(sessionState);
       setLoopIntervalDraft(sessionState.loop_interval_sec);
+    }
+
+    if (sessionState?.active) {
+      setSessionLoading(false);
+      return;
     }
 
     const [profileSummaries, systemHealth, systemConfig] = await Promise.all([
@@ -403,6 +409,8 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
           );
           return;
         }
+
+        setCockpitGeneratedAt(snapshot.generated_at);
 
         if (snapshot.session) {
           setSession(snapshot.session);
@@ -608,6 +616,12 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
       clearInterval(interval);
     };
   }, [session?.active, updateRefreshIssue]);
+
+  useEffect(() => {
+    if (!session?.active) {
+      setCockpitGeneratedAt(null);
+    }
+  }, [session?.active]);
 
   useEffect(() => {
     if (!health || !summary) return;
@@ -1593,6 +1607,11 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
         <div className="layout__status-row">
           {session.profile_name ? <span className="pill pill--muted">Profile: {session.profile_name}</span> : null}
           <span className="pill pill--muted">Mode: {session.mode === 'live' ? 'Live' : 'Paper'}</span>
+          <span className={cockpitGeneratedAt ? 'pill pill--muted' : 'pill pill--warning'}>
+            {cockpitGeneratedAt
+              ? `Cockpit updated ${formatDateTime(cockpitGeneratedAt)}`
+              : 'Cockpit freshness pending'}
+          </span>
           <span className={`pill ${
             runtimeTrust.sidebarTone === 'ok'
               ? 'pill--success'

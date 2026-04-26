@@ -8,7 +8,7 @@ from krakked.config import AppConfig, RiskConfig, StrategiesConfig, StrategyConf
 from krakked.market_data.api import MarketDataAPI
 from krakked.market_data.exceptions import DataStaleError
 from krakked.portfolio.manager import PortfolioService
-from krakked.portfolio.models import EquityView, SpotPosition
+from krakked.portfolio.models import SpotPosition
 from krakked.strategy.base import Strategy
 from krakked.strategy.engine import StrategyRiskEngine
 from krakked.strategy.strategies.demo_strategy import TrendFollowingStrategy
@@ -19,6 +19,7 @@ from krakked.strategy.models import (
     StrategyIntent,
     StrategyState,
 )
+from tests.runtime_mocks import make_portfolio_service_mock
 
 
 def test_engine_cycle():
@@ -42,8 +43,7 @@ def test_engine_cycle():
 
     # Mock Services
     market = MagicMock(spec=MarketDataAPI)
-    portfolio = MagicMock(spec=PortfolioService)
-    portfolio.get_realized_pnl_by_strategy.return_value = {}
+    portfolio = make_portfolio_service_mock()
 
     market.get_data_status.return_value = MagicMock(
         rest_api_reachable=True,
@@ -52,24 +52,8 @@ def test_engine_cycle():
     )
     market.get_pair_metadata.return_value = MagicMock(liquidity_24h_usd=200000.0)
 
-    # IMPORTANT: Mock drift_flag=False explicitly or use real object
-    portfolio.get_equity.return_value = EquityView(
-        equity_base=10000.0,
-        cash_base=10000.0,
-        realized_pnl_base_total=0.0,
-        unrealized_pnl_base_total=0.0,
-        drift_flag=False,
-    )
-
-    portfolio.store = MagicMock()
-    portfolio.store.get_snapshots.return_value = []
     portfolio.get_positions.return_value = []
     portfolio.get_asset_exposure.return_value = []
-    portfolio.get_cached_equity.return_value = portfolio.get_equity.return_value
-    portfolio.get_cached_asset_exposure.return_value = []
-    portfolio.get_cached_positions.return_value = []
-    portfolio.get_cached_drift_status.return_value = None
-    portfolio.config = SimpleNamespace(base_currency="USD")
 
     # Mock OHLC for strategy
     from dataclasses import dataclass
@@ -156,21 +140,7 @@ def test_invalid_strategy_config_does_not_block_engine_startup():
     app_config.universe.include_pairs = ["XBTUSD"]
 
     market = MagicMock(spec=MarketDataAPI)
-    portfolio = MagicMock(spec=PortfolioService)
-    portfolio.get_realized_pnl_by_strategy.return_value = {}
-    portfolio.get_cached_equity.return_value = EquityView(
-        equity_base=10000.0,
-        cash_base=10000.0,
-        realized_pnl_base_total=0.0,
-        unrealized_pnl_base_total=0.0,
-        drift_flag=False,
-    )
-    portfolio.get_cached_asset_exposure.return_value = []
-    portfolio.get_cached_positions.return_value = []
-    portfolio.get_cached_drift_status.return_value = None
-    portfolio.store = MagicMock()
-    portfolio.store.get_snapshots.return_value = []
-    portfolio.config = SimpleNamespace(base_currency="USD")
+    portfolio = make_portfolio_service_mock()
 
     engine = StrategyRiskEngine(app_config, market, portfolio)
 
@@ -220,21 +190,7 @@ def test_data_stale_error_skips_timeframe():
         stale_pairs=0,
     )
 
-    portfolio = MagicMock(spec=PortfolioService)
-    portfolio.record_execution_plan = MagicMock()
-    portfolio.store = MagicMock()
-    portfolio.store.get_snapshots.return_value = []
-    portfolio.get_cached_equity.return_value = EquityView(
-        equity_base=10000.0,
-        cash_base=10000.0,
-        realized_pnl_base_total=0.0,
-        unrealized_pnl_base_total=0.0,
-        drift_flag=False,
-    )
-    portfolio.get_cached_asset_exposure.return_value = []
-    portfolio.get_cached_positions.return_value = []
-    portfolio.get_cached_drift_status.return_value = None
-    portfolio.config = SimpleNamespace(base_currency="USD")
+    portfolio = make_portfolio_service_mock()
 
     engine = StrategyRiskEngine(app_config, market, portfolio)
     engine._data_ready = MagicMock(return_value=True)
@@ -367,22 +323,7 @@ def test_actions_inherit_userref_and_persist_in_execution_plan():
         stale_pairs=0,
     )
 
-    portfolio = MagicMock(spec=PortfolioService)
-    portfolio.record_execution_plan = MagicMock()
-    portfolio.record_decision = MagicMock()
-    portfolio.store = MagicMock()
-    portfolio.store.get_snapshots.return_value = []
-    portfolio.get_cached_equity.return_value = EquityView(
-        equity_base=10000.0,
-        cash_base=10000.0,
-        realized_pnl_base_total=0.0,
-        unrealized_pnl_base_total=0.0,
-        drift_flag=False,
-    )
-    portfolio.get_cached_asset_exposure.return_value = []
-    portfolio.get_cached_positions.return_value = []
-    portfolio.get_cached_drift_status.return_value = None
-    portfolio.config = SimpleNamespace(base_currency="USD")
+    portfolio = make_portfolio_service_mock()
 
     engine = StrategyRiskEngine(app_config, market, portfolio)
     engine._data_ready = MagicMock(return_value=True)

@@ -589,8 +589,24 @@ def _build_latest_replay_payload() -> ReplayLatestPayload:
     return ReplayLatestPayload(**summary)
 
 
-def _section_error(exc: Exception) -> str:
-    return str(exc) or exc.__class__.__name__
+_COCKPIT_SECTION_ERROR_MESSAGES = {
+    "health": "System health unavailable",
+    "session": "Session state unavailable",
+    "portfolio.summary": "Portfolio summary unavailable",
+    "portfolio.exposure": "Portfolio exposure unavailable",
+    "portfolio.positions": "Portfolio positions unavailable",
+    "risk.status": "Risk status unavailable",
+    "risk.config": "Risk configuration unavailable",
+    "strategies.state": "Strategy state unavailable",
+    "strategies.performance": "Strategy performance unavailable",
+    "activity.recent_executions": "Recent executions unavailable",
+    "activity.risk_decisions": "Risk decisions unavailable",
+    "replay.latest": "Latest replay unavailable",
+}
+
+
+def _section_error(key: str) -> str:
+    return _COCKPIT_SECTION_ERROR_MESSAGES.get(key, "Cockpit section unavailable")
 
 
 def _read_section(section_errors: dict[str, str], key: str, reader):
@@ -605,7 +621,7 @@ def _read_section(section_errors: dict[str, str], key: str, reader):
                 "error": str(exc),
             },
         )
-        section_errors[key] = _section_error(exc)
+        section_errors[key] = _section_error(key)
         return None
 
 

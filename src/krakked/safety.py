@@ -17,6 +17,7 @@ class SafetyStatus:
 
     live_mode_enabled: bool
     validate_only: bool
+    live_order_submission_blocked: bool
     allow_live_trading: bool
     has_min_order_notional: bool
     has_max_pair_notional: bool
@@ -29,9 +30,15 @@ def check_safety(config: AppConfig) -> SafetyStatus:
 
     execution = config.execution
     validate_only = execution.validate_only or execution.mode == "paper"
+    live_order_submission_blocked = (
+        execution.mode != "live"
+        or execution.validate_only
+        or not execution.allow_live_trading
+    )
     return SafetyStatus(
         live_mode_enabled=execution.mode == "live",
         validate_only=validate_only,
+        live_order_submission_blocked=live_order_submission_blocked,
         allow_live_trading=execution.allow_live_trading,
         has_min_order_notional=execution.min_order_notional_usd is not None,
         has_max_pair_notional=execution.max_pair_notional_usd is not None,
