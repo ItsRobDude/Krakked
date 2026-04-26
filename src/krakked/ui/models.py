@@ -332,3 +332,49 @@ class ReplayLatestPayload(BaseModel):
     cost_model: Optional[str] = None
     replay_inputs: Dict[str, Any] = Field(default_factory=dict)
     report_path: Optional[str] = None
+
+
+class SessionStatePayload(BaseModel):
+    active: bool
+    lifecycle: str
+    reloading: bool = False
+    mode: str
+    loop_interval_sec: float
+    profile_name: Optional[str]
+    ml_enabled: bool
+    emergency_flatten: bool = False
+    account_id: str
+
+
+class CockpitPortfolioPayload(BaseModel):
+    summary: Optional[PortfolioSummary] = None
+    exposure: Optional[ExposureBreakdown] = None
+    positions: Optional[List[PositionPayload]] = None
+
+
+class CockpitRiskPayload(BaseModel):
+    status: Optional[RiskStatusPayload] = None
+    config: Optional[RiskConfigPayload] = None
+
+
+class CockpitStrategiesPayload(BaseModel):
+    state: Optional[List[StrategyStatePayload]] = None
+    performance: Optional[List[StrategyPerformancePayload]] = None
+
+
+class CockpitActivityPayload(BaseModel):
+    recent_executions: Optional[List[ExecutionResultPayload]] = None
+    risk_decisions: Optional[List[RiskDecisionPayload]] = None
+
+
+class CockpitSnapshotPayload(BaseModel):
+    schema_version: str = "cockpit.v1"
+    generated_at: datetime
+    health: Optional[SystemHealthPayload] = None
+    session: Optional[SessionStatePayload] = None
+    portfolio: Optional[CockpitPortfolioPayload] = None
+    risk: Optional[CockpitRiskPayload] = None
+    strategies: Optional[CockpitStrategiesPayload] = None
+    activity: Optional[CockpitActivityPayload] = None
+    replay: Optional[ReplayLatestPayload] = None
+    section_errors: Dict[str, str] = Field(default_factory=dict)

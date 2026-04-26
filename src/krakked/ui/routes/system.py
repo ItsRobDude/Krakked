@@ -60,10 +60,30 @@ from krakked.secrets import (
 from krakked.ui.logging import build_request_log_extra
 from krakked.ui.models import (
     ApiEnvelope,
+    AssetExposureBreakdown,
+    CockpitActivityPayload,
+    CockpitPortfolioPayload,
+    CockpitRiskPayload,
+    CockpitSnapshotPayload,
+    CockpitStrategiesPayload,
+    ExposureBreakdown,
+    PortfolioSummary,
+    PositionPayload,
     ReplayLatestPayload,
+    RiskConfigPayload,
+    RiskDecisionPayload,
+    RiskStatusPayload,
+    SessionStatePayload,
+    StrategyExposureBreakdown,
+    StrategyPerformancePayload,
+    StrategyStatePayload,
     SystemHealthPayload,
     SystemMetricsPayload,
 )
+from krakked.ui.routes.execution import _serialize_execution_result
+from krakked.ui.routes.portfolio import _build_position_payload
+from krakked.ui.routes.risk import _serialize_decision
+from krakked.ui.routes.strategies import _strategy_label
 from krakked.utils.io import (
     atomic_write,
     backup_file,
@@ -187,20 +207,6 @@ class SessionConfigPatchPayload(BaseModel):
     profile_name: Optional[str] = None
     mode: Optional[Literal["paper", "live"]] = None
     loop_interval_sec: Optional[float] = Field(None, ge=1.0, le=300.0)
-
-
-class SessionStatePayload(BaseModel):
-    """Response payload describing the current session state."""
-
-    active: bool
-    lifecycle: str
-    reloading: bool = False
-    mode: str
-    loop_interval_sec: float
-    profile_name: Optional[str]
-    ml_enabled: bool
-    emergency_flatten: bool = False
-    account_id: str
 
 
 class ProfileSummaryPayload(BaseModel):
@@ -337,6 +343,272 @@ def _session_payload(ctx) -> SessionStatePayload:
     )
 
 
+def _build_system_health_payload(ctx) -> SystemHealthPayload:
+    if ctx.is_setup_mode:
+        return SystemHealthPayload(
+            app_version=APP_VERSION,
+            execution_mode="setup",
+            lifecycle=_resolve_lifecycle(ctx),
+            rest_api_reachable=False,
+            websocket_connected=False,
+            streaming_pairs=0,
+            stale_pairs=0,
+            subscription_errors=0,
+            market_data_ok=False,
+            market_data_status="unavailable",
+            market_data_reason="setup_required",
+            market_data_stale=False,
+            execution_ok=False,
+            current_mode="setup",
+            ui_read_only=False,
+            kill_switch_active=False,
+            portfolio_sync_ok=False,
+            portfolio_sync_reason="setup_required",
+            portfolio_last_sync_at=None,
+            portfolio_baseline=None,
+            drift_detected=False,
+            market_data_max_staleness=None,
+        )
+
+    metrics_snapshot = ctx.metrics.snapshot()
+    execution_config = ctx.config.execution
+    data_status = ctx.market_data.get_cached_data_status()
+    market_data_health = ctx.market_data.get_cached_health_status()
+    if not isinstance(market_data_health, MarketDataStatus):
+        market_data_health = None
+
+    market_data_ok = None
+    market_data_stale = None
+    market_data_reason = None
+    market_data_detail = None
+    market_data_max_staleness = None
+
+    if market_data_health:
+        market_data_ok = getattr(market_data_health, "health", "") in {
+            "healthy",
+            "streaming",
+        }
+        market_data_stale = getattr(market_data_health, "health", "") in {
+            "stale",
+            "degraded",
+        }
+        market_data_reason = getattr(market_data_health, "reason", None)
+        market_data_detail = getattr(market_data_health, "detail", None)
+        market_data_max_staleness = getattr(market_data_health, "max_staleness", None)
+
+    if market_data_ok is None:
+        market_data_ok = (
+            data_status.rest_api_reachable
+            and data_status.websocket_connected
+            and data_status.subscription_errors == 0
+            and data_status.stale_pairs == 0
+        )
+    if market_data_stale is None:
+        market_data_stale = data_status.stale_pairs > 0
+    if market_data_reason is None:
+        market_data_reason = (
+            None
+            if market_data_ok
+            else ("data_stale" if market_data_stale else "connection_issue")
+        )
+
+    metrics_has_update = bool(metrics_snapshot.get("market_data_status_updated"))
+
+    if metrics_has_update:
+        market_data_ok = bool(metrics_snapshot.get("market_data_ok", market_data_ok))
+        market_data_stale = bool(
+            metrics_snapshot.get("market_data_stale", market_data_stale)
+        )
+        market_data_reason = metrics_snapshot.get(
+            "market_data_reason", market_data_reason
+        )
+        market_data_max_staleness = metrics_snapshot.get(
+            "market_data_max_staleness", market_data_max_staleness
+        )
+
+    if metrics_has_update:
+        market_data_status = metrics_snapshot.get(
+            "market_data_status",
+            getattr(market_data_health, "health", None)
+            or (
+                "streaming"
+                if market_data_ok
+                else ("degraded" if market_data_stale else "unavailable")
+            ),
+        )
+    else:
+        market_data_status = getattr(market_data_health, "health", None) or (
+            "streaming"
+            if market_data_ok
+            else ("degraded" if market_data_stale else "unavailable")
+        )
+
+    execution_ok = (
+        execution_config.mode != "live"
+        or get_live_trading_block_reason(execution_config) is None
+    )
+    risk_status = ctx.strategy_engine.get_risk_status()
+    portfolio_sync_ok = bool(getattr(ctx.portfolio, "last_sync_ok", True))
+    portfolio_sync_reason = getattr(ctx.portfolio, "last_sync_reason", None)
+    portfolio_last_sync_at = getattr(ctx.portfolio, "last_sync_at", None)
+    portfolio_baseline = getattr(ctx.portfolio, "baseline_source", None)
+    return SystemHealthPayload(
+        app_version=APP_VERSION,
+        execution_mode=getattr(execution_config, "mode", None),
+        lifecycle=_resolve_lifecycle(ctx),
+        rest_api_reachable=data_status.rest_api_reachable,
+        websocket_connected=data_status.websocket_connected,
+        streaming_pairs=data_status.streaming_pairs,
+        stale_pairs=data_status.stale_pairs,
+        subscription_errors=data_status.subscription_errors,
+        market_data_ok=bool(market_data_ok),
+        market_data_status=market_data_status,
+        market_data_reason=market_data_reason,
+        market_data_detail=market_data_detail,
+        market_data_stale=market_data_stale,
+        market_data_max_staleness=market_data_max_staleness,
+        execution_ok=execution_ok,
+        current_mode=execution_config.mode,
+        ui_read_only=ctx.config.ui.read_only,
+        kill_switch_active=getattr(risk_status, "kill_switch_active", None),
+        portfolio_sync_ok=portfolio_sync_ok,
+        portfolio_sync_reason=portfolio_sync_reason,
+        portfolio_last_sync_at=portfolio_last_sync_at,
+        portfolio_baseline=portfolio_baseline,
+        drift_detected=bool(metrics_snapshot.get("drift_detected")),
+        drift_reason=metrics_snapshot.get("drift_reason"),
+    )
+
+
+def _build_portfolio_summary_payload(ctx) -> PortfolioSummary:
+    equity = ctx.portfolio.get_cached_equity()
+    last_snapshot_ts = ctx.portfolio.get_cached_last_snapshot_ts()
+    reference_reader = getattr(ctx.portfolio, "get_exchange_reference_summary", None)
+    reference_summary = (
+        reference_reader() if callable(reference_reader) else None
+    ) or {}
+    return PortfolioSummary(
+        equity_usd=equity.equity_base,
+        cash_usd=equity.cash_base,
+        realized_pnl_usd=equity.realized_pnl_base_total,
+        unrealized_pnl_usd=equity.unrealized_pnl_base_total,
+        drift_flag=equity.drift_flag,
+        last_snapshot_ts=last_snapshot_ts,
+        portfolio_baseline=getattr(ctx.portfolio, "baseline_source", None),
+        exchange_reference_equity_usd=reference_summary.get("equity_usd"),
+        exchange_reference_cash_usd=reference_summary.get("cash_usd"),
+        exchange_reference_checked_at=reference_summary.get("checked_at"),
+    )
+
+
+def _build_positions_payload(ctx) -> list[PositionPayload]:
+    positions: list[PositionPayload] = []
+    for position in ctx.portfolio.get_cached_positions():
+        price = (
+            (position.current_value_base / position.base_size)
+            if abs(position.base_size) > 1e-12 and position.current_value_base
+            else None
+        )
+        metadata = None
+        try:
+            metadata = ctx.market_data.get_pair_metadata(position.pair)
+        except Exception:
+            logger.debug(
+                "Metadata lookup failed",
+                extra={"event": "metadata_lookup_failed", "pair": position.pair},
+            )
+
+        positions.append(_build_position_payload(position, price, metadata))
+
+    return positions
+
+
+def _build_exposure_payload(ctx) -> ExposureBreakdown:
+    by_asset = [
+        AssetExposureBreakdown(
+            asset=exp.asset,
+            value_usd=exp.value_base,
+            pct_of_equity=exp.percentage_of_equity,
+        )
+        for exp in ctx.portfolio.get_cached_asset_exposure()
+    ]
+    risk_status = ctx.strategy_engine.get_risk_status()
+    by_strategy = [
+        StrategyExposureBreakdown(
+            strategy_id=sid,
+            value_usd=None,
+            pct_of_equity=pct,
+        )
+        for sid, pct in (risk_status.per_strategy_exposure_pct or {}).items()
+    ]
+    return ExposureBreakdown(by_asset=by_asset, by_strategy=by_strategy)
+
+
+def _build_risk_status_payload(ctx) -> RiskStatusPayload:
+    status = ctx.strategy_engine.get_risk_status()
+    return RiskStatusPayload(**status.__dict__)
+
+
+def _build_risk_config_payload(ctx) -> RiskConfigPayload:
+    return RiskConfigPayload(**ctx.config.risk.__dict__)
+
+
+def _build_strategy_state_payload(ctx) -> list[StrategyStatePayload]:
+    return [
+        StrategyStatePayload(
+            label=_strategy_label(ctx, state.strategy_id), **state.__dict__
+        )
+        for state in ctx.strategy_engine.get_cached_strategy_state()
+    ]
+
+
+def _build_strategy_performance_payload(ctx) -> list[StrategyPerformancePayload]:
+    perf = ctx.portfolio.get_strategy_performance()
+    return [StrategyPerformancePayload(**record.__dict__) for record in perf.values()]
+
+
+def _build_recent_executions_payload(ctx) -> list:
+    return [
+        _serialize_execution_result(result)
+        for result in ctx.execution_service.get_recent_executions()
+    ]
+
+
+def _build_risk_decisions_payload(ctx, limit: int = 50) -> list[RiskDecisionPayload]:
+    decisions = ctx.portfolio.get_decisions(limit=limit)
+    return [_serialize_decision(record) for record in decisions]
+
+
+def _build_latest_replay_payload() -> ReplayLatestPayload:
+    report_path = get_latest_backtest_report_path(get_config_dir())
+    if not report_path.exists():
+        return ReplayLatestPayload(available=False)
+
+    payload = load_backtest_report(report_path)
+    summary = summarize_latest_backtest_report(payload, resolved_path=report_path)
+    return ReplayLatestPayload(**summary)
+
+
+def _section_error(exc: Exception) -> str:
+    return str(exc) or exc.__class__.__name__
+
+
+def _read_section(section_errors: dict[str, str], key: str, reader):
+    try:
+        return reader()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "Cockpit snapshot section unavailable",
+            extra={
+                "event": "cockpit_section_unavailable",
+                "section": key,
+                "error": str(exc),
+            },
+        )
+        section_errors[key] = _section_error(exc)
+        return None
+
+
 def _persist_session_config_to_main_config(
     config_dir: Path,
     *,
@@ -428,7 +700,9 @@ async def setup_config(
     try:
         config_dir = get_config_dir()
         config_path = config_dir / "config.yaml"
-        config_data = _build_setup_config_data(payload.region_code, payload.universe_pairs)
+        config_data = _build_setup_config_data(
+            payload.region_code, payload.universe_pairs
+        )
 
         if config_path.exists():
             existing = _load_yaml_mapping(config_path)
@@ -442,9 +716,9 @@ async def setup_config(
             )
             existing["universe"].setdefault("exclude_pairs", [])
             if float(existing["universe"].get("min_24h_volume_usd", 0.0) or 0.0) <= 0:
-                existing["universe"]["min_24h_volume_usd"] = (
-                    STARTER_SETUP_MIN_LIQUIDITY_USD
-                )
+                existing["universe"][
+                    "min_24h_volume_usd"
+                ] = STARTER_SETUP_MIN_LIQUIDITY_USD
             if not isinstance(existing.get("market_data"), dict):
                 existing["market_data"] = config_data["market_data"]
 
@@ -973,153 +1247,100 @@ async def delete_account(account_id: str, request: Request) -> ApiEnvelope[dict]
 async def system_health(request: Request) -> ApiEnvelope[SystemHealthPayload]:
     try:
         ctx = _context(request)
-        if ctx.is_setup_mode:
-            # Return a limited health payload in setup mode
-            return ApiEnvelope(
-                data=SystemHealthPayload(
-                    app_version=APP_VERSION,
-                    execution_mode="setup",
-                    lifecycle=_resolve_lifecycle(ctx),
-                    rest_api_reachable=False,
-                    websocket_connected=False,
-                    streaming_pairs=0,
-                    stale_pairs=0,
-                    subscription_errors=0,
-                    market_data_ok=False,
-                    market_data_status="unavailable",
-                    market_data_reason="setup_required",
-                    market_data_stale=False,
-                    execution_ok=False,
-                    current_mode="setup",
-                    ui_read_only=False,
-                    kill_switch_active=False,
-                    portfolio_sync_ok=False,
-                    portfolio_sync_reason="setup_required",
-                    portfolio_last_sync_at=None,
-                    portfolio_baseline=None,
-                    drift_detected=False,
-                    market_data_max_staleness=None,
-                ),
-                error=None,
-            )
-
-        metrics_snapshot = ctx.metrics.snapshot()
-        execution_config = ctx.config.execution
-        data_status = ctx.market_data.get_cached_data_status()
-        market_data_health = ctx.market_data.get_cached_health_status()
-        if not isinstance(market_data_health, MarketDataStatus):
-            market_data_health = None
-
-        market_data_ok = None
-        market_data_stale = None
-        market_data_reason = None
-        market_data_detail = None
-        market_data_max_staleness = None
-
-        if market_data_health:
-            market_data_ok = getattr(market_data_health, "health", "") in {
-                "healthy",
-                "streaming",
-            }
-            market_data_stale = getattr(market_data_health, "health", "") in {
-                "stale",
-                "degraded",
-            }
-            market_data_reason = getattr(market_data_health, "reason", None)
-            market_data_detail = getattr(market_data_health, "detail", None)
-            market_data_max_staleness = getattr(
-                market_data_health, "max_staleness", None
-            )
-
-        if market_data_ok is None:
-            market_data_ok = (
-                data_status.rest_api_reachable
-                and data_status.websocket_connected
-                and data_status.subscription_errors == 0
-                and data_status.stale_pairs == 0
-            )
-        if market_data_stale is None:
-            market_data_stale = data_status.stale_pairs > 0
-        if market_data_reason is None:
-            market_data_reason = (
-                None
-                if market_data_ok
-                else ("data_stale" if market_data_stale else "connection_issue")
-            )
-
-        metrics_has_update = bool(metrics_snapshot.get("market_data_status_updated"))
-
-        if metrics_has_update:
-            market_data_ok = bool(
-                metrics_snapshot.get("market_data_ok", market_data_ok)
-            )
-            market_data_stale = bool(
-                metrics_snapshot.get("market_data_stale", market_data_stale)
-            )
-            market_data_reason = metrics_snapshot.get(
-                "market_data_reason", market_data_reason
-            )
-            market_data_max_staleness = metrics_snapshot.get(
-                "market_data_max_staleness", market_data_max_staleness
-            )
-
-        if metrics_has_update:
-            market_data_status = metrics_snapshot.get(
-                "market_data_status",
-                getattr(market_data_health, "health", None)
-                or (
-                    "streaming"
-                    if market_data_ok
-                    else ("degraded" if market_data_stale else "unavailable")
-                ),
-            )
-        else:
-            market_data_status = getattr(market_data_health, "health", None) or (
-                "streaming"
-                if market_data_ok
-                else ("degraded" if market_data_stale else "unavailable")
-            )
-
-        execution_ok = (
-            execution_config.mode != "live"
-            or get_live_trading_block_reason(execution_config) is None
-        )
-        risk_status = ctx.strategy_engine.get_risk_status()
-        portfolio_sync_ok = bool(getattr(ctx.portfolio, "last_sync_ok", True))
-        portfolio_sync_reason = getattr(ctx.portfolio, "last_sync_reason", None)
-        portfolio_last_sync_at = getattr(ctx.portfolio, "last_sync_at", None)
-        portfolio_baseline = getattr(ctx.portfolio, "baseline_source", None)
-        health_payload = SystemHealthPayload(
-            app_version=APP_VERSION,
-            execution_mode=getattr(execution_config, "mode", None),
-            lifecycle=_resolve_lifecycle(ctx),
-            rest_api_reachable=data_status.rest_api_reachable,
-            websocket_connected=data_status.websocket_connected,
-            streaming_pairs=data_status.streaming_pairs,
-            stale_pairs=data_status.stale_pairs,
-            subscription_errors=data_status.subscription_errors,
-            market_data_ok=bool(market_data_ok),
-            market_data_status=market_data_status,
-            market_data_reason=market_data_reason,
-            market_data_detail=market_data_detail,
-            market_data_stale=market_data_stale,
-            market_data_max_staleness=market_data_max_staleness,
-            execution_ok=execution_ok,
-            current_mode=execution_config.mode,
-            ui_read_only=ctx.config.ui.read_only,
-            kill_switch_active=getattr(risk_status, "kill_switch_active", None),
-            portfolio_sync_ok=portfolio_sync_ok,
-            portfolio_sync_reason=portfolio_sync_reason,
-            portfolio_last_sync_at=portfolio_last_sync_at,
-            portfolio_baseline=portfolio_baseline,
-            drift_detected=bool(metrics_snapshot.get("drift_detected")),
-            drift_reason=metrics_snapshot.get("drift_reason"),
-        )
-        return ApiEnvelope(data=health_payload, error=None)
+        return ApiEnvelope(data=_build_system_health_payload(ctx), error=None)
     except Exception as exc:  # pragma: no cover - defensive
         logger.exception(
             "Failed to fetch system health",
             extra=build_request_log_extra(request, event="system_health_failed"),
+        )
+        return ApiEnvelope(data=None, error=str(exc))
+
+
+@router.get("/cockpit", response_model=ApiEnvelope[CockpitSnapshotPayload])
+async def cockpit_snapshot(request: Request) -> ApiEnvelope[CockpitSnapshotPayload]:
+    """Return one coherent operator snapshot for the active cockpit."""
+
+    try:
+        ctx = _context(request)
+        section_errors: dict[str, str] = {}
+        health = _read_section(
+            section_errors, "health", lambda: _build_system_health_payload(ctx)
+        )
+        session = _read_section(
+            section_errors, "session", lambda: _session_payload(ctx)
+        )
+
+        portfolio_summary = _read_section(
+            section_errors,
+            "portfolio.summary",
+            lambda: _build_portfolio_summary_payload(ctx),
+        )
+        exposure = _read_section(
+            section_errors, "portfolio.exposure", lambda: _build_exposure_payload(ctx)
+        )
+        positions = _read_section(
+            section_errors, "portfolio.positions", lambda: _build_positions_payload(ctx)
+        )
+
+        risk_status = _read_section(
+            section_errors, "risk.status", lambda: _build_risk_status_payload(ctx)
+        )
+        risk_config = _read_section(
+            section_errors, "risk.config", lambda: _build_risk_config_payload(ctx)
+        )
+
+        strategies = _read_section(
+            section_errors,
+            "strategies.state",
+            lambda: _build_strategy_state_payload(ctx),
+        )
+        performance = _read_section(
+            section_errors,
+            "strategies.performance",
+            lambda: _build_strategy_performance_payload(ctx),
+        )
+
+        recent_executions = _read_section(
+            section_errors,
+            "activity.recent_executions",
+            lambda: _build_recent_executions_payload(ctx),
+        )
+        risk_decisions = _read_section(
+            section_errors,
+            "activity.risk_decisions",
+            lambda: _build_risk_decisions_payload(ctx),
+        )
+
+        replay = _read_section(
+            section_errors, "replay.latest", _build_latest_replay_payload
+        )
+
+        payload = CockpitSnapshotPayload(
+            generated_at=datetime.now(timezone.utc),
+            health=health,
+            session=session,
+            portfolio=CockpitPortfolioPayload(
+                summary=portfolio_summary,
+                exposure=exposure,
+                positions=positions,
+            ),
+            risk=CockpitRiskPayload(status=risk_status, config=risk_config),
+            strategies=CockpitStrategiesPayload(
+                state=strategies,
+                performance=performance,
+            ),
+            activity=CockpitActivityPayload(
+                recent_executions=recent_executions,
+                risk_decisions=risk_decisions,
+            ),
+            replay=replay,
+            section_errors=section_errors,
+        )
+        return ApiEnvelope(data=payload, error=None)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.exception(
+            "Failed to build cockpit snapshot",
+            extra=build_request_log_extra(request, event="cockpit_snapshot_failed"),
         )
         return ApiEnvelope(data=None, error=str(exc))
 
@@ -1523,21 +1744,14 @@ async def latest_replay_report(
     ctx = _context(request)
     _check_setup_mode(ctx)
 
-    report_path = get_latest_backtest_report_path(get_config_dir())
-    if not report_path.exists():
-        return ApiEnvelope(data=ReplayLatestPayload(available=False), error=None)
-
     try:
-        payload = load_backtest_report(report_path)
-        summary = summarize_latest_backtest_report(payload, resolved_path=report_path)
-        return ApiEnvelope(data=ReplayLatestPayload(**summary), error=None)
+        return ApiEnvelope(data=_build_latest_replay_payload(), error=None)
     except Exception as exc:  # noqa: BLE001
         logger.warning(
             "Latest replay report is unavailable",
             extra=build_request_log_extra(
                 request,
                 event="latest_replay_unavailable",
-                report_path=str(report_path),
                 error=str(exc),
             ),
         )
@@ -1582,10 +1796,7 @@ async def set_execution_mode(
     )
     repairing_live_state = new_mode == "live" and (
         (not current_allow_live and bool(payload.password or payload.confirmation))
-        or (
-            not current_paper_tests_completed
-            and payload.certify_paper_tests_completed
-        )
+        or (not current_paper_tests_completed and payload.certify_paper_tests_completed)
     )
 
     if new_mode == current_mode and not repairing_live_state:
@@ -1650,7 +1861,8 @@ async def set_execution_mode(
             ),
             paper_tests_completed=(
                 next_paper_tests_completed
-                if new_mode == "live" or next_paper_tests_completed != current_paper_tests_completed
+                if new_mode == "live"
+                or next_paper_tests_completed != current_paper_tests_completed
                 else None
             ),
         )

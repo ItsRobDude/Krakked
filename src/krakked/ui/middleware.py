@@ -30,6 +30,7 @@ class LifecycleMiddleware(BaseHTTPMiddleware):
         self._allowed_paths_exact = {
             "/api/system/session",
             "/api/system/health",
+            "/api/system/cockpit",
             "/api/system/profiles",
             "/api/health",
             "/api/config/runtime",
@@ -39,6 +40,7 @@ class LifecycleMiddleware(BaseHTTPMiddleware):
                 {
                     f"{normalized_base}/api/system/session",
                     f"{normalized_base}/api/system/health",
+                    f"{normalized_base}/api/system/cockpit",
                     f"{normalized_base}/api/system/profiles",
                     f"{normalized_base}/api/health",
                     f"{normalized_base}/api/config/runtime",

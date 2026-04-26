@@ -165,6 +165,40 @@ export type ReplayLatestSummary = {
   report_path?: string | null;
 };
 
+export type CockpitPortfolioSnapshot = {
+  summary: PortfolioSummary | null;
+  exposure: ExposureBreakdown | null;
+  positions: PositionPayload[] | null;
+};
+
+export type CockpitRiskSnapshot = {
+  status: RiskStatus | null;
+  config: RiskConfig | null;
+};
+
+export type CockpitStrategiesSnapshot = {
+  state: StrategyState[] | null;
+  performance: StrategyPerformance[] | null;
+};
+
+export type CockpitActivitySnapshot = {
+  recent_executions: RecentExecution[] | null;
+  risk_decisions: RiskDecision[] | null;
+};
+
+export type CockpitSnapshot = {
+  schema_version: string;
+  generated_at: string;
+  health: SystemHealth | null;
+  session: SessionStateResponse | null;
+  portfolio: CockpitPortfolioSnapshot | null;
+  risk: CockpitRiskSnapshot | null;
+  strategies: CockpitStrategiesSnapshot | null;
+  activity: CockpitActivitySnapshot | null;
+  replay: ReplayLatestSummary | null;
+  section_errors: Record<string, string>;
+};
+
 export type ExecutionMode = 'paper' | 'live';
 export type StrategyRiskProfile = 'conservative' | 'balanced' | 'aggressive';
 export type RiskPresetName = 'conservative' | 'balanced' | 'aggressive' | 'degen';
@@ -371,6 +405,10 @@ export async function fetchSystemMetrics(): Promise<SystemMetrics | null> {
 
 export async function fetchLatestReplay(options: ApiRequestOptions = {}): Promise<ReplayLatestSummary | null> {
   return fetchJson<ReplayLatestSummary>('/system/replay/latest', options);
+}
+
+export async function fetchCockpitSnapshot(options: ApiRequestOptions = {}): Promise<CockpitSnapshot | null> {
+  return fetchJson<CockpitSnapshot>('/system/cockpit', options);
 }
 
 export async function fetchSessionState(options: ApiRequestOptions = {}): Promise<SessionStateResponse | null> {

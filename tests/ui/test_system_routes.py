@@ -140,7 +140,11 @@ def test_system_health_enveloped(client, system_context):
 def test_system_health_reports_config_and_risk_flags(client, system_context):
     metrics = SystemMetrics()
     metrics.update_market_data_status(
-        ok=False, stale=True, status="degraded", reason="stream delay", max_staleness=12.5
+        ok=False,
+        stale=True,
+        status="degraded",
+        reason="stream delay",
+        max_staleness=12.5,
     )
     system_context.metrics = metrics
 
@@ -164,8 +168,12 @@ def test_system_health_reports_config_and_risk_flags(client, system_context):
         kill_switch_active=True
     )
     system_context.portfolio.last_sync_ok = False
-    system_context.portfolio.last_sync_reason = "Trade ingestion failed during portfolio sync."
-    system_context.portfolio.last_sync_at = datetime(2026, 4, 19, 19, 30, tzinfo=timezone.utc)
+    system_context.portfolio.last_sync_reason = (
+        "Trade ingestion failed during portfolio sync."
+    )
+    system_context.portfolio.last_sync_at = datetime(
+        2026, 4, 19, 19, 30, tzinfo=timezone.utc
+    )
     system_context.portfolio.baseline_source = "exchange_balances"
 
     response = client.get("/api/system/health")
@@ -187,7 +195,10 @@ def test_system_health_reports_config_and_risk_flags(client, system_context):
     assert payload["market_data_stale"] is True
     assert payload["kill_switch_active"] is True
     assert payload["portfolio_sync_ok"] is False
-    assert payload["portfolio_sync_reason"] == "Trade ingestion failed during portfolio sync."
+    assert (
+        payload["portfolio_sync_reason"]
+        == "Trade ingestion failed during portfolio sync."
+    )
     assert payload["portfolio_last_sync_at"] == "2026-04-19T19:30:00Z"
     assert payload["portfolio_baseline"] == "exchange_balances"
 
@@ -425,7 +436,9 @@ def test_latest_replay_endpoint_returns_compact_summary(
                     "cost_model": "Immediate candle-close fills using configured slippage and flat taker fees.",
                     "trust_level": "limited",
                     "trust_note": "Limited signal: some strategy actions were blocked by guardrails.",
-                    "notable_warnings": ["Most strategy actions were blocked by guardrails."],
+                    "notable_warnings": [
+                        "Most strategy actions were blocked by guardrails."
+                    ],
                     "usable_series_count": 1,
                     "missing_series": [],
                     "partial_series": ["BTC/USD@1h"],
@@ -473,7 +486,9 @@ def test_latest_replay_endpoint_hides_invalid_report(
     monkeypatch.setattr(system_routes, "get_config_dir", lambda: tmp_path)
     report_path = tmp_path / "reports" / "backtests" / "latest.json"
     report_path.parent.mkdir(parents=True, exist_ok=True)
-    report_path.write_text(json.dumps({"report_version": 2, "summary": {}}), encoding="utf-8")
+    report_path.write_text(
+        json.dumps({"report_version": 2, "summary": {}}), encoding="utf-8"
+    )
 
     response = client.get("/api/system/replay/latest")
 
@@ -481,6 +496,81 @@ def test_latest_replay_endpoint_hides_invalid_report(
     payload = response.json()
     assert payload["error"] is None
     assert payload["data"]["available"] is False
+
+
+def test_cockpit_snapshot_returns_expected_sections(client, system_context):
+    system_context.market_data.get_cached_data_status.return_value = SimpleNamespace(
+        rest_api_reachable=True,
+        websocket_connected=True,
+        streaming_pairs=4,
+        stale_pairs=0,
+        subscription_errors=0,
+    )
+    system_context.portfolio.get_strategy_performance.return_value = {}
+    system_context.execution_service.get_recent_executions.return_value = []
+    system_context.portfolio.get_decisions.return_value = []
+
+    response = client.get("/api/system/cockpit")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["error"] is None
+    data = payload["data"]
+    assert data["schema_version"] == "cockpit.v1"
+    assert data["generated_at"]
+    assert data["section_errors"] == {}
+    assert data["health"]["market_data_ok"] is True
+    assert data["session"]["active"] is False
+    assert data["portfolio"]["summary"]["equity_usd"] == 0.0
+    assert data["portfolio"]["exposure"]["by_asset"] == []
+    assert data["portfolio"]["positions"] == []
+    assert data["risk"]["status"]["kill_switch_active"] is False
+    assert (
+        data["risk"]["config"]["max_open_positions"]
+        == system_context.config.risk.max_open_positions
+    )
+    assert data["strategies"]["state"] == []
+    assert data["strategies"]["performance"] == []
+    assert data["activity"]["recent_executions"] == []
+    assert data["activity"]["risk_decisions"] == []
+    assert data["replay"]["available"] is False
+
+
+def test_cockpit_snapshot_isolates_section_failures(client, system_context):
+    system_context.portfolio.get_strategy_performance.side_effect = RuntimeError(
+        "performance cache busy"
+    )
+    system_context.execution_service.get_recent_executions.side_effect = RuntimeError(
+        "execution store busy"
+    )
+
+    response = client.get("/api/system/cockpit")
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["strategies"]["state"] == []
+    assert data["strategies"]["performance"] is None
+    assert data["activity"]["recent_executions"] is None
+    assert data["activity"]["risk_decisions"] == []
+    assert data["section_errors"]["strategies.performance"] == "performance cache busy"
+    assert (
+        data["section_errors"]["activity.recent_executions"] == "execution store busy"
+    )
+
+
+def test_cockpit_snapshot_reports_safe_setup_lifecycle(client, system_context):
+    system_context.is_setup_mode = True
+    system_context.session.active = False
+
+    response = client.get("/api/system/cockpit")
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["health"]["lifecycle"] == "locked"
+    assert data["health"]["current_mode"] == "setup"
+    assert data["health"]["market_data_reason"] == "setup_required"
+    assert data["session"]["active"] is False
+    assert data["session"]["lifecycle"] == "locked"
 
 
 def test_start_session_reads_ml_from_config(client, system_context):
@@ -627,9 +717,7 @@ def test_setup_config_uses_starter_universe_when_none_provided(
     ]
 
 
-def test_setup_config_preserves_ws_style_pairs(
-    monkeypatch, client, temp_config_dir
-):
+def test_setup_config_preserves_ws_style_pairs(monkeypatch, client, temp_config_dir):
     monkeypatch.setattr(
         "krakked.ui.routes.system.get_config_dir", lambda: temp_config_dir
     )

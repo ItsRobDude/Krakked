@@ -12,18 +12,12 @@ import { SetupWizard } from './components/SetupWizard';
 import { PasswordScreen } from './components/PasswordScreen';
 import { LiveModeModal } from './components/LiveModeModal';
 import {
-  fetchExposure,
-  fetchPortfolioSummary,
-  fetchPositions,
-  fetchRecentExecutions,
-  fetchLatestReplay,
-  fetchRiskDecisions,
+  fetchCockpitSnapshot,
   fetchSystemHealth,
   fetchSessionState,
   fetchProfiles, ProfileSummary,
   fetchStrategies,
   fetchStrategyPerformance,
-  fetchRiskConfig,
   applyRiskPreset,
   getRiskStatus,
   fetchSetupStatus,
@@ -297,7 +291,6 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
   const [pendingLiveStart, setPendingLiveStart] = useState<SessionConfigRequest | null>(null);
   const dashboardRefreshInFlightRef = useRef(false);
   const dashboardAbortRef = useRef<AbortController | null>(null);
-  const requestInFlightRef = useRef<Record<string, boolean>>({});
 
   const mlEnabled = session?.ml_enabled ?? false;
   const startupReloading = Boolean(
@@ -316,23 +309,6 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
       return next;
     });
   }, []);
-
-  const requestDashboardResource = async <T,>(
-    key: string,
-    controller: AbortController,
-    loader: (options: { signal: AbortSignal; timeoutMs: number }) => Promise<T | null>,
-  ) => {
-    if (requestInFlightRef.current[key]) {
-      return null;
-    }
-
-    requestInFlightRef.current[key] = true;
-    try {
-      return await loader({ signal: controller.signal, timeoutMs: ACTIVE_RESOURCE_TIMEOUT_MS });
-    } finally {
-      requestInFlightRef.current[key] = false;
-    }
-  };
 
   const loadSession = useCallback(async () => {
     const sessionState = await fetchSessionState({ timeoutMs: ACTIVE_RESOURCE_TIMEOUT_MS });
@@ -412,34 +388,39 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
       dashboardAbortRef.current = controller;
 
       try {
-        const [
-          portfolioSummary,
-          exposureData,
-          systemHealth,
-          riskStatus,
-          riskConfigData,
-          positionsData,
-          strategiesData,
-          perf,
-          executions,
-          decisions,
-          latestReplaySummary,
-        ] = await Promise.all([
-          requestDashboardResource('portfolio-summary', controller, fetchPortfolioSummary),
-          requestDashboardResource('portfolio-exposure', controller, fetchExposure),
-          requestDashboardResource('system-health', controller, fetchSystemHealth),
-          requestDashboardResource('risk-status', controller, getRiskStatus),
-          requestDashboardResource('risk-config', controller, fetchRiskConfig),
-          requestDashboardResource('portfolio-positions', controller, fetchPositions),
-          requestDashboardResource('strategy-state', controller, fetchStrategies),
-          requestDashboardResource('strategy-performance', controller, fetchStrategyPerformance),
-          requestDashboardResource('recent-executions', controller, fetchRecentExecutions),
-          requestDashboardResource('risk-decisions', controller, (options) => fetchRiskDecisions(50, options)),
-          requestDashboardResource('latest-replay', controller, fetchLatestReplay),
-        ]);
+        const snapshot = await fetchCockpitSnapshot({
+          signal: controller.signal,
+          timeoutMs: ACTIVE_RESOURCE_TIMEOUT_MS,
+        });
 
         if (cancelled || controller.signal.aborted) return;
 
+        if (!snapshot) {
+          setConnectionState('degraded');
+          updateRefreshIssue(
+            'dashboard',
+            'Cockpit snapshot is unavailable. Showing the last successful dashboard data where possible.',
+          );
+          return;
+        }
+
+        if (snapshot.session) {
+          setSession(snapshot.session);
+          setLoopIntervalDraft(snapshot.session.loop_interval_sec);
+        }
+
+        const sectionErrors = snapshot.section_errors ?? {};
+        const portfolioSummary = snapshot.portfolio?.summary ?? null;
+        const exposureData = snapshot.portfolio?.exposure ?? null;
+        const positionsData = snapshot.portfolio?.positions ?? null;
+        const systemHealth = snapshot.health;
+        const riskStatus = snapshot.risk?.status ?? null;
+        const riskConfigData = snapshot.risk?.config ?? null;
+        const strategiesData = snapshot.strategies?.state ?? null;
+        const perf = snapshot.strategies?.performance ?? null;
+        const executions = snapshot.activity?.recent_executions ?? null;
+        const decisions = snapshot.activity?.risk_decisions ?? null;
+        const latestReplaySummary = snapshot.replay;
         const dashboardFailures: string[] = [];
 
         if (portfolioSummary) {
@@ -458,7 +439,9 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
           setConnectionState('degraded');
           updateRefreshIssue(
             'session-health',
-            'System health is unavailable. Showing the last successful status where possible.',
+            sectionErrors.health
+              ? `System health is unavailable: ${sectionErrors.health}`
+              : 'System health is unavailable. Showing the last successful status where possible.',
           );
         }
 
@@ -469,7 +452,9 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
           dashboardFailures.push('risk status');
           updateRefreshIssue(
             'risk-status',
-            'Risk status refresh failed. Dashboard risk indicators may be stale.',
+            sectionErrors['risk.status']
+              ? `Risk status refresh failed: ${sectionErrors['risk.status']}`
+              : 'Risk status refresh failed. Dashboard risk indicators may be stale.',
           );
         }
 
@@ -480,7 +465,9 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
           dashboardFailures.push('exposure');
           updateRefreshIssue(
             'exposure',
-            'Exposure refresh failed. Exposure panels may be showing the last successful data.',
+            sectionErrors['portfolio.exposure']
+              ? `Exposure refresh failed: ${sectionErrors['portfolio.exposure']}`
+              : 'Exposure refresh failed. Exposure panels may be showing the last successful data.',
           );
         }
 
@@ -490,7 +477,9 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
         } else {
           updateRefreshIssue(
             'risk-config',
-            'Risk configuration refresh failed. Edits may be working against stale values.',
+            sectionErrors['risk.config']
+              ? `Risk configuration refresh failed: ${sectionErrors['risk.config']}`
+              : 'Risk configuration refresh failed. Edits may be working against stale values.',
           );
         }
 
@@ -503,7 +492,9 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
         } else {
           updateRefreshIssue(
             'positions',
-            'Positions refresh failed. Position tables may be showing the last successful snapshot.',
+            sectionErrors['portfolio.positions']
+              ? `Positions refresh failed: ${sectionErrors['portfolio.positions']}`
+              : 'Positions refresh failed. Position tables may be showing the last successful snapshot.',
           );
         }
 
@@ -513,7 +504,9 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
         } else {
           updateRefreshIssue(
             'latest-replay',
-            'Latest replay summary refresh failed. Showing the last published replay where possible.',
+            sectionErrors['replay.latest']
+              ? `Latest replay summary refresh failed: ${sectionErrors['replay.latest']}`
+              : 'Latest replay summary refresh failed. Showing the last published replay where possible.',
           );
         }
 
@@ -547,7 +540,9 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
         } else {
           updateRefreshIssue(
             'strategies',
-            'Strategy refresh failed. Strategy toggles and weights may be showing stale data.',
+            sectionErrors['strategies.state']
+              ? `Strategy refresh failed: ${sectionErrors['strategies.state']}`
+              : 'Strategy refresh failed. Strategy toggles and weights may be showing stale data.',
           );
         }
 
@@ -561,7 +556,9 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
         } else {
           updateRefreshIssue(
             'strategy-performance',
-            'Strategy performance refresh failed. Performance metrics may be stale.',
+            sectionErrors['strategies.performance']
+              ? `Strategy performance refresh failed: ${sectionErrors['strategies.performance']}`
+              : 'Strategy performance refresh failed. Performance metrics may be stale.',
           );
         }
 
@@ -576,7 +573,11 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
         } else {
           updateRefreshIssue(
             'activity',
-            'Recent activity refresh failed. Execution and risk logs may be stale.',
+            sectionErrors['activity.recent_executions'] || sectionErrors['activity.risk_decisions']
+              ? `Recent activity refresh failed: ${
+                sectionErrors['activity.recent_executions'] || sectionErrors['activity.risk_decisions']
+              }`
+              : 'Recent activity refresh failed. Execution and risk logs may be stale.',
           );
         }
 

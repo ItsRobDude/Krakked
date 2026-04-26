@@ -153,6 +153,8 @@ def build_test_context(
     portfolio.get_asset_exposure.return_value = []
     portfolio.get_cached_asset_exposure.return_value = []
     portfolio.get_trade_history.return_value = []
+    portfolio.get_decisions.return_value = []
+    portfolio.get_strategy_performance.return_value = {}
     portfolio.create_snapshot.return_value = _mock_snapshot()
     portfolio.get_exchange_reference_summary.return_value = None
     portfolio.get_cached_drift_status.return_value = SimpleNamespace(
@@ -179,6 +181,7 @@ def build_test_context(
     execution_service = MagicMock(name="execution_service")
     execution_service.adapter = MagicMock()
     execution_service.adapter.config = config.execution
+    execution_service.get_recent_executions.return_value = []
 
     metrics = SystemMetrics()
 
