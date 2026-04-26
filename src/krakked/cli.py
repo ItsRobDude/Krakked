@@ -33,6 +33,7 @@ from krakked.config import AppConfig, get_config_dir, get_default_ohlc_store_con
 from krakked.connection.rest_client import KrakenRESTClient
 from krakked.credentials import CredentialResult, CredentialStatus
 from krakked.main import run as run_orchestrator
+from krakked.market_data.api import MarketDataAPI
 from krakked.portfolio.exceptions import PortfolioSchemaError
 from krakked.portfolio.store import (
     CURRENT_SCHEMA_VERSION,
@@ -279,6 +280,149 @@ def _load_backtest_config(args: argparse.Namespace) -> AppConfig:
                 strat_cfg.params = params
 
     return config
+
+
+def _resolve_requested_timeframes(args: argparse.Namespace, config: AppConfig) -> list[str]:
+    return list(args.timeframe) if args.timeframe else list(config.market_data.backfill_timeframes)
+
+
+def _print_refresh_ohlc_summary(
+    *,
+    start: datetime,
+    end: datetime,
+    pairs: list[str],
+    timeframes: list[str],
+    refreshed: list[dict[str, Any]],
+    preflight: BacktestPreflightResult,
+) -> None:
+    print("OHLC refresh completed.")
+    print(
+        f"Window: {start.isoformat()} -> {end.isoformat()} "
+        f"| Pairs: {', '.join(pairs)} | Timeframes: {', '.join(timeframes)}"
+    )
+    print("Series refresh:")
+    for item in refreshed:
+        unchanged_suffix = " (latest unchanged)" if not item["latest_changed"] else ""
+        print(
+            f"- {item['series_key']}: fetched {item['fetched_bars']} bars, "
+            f"previous {item['previous_latest_at']}, latest {item['latest_at']}"
+            f"{unchanged_suffix}"
+        )
+    coverage = preflight.preflight
+    print(
+        f"Refresh readiness: {coverage.status} "
+        f"({coverage.usable_series_count} usable, "
+        f"{len(coverage.partial_series)} partial, {len(coverage.missing_series)} missing)"
+    )
+    print(f"Replay readiness: {coverage.summary_note}")
+    if coverage.warnings:
+        print("Warnings:")
+        for warning in coverage.warnings:
+            print(f"- {warning}")
+
+
+def _refresh_ohlc_command(args: argparse.Namespace) -> int:
+    try:
+        start = _parse_datetime_arg(args.start)
+        end = _parse_datetime_arg(args.end)
+    except ValueError as exc:
+        return _print_error(f"Invalid refresh-ohlc datetime: {exc}")
+
+    try:
+        config = _load_backtest_config(args)
+        timeframes = _resolve_requested_timeframes(args, config)
+        pairs = list(config.universe.include_pairs)
+    except Exception as exc:  # noqa: BLE001
+        return _print_error(f"OHLC refresh failed: {exc}")
+
+    if not pairs:
+        return _print_error("OHLC refresh failed: no pairs were configured or requested.")
+    if not timeframes:
+        return _print_error(
+            "OHLC refresh failed: no timeframes were configured or requested."
+        )
+
+    refreshed: list[dict[str, Any]] = []
+    market_data: MarketDataAPI | None = None
+    try:
+        market_data = MarketDataAPI(config)
+        market_data.refresh_universe()
+
+        for pair in pairs:
+            for timeframe in timeframes:
+                existing = market_data.get_ohlc(pair, timeframe, 1)
+                since = existing[-1].timestamp if existing else None
+                previous_latest_at = (
+                    datetime.fromtimestamp(since, tz=UTC).isoformat()
+                    if since is not None
+                    else "none"
+                )
+                fetched_bars = market_data.backfill_ohlc(pair, timeframe, since=since)
+                refreshed.append(
+                    {
+                        "pair": pair,
+                        "timeframe": timeframe,
+                        "series_key": f"{pair}@{timeframe}",
+                        "fetched_bars": fetched_bars,
+                        "previous_latest_ts": since,
+                        "previous_latest_at": previous_latest_at,
+                        "latest_at": "pending",
+                        "latest_changed": False,
+                    }
+                )
+
+        write_queue = getattr(getattr(market_data, "_ohlc_store", None), "_write_queue", None)
+        if write_queue is not None:
+            write_queue.join()
+
+        for item in refreshed:
+            latest = market_data.get_ohlc(item["pair"], item["timeframe"], 1)
+            latest_ts = latest[-1].timestamp if latest else None
+            item["latest_at"] = (
+                datetime.fromtimestamp(latest_ts, tz=UTC).isoformat()
+                if latest_ts is not None
+                else "none"
+            )
+            item["latest_changed"] = latest_ts != item["previous_latest_ts"]
+
+        preflight = build_backtest_preflight(
+            config,
+            start=start,
+            end=end,
+            timeframes=timeframes,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _print_error(f"OHLC refresh failed: {exc}")
+    finally:
+        if market_data is not None:
+            market_data.shutdown()
+
+    payload = {
+        "start": start.isoformat(),
+        "end": end.isoformat(),
+        "pairs": pairs,
+        "timeframes": timeframes,
+        "refreshed": refreshed,
+        "preflight": preflight.to_dict(),
+    }
+    if args.json:
+        print(json.dumps(payload, indent=2))
+    else:
+        _print_refresh_ohlc_summary(
+            start=start,
+            end=end,
+            pairs=pairs,
+            timeframes=timeframes,
+            refreshed=refreshed,
+            preflight=preflight,
+        )
+
+    if preflight.preflight.missing_series or preflight.preflight.partial_series:
+        if args.json:
+            return 1
+        print("OHLC refresh left replay coverage incomplete for the requested window.")
+        return 1
+    return 0
 
 
 def _print_backtest_summary(
@@ -1056,6 +1200,41 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Prompt for credentials if they are not already configured",
     )
     run_parser.set_defaults(func=_run_command)
+
+    refresh_ohlc_parser = subparsers.add_parser(
+        "refresh-ohlc",
+        help="Incrementally refresh cached OHLC for the configured replay pairs/timeframes and verify window coverage",
+    )
+    refresh_ohlc_parser.add_argument(
+        "--start",
+        required=True,
+        help="Window start time in ISO-8601 form for the readiness check",
+    )
+    refresh_ohlc_parser.add_argument(
+        "--end",
+        required=True,
+        help="Window end time in ISO-8601 form for the readiness check",
+    )
+    refresh_ohlc_parser.add_argument(
+        "--config",
+        help="Optional path to the base config.yaml to use",
+    )
+    refresh_ohlc_parser.add_argument(
+        "--pair",
+        action="append",
+        help="Limit the refresh to one pair; repeat to include multiple pairs",
+    )
+    refresh_ohlc_parser.add_argument(
+        "--timeframe",
+        action="append",
+        help="Limit the refresh to one timeframe; repeat to include multiple timeframes",
+    )
+    refresh_ohlc_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print the refresh result as JSON",
+    )
+    refresh_ohlc_parser.set_defaults(func=_refresh_ohlc_command)
 
     backtest_preflight_parser = subparsers.add_parser(
         "backtest-preflight",

@@ -851,6 +851,246 @@ def test_backtest_preflight_command_prints_summary(
     assert "Replay readiness: Coverage looks complete" in output
 
 
+def test_refresh_ohlc_command_prints_summary_and_checks_readiness(
+    monkeypatch: pytest.MonkeyPatch, capsys: Any
+) -> None:
+    config = load_config(config_path=Path("config_examples/config.yaml"), env="paper")
+    config.universe.include_pairs = ["BTC/USD"]
+    config.market_data.backfill_timeframes = ["1h"]
+
+    start = datetime(2026, 4, 1, tzinfo=UTC)
+    end = datetime(2026, 4, 2, tzinfo=UTC)
+    latest_before = int(datetime(2026, 4, 1, 0, 0, tzinfo=UTC).timestamp())
+    latest_after = int(datetime(2026, 4, 2, 0, 0, tzinfo=UTC).timestamp())
+
+    class _FakeQueue:
+        def join(self) -> None:
+            return None
+
+    class _FakeMarketData:
+        def __init__(self, cfg: Any) -> None:
+            self.config = cfg
+            self._latest = {("BTC/USD", "1h"): latest_before}
+            self._ohlc_store = SimpleNamespace(_write_queue=_FakeQueue())
+
+        def refresh_universe(self) -> None:
+            return None
+
+        def get_ohlc(self, pair: str, timeframe: str, lookback: int) -> list[Any]:  # noqa: ARG002
+            timestamp = self._latest[(pair, timeframe)]
+            return [SimpleNamespace(timestamp=timestamp)]
+
+        def backfill_ohlc(self, pair: str, timeframe: str, since: int | None = None) -> int:
+            assert since == latest_before
+            self._latest[(pair, timeframe)] = latest_after
+            return 24
+
+        def shutdown(self) -> None:
+            return None
+
+    def _fake_build_backtest_preflight(*args: Any, **kwargs: Any) -> BacktestPreflightResult:  # noqa: ARG001
+        return BacktestPreflightResult(
+            start=start,
+            end=end,
+            pairs=["BTC/USD"],
+            timeframes=["1h"],
+            preflight=BacktestPreflight(
+                coverage=[
+                    BacktestCoverageItem(
+                        pair="BTC/USD",
+                        timeframe="1h",
+                        bar_count=24,
+                        first_bar_at=start,
+                        last_bar_at=end,
+                        status="ok",
+                    )
+                ],
+                usable_series_count=1,
+                missing_series=[],
+                partial_series=[],
+                status="ready",
+                summary_note="Coverage looks complete for the requested replay window.",
+                warnings=[],
+            ),
+        )
+
+    monkeypatch.setattr(cli, "_load_backtest_config", lambda args: config)  # noqa: ARG005
+    monkeypatch.setattr(cli, "MarketDataAPI", _FakeMarketData)
+    monkeypatch.setattr(cli, "build_backtest_preflight", _fake_build_backtest_preflight)
+
+    exit_code = cli.main(
+        [
+            "refresh-ohlc",
+            "--start",
+            "2026-04-01T00:00:00Z",
+            "--end",
+            "2026-04-02T00:00:00Z",
+        ]
+    )
+
+    assert exit_code == 0
+    output = capsys.readouterr().out
+    assert "OHLC refresh completed." in output
+    assert "BTC/USD@1h: fetched 24 bars" in output
+    assert "Refresh readiness: ready" in output
+    assert "Replay readiness: Coverage looks complete" in output
+
+
+def test_refresh_ohlc_command_fails_when_window_stays_incomplete(
+    monkeypatch: pytest.MonkeyPatch, capsys: Any
+) -> None:
+    config = load_config(config_path=Path("config_examples/config.yaml"), env="paper")
+    config.universe.include_pairs = ["BTC/USD"]
+    config.market_data.backfill_timeframes = ["1d"]
+
+    start = datetime(2026, 4, 1, tzinfo=UTC)
+    end = datetime(2026, 4, 2, tzinfo=UTC)
+    latest_before = int(datetime(2026, 4, 1, 0, 0, tzinfo=UTC).timestamp())
+
+    class _FakeQueue:
+        def join(self) -> None:
+            return None
+
+    class _FakeMarketData:
+        def __init__(self, cfg: Any) -> None:
+            self.config = cfg
+            self._ohlc_store = SimpleNamespace(_write_queue=_FakeQueue())
+
+        def refresh_universe(self) -> None:
+            return None
+
+        def get_ohlc(self, pair: str, timeframe: str, lookback: int) -> list[Any]:  # noqa: ARG002
+            return [SimpleNamespace(timestamp=latest_before)]
+
+        def backfill_ohlc(self, pair: str, timeframe: str, since: int | None = None) -> int:  # noqa: ARG002
+            return 0
+
+        def shutdown(self) -> None:
+            return None
+
+    def _fake_build_backtest_preflight(*args: Any, **kwargs: Any) -> BacktestPreflightResult:  # noqa: ARG001
+        return BacktestPreflightResult(
+            start=start,
+            end=end,
+            pairs=["BTC/USD"],
+            timeframes=["1d"],
+            preflight=BacktestPreflight(
+                coverage=[
+                    BacktestCoverageItem(
+                        pair="BTC/USD",
+                        timeframe="1d",
+                        bar_count=1,
+                        first_bar_at=start,
+                        last_bar_at=start,
+                        status="partial_window",
+                    )
+                ],
+                usable_series_count=1,
+                missing_series=[],
+                partial_series=["BTC/USD@1d"],
+                status="limited",
+                summary_note="Coverage is limited: some requested series are missing or partial.",
+                warnings=["1 requested series only partially cover the requested window."],
+            ),
+        )
+
+    monkeypatch.setattr(cli, "_load_backtest_config", lambda args: config)  # noqa: ARG005
+    monkeypatch.setattr(cli, "MarketDataAPI", _FakeMarketData)
+    monkeypatch.setattr(cli, "build_backtest_preflight", _fake_build_backtest_preflight)
+
+    exit_code = cli.main(
+        [
+            "refresh-ohlc",
+            "--start",
+            "2026-04-01T00:00:00Z",
+            "--end",
+            "2026-04-02T00:00:00Z",
+        ]
+    )
+
+    assert exit_code == 1
+    output = capsys.readouterr().out
+    assert "Refresh readiness: limited" in output
+    assert "OHLC refresh left replay coverage incomplete" in output
+
+
+def test_refresh_ohlc_command_marks_unchanged_latest_timestamp(
+    monkeypatch: pytest.MonkeyPatch, capsys: Any
+) -> None:
+    config = load_config(config_path=Path("config_examples/config.yaml"), env="paper")
+    config.universe.include_pairs = ["BTC/USD"]
+    config.market_data.backfill_timeframes = ["1d"]
+
+    start = datetime(2026, 4, 1, tzinfo=UTC)
+    end = datetime(2026, 4, 2, tzinfo=UTC)
+    latest_before = int(datetime(2026, 4, 1, 0, 0, tzinfo=UTC).timestamp())
+
+    class _FakeQueue:
+        def join(self) -> None:
+            return None
+
+    class _FakeMarketData:
+        def __init__(self, cfg: Any) -> None:
+            self.config = cfg
+            self._ohlc_store = SimpleNamespace(_write_queue=_FakeQueue())
+
+        def refresh_universe(self) -> None:
+            return None
+
+        def get_ohlc(self, pair: str, timeframe: str, lookback: int) -> list[Any]:  # noqa: ARG002
+            return [SimpleNamespace(timestamp=latest_before)]
+
+        def backfill_ohlc(self, pair: str, timeframe: str, since: int | None = None) -> int:  # noqa: ARG002
+            return 1
+
+        def shutdown(self) -> None:
+            return None
+
+    def _fake_build_backtest_preflight(*args: Any, **kwargs: Any) -> BacktestPreflightResult:  # noqa: ARG001
+        return BacktestPreflightResult(
+            start=start,
+            end=end,
+            pairs=["BTC/USD"],
+            timeframes=["1d"],
+            preflight=BacktestPreflight(
+                coverage=[
+                    BacktestCoverageItem(
+                        pair="BTC/USD",
+                        timeframe="1d",
+                        bar_count=2,
+                        first_bar_at=start,
+                        last_bar_at=end,
+                        status="ok",
+                    )
+                ],
+                usable_series_count=1,
+                missing_series=[],
+                partial_series=[],
+                status="ready",
+                summary_note="Coverage looks complete for the requested replay window.",
+                warnings=[],
+            ),
+        )
+
+    monkeypatch.setattr(cli, "_load_backtest_config", lambda args: config)  # noqa: ARG005
+    monkeypatch.setattr(cli, "MarketDataAPI", _FakeMarketData)
+    monkeypatch.setattr(cli, "build_backtest_preflight", _fake_build_backtest_preflight)
+
+    exit_code = cli.main(
+        [
+            "refresh-ohlc",
+            "--start",
+            "2026-04-01T00:00:00Z",
+            "--end",
+            "2026-04-02T00:00:00Z",
+        ]
+    )
+
+    assert exit_code == 0
+    output = capsys.readouterr().out
+    assert "(latest unchanged)" in output
+
+
 def test_compare_backtests_prints_deltas(tmp_path: Path, capsys: Any) -> None:
     baseline_path = tmp_path / "baseline.json"
     candidate_path = tmp_path / "candidate.json"
