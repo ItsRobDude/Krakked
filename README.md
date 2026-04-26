@@ -241,6 +241,18 @@ poetry run krakked run-once
 `krakked backtest` replays stored OHLC through the existing strategy, risk, router, and OMS layers without Kraken network calls. It uses an explicit synthetic USD bankroll and now leads with a simple trust/readiness readout so average users do not have to parse the whole report to see whether a run is decision-helpful.
 
 ```bash
+poetry run krakked refresh-ohlc \
+  --start 2026-04-01T00:00:00Z \
+  --end 2026-04-20T00:00:00Z
+
+poetry run krakked replay-ready \
+  --start 2026-04-01T00:00:00Z \
+  --end 2026-04-20T00:00:00Z
+
+poetry run krakked replay-run \
+  --start 2026-04-01T00:00:00Z \
+  --end 2026-04-20T00:00:00Z
+
 poetry run krakked backtest-preflight \
   --start 2026-04-01T00:00:00Z \
   --end 2026-04-20T00:00:00Z
@@ -253,7 +265,7 @@ poetry run krakked backtest \
   --publish-latest
 ```
 
-Start with `backtest-preflight` if you want a quick local coverage check before running the strategy stack. Add `--fee-bps` to tune the flat taker-fee assumption, `--strict-data` to hard-fail on missing or partial coverage, `--db-path backtest.db` if you want to keep the SQLite decisions/orders/results after the run, and `--publish-latest` when you want the operator dashboard to read the latest validated replay summary. Use `poetry run krakked compare-backtests --baseline a.json --candidate b.json` to compare two saved reports without rerunning. See [`docs/simulation.md`](docs/simulation.md) for the current assumptions, limits, and replay smoke scenarios.
+`refresh-ohlc` incrementally repairs the configured replay lanes from the local cache forward and then checks the requested window. `replay-ready` does the same refresh step and prints the dedicated preflight report in one operator command. `replay-run` is the full guarded path: it refreshes OHLC, refuses to continue if coverage is still missing or partial, and otherwise runs the replay and publishes the latest summary automatically. If you want the low-level pieces directly, start with `backtest-preflight` for a quick local coverage check before running the strategy stack. Add `--fee-bps` to tune the flat taker-fee assumption, `--strict-data` to hard-fail on missing or partial coverage, `--db-path backtest.db` if you want to keep the SQLite decisions/orders/results after the run, and `--publish-latest` when you want the operator dashboard to read the latest validated replay summary. Use `poetry run krakked compare-backtests --baseline a.json --candidate b.json` to compare two saved reports without rerunning. See [`docs/simulation.md`](docs/simulation.md) for the current assumptions, limits, and replay smoke scenarios.
 
 ### ▶️ Running the bot
 
@@ -300,6 +312,9 @@ Use the packaged console script for the common workflows:
 
 * `poetry run krakked run` — long-lived orchestrator with scheduler, OMS, and UI enabled.
 * `poetry run krakked run-once` — single paper/validate-only cycle for quick safety checks.
+* `poetry run krakked refresh-ohlc --start <iso> --end <iso>` — incrementally refresh cached OHLC for the configured replay pairs/timeframes and verify the requested window afterward.
+* `poetry run krakked replay-ready --start <iso> --end <iso>` — refresh OHLC and print the replay preflight readiness check in one step.
+* `poetry run krakked replay-run --start <iso> --end <iso>` — refresh OHLC, require clean readiness, then run and publish the latest replay summary.
 * `poetry run krakked backtest-preflight --start <iso> --end <iso>` — check historical pair/timeframe coverage and replay readiness without running strategies.
 * `poetry run krakked backtest --start <iso> --end <iso>` — offline replay over stored OHLC using the live strategy/risk/execution stack with slippage/fee-aware simulation fills, coverage preflight, and optional saved JSON reports.
 * `poetry run krakked compare-backtests --baseline <report.json> --candidate <report.json>` — compare two saved replay reports without rerunning the strategy stack.

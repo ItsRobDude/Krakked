@@ -286,6 +286,10 @@ def _resolve_requested_timeframes(args: argparse.Namespace, config: AppConfig) -
     return list(args.timeframe) if args.timeframe else list(config.market_data.backfill_timeframes)
 
 
+def _preflight_incomplete(result: BacktestPreflightResult) -> bool:
+    return bool(result.preflight.missing_series or result.preflight.partial_series)
+
+
 def _print_refresh_ohlc_summary(
     *,
     start: datetime,
@@ -321,24 +325,26 @@ def _print_refresh_ohlc_summary(
             print(f"- {warning}")
 
 
-def _refresh_ohlc_command(args: argparse.Namespace) -> int:
+def _refresh_ohlc_window(
+    args: argparse.Namespace,
+) -> tuple[dict[str, Any], BacktestPreflightResult]:
     try:
         start = _parse_datetime_arg(args.start)
         end = _parse_datetime_arg(args.end)
     except ValueError as exc:
-        return _print_error(f"Invalid refresh-ohlc datetime: {exc}")
+        raise ValueError(f"Invalid refresh-ohlc datetime: {exc}") from exc
 
     try:
         config = _load_backtest_config(args)
         timeframes = _resolve_requested_timeframes(args, config)
         pairs = list(config.universe.include_pairs)
     except Exception as exc:  # noqa: BLE001
-        return _print_error(f"OHLC refresh failed: {exc}")
+        raise ValueError(f"OHLC refresh failed: {exc}") from exc
 
     if not pairs:
-        return _print_error("OHLC refresh failed: no pairs were configured or requested.")
+        raise ValueError("OHLC refresh failed: no pairs were configured or requested.")
     if not timeframes:
-        return _print_error(
+        raise ValueError(
             "OHLC refresh failed: no timeframes were configured or requested."
         )
 
@@ -392,7 +398,7 @@ def _refresh_ohlc_command(args: argparse.Namespace) -> int:
             timeframes=timeframes,
         )
     except Exception as exc:  # noqa: BLE001
-        return _print_error(f"OHLC refresh failed: {exc}")
+        raise ValueError(f"OHLC refresh failed: {exc}") from exc
     finally:
         if market_data is not None:
             market_data.shutdown()
@@ -405,24 +411,179 @@ def _refresh_ohlc_command(args: argparse.Namespace) -> int:
         "refreshed": refreshed,
         "preflight": preflight.to_dict(),
     }
+    return payload, preflight
+
+
+def _refresh_ohlc_command(args: argparse.Namespace) -> int:
+    try:
+        payload, preflight = _refresh_ohlc_window(args)
+    except ValueError as exc:
+        return _print_error(str(exc))
+
+    start = _parse_datetime_arg(args.start)
+    end = _parse_datetime_arg(args.end)
     if args.json:
         print(json.dumps(payload, indent=2))
     else:
         _print_refresh_ohlc_summary(
             start=start,
             end=end,
-            pairs=pairs,
-            timeframes=timeframes,
-            refreshed=refreshed,
+            pairs=payload["pairs"],
+            timeframes=payload["timeframes"],
+            refreshed=payload["refreshed"],
             preflight=preflight,
         )
 
-    if preflight.preflight.missing_series or preflight.preflight.partial_series:
+    if _preflight_incomplete(preflight):
         if args.json:
             return 1
         print("OHLC refresh left replay coverage incomplete for the requested window.")
         return 1
     return 0
+
+
+def _replay_ready_command(args: argparse.Namespace) -> int:
+    try:
+        payload, preflight = _refresh_ohlc_window(args)
+    except ValueError as exc:
+        return _print_error(str(exc))
+
+    start = _parse_datetime_arg(args.start)
+    end = _parse_datetime_arg(args.end)
+    if args.json:
+        print(json.dumps(payload, indent=2))
+    else:
+        _print_refresh_ohlc_summary(
+            start=start,
+            end=end,
+            pairs=payload["pairs"],
+            timeframes=payload["timeframes"],
+            refreshed=payload["refreshed"],
+            preflight=preflight,
+        )
+        print("")
+        _print_backtest_preflight(preflight)
+
+    if _preflight_incomplete(preflight):
+        if args.json:
+            return 1
+        print("Replay-ready check failed: replay coverage is still incomplete for the requested window.")
+        return 1
+    return 0
+
+
+def _replay_run_command(args: argparse.Namespace) -> int:
+    try:
+        refresh_payload, preflight = _refresh_ohlc_window(args)
+    except ValueError as exc:
+        return _print_error(str(exc))
+
+    start = _parse_datetime_arg(args.start)
+    end = _parse_datetime_arg(args.end)
+    if _preflight_incomplete(preflight):
+        if args.json:
+            print(json.dumps({"refresh": refresh_payload, "backtest": None}, indent=2))
+            return 1
+        _print_refresh_ohlc_summary(
+            start=start,
+            end=end,
+            pairs=refresh_payload["pairs"],
+            timeframes=refresh_payload["timeframes"],
+            refreshed=refresh_payload["refreshed"],
+            preflight=preflight,
+        )
+        print("")
+        _print_backtest_preflight(preflight)
+        print("Replay-run aborted: replay coverage is still incomplete for the requested window.")
+        return 1
+
+    try:
+        config = _load_backtest_config(args)
+        result = run_backtest(
+            config,
+            start=start,
+            end=end,
+            timeframes=_resolve_requested_timeframes(args, config),
+            starting_cash_usd=float(args.starting_cash_usd),
+            fee_bps=float(args.fee_bps),
+            db_path=args.db_path,
+            strict_data=False,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _print_error(f"Replay-run failed: {exc}")
+
+    payload = _build_backtest_payload(args, result)
+
+    saved_report_path: str | None = None
+    if args.save_report:
+        try:
+            saved_report_path = _write_backtest_report(payload, args.save_report)
+        except Exception as exc:  # noqa: BLE001
+            return _print_error(f"Replay-run report write failed: {exc}")
+
+    try:
+        published_report_path = str(
+            publish_latest_backtest_report(payload, config_dir=get_config_dir())
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _print_error(f"Replay-run latest-report publish failed: {exc}")
+
+    if args.json:
+        print(
+            json.dumps(
+                {
+                    "refresh": refresh_payload,
+                    "backtest": payload,
+                    "published_report_path": published_report_path,
+                    "saved_report_path": saved_report_path,
+                },
+                indent=2,
+            )
+        )
+        return 0
+
+    _print_refresh_ohlc_summary(
+        start=start,
+        end=end,
+        pairs=refresh_payload["pairs"],
+        timeframes=refresh_payload["timeframes"],
+        refreshed=refresh_payload["refreshed"],
+        preflight=preflight,
+    )
+    print("")
+    _print_backtest_preflight(preflight)
+    print("")
+    persist_db_path = (
+        str(Path(args.db_path).expanduser().resolve()) if args.db_path else None
+    )
+    _print_backtest_summary(
+        result,
+        persist_db_path=persist_db_path,
+        report_path=saved_report_path or published_report_path,
+    )
+    if saved_report_path and published_report_path:
+        print(f"Published latest replay: {published_report_path}")
+    return 0
+
+
+def _build_backtest_payload(
+    args: argparse.Namespace, result: BacktestResult
+) -> dict[str, Any]:
+    payload = result.to_report_dict()
+    if result.summary is not None:
+        payload["summary"]["replay_inputs"]["config_path"] = (
+            str(Path(args.config).expanduser().resolve()) if args.config else None
+        )
+    payload["provenance"] = {
+        "app_version": APP_VERSION,
+        "config_path": (
+            str(Path(args.config).expanduser().resolve()) if args.config else None
+        ),
+        "generated_by": "krakked backtest",
+    }
+    if args.db_path:
+        payload["sqlite_output"] = str(Path(args.db_path).expanduser().resolve())
+    return payload
 
 
 def _print_backtest_summary(
@@ -1235,6 +1396,96 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Print the refresh result as JSON",
     )
     refresh_ohlc_parser.set_defaults(func=_refresh_ohlc_command)
+
+    replay_ready_parser = subparsers.add_parser(
+        "replay-ready",
+        help="Refresh cached OHLC and print a replay preflight readiness check for the requested window",
+    )
+    replay_ready_parser.add_argument(
+        "--start",
+        required=True,
+        help="Window start time in ISO-8601 form for the readiness check",
+    )
+    replay_ready_parser.add_argument(
+        "--end",
+        required=True,
+        help="Window end time in ISO-8601 form for the readiness check",
+    )
+    replay_ready_parser.add_argument(
+        "--config",
+        help="Optional path to the base config.yaml to use",
+    )
+    replay_ready_parser.add_argument(
+        "--pair",
+        action="append",
+        help="Limit the refresh/readiness check to one pair; repeat to include multiple pairs",
+    )
+    replay_ready_parser.add_argument(
+        "--timeframe",
+        action="append",
+        help="Limit the refresh/readiness check to one timeframe; repeat to include multiple timeframes",
+    )
+    replay_ready_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print the replay-ready result as JSON",
+    )
+    replay_ready_parser.set_defaults(func=_replay_ready_command)
+
+    replay_run_parser = subparsers.add_parser(
+        "replay-run",
+        help="Refresh OHLC, require clean replay readiness, then run and publish the latest replay summary",
+    )
+    replay_run_parser.add_argument(
+        "--start",
+        required=True,
+        help="Replay start time in ISO-8601 form",
+    )
+    replay_run_parser.add_argument(
+        "--end",
+        required=True,
+        help="Replay end time in ISO-8601 form",
+    )
+    replay_run_parser.add_argument(
+        "--config",
+        help="Optional path to the base config.yaml to use for the replay",
+    )
+    replay_run_parser.add_argument(
+        "--pair",
+        action="append",
+        help="Limit the refresh/replay to one pair; repeat to include multiple pairs",
+    )
+    replay_run_parser.add_argument(
+        "--timeframe",
+        action="append",
+        help="Limit the refresh/replay to one timeframe; repeat to include multiple timeframes",
+    )
+    replay_run_parser.add_argument(
+        "--starting-cash-usd",
+        type=float,
+        default=10_000.0,
+        help="Synthetic starting USD wallet balance for the offline replay",
+    )
+    replay_run_parser.add_argument(
+        "--fee-bps",
+        type=float,
+        default=25.0,
+        help="Flat taker fee in basis points applied to simulated fills",
+    )
+    replay_run_parser.add_argument(
+        "--db-path",
+        help="Optional SQLite path to persist decisions, orders, and execution results",
+    )
+    replay_run_parser.add_argument(
+        "--save-report",
+        help="Optional JSON path for a durable backtest report artifact",
+    )
+    replay_run_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print the replay-run result as JSON",
+    )
+    replay_run_parser.set_defaults(func=_replay_run_command)
 
     backtest_preflight_parser = subparsers.add_parser(
         "backtest-preflight",

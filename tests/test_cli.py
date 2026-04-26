@@ -1091,6 +1091,298 @@ def test_refresh_ohlc_command_marks_unchanged_latest_timestamp(
     assert "(latest unchanged)" in output
 
 
+def test_replay_ready_command_prints_refresh_and_preflight(
+    monkeypatch: pytest.MonkeyPatch, capsys: Any
+) -> None:
+    start = datetime(2026, 4, 1, tzinfo=UTC)
+    end = datetime(2026, 4, 2, tzinfo=UTC)
+    preflight = BacktestPreflightResult(
+        start=start,
+        end=end,
+        pairs=["BTC/USD"],
+        timeframes=["1h"],
+        preflight=BacktestPreflight(
+            coverage=[
+                BacktestCoverageItem(
+                    pair="BTC/USD",
+                    timeframe="1h",
+                    bar_count=24,
+                    first_bar_at=start,
+                    last_bar_at=end,
+                    status="ok",
+                )
+            ],
+            usable_series_count=1,
+            missing_series=[],
+            partial_series=[],
+            status="ready",
+            summary_note="Coverage looks complete for the requested replay window.",
+            warnings=[],
+        ),
+    )
+    payload = {
+        "start": start.isoformat(),
+        "end": end.isoformat(),
+        "pairs": ["BTC/USD"],
+        "timeframes": ["1h"],
+        "refreshed": [
+            {
+                "pair": "BTC/USD",
+                "timeframe": "1h",
+                "series_key": "BTC/USD@1h",
+                "fetched_bars": 24,
+                "previous_latest_ts": int(start.timestamp()),
+                "previous_latest_at": start.isoformat(),
+                "latest_at": end.isoformat(),
+                "latest_changed": True,
+            }
+        ],
+        "preflight": preflight.to_dict(),
+    }
+
+    monkeypatch.setattr(cli, "_refresh_ohlc_window", lambda args: (payload, preflight))  # noqa: ARG005
+
+    exit_code = cli.main(
+        [
+            "replay-ready",
+            "--start",
+            "2026-04-01T00:00:00Z",
+            "--end",
+            "2026-04-02T00:00:00Z",
+        ]
+    )
+
+    assert exit_code == 0
+    output = capsys.readouterr().out
+    assert "OHLC refresh completed." in output
+    assert "Backtest preflight" in output
+    assert "Coverage status: ready" in output
+
+
+def test_replay_run_command_runs_and_publishes_after_clean_readiness(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: Any
+) -> None:
+    start = datetime(2026, 4, 1, tzinfo=UTC)
+    end = datetime(2026, 4, 2, tzinfo=UTC)
+    preflight = BacktestPreflightResult(
+        start=start,
+        end=end,
+        pairs=["BTC/USD"],
+        timeframes=["1h"],
+        preflight=BacktestPreflight(
+            coverage=[
+                BacktestCoverageItem(
+                    pair="BTC/USD",
+                    timeframe="1h",
+                    bar_count=24,
+                    first_bar_at=start,
+                    last_bar_at=end,
+                    status="ok",
+                )
+            ],
+            usable_series_count=1,
+            missing_series=[],
+            partial_series=[],
+            status="ready",
+            summary_note="Coverage looks complete for the requested replay window.",
+            warnings=[],
+        ),
+    )
+    refresh_payload = {
+        "start": start.isoformat(),
+        "end": end.isoformat(),
+        "pairs": ["BTC/USD"],
+        "timeframes": ["1h"],
+        "refreshed": [
+            {
+                "pair": "BTC/USD",
+                "timeframe": "1h",
+                "series_key": "BTC/USD@1h",
+                "fetched_bars": 24,
+                "previous_latest_ts": int(start.timestamp()),
+                "previous_latest_at": start.isoformat(),
+                "latest_at": end.isoformat(),
+                "latest_changed": True,
+            }
+        ],
+        "preflight": preflight.to_dict(),
+    }
+    config = load_config(config_path=Path("config_examples/config.yaml"), env="paper")
+    config.universe.include_pairs = ["BTC/USD"]
+    config.market_data.backfill_timeframes = ["1h"]
+    captured: dict[str, Any] = {}
+
+    def _fake_run_backtest(
+        loaded_config: Any,
+        start: Any,
+        end: Any,
+        timeframes: Any = None,
+        *,
+        starting_cash_usd: float,
+        fee_bps: float,
+        db_path: str | None = None,
+        strict_data: bool = False,
+    ) -> BacktestResult:
+        captured["config"] = loaded_config
+        captured["start"] = start
+        captured["end"] = end
+        captured["timeframes"] = timeframes
+        captured["starting_cash_usd"] = starting_cash_usd
+        captured["fee_bps"] = fee_bps
+        captured["db_path"] = db_path
+        captured["strict_data"] = strict_data
+        return BacktestResult(
+            plans=[],
+            executions=[],
+            preflight=preflight.preflight,
+            summary=BacktestSummary(
+                start=start,
+                end=end,
+                starting_cash_usd=starting_cash_usd,
+                ending_equity_usd=10_100.0,
+                absolute_pnl_usd=100.0,
+                return_pct=1.0,
+                max_drawdown_pct=0.5,
+                realized_pnl_usd=100.0,
+                unrealized_pnl_usd=0.0,
+                pairs=["BTC/USD"],
+                timeframes=["1h"],
+                total_cycles=24,
+                total_actions=2,
+                blocked_actions=0,
+                total_orders=2,
+                filled_orders=2,
+                rejected_orders=0,
+                execution_errors=0,
+                fee_bps=fee_bps,
+                slippage_bps=50.0,
+                cost_model="Immediate candle-close fills using configured slippage and flat taker fees.",
+                usable_series_count=1,
+                missing_series=[],
+                partial_series=[],
+                coverage=preflight.preflight.coverage,
+                per_strategy={},
+                replay_inputs={
+                    "start": start.isoformat(),
+                    "end": end.isoformat(),
+                    "pairs": ["BTC/USD"],
+                    "timeframes": ["1h"],
+                    "enabled_strategies": ["majors_mean_rev"],
+                    "starting_cash_usd": starting_cash_usd,
+                    "fee_bps": fee_bps,
+                    "slippage_bps": 50.0,
+                    "strict_data": strict_data,
+                },
+                trust_level="decision_helpful",
+                trust_note="Decision-helpful: coverage was complete and the replay produced filled trades.",
+                notable_warnings=[],
+                blocked_reason_counts={},
+                assumptions=["Synthetic fills only."],
+            ),
+        )
+
+    monkeypatch.setattr(cli, "_refresh_ohlc_window", lambda args: (refresh_payload, preflight))  # noqa: ARG005
+    monkeypatch.setattr(cli, "_load_backtest_config", lambda args: config)  # noqa: ARG005
+    monkeypatch.setattr(cli, "run_backtest", _fake_run_backtest)
+    monkeypatch.setattr(cli, "get_config_dir", lambda: tmp_path)
+
+    exit_code = cli.main(
+        [
+            "replay-run",
+            "--start",
+            "2026-04-01T00:00:00Z",
+            "--end",
+            "2026-04-02T00:00:00Z",
+        ]
+    )
+
+    assert exit_code == 0
+    assert captured["timeframes"] == ["1h"]
+    assert captured["strict_data"] is False
+    latest_path = tmp_path / "reports" / "backtests" / "latest.json"
+    assert latest_path.exists()
+    output = capsys.readouterr().out
+    assert "OHLC refresh completed." in output
+    assert "Backtest preflight" in output
+    assert "Backtest completed." in output
+    assert "Replay trust: Decision-helpful: coverage was complete and the replay produced filled trades." in output
+
+
+def test_replay_run_command_aborts_before_backtest_when_readiness_is_incomplete(
+    monkeypatch: pytest.MonkeyPatch, capsys: Any
+) -> None:
+    start = datetime(2026, 4, 1, tzinfo=UTC)
+    end = datetime(2026, 4, 2, tzinfo=UTC)
+    preflight = BacktestPreflightResult(
+        start=start,
+        end=end,
+        pairs=["BTC/USD"],
+        timeframes=["1d"],
+        preflight=BacktestPreflight(
+            coverage=[
+                BacktestCoverageItem(
+                    pair="BTC/USD",
+                    timeframe="1d",
+                    bar_count=1,
+                    first_bar_at=start,
+                    last_bar_at=start,
+                    status="partial_window",
+                )
+            ],
+            usable_series_count=1,
+            missing_series=[],
+            partial_series=["BTC/USD@1d"],
+            status="limited",
+            summary_note="Coverage is limited: some requested series are missing or partial.",
+            warnings=["1 requested series only partially cover the requested window."],
+        ),
+    )
+    refresh_payload = {
+        "start": start.isoformat(),
+        "end": end.isoformat(),
+        "pairs": ["BTC/USD"],
+        "timeframes": ["1d"],
+        "refreshed": [
+            {
+                "pair": "BTC/USD",
+                "timeframe": "1d",
+                "series_key": "BTC/USD@1d",
+                "fetched_bars": 0,
+                "previous_latest_ts": int(start.timestamp()),
+                "previous_latest_at": start.isoformat(),
+                "latest_at": start.isoformat(),
+                "latest_changed": False,
+            }
+        ],
+        "preflight": preflight.to_dict(),
+    }
+    called = False
+
+    def _should_not_run(*args: Any, **kwargs: Any) -> BacktestResult:  # noqa: ARG001
+        nonlocal called
+        called = True
+        raise AssertionError("run_backtest should not be called")
+
+    monkeypatch.setattr(cli, "_refresh_ohlc_window", lambda args: (refresh_payload, preflight))  # noqa: ARG005
+    monkeypatch.setattr(cli, "run_backtest", _should_not_run)
+
+    exit_code = cli.main(
+        [
+            "replay-run",
+            "--start",
+            "2026-04-01T00:00:00Z",
+            "--end",
+            "2026-04-02T00:00:00Z",
+        ]
+    )
+
+    assert exit_code == 1
+    assert called is False
+    output = capsys.readouterr().out
+    assert "Backtest preflight" in output
+    assert "Replay-run aborted: replay coverage is still incomplete" in output
+
+
 def test_compare_backtests_prints_deltas(tmp_path: Path, capsys: Any) -> None:
     baseline_path = tmp_path / "baseline.json"
     candidate_path = tmp_path / "candidate.json"

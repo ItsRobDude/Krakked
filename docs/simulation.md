@@ -3,6 +3,18 @@
 Krakked now has a real offline replay seam:
 
 ```bash
+poetry run krakked refresh-ohlc \
+  --start 2026-04-01T00:00:00Z \
+  --end 2026-04-20T00:00:00Z
+
+poetry run krakked replay-ready \
+  --start 2026-04-01T00:00:00Z \
+  --end 2026-04-20T00:00:00Z
+
+poetry run krakked replay-run \
+  --start 2026-04-01T00:00:00Z \
+  --end 2026-04-20T00:00:00Z
+
 poetry run krakked backtest-preflight \
   --start 2026-04-01T00:00:00Z \
   --end 2026-04-20T00:00:00Z
@@ -39,6 +51,9 @@ Current assumptions and limits:
 
 Useful flags:
 
+- `refresh-ohlc`: incrementally refresh the configured replay pairs/timeframes from the local cache forward, then verify the requested window
+- `replay-ready`: run the same refresh step and print the replay preflight report in one operator command
+- `replay-run`: refresh OHLC, require clean readiness, then run and publish the latest replay summary
 - `backtest-preflight`: check pair/timeframe coverage before you spend time on a full replay
 - `--config <path>`: use a specific base `config.yaml`
 - `--pair BTC/USD --pair ETH/USD`: clamp the replay to specific pairs
@@ -74,12 +89,14 @@ This compares two saved reports without rerunning simulations and prints the del
 
 Suggested workflow:
 
-1. Run `krakked backtest-preflight` for the date window you care about.
-2. Backfill or collect OHLC if the preflight shows missing or partial coverage you do not want.
-3. Run `krakked backtest` over the bounded window.
-4. Start with the simple replay trust note and important warnings before looking at deeper details.
-5. Save a JSON report when you want a durable artifact or an A/B comparison point.
-6. If needed, rerun with `--db-path` and inspect the stored decisions and orders.
+1. Run `krakked refresh-ohlc` if you want a manual repair step that refreshes cached OHLC and stops after the readiness check.
+2. Run `krakked replay-ready` if you want the same refresh plus the dedicated preflight section in one operator command.
+3. Run `krakked replay-run` when you want the full guarded path: refresh, require ready coverage, run the replay, and publish the latest summary.
+4. If you want the low-level pieces directly, run `krakked backtest-preflight` for the date window you care about.
+5. Run `krakked backtest` over the bounded window when you need a custom save-report, fee, or inspection flow.
+6. Start with the simple replay trust note and important warnings before looking at deeper details.
+7. Save a JSON report when you want a durable artifact or an A/B comparison point.
+8. If needed, rerun with `--db-path` and inspect the stored decisions and orders.
 
 ## Replay Smoke Scenarios
 
@@ -88,15 +105,10 @@ Suggested workflow:
 Use this when you want to prove the offline seam still runs end to end and publish one operator-facing summary:
 
 ```bash
-poetry run krakked backtest-preflight \
-  --start 2026-04-01T00:00:00Z \
-  --end 2026-04-20T00:00:00Z
-
-poetry run krakked backtest \
+poetry run krakked replay-run \
   --start 2026-04-01T00:00:00Z \
   --end 2026-04-20T00:00:00Z \
-  --starting-cash-usd 10000 \
-  --publish-latest
+  --starting-cash-usd 10000
 ```
 
 Healthy enough:
