@@ -65,14 +65,14 @@ Implemented or substantially in place:
 - Strategy weighting support in the runtime
 - Crash-safe ML checkpoint/resume foundations
 - Backup, export, import, and upgrade-oriented operator tooling
-- Operator cockpit shell that now prefers partial rendering and local panel degradation over global loading deadlocks
+- Operator cockpit shell that now prefers one cockpit snapshot, partial rendering, and local section degradation over global loading deadlocks
 - Paper mode now uses a profile-scoped persistent synthetic wallet, with live exchange balances kept only as optional reference context
 
 Still needing real-world validation or product work:
 
 - Docker smoke testing on an actual deployment host
 - More polished strategy-management and attribution UX
-- Faster backend reads for active cockpit panels such as health, summary, exposure, strategy refresh, and risk status
+- Operator polish on cockpit snapshot V1: safe section errors, visible snapshot freshness, and any remaining startup/setup fan-out
 - A cleaner startup/unlock/session lifecycle model so first-run and reinitialization states stay explicit and predictable
 - Simple/Advanced UI presentation split
 - ML operator controls beyond the checkpoint/resume foundation
@@ -85,7 +85,7 @@ Krakked is now closer to an operator-facing control room than a hobby bot shell,
 
 - Paper mode is a local persistent synthetic wallet that can exercise the strategy, risk, OMS, and portfolio loops without transmitting live orders.
 - Exchange balances are now optional reference context in paper mode, not the paper account baseline.
-- The active dashboard now renders its shell quickly and fails fast on slow panel reads, but some backend routes still need performance work to avoid repeated degraded states.
+- The active dashboard now has cockpit snapshot V1 for coherent active-session refreshes, but it still needs safer section error text, visible freshness, and cleanup around any remaining startup/setup fan-out.
 - Startup, unlock, and session-start flows have improved significantly, but they still need a tighter lifecycle model before the product feels fully polished for a first-time operator.
 
 ## UX Recommendation
@@ -145,7 +145,7 @@ The next milestones are product-facing rather than architecture-facing:
 
 2. Operator UX
    - Improve strategy toggles, weights, and per-strategy attribution in the UI.
-   - Remove remaining active-cockpit degraded states by fixing the slow backend reads behind summary, health, risk, and strategy panels.
+   - Polish cockpit snapshot V1 by making section errors operator-safe, surfacing the snapshot freshness time, and trimming any remaining startup/setup fan-out.
    - Introduce a clearer Simple vs Advanced presentation model.
    - Surface ML status and training/checkpoint information more directly.
 

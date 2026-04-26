@@ -6,6 +6,7 @@ import pytest
 
 from krakked.config import (
     AppConfig,
+    ExecutionConfig,
     MarketDataConfig,
     PortfolioConfig,
     RegionCapabilities,
@@ -23,6 +24,7 @@ def mock_config():
         universe=UniverseConfig([], [], 0),
         market_data=MarketDataConfig({}, {}, [], []),
         portfolio=PortfolioConfig(),
+        execution=ExecutionConfig(mode="live"),
     )
 
 

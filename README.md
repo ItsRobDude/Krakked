@@ -172,7 +172,8 @@ The product, CLI, Python package, and config namespace now all use `krakked` / `
       max_slippage_bps: 50            # 0.5% price protection for limit offsets
       time_in_force: "GTC"            # Good-til-cancel default
       post_only: false                # Maker-only preference
-      validate_only: true             # Automatically flips to false when mode == "live"
+      validate_only: false            # Paper uses the synthetic wallet; live validation is controlled separately
+      allow_live_trading: false       # Final gate for live order submission
       dead_man_switch_seconds: 600    # Auto-cancel window (0 to disable)
       max_retries: 3                  # Per-order retry budget
       retry_backoff_seconds: 2        # Initial retry delay
@@ -209,7 +210,7 @@ To run the implemented Phase 4 features, set these keys in `config.yaml`:
 
 ### Phase 5 execution wiring
 
-Phase 4 produces risk-adjusted actions that now flow through an OMS capable of paper/validate routing by default. Orders are built from plan deltas, priced off mid/bid/ask via `MarketDataAPI`, and constrained by `ExecutionConfig` guardrails (slippage bands, min notional, max concurrency). Submissions use retries/backoff for transient errors, apply a dead-man switch heartbeat when enabled, and persist to SQLite (`execution_orders` / `execution_results`) alongside in-memory tracking. The admin CLI provides listing, reconciliation, targeted cancels, and a panic cancel-all path that refreshes state after cancelation.
+Phase 4 produces risk-adjusted actions that now flow through an OMS capable of synthetic paper execution, dry-run/validate routing, and gated live routing. Orders are built from plan deltas, priced off mid/bid/ask via `MarketDataAPI`, and constrained by `ExecutionConfig` guardrails (slippage bands, min notional, max concurrency). Submissions use retries/backoff for transient errors, apply a dead-man switch heartbeat when enabled, and persist to SQLite (`execution_orders` / `execution_results`) alongside in-memory tracking. The admin CLI provides listing, reconciliation, targeted cancels, and a panic cancel-all path that refreshes state after cancelation.
 
 #### Strategy ID propagation and tagging
 
@@ -226,9 +227,11 @@ Use the shared strategy IDs and implementation type strings below everywhere—`
 * `rs_rotation` (`type: relative_strength`) – relative strength rotation.
 
 
-### 🧪 Paper / Validate Quickstart
+### Paper Safety Quickstart
 
-`krakked run-once` is pinned to the safest defaults: `execution.mode="paper"`, `validate_only=True`, and `allow_live_trading=False`, even if your config requests otherwise. Orders are priced from mid/bid/ask snapshots with slippage caps and written to SQLite for inspection.
+Normal paper mode uses Krakked's persistent synthetic wallet with `execution.validate_only=false` in raw config. It is still safe from live submission because it is not live mode and `allow_live_trading` remains closed.
+
+`krakked run-once` is a special safety helper pinned to `execution.mode="paper"`, validate-only order handling, and `allow_live_trading=false`, even if your config requests otherwise. Orders are priced from mid/bid/ask snapshots with slippage caps and written to SQLite for inspection.
 
 To run a single synchronous cycle:
 
@@ -299,7 +302,7 @@ Key tables to review are `execution_orders` (every `LocalOrder` snapshot), `exec
 Use the packaged console script for the common workflows:
 
 * `poetry run krakked run` — long-lived orchestrator with scheduler, OMS, and UI enabled.
-* `poetry run krakked run-once` — single paper/validate-only cycle for quick safety checks.
+* `poetry run krakked run-once` — single forced-safe paper cycle for quick safety checks.
 * `poetry run krakked backtest-preflight --start <iso> --end <iso>` — check historical pair/timeframe coverage and replay readiness without running strategies.
 * `poetry run krakked backtest --start <iso> --end <iso>` — offline replay over stored OHLC using the live strategy/risk/execution stack with slippage/fee-aware simulation fills, coverage preflight, and optional saved JSON reports.
 * `poetry run krakked compare-backtests --baseline <report.json> --candidate <report.json>` — compare two saved replay reports without rerunning the strategy stack.
@@ -321,7 +324,7 @@ Live routing is guarded by multiple gates that must all be opened:
 * **Affirm live intent**: `execution.allow_live_trading: true`; this defaults to `false` as a last-ditch safety catch.
 * **Environment gates**: No additional env flag is required today—config values alone control live behavior.
 
-Only adapters that submit orders honor live mode (`ExecutionAdapter`/`KrakenExecutionAdapter` and any CLI that boots the OMS with a REST client). The `krakked run-once` helper always forces paper/validate-only regardless of config so it cannot transmit live orders.
+Only adapters that submit orders honor live mode (`ExecutionAdapter`/`KrakenExecutionAdapter` and any CLI that boots the OMS with a REST client). The `krakked run-once` helper always forces a paper/validated safety path regardless of config so it cannot transmit live orders.
 
 Before enabling live trading, run at least one paper `krakked run-once` cycle and review orders/results (via SQLite or the admin CLI) to validate sizing, tags, and guardrails.
 
@@ -330,7 +333,7 @@ Before enabling live trading, run at least one paper `krakked run-once` cycle an
 To return to paper-only safety:
 
 1. Set `execution.mode: "paper"` (or `"dry_run"`).
-2. Set `execution.validate_only: true`.
+2. For normal paper mode, keep `execution.validate_only: false`; paper uses the synthetic wallet and the loader may normalize stale paper configs back to false.
 3. Set `execution.allow_live_trading: false`.
 4. Unset any future environment gate if added (none exist currently).
 

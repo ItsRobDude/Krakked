@@ -119,7 +119,13 @@ def test_load_api_keys_from_file_missing_password(mock_config_dir):
     encrypt_secrets("file_key", "file_secret", "env_pw")
 
     # No env var, no interactive mode
-    result = load_api_keys(allow_interactive_setup=False)
+    with (
+        patch.dict(os.environ, {}, clear=True),
+        patch("krakked.secrets.get_session_master_password", return_value=None),
+        patch("krakked.secrets.get_saved_master_password", return_value=None),
+    ):
+        result = load_api_keys(allow_interactive_setup=False)
+
     assert result.status == CredentialStatus.MISSING_PASSWORD
     assert "Credentials unavailable" in result.validation_error
 

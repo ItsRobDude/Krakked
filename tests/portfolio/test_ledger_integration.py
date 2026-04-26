@@ -1,4 +1,5 @@
 from decimal import Decimal
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -32,6 +33,8 @@ def service(mock_store, mock_rest_client):
     config.portfolio = MagicMock()
     config.portfolio.reconciliation_tolerance = 0.0001
     config.portfolio.base_currency = "USD"
+    config.execution = SimpleNamespace(mode="live")
+    config.session = SimpleNamespace(profile_name=None)
     config.strategies = MagicMock()
     config.strategies.configs = {}
 

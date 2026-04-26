@@ -67,7 +67,22 @@ def test_strategy_engine_composite_id_resolution():
     portfolio.record_execution_plan = MagicMock()
     portfolio.record_decision = MagicMock()
     portfolio.get_realized_pnl_by_strategy.return_value = {}
+    portfolio.get_cached_equity.return_value = SimpleNamespace(
+        equity_base=10000.0,
+        drift_flag=False,
+    )
+    portfolio.get_cached_asset_exposure.return_value = []
+    portfolio.get_cached_positions.return_value = []
+    portfolio.get_cached_drift_status.return_value = SimpleNamespace(
+        drift_flag=False,
+        expected_position_value_base=None,
+        actual_balance_value_base=None,
+        tolerance_base=None,
+        mismatched_assets=[],
+    )
+    portfolio.config = SimpleNamespace(base_currency="USD")
     portfolio.store = MagicMock()
+    portfolio.store.get_snapshots.return_value = []
 
     engine = StrategyRiskEngine(app_config, market, portfolio)
 

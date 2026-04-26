@@ -11,6 +11,7 @@ Important current behavior:
 - paper mode uses practice money in a local Krakked paper wallet, not your current Kraken balances
 - the paper wallet starts with a local $10,000 USD bankroll by default and persists by profile
 - live exchange balances are optional comparison context only, not the source of paper-mode funds
+- normal paper config uses `execution.validate_only: false`; live submission is still blocked because paper mode is not live and `allow_live_trading` remains closed
 - during startup or portfolio sync, some dashboard panels may show local degraded or pending states instead of blocking the whole UI
 
 ## What You Need
@@ -100,7 +101,7 @@ docker compose run --rm krakked export-install \
 ## What To Expect In The UI Today
 
 - `Paper Trading Overview` should load as the main operator cockpit after unlock and session start
-- if a slow backend read stalls, the UI should now fail fast and show a local degraded message instead of hanging on a full-page loading screen
+- the active cockpit should refresh from the cockpit snapshot where available, with local degraded messages for sections that cannot load
 - strategy, risk, and portfolio panels may still show temporary timeout/degraded states while the active session is warming up
 - if those degraded states persist, treat that as an operator issue to investigate before relying on the dashboard for trading decisions
 

@@ -28,9 +28,10 @@ def check_safety(config: AppConfig) -> SafetyStatus:
     """Evaluate safety-related settings from configuration."""
 
     execution = config.execution
+    validate_only = execution.validate_only or execution.mode == "paper"
     return SafetyStatus(
         live_mode_enabled=execution.mode == "live",
-        validate_only=execution.validate_only,
+        validate_only=validate_only,
         allow_live_trading=execution.allow_live_trading,
         has_min_order_notional=execution.min_order_notional_usd is not None,
         has_max_pair_notional=execution.max_pair_notional_usd is not None,

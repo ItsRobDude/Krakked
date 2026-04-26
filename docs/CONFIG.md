@@ -45,6 +45,7 @@ You can keep all files side by side in the config directory; the loader will aut
 Krakked now boots with a conservative operator-first starter profile unless you override it:
 
 * Execution defaults to `paper` with a persistent synthetic paper wallet and live submission still gated behind explicit opt-in.
+* Normal paper config uses `execution.validate_only: false` because no Kraken live order is submitted. Operator safety summaries may still treat paper as effectively safe/validated; that is not the same as the raw config flag.
 * The starter universe is limited to `BTC/USD`, `ETH/USD`, `SOL/USD`, and `ADA/USD`.
 * Historical backfill defaults to `1h` and `4h`.
 * Live websocket OHLC defaults to a single `1m` stream.
