@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import signal
 import sqlite3
 import threading
@@ -22,6 +23,7 @@ from krakked.config_loader import (
     get_default_starter_strategies_config,
     get_config_dir,
     get_initial_ui_config,
+    ensure_starter_profile,
     load_config,
     write_initial_config,
 )
@@ -57,6 +59,15 @@ def _coerce_interval(value: Optional[int], default: int, name: str) -> int:
         return int(value)
     logger.warning("Invalid %s; using default %ss", name, default)
     return default
+
+
+def _has_non_interactive_credentials() -> bool:
+    """Return true when startup has enough credential material to try unlocking."""
+
+    api_key = (os.getenv("KRAKEN_API_KEY") or "").strip()
+    api_secret = (os.getenv("KRAKEN_API_SECRET") or "").strip()
+    secret_password = (os.getenv("KRAKKED_SECRET_PW") or "").strip()
+    return bool(secret_password or (api_key and api_secret))
 
 
 def _refresh_metrics_state(
@@ -526,6 +537,7 @@ class BotController:
 
         # Load config but DO NOT bootstrap credentials
         config = load_config(config_path=config_path)
+        ensure_starter_profile(config, config_dir=config_dir)
         self.is_setup_mode = True
 
         session_state = SessionState(
@@ -564,6 +576,7 @@ class BotController:
             client, config, rate_limiter = bootstrap(
                 allow_interactive_setup=self.allow_interactive_setup
             )
+            ensure_starter_profile(config, config_dir=get_config_dir())
 
             db_path = resolve_portfolio_db_path(
                 config, getattr(config.portfolio, "db_path", "portfolio.db")
@@ -703,6 +716,7 @@ class BotController:
 
             # If credentials are missing/locked we still want to load config and expose setup endpoints.
             config = load_config(config_path=config_path)
+            ensure_starter_profile(config, config_dir=config_dir)
             self.is_setup_mode = True
 
             # Return a minimal context for UI/setup flows.
@@ -875,6 +889,22 @@ class BotController:
                 extra=structured_log_extra(event="startup_failed"),
             )
             return 1
+
+        if _has_non_interactive_credentials():
+            logger.info(
+                "Non-interactive credentials detected; attempting service initialization",
+                extra=structured_log_extra(event="headless_bootstrap_attempt"),
+            )
+            try:
+                self.context = self.bootstrap_context()
+            except Exception as exc:
+                logger.exception(
+                    "Headless service initialization failed; continuing in locked setup mode",
+                    extra=structured_log_extra(
+                        event="headless_bootstrap_failed",
+                        error=str(exc),
+                    ),
+                )
 
         logger.info(
             "Starting Kraken bot",

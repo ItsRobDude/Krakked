@@ -41,6 +41,8 @@ DEFAULT_STARTER_STRATEGY_IDS = [
 DEFAULT_STARTER_PAIRS = ["BTC/USD", "ETH/USD", "SOL/USD", "ADA/USD"]
 DEFAULT_STARTER_BACKFILL_TIMEFRAMES = ["1h", "4h"]
 DEFAULT_STARTER_WS_TIMEFRAMES = ["1m"]
+DEFAULT_STARTER_PROFILE_NAME = "Default"
+DEFAULT_STARTER_PROFILE_DESCRIPTION = "Starter paper profile"
 DEFAULT_STARTER_STRATEGY_LIMITS: Dict[str, float] = {
     "trend_core": 5.0,
     "vol_breakout": 5.0,
@@ -585,6 +587,75 @@ def write_initial_config(config_data: dict, config_dir: Path | None = None) -> N
                 tmp_path.unlink()
             except Exception:
                 pass
+
+
+def ensure_starter_profile(
+    config: AppConfig,
+    config_dir: Path | None = None,
+    *,
+    profile_name: str = DEFAULT_STARTER_PROFILE_NAME,
+    description: str = DEFAULT_STARTER_PROFILE_DESCRIPTION,
+) -> bool:
+    """Seed a selectable starter profile when an install has none."""
+
+    config_profiles = getattr(config, "profiles", None)
+    session = getattr(config, "session", None)
+    if not isinstance(config_profiles, dict) or session is None:
+        return False
+
+    if config_profiles:
+        return False
+
+    config_dir = config_dir or get_config_dir()
+    main_config_path = config_dir / "config.yaml"
+    if not main_config_path.exists():
+        return False
+
+    profile_filename = f"{profile_name}.yaml"
+    profile_rel_path = Path("profiles") / profile_filename
+    profile_path = config_dir / profile_rel_path
+    if not profile_path.exists():
+        atomic_write(profile_path, {}, dump_func=yaml.safe_dump)
+
+    main_data = _load_yaml_mapping(main_config_path)
+    main_profiles = main_data.get("profiles")
+    if not isinstance(main_profiles, dict):
+        main_profiles = {}
+
+    main_profiles[profile_name] = {
+        "name": profile_name,
+        "description": description,
+        "config_path": str(profile_rel_path),
+        "credentials_path": "",
+        "default_mode": "paper",
+    }
+    main_data["profiles"] = main_profiles
+
+    session_data = main_data.get("session")
+    if not isinstance(session_data, dict):
+        session_data = {}
+    if not session_data.get("profile_name"):
+        session_data["profile_name"] = profile_name
+        main_data["session"] = session_data
+
+    backup_file(main_config_path)
+    atomic_write(main_config_path, main_data, dump_func=yaml.safe_dump)
+
+    config_profiles[profile_name] = ProfileConfig(
+        name=profile_name,
+        description=description,
+        config_path=str(profile_rel_path),
+        credentials_path="",
+        default_mode="paper",
+    )
+    if not session.profile_name:
+        session.profile_name = profile_name
+
+    logger.info(
+        "Seeded starter profile",
+        extra=structured_log_extra(event="starter_profile_seeded", profile=profile_name),
+    )
+    return True
 
 
 def _validate_config_int(

@@ -14,7 +14,9 @@ export type SidebarAction = {
 
 export type SidebarMenuItem = {
   label: string;
-  href: string;
+  href?: string;
+  active?: boolean;
+  onClick?: () => void;
 };
 
 export type SidebarProps = {
@@ -26,6 +28,21 @@ export type SidebarProps = {
 };
 
 export function Sidebar({ systemStatus, integrity, actions, menu, note }: SidebarProps) {
+  const primaryActions = actions.filter((action) => action.tone !== 'danger');
+  const dangerActions = actions.filter((action) => action.tone === 'danger');
+
+  const renderAction = (action: SidebarAction) => (
+    <button
+      key={action.label}
+      type="button"
+      className={`sidebar__action${action.tone === 'danger' ? ' sidebar__action--danger' : ''}`}
+      disabled={action.disabled}
+      onClick={action.onClick}
+    >
+      {action.label}
+    </button>
+  );
+
   return (
     <div className="sidebar">
       <div className="sidebar__brand">
@@ -71,28 +88,36 @@ export function Sidebar({ systemStatus, integrity, actions, menu, note }: Sideba
       <section className="sidebar__section" aria-label="Actions">
         <p className="sidebar__section-title">Actions</p>
         <div className="sidebar__actions">
-          {actions.map((action) => (
-            <button
-              key={action.label}
-              type="button"
-              className={`sidebar__action${action.tone === 'danger' ? ' sidebar__action--danger' : ''}`}
-              disabled={action.disabled}
-              onClick={action.onClick}
-            >
-              {action.label}
-            </button>
-          ))}
+          {primaryActions.map(renderAction)}
         </div>
+        {dangerActions.length > 0 ? (
+          <div className="sidebar__danger-zone" aria-label="Danger actions">
+            <p className="sidebar__danger-title">Danger</p>
+            <div className="sidebar__actions">
+              {dangerActions.map(renderAction)}
+            </div>
+          </div>
+        ) : null}
       </section>
 
       <nav className="sidebar__section" aria-label="Dashboard sections">
         <p className="sidebar__section-title">Menu</p>
         <ul className="sidebar__menu-list">
           {menu.map((item) => (
-            <li key={item.href}>
-              <a className="sidebar__menu-link" href={item.href}>
-                {item.label}
-              </a>
+            <li key={item.label}>
+              {item.onClick ? (
+                <button
+                  type="button"
+                  className={`sidebar__menu-link sidebar__menu-button${item.active ? ' sidebar__menu-link--active' : ''}`}
+                  onClick={item.onClick}
+                >
+                  {item.label}
+                </button>
+              ) : (
+                <a className={`sidebar__menu-link${item.active ? ' sidebar__menu-link--active' : ''}`} href={item.href}>
+                  {item.label}
+                </a>
+              )}
             </li>
           ))}
         </ul>

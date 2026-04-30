@@ -62,6 +62,17 @@ const ACTIVE_RESOURCE_TIMEOUT_MS = 3500;
 const STARTER_STRATEGY_IDS = ['trend_core', 'vol_breakout', 'majors_mean_rev', 'rs_rotation'] as const;
 type SystemMessage = { tone: 'info' | 'error' | 'success'; message: string };
 type DashboardAlert = { id: string; tone: 'danger' | 'warning' | 'info'; title: string; message: string };
+type CockpitTab = 'overview' | 'positions' | 'strategies' | 'risk' | 'activity';
+
+const COCKPIT_TABS: Array<{ id: CockpitTab; label: string }> = [
+  { id: 'overview', label: 'Overview' },
+  { id: 'positions', label: 'Positions' },
+  { id: 'strategies', label: 'Strategies' },
+  { id: 'risk', label: 'Risk' },
+  { id: 'activity', label: 'Activity' },
+];
+
+const CASH_ASSETS = new Set(['USD', 'ZUSD', 'USDT', 'USDC']);
 
 const formatCurrency = (value: number | null | undefined) => {
   const formatter = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 });
@@ -69,9 +80,9 @@ const formatCurrency = (value: number | null | undefined) => {
   return formatter.format(value);
 };
 
-const formatPercent = (value: number | null | undefined) => {
+const formatRatioPercent = (value: number | null | undefined) => {
   if (typeof value !== 'number' || Number.isNaN(value)) return '0.00%';
-  return `${value.toFixed(2)}%`;
+  return `${(value * 100).toFixed(2)}%`;
 };
 
 const formatTimestamp = (timestamp: string | null) => {
@@ -99,6 +110,36 @@ const getConnectionStateFromHealth = (state: SystemHealth | null): 'connected' |
     return state.execution_ok && state.portfolio_sync_ok ? 'connected' : 'degraded';
   }
   return state.market_data_ok && state.execution_ok && state.portfolio_sync_ok ? 'connected' : 'degraded';
+};
+
+const formatHealthReason = (reason: string | null | undefined) => {
+  if (!reason) return '';
+  const reasonLabels: Record<string, string> = {
+    data_stale: 'stale market data',
+    no_market_data: 'market data unavailable',
+    websocket_disconnected: 'websocket disconnected',
+    subscription_errors: 'subscription errors',
+    rest_unreachable: 'REST API unreachable',
+  };
+  return reasonLabels[reason] ?? reason.replace(/_/g, ' ');
+};
+
+const formatMarketDataHint = (state: SystemHealth | null) => {
+  if (!state) return 'Market data status is unavailable.';
+  if (state.market_data_status === 'warming_up') {
+    return 'Streaming is online; waiting for fresh startup data.';
+  }
+  if (state.market_data_ok) {
+    return `${state.streaming_pairs ?? 0} pairs streaming.`;
+  }
+  const reason = formatHealthReason(state.market_data_reason);
+  if (state.market_data_reason === 'data_stale' && state.market_data_detail) {
+    return `Stale market data: ${state.market_data_detail}.`;
+  }
+  if (state.market_data_detail && reason) {
+    return `${reason}: ${state.market_data_detail}.`;
+  }
+  return reason || 'Streaming or REST market data is degraded.';
 };
 
 const isRiskProfile = (value: unknown): value is StrategyRiskProfile =>
@@ -215,7 +256,11 @@ const transformLogs = (executions: RecentExecution[]) =>
     const source = execution.errors[0] || execution.warnings[0] || 'Execution summary';
     const completedAt = execution.completed_at || execution.started_at;
     const timestamp = formatTimestamp(completedAt);
-    const message = `${execution.plan_id} ${execution.success ? 'succeeded' : 'failed'} (${execution.orders.length} orders)`;
+    const orderCount = execution.orders_count ?? execution.orders.length;
+    const pairs = Array.from(new Set(execution.orders.map((order) => order.pair).filter(Boolean))).slice(0, 4);
+    const pairSummary = pairs.length > 0 ? ` on ${pairs.join(', ')}` : '';
+    const orderSummary = orderCount === 1 ? '1 order' : `${orderCount} orders`;
+    const message = `${execution.plan_id} ${execution.success ? 'succeeded' : 'failed'} (${orderSummary}${pairSummary})`;
     const level: LogEntry['level'] = execution.success ? 'info' : 'error';
 
     return {
@@ -282,6 +327,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
   const [cockpitGeneratedAt, setCockpitGeneratedAt] = useState<string | null>(null);
   const [modeBusy, setModeBusy] = useState(false);
   const [showIntegrityAdvanced, setShowIntegrityAdvanced] = useState(false);
+  const [activeCockpitTab, setActiveCockpitTab] = useState<CockpitTab>('overview');
   const [session, setSession] = useState<SessionStateResponse | null>(null);
   const [sessionLoading, setSessionLoading] = useState(true);
   const [profiles, setProfiles] = useState<ProfileSummary[]>([]);
@@ -637,7 +683,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
         hint:
           health.market_data_status === 'warming_up'
             ? 'Awaiting fresh startup ticks'
-            : (health.market_data_reason ?? ''),
+            : formatMarketDataHint(health),
       },
       {
         label: 'Execution',
@@ -1017,10 +1063,17 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
       return;
     }
 
-    const confirmed = window.confirm(
-      'Send flatten-all orders? This will attempt to close every open position immediately.',
-    );
-    if (!confirmed) return;
+    if (session?.mode === 'live') {
+      const typed = window.prompt(
+        'Flatten all LIVE positions will attempt to close every open position immediately. Type FLATTEN to continue.',
+      );
+      if (typed !== 'FLATTEN') return;
+    } else {
+      const confirmed = window.confirm(
+        'Flatten all paper positions? This will attempt to close every open paper position immediately.',
+      );
+      if (!confirmed) return;
+    }
 
     try {
       const result = await flattenAllPositions();
@@ -1463,7 +1516,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
       message:
         health.market_data_status === 'warming_up'
           ? 'Streaming is online, but Krakked is still waiting for fresh startup data.'
-          : (health.market_data_detail || health.market_data_reason || 'Streaming or REST market data is degraded.'),
+          : formatMarketDataHint(health),
     });
   }
   if (health?.drift_detected) {
@@ -1491,8 +1544,11 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
     });
   }
 
-  const topAsset = exposure?.by_asset
-    ?.filter((asset) => typeof asset.pct_of_equity === 'number')
+  const cashAsset = exposure?.by_asset
+    ?.filter((asset) => CASH_ASSETS.has(asset.asset.toUpperCase()))
+    .sort((a, b) => (b.value_usd ?? 0) - (a.value_usd ?? 0))[0] ?? null;
+  const topRiskAsset = exposure?.by_asset
+    ?.filter((asset) => typeof asset.pct_of_equity === 'number' && !CASH_ASSETS.has(asset.asset.toUpperCase()))
     .sort((a, b) => (b.pct_of_equity ?? 0) - (a.pct_of_equity ?? 0))[0] ?? null;
   const topStrategyExposure = risk
     ? Object.entries(risk.per_strategy_exposure_pct)
@@ -1562,7 +1618,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
       hint:
         health?.market_data_status === 'warming_up'
           ? 'Streaming is online; waiting for fresh startup data'
-          : (health?.market_data_detail || health?.market_data_reason || `${health?.streaming_pairs ?? 0} pairs streaming`),
+          : formatMarketDataHint(health),
     },
     {
       label: 'Drift',
@@ -1580,25 +1636,22 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
     },
     {
       label: 'Flatten All Positions',
+      tone: 'danger' as const,
       disabled: Boolean(health?.ui_read_only),
       onClick: handleFlattenAll,
     },
     {
       label: 'Stop Session',
-      tone: 'danger' as const,
       disabled: Boolean(health?.ui_read_only),
       onClick: handleStopSession,
     },
   ];
 
-  const sidebarMenu = [
-    { label: 'Overview', href: '#overview' },
-    { label: 'Positions', href: '#positions' },
-    { label: 'Strategies', href: '#strategies' },
-    { label: 'Risk', href: '#risk' },
-    { label: 'Activity', href: '#activity' },
-    { label: 'Settings', href: '#settings' },
-  ];
+  const sidebarMenu = COCKPIT_TABS.map((tab) => ({
+    label: tab.label,
+    active: activeCockpitTab === tab.id,
+    onClick: () => setActiveCockpitTab(tab.id),
+  }));
 
   return (
     <Layout
@@ -1691,11 +1744,25 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
         </section>
       ) : null}
 
-      <section id="overview" className="dashboard-anchor">
+      <nav className="cockpit-tabs" aria-label="Cockpit sections">
+        {COCKPIT_TABS.map((tab) => (
+          <button
+            key={tab.id}
+            type="button"
+            className={`cockpit-tabs__button${activeCockpitTab === tab.id ? ' cockpit-tabs__button--active' : ''}`}
+            aria-pressed={activeCockpitTab === tab.id}
+            onClick={() => setActiveCockpitTab(tab.id)}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </nav>
+
+      <section id="overview" className="dashboard-anchor cockpit-tab-panel" hidden={activeCockpitTab !== 'overview'}>
         <KpiGrid items={kpis} />
       </section>
 
-      <div className="dashboard-grid dashboard-grid--primary">
+      <div className="dashboard-grid dashboard-grid--primary cockpit-tab-panel" hidden={activeCockpitTab !== 'positions'}>
         <section id="positions" className="dashboard-anchor">
           <PositionsTable
             positions={activePositions}
@@ -1766,7 +1833,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
               <p className="integrity-panel__hint">
                 {health?.market_data_status === 'warming_up'
                   ? 'Streaming is online; waiting for fresh startup data'
-                  : (health?.market_data_detail || health?.market_data_reason || `${health?.streaming_pairs ?? 0} pairs streaming`)}
+                  : formatMarketDataHint(health)}
               </p>
             </div>
             <div className="integrity-panel__item">
@@ -1779,12 +1846,21 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
               </p>
             </div>
             <div className="integrity-panel__item">
-              <p className="integrity-panel__label">Top asset exposure</p>
+              <p className="integrity-panel__label">Largest non-cash exposure</p>
               <p className="integrity-panel__value">
-                {topAsset ? `${topAsset.asset} ${formatPercent(topAsset.pct_of_equity)}` : 'No exposure'}
+                {topRiskAsset ? `${topRiskAsset.asset} ${formatRatioPercent(topRiskAsset.pct_of_equity)}` : 'No non-cash exposure'}
               </p>
               <p className="integrity-panel__hint">
-                {topAsset ? formatCurrency(topAsset.value_usd) : 'No asset exposure reported yet.'}
+                {topRiskAsset ? formatCurrency(topRiskAsset.value_usd) : 'Only cash or no exposure reported.'}
+              </p>
+            </div>
+            <div className="integrity-panel__item">
+              <p className="integrity-panel__label">Cash balance</p>
+              <p className="integrity-panel__value">
+                {cashAsset ? `${cashAsset.asset} ${formatRatioPercent(cashAsset.pct_of_equity)}` : formatCurrency(summary?.cash_usd)}
+              </p>
+              <p className="integrity-panel__hint">
+                {cashAsset ? formatCurrency(cashAsset.value_usd) : 'Cash reported by the portfolio summary.'}
               </p>
             </div>
           </div>
@@ -1815,7 +1891,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
         </section>
       </div>
 
-      <div className="dashboard-grid dashboard-grid--secondary">
+      <div className="dashboard-grid dashboard-grid--secondary cockpit-tab-panel" hidden={activeCockpitTab !== 'overview'}>
         <section className="panel strategy-summary-panel">
           <div className="panel__header">
             <div>
@@ -1960,9 +2036,9 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
           </div>
           <div className="snapshot-grid">
             <div className="snapshot-grid__item">
-              <span className="snapshot-grid__label">Kill switch</span>
+              <span className="snapshot-grid__label">{risk?.kill_switch_active ? 'Trading state' : 'Trading permission'}</span>
               <span className={`snapshot-grid__value${risk?.kill_switch_active ? ' text--danger' : ' text--success'}`}>
-                {risk?.kill_switch_active ? 'Paused' : 'Active'}
+                {risk?.kill_switch_active ? 'Trading paused' : 'Trading allowed'}
               </span>
             </div>
             <div className="snapshot-grid__item">
@@ -1991,7 +2067,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
         </section>
       </div>
 
-      <section className="panel replay-toggle-panel">
+      <section className="panel replay-toggle-panel cockpit-tab-panel" hidden={activeCockpitTab !== 'activity'}>
         <div className="panel__header replay-panel__header">
           <div>
             <h2>Latest Replay</h2>
@@ -2002,15 +2078,16 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
           <button
             type="button"
             className="ghost-button"
+            disabled={!latestReplay?.available}
             onClick={() => setShowReplayPanel((current) => !current)}
           >
-            {showReplayPanel ? 'Hide latest replay' : 'Open latest replay'}
+            {!latestReplay?.available ? 'No replay published' : showReplayPanel ? 'Hide latest replay' : 'Open latest replay'}
           </button>
         </div>
-        {showReplayPanel ? <ReplaySummaryPanel replay={latestReplay} /> : null}
+        {showReplayPanel || !latestReplay?.available ? <ReplaySummaryPanel replay={latestReplay} /> : null}
       </section>
 
-      <section id="activity" className="dashboard-anchor">
+      <section id="activity" className="dashboard-anchor cockpit-tab-panel" hidden={activeCockpitTab !== 'activity'}>
         <LogPanel
           entries={logs}
           title="Activity Log"
@@ -2018,7 +2095,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
         />
       </section>
 
-      <section id="strategies" className="dashboard-anchor dashboard-section">
+      <section id="strategies" className="dashboard-anchor dashboard-section cockpit-tab-panel" hidden={activeCockpitTab !== 'strategies'}>
         <div className="section-header">
           <div>
             <p className="section-header__eyebrow">Strategies</p>
@@ -2041,7 +2118,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
         />
       </section>
 
-      <section id="risk" className="dashboard-anchor dashboard-section">
+      <section id="risk" className="dashboard-anchor dashboard-section cockpit-tab-panel" hidden={activeCockpitTab !== 'risk'}>
         <div className="section-header">
           <div>
             <p className="section-header__eyebrow">Risk</p>
@@ -2233,7 +2310,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
         ) : null}
       </section>
 
-      <section id="settings" className="dashboard-anchor dashboard-section">
+      <section id="settings" className="dashboard-anchor dashboard-section cockpit-tab-panel" hidden={activeCockpitTab !== 'activity'}>
         <div className="section-header">
           <div>
             <p className="section-header__eyebrow">Settings</p>

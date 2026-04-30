@@ -97,7 +97,7 @@ p {
   position: relative;
   width: min(1320px, 100%);
   display: grid;
-  grid-template-columns: 270px 1fr;
+  grid-template-columns: 260px 1fr;
   gap: var(--space-5);
   z-index: 1;
 }
@@ -1287,7 +1287,7 @@ input[aria-invalid='true'] {
   margin-bottom: var(--space-3);
 }
 
-@media (max-width: 960px) {
+@media (max-width: 760px) {
   .layout {
     grid-template-columns: 1fr;
   }
@@ -1323,7 +1323,7 @@ body {
 
 .layout {
   width: min(1520px, 100%);
-  grid-template-columns: 300px 1fr;
+  grid-template-columns: 260px 1fr;
   gap: 1.1rem;
 }
 
@@ -1456,6 +1456,25 @@ body {
   gap: 0.55rem;
 }
 
+.sidebar__danger-zone {
+  display: grid;
+  gap: 0.45rem;
+  margin-top: 0.2rem;
+  padding: 0.7rem;
+  border: 1px solid rgba(248, 113, 113, 0.22);
+  border-radius: 12px;
+  background: rgba(127, 29, 29, 0.12);
+}
+
+.sidebar__danger-title {
+  margin: 0;
+  color: #fca5a5;
+  font-size: 0.76rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
 .sidebar__action {
   appearance: none;
   width: 100%;
@@ -1488,6 +1507,7 @@ body {
 
 .sidebar__menu-link {
   display: block;
+  width: 100%;
   border-radius: 10px;
   padding: 0.7rem 0.8rem;
   text-decoration: none;
@@ -1497,9 +1517,21 @@ body {
   font-weight: 700;
 }
 
+.sidebar__menu-button {
+  appearance: none;
+  text-align: left;
+  cursor: pointer;
+}
+
 .sidebar__menu-link:hover,
 .sidebar__menu-link:focus-visible {
   border-color: rgba(56, 189, 248, 0.36);
+  color: #f8fafc;
+}
+
+.sidebar__menu-link--active {
+  border-color: rgba(56, 189, 248, 0.5);
+  background: rgba(14, 116, 144, 0.22);
   color: #f8fafc;
 }
 
@@ -1543,6 +1575,41 @@ body {
 
 .dashboard-anchor {
   scroll-margin-top: 1rem;
+}
+
+.cockpit-tabs {
+  display: flex;
+  gap: 0.45rem;
+  overflow-x: auto;
+  padding: 0.25rem 0 0.1rem;
+}
+
+.cockpit-tabs__button {
+  appearance: none;
+  border: 1px solid rgba(146, 162, 183, 0.2);
+  border-radius: 10px;
+  background: rgba(16, 24, 35, 0.78);
+  color: #d3dde7;
+  cursor: pointer;
+  font-weight: 800;
+  padding: 0.62rem 0.78rem;
+  white-space: nowrap;
+}
+
+.cockpit-tabs__button:hover,
+.cockpit-tabs__button:focus-visible {
+  border-color: rgba(56, 189, 248, 0.42);
+  color: #f8fafc;
+}
+
+.cockpit-tabs__button--active {
+  border-color: rgba(56, 189, 248, 0.56);
+  background: rgba(14, 116, 144, 0.24);
+  color: #f8fafc;
+}
+
+[hidden].cockpit-tab-panel {
+  display: none;
 }
 
 .dashboard-section {
@@ -2017,7 +2084,7 @@ body {
   }
 }
 
-@media (max-width: 960px) {
+@media (max-width: 760px) {
   .layout {
     grid-template-columns: 1fr;
   }
@@ -2132,6 +2199,17 @@ body {
   gap: var(--space-4);
 }
 
+.profile-create-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.profile-create-row .ghost-button {
+  white-space: nowrap;
+}
+
 .startup__section {
   display: grid;
   gap: var(--space-3);
@@ -2155,7 +2233,7 @@ body {
   justify-content: flex-start;
 }
 
-@media (max-width: 960px) {
+@media (max-width: 760px) {
   .layout {
     grid-template-columns: 1fr;
   }
@@ -2166,6 +2244,12 @@ body {
   }
 
   .dashboard__columns {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .profile-create-row {
     grid-template-columns: 1fr;
   }
 }

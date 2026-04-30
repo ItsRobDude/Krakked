@@ -36,6 +36,8 @@ export function StartupScreen({
   const [loopInterval, setLoopInterval] = useState<number>(DEFAULT_LOOP_INTERVAL);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showNewProfile, setShowNewProfile] = useState(false);
+  const [newProfileName, setNewProfileName] = useState('');
 
   // Sync internal selection with active profile prop
   // We prioritize activeProfileName (the source of truth) over local assumption
@@ -71,17 +73,19 @@ export function StartupScreen({
       return;
     }
 
-    const name = window.prompt('New profile name');
-    if (!name) return;
-
-    const trimmed = name.trim();
-    if (!trimmed) return;
+    const trimmed = newProfileName.trim();
+    if (!trimmed) {
+      setError('Enter a profile name.');
+      return;
+    }
 
     setBusy(true);
     setError(null);
 
     try {
       await onCreateProfile(trimmed);
+      setNewProfileName('');
+      setShowNewProfile(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to create profile');
     } finally {
@@ -184,7 +188,10 @@ export function StartupScreen({
               <button
                 type="button"
                 className="ghost-button"
-                onClick={handleCreateProfile}
+                onClick={() => {
+                  setShowNewProfile((current) => !current);
+                  setError(null);
+                }}
                 disabled={busy || modeBusy || readOnly}
               >
                 New profile
@@ -204,6 +211,48 @@ export function StartupScreen({
             </select>
             {selectedProfileMeta?.description ? (
               <p className="field__hint">{selectedProfileMeta.description}</p>
+            ) : null}
+            {showNewProfile ? (
+              <div className="profile-create-row">
+                <input
+                  type="text"
+                  value={newProfileName}
+                  placeholder="Profile name"
+                  aria-label="New profile name"
+                  disabled={busy || modeBusy || readOnly}
+                  onChange={(event) => setNewProfileName(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      void handleCreateProfile();
+                    }
+                    if (event.key === 'Escape') {
+                      setShowNewProfile(false);
+                      setNewProfileName('');
+                      setError(null);
+                    }
+                  }}
+                />
+                <button
+                  type="button"
+                  className="ghost-button"
+                  onClick={handleCreateProfile}
+                  disabled={busy || modeBusy || readOnly}
+                >
+                  Create
+                </button>
+                <button
+                  type="button"
+                  className="ghost-button"
+                  onClick={() => {
+                    setShowNewProfile(false);
+                    setNewProfileName('');
+                    setError(null);
+                  }}
+                  disabled={busy || modeBusy || readOnly}
+                >
+                  Cancel
+                </button>
+              </div>
             ) : null}
           </div>
 

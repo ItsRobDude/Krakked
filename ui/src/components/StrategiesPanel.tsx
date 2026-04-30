@@ -165,6 +165,7 @@ export function StrategiesPanel({
             const latestIntent = strategy.last_intents?.[0];
             const latestConflict = strategy.conflict_summary?.[0];
             const momentum = momentumBadge(strategy, perf?.realized_pnl_quote, perf?.max_drawdown_pct);
+            const learningEnabled = learningSelections[strategy.strategy_id] ?? true;
 
             return (
               <div key={strategy.strategy_id} className="table__row" role="row">
@@ -283,13 +284,13 @@ export function StrategiesPanel({
                       <input
                         type="checkbox"
                         className="strategy-toggle"
-                        checked={learningSelections[strategy.strategy_id] ?? true}
-                        disabled={readOnly || isBusy}
+                        checked={strategy.enabled && learningEnabled}
+                        disabled={readOnly || isBusy || !strategy.enabled}
                         title="Per-strategy learning only controls continuous training. It does not replace the global ML master switch in Startup."
                         onChange={(event) => onLearningToggle(strategy.strategy_id, event.target.checked)}
                       />
                       <span className="pill pill--info">
-                        {learningSelections[strategy.strategy_id] ?? true ? 'Learning' : 'Paused'}
+                        {strategy.enabled && learningEnabled ? 'Learning' : 'Paused'}
                       </span>
                     </label>
                   ) : (

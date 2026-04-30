@@ -93,9 +93,10 @@ export function ReplaySummaryPanel({ replay }: ReplaySummaryPanelProps) {
       {!replay?.available ? (
         <div className="panel__empty replay-panel__empty">
           <p>No published replay is available yet.</p>
-          <code className="replay-panel__hint-code">
-            poetry run krakked backtest --start 2026-04-01T00:00:00Z --end 2026-04-20T00:00:00Z --publish-latest
-          </code>
+          <p className="panel__hint">
+            Run and publish a replay from the Krakked container or maintenance shell before using this panel for
+            operator review.
+          </p>
         </div>
       ) : (
         <div className="replay-panel__content">

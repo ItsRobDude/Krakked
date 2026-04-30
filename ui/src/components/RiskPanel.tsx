@@ -22,7 +22,7 @@ const statusCopy = {
     tone: 'pill--danger',
   },
   off: {
-    label: 'Trading live (subject to mode)',
+    label: 'Trading allowed',
     description: 'Kill switch is off. Execution still obeys paper/live mode and risk caps.',
     tone: 'pill--long',
   },
@@ -132,8 +132,8 @@ export function RiskPanel({
 
       <div className="risk-panel__controls">
         <div className="risk-panel__meta">
-          <p className="risk-panel__label">Start / Stop trading</p>
-          <p className="risk-panel__status">{status ? (status.kill_switch_active ? 'Paused' : 'Active') : 'Loading…'}</p>
+          <p className="risk-panel__label">Trading pause control</p>
+          <p className="risk-panel__status">{status ? (status.kill_switch_active ? 'Trading paused' : 'Trading allowed') : 'Loading…'}</p>
           {readOnly ? <span className="pill pill--warning">Read-only mode</span> : null}
           <p className="risk-panel__hint">
             Toggle requires backend write access and updates alongside other dashboard refreshes.
