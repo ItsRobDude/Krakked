@@ -534,6 +534,92 @@ def test_cockpit_snapshot_returns_expected_sections(client, system_context):
     assert data["activity"]["recent_executions"] == []
     assert data["activity"]["risk_decisions"] == []
     assert data["replay"]["available"] is False
+    assert data["market_data"]["classification"] == "healthy"
+    assert data["market_data"]["session_critical"] is False
+
+
+def _strategy_state(
+    strategy_id: str,
+    *,
+    enabled: bool,
+    pairs: list[str],
+    intents: list[dict] | None = None,
+):
+    return SimpleNamespace(
+        strategy_id=strategy_id,
+        enabled=enabled,
+        last_intents_at=None,
+        last_actions_at=None,
+        current_positions=[],
+        pnl_summary={"realized_pnl_usd": 0.0, "exposure_pct": 0.0},
+        last_intents=intents,
+        conflict_summary=None,
+        params={"pairs": pairs},
+        configured_weight=100,
+        effective_weight_pct=100.0 if enabled else None,
+    )
+
+
+def test_cockpit_market_data_marks_disabled_strategy_stale_pair_watchlist_only(
+    client, system_context
+):
+    system_context.market_data.get_cached_data_status.return_value = SimpleNamespace(
+        rest_api_reachable=True,
+        websocket_connected=True,
+        streaming_pairs=3,
+        stale_pairs=1,
+        subscription_errors=0,
+    )
+    system_context.market_data.get_cached_health_status.return_value = MarketDataStatus(
+        health="degraded",
+        reason="data_stale",
+        detail="ADA/USD",
+        stale_pairs=["ADA/USD"],
+    )
+    system_context.strategy_engine.get_cached_strategy_state.return_value = [
+        _strategy_state("dca_overlay", enabled=True, pairs=["BTC/USD", "ETH/USD"]),
+        _strategy_state("rs_rotation", enabled=False, pairs=["ADA/USD"]),
+    ]
+
+    response = client.get("/api/system/cockpit")
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["health"]["market_data_ok"] is False
+    assert data["market_data"]["classification"] == "watchlist_only"
+    assert data["market_data"]["session_critical"] is False
+    assert data["market_data"]["watchlist_stale_pairs"] == ["ADA/USD"]
+    assert data["market_data"]["session_stale_pairs"] == []
+
+
+def test_cockpit_market_data_marks_active_strategy_stale_pair_session_critical(
+    client, system_context
+):
+    system_context.market_data.get_cached_data_status.return_value = SimpleNamespace(
+        rest_api_reachable=True,
+        websocket_connected=True,
+        streaming_pairs=3,
+        stale_pairs=1,
+        subscription_errors=0,
+    )
+    system_context.market_data.get_cached_health_status.return_value = MarketDataStatus(
+        health="degraded",
+        reason="data_stale",
+        detail="BTC/USD",
+        stale_pairs=["BTC/USD"],
+    )
+    system_context.strategy_engine.get_cached_strategy_state.return_value = [
+        _strategy_state("dca_overlay", enabled=True, pairs=["BTC/USD", "ETH/USD"]),
+        _strategy_state("rs_rotation", enabled=False, pairs=["ADA/USD"]),
+    ]
+
+    response = client.get("/api/system/cockpit")
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["market_data"]["classification"] == "session_critical"
+    assert data["market_data"]["session_critical"] is True
+    assert data["market_data"]["session_stale_pairs"] == ["BTC/USD"]
 
 
 def test_cockpit_snapshot_isolates_section_failures(client, system_context):

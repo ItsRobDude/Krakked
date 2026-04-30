@@ -186,6 +186,18 @@ export type CockpitActivitySnapshot = {
   risk_decisions: RiskDecision[] | null;
 };
 
+export type CockpitMarketDataSnapshot = {
+  stale_pairs: string[];
+  session_pairs: string[];
+  watchlist_pairs: string[];
+  session_stale_pairs: string[];
+  watchlist_stale_pairs: string[];
+  global_stale_pairs: string[];
+  classification: 'healthy' | 'session_critical' | 'watchlist_only' | 'global_only' | string;
+  session_critical: boolean;
+  message: string | null;
+};
+
 export type CockpitSnapshot = {
   schema_version: string;
   generated_at: string;
@@ -196,6 +208,7 @@ export type CockpitSnapshot = {
   strategies: CockpitStrategiesSnapshot | null;
   activity: CockpitActivitySnapshot | null;
   replay: ReplayLatestSummary | null;
+  market_data: CockpitMarketDataSnapshot | null;
   section_errors: Record<string, string>;
 };
 

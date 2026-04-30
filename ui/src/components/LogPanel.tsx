@@ -3,6 +3,7 @@ export type LogEntry = {
   message: string;
   timestamp: string;
   source?: string;
+  details?: string[];
   sortKey?: number;
 };
 
@@ -37,6 +38,13 @@ export function LogPanel({
             <li key={entry.timestamp + entry.message} className="log-panel__item">
               <div>
                 <p className="log-panel__message">{entry.message}</p>
+                {entry.details && entry.details.length > 0 ? (
+                  <ul className="log-panel__details">
+                    {entry.details.map((detail) => (
+                      <li key={detail}>{detail}</li>
+                    ))}
+                  </ul>
+                ) : null}
                 <p className="log-panel__meta">
                   <span className={`pill ${levelToBadge[entry.level]}`}>{entry.level}</span>
                   {entry.source ? <span className="log-panel__source">{entry.source}</span> : null}

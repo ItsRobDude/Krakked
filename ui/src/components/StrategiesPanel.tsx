@@ -140,129 +140,134 @@ export function StrategiesPanel({
         </div>
       ) : null}
 
-      <div className="table table--strategies" role="table" aria-label="Strategy controls">
-        <div className="table__head" role="row">
-          <span role="columnheader">Strategy</span>
-          <span role="columnheader">Enabled</span>
-          <span role="columnheader">Weight</span>
-          <span role="columnheader">Last action</span>
-          <span role="columnheader">Exposure</span>
-          <span role="columnheader">Realized PnL</span>
-          <span role="columnheader">Latest signal</span>
-          <span role="columnheader">72h PnL</span>
-          <span role="columnheader">Win rate</span>
-          <span role="columnheader">Drawdown</span>
-          <span role="columnheader">Risk profile</span>
-          <span role="columnheader">Learning</span>
-        </div>
-        <div className="table__body">
-          {strategies.map((strategy) => {
-            const isBusy = busy.has(strategy.strategy_id);
-            const riskProfile = riskSelections[strategy.strategy_id] ?? 'balanced';
-            const lastAction = strategy.last_actions_at || strategy.last_intents_at;
-            const perf = performance[strategy.strategy_id];
-            const drawdown = drawdownBadge(perf?.max_drawdown_pct);
-            const latestIntent = strategy.last_intents?.[0];
-            const latestConflict = strategy.conflict_summary?.[0];
-            const momentum = momentumBadge(strategy, perf?.realized_pnl_quote, perf?.max_drawdown_pct);
-            const learningEnabled = learningSelections[strategy.strategy_id] ?? true;
+      <div className="strategy-card-list" aria-label="Strategy controls">
+        {strategies.map((strategy) => {
+          const isBusy = busy.has(strategy.strategy_id);
+          const riskProfile = riskSelections[strategy.strategy_id] ?? 'balanced';
+          const lastAction = strategy.last_actions_at || strategy.last_intents_at;
+          const perf = performance[strategy.strategy_id];
+          const drawdown = drawdownBadge(perf?.max_drawdown_pct);
+          const latestIntent = strategy.last_intents?.[0];
+          const latestConflict = strategy.conflict_summary?.[0];
+          const momentum = momentumBadge(strategy, perf?.realized_pnl_quote, perf?.max_drawdown_pct);
+          const learningEnabled = learningSelections[strategy.strategy_id] ?? true;
 
-            return (
-              <div key={strategy.strategy_id} className="table__row" role="row">
-                <span role="cell" className="strategy__label">
-                  <span className="strategy__name" title={strategy.strategy_id}>{strategy.label}</span>
-                  <span className="strategy__id">{strategy.strategy_id}</span>
+          return (
+            <article key={strategy.strategy_id} className="strategy-control-card">
+              <div className="strategy-control-card__header">
+                <div>
+                  <h3 className="strategy-control-card__title">{strategy.label}</h3>
+                  <p className="strategy-control-card__id">{strategy.strategy_id}</p>
+                </div>
+                <div className="strategy-control-card__badges">
+                  <span className={`pill ${strategy.enabled ? 'pill--long' : 'pill--neutral'}`}>
+                    {strategy.enabled ? 'Active' : 'Paused'}
+                  </span>
                   <span className={`pill ${momentum.tone}`}>{momentum.label}</span>
                   {STRATEGY_TAGS[strategy.strategy_id] ? (
                     <span className="pill pill--muted strategy__tag">
                       {STRATEGY_TAGS[strategy.strategy_id]}
                     </span>
                   ) : null}
-                </span>
-                <span role="cell">
-                  <label className="strategy-toggle__label">
-                    <input
-                      type="checkbox"
-                      className="strategy-toggle"
-                      checked={strategy.enabled}
-                      disabled={readOnly || isBusy}
-                      title={liveMode
-                        ? 'Live change: enabling or disabling this strategy affects the active session immediately.'
-                        : 'Toggle this strategy on or off for the current session.'}
-                      onChange={(event) => onToggle(strategy.strategy_id, event.target.checked)}
-                    />
-                    <span className="pill pill--info">{strategy.enabled ? 'On' : 'Off'}</span>
-                  </label>
-                </span>
-                <span role="cell">
-                  <div className="strategy__meta" style={{ display: 'grid', gap: '0.35rem' }}>
-                    <input
-                      type="number"
-                      min={1}
-                      max={100}
-                      value={weightDrafts[strategy.strategy_id] ?? strategy.configured_weight ?? 100}
-                      disabled={readOnly || isBusy}
-                      title={liveMode
-                        ? 'Live change: commit a new weight to change effective share and conflict winners.'
-                        : 'Set the relative weight used to calculate this strategy’s effective share.'}
-                      onChange={(event) => {
-                        const nextWeight = Math.min(100, Math.max(1, Number(event.target.value) || 1));
-                        setWeightDraft(strategy.strategy_id, nextWeight);
-                        if (!liveMode) {
-                          onWeightChange(strategy.strategy_id, nextWeight);
-                        }
-                      }}
-                      onBlur={() => {
-                        if (liveMode) {
-                          commitWeightDraft(strategy.strategy_id);
-                        }
-                      }}
-                      onKeyDown={(event) => {
-                        if (liveMode && event.key === 'Enter') {
-                          event.currentTarget.blur();
-                        }
-                      }}
-                    />
-                    <span className="pill pill--muted">
-                      Share {typeof strategy.effective_weight_pct === 'number'
-                        ? `${strategy.effective_weight_pct.toFixed(1)}%`
-                        : '—'}
-                    </span>
-                  </div>
-                </span>
-                <span role="cell" className="strategy__meta">
-                  {formatTimestamp(lastAction)}
-                </span>
-                <span role="cell" className="strategy__meta">
-                  {formatExposure(strategy.pnl_summary?.exposure_pct)}
-                </span>
-                <span role="cell" className="strategy__meta">
-                  {formatPnl(strategy.pnl_summary?.realized_pnl_usd)}
-                </span>
-                <span role="cell" className="strategy__meta" title={latestIntent ? JSON.stringify(latestIntent) : undefined}>
-                  <div style={{ display: 'grid', gap: '0.35rem' }}>
-                    <span>
-                      {latestIntent
-                        ? `${latestIntent.side} ${latestIntent.pair} (${latestIntent.timeframe})`
-                        : 'No recent signals'}
-                    </span>
-                    <span>
-                      {latestConflict
-                        ? `Conflict: ${latestConflict.pair} ${latestConflict.winning_reason}`
-                        : 'Conflict: clear'}
-                    </span>
-                  </div>
-                </span>
-                <span role="cell" className="strategy__meta">
-                  {perf ? formatPnl(perf.realized_pnl_quote) : 'No trades'}
-                </span>
-                <span role="cell" className="strategy__meta">
-                  {perf ? formatWinRate(perf.win_rate) : '—'}
-                </span>
-                <span role="cell">
-                  <span className={`pill ${drawdown.tone}`}>{perf ? drawdown.label : 'No data'}</span>
-                </span>
-                <span role="cell">
+                </div>
+              </div>
+
+              <div className="strategy-control-card__metrics">
+                <div>
+                  <span>Effective share</span>
+                  <strong>{typeof strategy.effective_weight_pct === 'number' ? `${strategy.effective_weight_pct.toFixed(1)}%` : '—'}</strong>
+                </div>
+                <div>
+                  <span>Exposure</span>
+                  <strong>{formatExposure(strategy.pnl_summary?.exposure_pct)}</strong>
+                </div>
+                <div>
+                  <span>Realized PnL</span>
+                  <strong>{formatPnl(strategy.pnl_summary?.realized_pnl_usd)}</strong>
+                </div>
+                <div>
+                  <span>72h PnL</span>
+                  <strong>{perf ? formatPnl(perf.realized_pnl_quote) : 'No trades'}</strong>
+                </div>
+                <div>
+                  <span>Win rate</span>
+                  <strong>{perf ? formatWinRate(perf.win_rate) : '—'}</strong>
+                </div>
+                <div>
+                  <span>Drawdown</span>
+                  <strong><span className={`pill ${drawdown.tone}`}>{perf ? drawdown.label : 'No data'}</span></strong>
+                </div>
+              </div>
+
+              <div className="strategy-control-card__signals">
+                <div>
+                  <span>Latest signal</span>
+                  <strong title={latestIntent ? JSON.stringify(latestIntent) : undefined}>
+                    {latestIntent
+                      ? `${latestIntent.side} ${latestIntent.pair} (${latestIntent.timeframe})`
+                      : 'No recent signals'}
+                  </strong>
+                </div>
+                <div>
+                  <span>Conflict</span>
+                  <strong>
+                    {latestConflict
+                      ? `${latestConflict.pair}: ${latestConflict.winning_reason}`
+                      : 'Clear'}
+                  </strong>
+                </div>
+                <div>
+                  <span>Freshness</span>
+                  <strong>{formatTimestamp(lastAction)}</strong>
+                </div>
+              </div>
+
+              <div className="strategy-control-card__configure" aria-label={`${strategy.label} configuration`}>
+                <label className="strategy-toggle__label">
+                  <input
+                    type="checkbox"
+                    className="strategy-toggle"
+                    checked={strategy.enabled}
+                    disabled={readOnly || isBusy}
+                    title={liveMode
+                      ? 'Live change: enabling or disabling this strategy affects the active session immediately.'
+                      : 'Toggle this strategy on or off for the current session.'}
+                    onChange={(event) => onToggle(strategy.strategy_id, event.target.checked)}
+                  />
+                  <span className="pill pill--info">{strategy.enabled ? 'On' : 'Off'}</span>
+                </label>
+                <label className="strategy-control-card__field">
+                  <span>Weight</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={100}
+                    value={weightDrafts[strategy.strategy_id] ?? strategy.configured_weight ?? 100}
+                    disabled={readOnly || isBusy}
+                    title={liveMode
+                      ? 'Live change: commit a new weight to change effective share and conflict winners.'
+                      : 'Set the relative weight used to calculate this strategy’s effective share.'}
+                    onChange={(event) => {
+                      const nextWeight = Math.min(100, Math.max(1, Number(event.target.value) || 1));
+                      setWeightDraft(strategy.strategy_id, nextWeight);
+                      if (!liveMode) {
+                        onWeightChange(strategy.strategy_id, nextWeight);
+                      }
+                    }}
+                    onBlur={() => {
+                      if (liveMode) {
+                        commitWeightDraft(strategy.strategy_id);
+                      }
+                    }}
+                    onKeyDown={(event) => {
+                      if (liveMode && event.key === 'Enter') {
+                        event.currentTarget.blur();
+                      }
+                    }}
+                  />
+                </label>
+                <label className="strategy-control-card__field">
+                  <span>Risk profile</span>
                   <select
                     className="strategy-select"
                     value={riskProfile}
@@ -277,30 +282,26 @@ export function StrategiesPanel({
                       </option>
                     ))}
                   </select>
-                </span>
-                <span role="cell">
-                  {Object.prototype.hasOwnProperty.call(strategy.params ?? {}, 'continuous_learning') ? (
-                    <label className="strategy-toggle__label">
-                      <input
-                        type="checkbox"
-                        className="strategy-toggle"
-                        checked={strategy.enabled && learningEnabled}
-                        disabled={readOnly || isBusy || !strategy.enabled}
-                        title="Per-strategy learning only controls continuous training. It does not replace the global ML master switch in Startup."
-                        onChange={(event) => onLearningToggle(strategy.strategy_id, event.target.checked)}
-                      />
-                      <span className="pill pill--info">
-                        {strategy.enabled && learningEnabled ? 'Learning' : 'Paused'}
-                      </span>
-                    </label>
-                  ) : (
-                    <span className="strategy__meta">—</span>
-                  )}
-                </span>
+                </label>
+                {Object.prototype.hasOwnProperty.call(strategy.params ?? {}, 'continuous_learning') ? (
+                  <label className="strategy-toggle__label">
+                    <input
+                      type="checkbox"
+                      className="strategy-toggle"
+                      checked={strategy.enabled && learningEnabled}
+                      disabled={readOnly || isBusy || !strategy.enabled}
+                      title="Per-strategy learning only controls continuous training. It does not replace the global ML master switch in Startup."
+                      onChange={(event) => onLearningToggle(strategy.strategy_id, event.target.checked)}
+                    />
+                    <span className="pill pill--info">
+                      {strategy.enabled && learningEnabled ? 'Learning' : 'Paused'}
+                    </span>
+                  </label>
+                ) : null}
               </div>
-            );
-          })}
-        </div>
+            </article>
+          );
+        })}
       </div>
 
       {feedback ? <div className="feedback feedback--info">{feedback}</div> : null}

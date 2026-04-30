@@ -1,4 +1,4 @@
-import type { ReplayLatestSummary, SystemHealth } from '../services/api';
+import type { CockpitMarketDataSnapshot, ReplayLatestSummary, SystemHealth } from '../services/api';
 
 export type TrustBadge = {
   label: string;
@@ -35,7 +35,8 @@ export const getReplayTrustBadge = (
 
 export const getRuntimeTrust = (
   health: SystemHealth | null,
-  connectionState: 'connected' | 'degraded',
+  _connectionState: 'connected' | 'degraded',
+  marketData?: CockpitMarketDataSnapshot | null,
 ): RuntimeTrust => {
   if (!health) {
     return {
@@ -53,11 +54,25 @@ export const getRuntimeTrust = (
     };
   }
 
-  if (connectionState === 'connected' && !health.drift_detected && !health.kill_switch_active) {
+  const marketDataSessionOk = health.market_data_ok || Boolean(
+    marketData &&
+      !marketData.session_critical &&
+      (marketData.classification === 'watchlist_only' || marketData.classification === 'global_only'),
+  );
+  const coreRuntimeOk =
+    health.portfolio_sync_ok &&
+    health.execution_ok &&
+    marketDataSessionOk &&
+    !health.drift_detected &&
+    !health.kill_switch_active;
+
+  if (coreRuntimeOk) {
     return {
       label: 'Healthy',
       sidebarTone: 'ok',
-      hint: 'Portfolio sync, market data, and execution checks look good.',
+      hint: marketData?.message
+        ? `Session-critical checks look good. ${marketData.message}`
+        : 'Portfolio sync, market data, and execution checks look good.',
     };
   }
 

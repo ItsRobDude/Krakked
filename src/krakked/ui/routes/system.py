@@ -62,6 +62,7 @@ from krakked.ui.models import (
     ApiEnvelope,
     AssetExposureBreakdown,
     CockpitActivityPayload,
+    CockpitMarketDataPayload,
     CockpitPortfolioPayload,
     CockpitRiskPayload,
     CockpitSnapshotPayload,
@@ -589,6 +590,122 @@ def _build_latest_replay_payload() -> ReplayLatestPayload:
     return ReplayLatestPayload(**summary)
 
 
+def _canonical_market_pair(pair: str | None) -> str:
+    if not pair:
+        return ""
+    normalized = str(pair).upper().replace("/", "").replace("-", "").replace("_", "")
+    for prefix in ("XBT", "XXBT"):
+        if normalized.startswith(prefix):
+            return "BTC" + normalized[len(prefix) :]
+    if normalized.startswith("XETH"):
+        return "ETH" + normalized[4:]
+    return normalized
+
+
+def _split_market_data_detail(detail: str | None) -> list[str]:
+    if not detail:
+        return []
+    cleaned = str(detail).replace(";", ",")
+    pairs: list[str] = []
+    for token in cleaned.split(","):
+        value = token.strip()
+        if value:
+            pairs.append(value)
+    return pairs
+
+
+def _collect_strategy_pairs(strategy: StrategyStatePayload) -> set[str]:
+    pairs: set[str] = set()
+    params = strategy.params or {}
+    raw_pairs = params.get("pairs")
+    if isinstance(raw_pairs, list):
+        pairs.update(str(pair) for pair in raw_pairs if pair)
+
+    target_weights = params.get("target_weights")
+    if isinstance(target_weights, dict):
+        pairs.update(str(pair) for pair in target_weights.keys() if pair)
+
+    for intent in strategy.last_intents or []:
+        pair = intent.get("pair") if isinstance(intent, dict) else None
+        if pair:
+            pairs.add(str(pair))
+
+    for position in strategy.current_positions or []:
+        pairs.add(position.pair)
+
+    return {_canonical_market_pair(pair) for pair in pairs if pair}
+
+
+def _build_cockpit_market_data_payload(
+    health: SystemHealthPayload | None,
+    strategies: list[StrategyStatePayload] | None,
+    positions: list[PositionPayload] | None,
+) -> CockpitMarketDataPayload | None:
+    if health is None:
+        return None
+
+    stale_pairs = _split_market_data_detail(health.market_data_detail)
+    if not stale_pairs and health.market_data_stale and health.market_data_reason:
+        stale_pairs = [health.market_data_reason]
+
+    session_pairs: set[str] = set()
+    watchlist_pairs: set[str] = set()
+
+    for position in positions or []:
+        session_pairs.add(_canonical_market_pair(position.pair))
+
+    for strategy in strategies or []:
+        strategy_pairs = _collect_strategy_pairs(strategy)
+        watchlist_pairs.update(strategy_pairs)
+        if strategy.enabled:
+            session_pairs.update(strategy_pairs)
+
+    stale_by_key = {
+        _canonical_market_pair(pair): pair for pair in stale_pairs if _canonical_market_pair(pair)
+    }
+    session_stale = [
+        display for key, display in stale_by_key.items() if key in session_pairs
+    ]
+    watchlist_stale = [
+        display
+        for key, display in stale_by_key.items()
+        if key not in session_pairs and key in watchlist_pairs
+    ]
+    global_stale = [
+        display
+        for key, display in stale_by_key.items()
+        if key not in session_pairs and key not in watchlist_pairs
+    ]
+
+    if session_stale:
+        classification = "session_critical"
+        message = f"Session market data stale: {', '.join(session_stale)}."
+    elif watchlist_stale:
+        classification = "watchlist_only"
+        message = f"Watchlist data stale: {', '.join(watchlist_stale)}."
+    elif global_stale:
+        classification = "global_only"
+        message = f"Non-active market data stale: {', '.join(global_stale)}."
+    elif health.market_data_ok:
+        classification = "healthy"
+        message = None
+    else:
+        classification = "session_critical"
+        message = health.market_data_detail or health.market_data_reason
+
+    return CockpitMarketDataPayload(
+        stale_pairs=stale_pairs,
+        session_pairs=sorted(pair for pair in session_pairs if pair),
+        watchlist_pairs=sorted(pair for pair in watchlist_pairs if pair),
+        session_stale_pairs=session_stale,
+        watchlist_stale_pairs=watchlist_stale,
+        global_stale_pairs=global_stale,
+        classification=classification,
+        session_critical=classification == "session_critical",
+        message=message,
+    )
+
+
 _COCKPIT_SECTION_ERROR_MESSAGES = {
     "health": "System health unavailable",
     "session": "Session state unavailable",
@@ -602,6 +719,7 @@ _COCKPIT_SECTION_ERROR_MESSAGES = {
     "activity.recent_executions": "Recent executions unavailable",
     "activity.risk_decisions": "Risk decisions unavailable",
     "replay.latest": "Latest replay unavailable",
+    "market_data.scope": "Market data scope unavailable",
 }
 
 
@@ -1330,6 +1448,15 @@ async def cockpit_snapshot(request: Request) -> ApiEnvelope[CockpitSnapshotPaylo
         replay = _read_section(
             section_errors, "replay.latest", _build_latest_replay_payload
         )
+        market_data = _read_section(
+            section_errors,
+            "market_data.scope",
+            lambda: _build_cockpit_market_data_payload(
+                health,
+                strategies,
+                positions,
+            ),
+        )
 
         payload = CockpitSnapshotPayload(
             generated_at=datetime.now(timezone.utc),
@@ -1350,6 +1477,7 @@ async def cockpit_snapshot(request: Request) -> ApiEnvelope[CockpitSnapshotPaylo
                 risk_decisions=risk_decisions,
             ),
             replay=replay,
+            market_data=market_data,
             section_errors=section_errors,
         )
         return ApiEnvelope(data=payload, error=None)

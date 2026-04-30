@@ -1361,6 +1361,8 @@ body {
   padding: 1.1rem 1rem;
   gap: 1rem;
   box-shadow: none;
+  max-height: calc(100vh - 3rem);
+  overflow-y: auto;
 }
 
 .sidebar__brand {
@@ -1464,6 +1466,10 @@ body {
   border: 1px solid rgba(248, 113, 113, 0.22);
   border-radius: 12px;
   background: rgba(127, 29, 29, 0.12);
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  box-shadow: 0 -10px 22px rgba(8, 13, 20, 0.34);
 }
 
 .sidebar__danger-title {
@@ -1975,6 +1981,100 @@ body {
   gap: 0.6rem;
 }
 
+.strategy-card-list {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.strategy-control-card {
+  display: grid;
+  gap: 0.85rem;
+  padding: 1rem;
+  border-radius: 14px;
+  border: 1px solid rgba(146, 162, 183, 0.12);
+  background: rgba(16, 24, 35, 0.78);
+}
+
+.strategy-control-card__header,
+.strategy-control-card__badges,
+.strategy-control-card__configure {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  flex-wrap: wrap;
+}
+
+.strategy-control-card__header {
+  justify-content: space-between;
+}
+
+.strategy-control-card__title {
+  margin: 0;
+  color: #f8fafc;
+  font-size: 1rem;
+}
+
+.strategy-control-card__id {
+  margin: 0.18rem 0 0;
+  color: #8ea2b7;
+  font-size: 0.82rem;
+  font-family: var(--font-mono);
+}
+
+.strategy-control-card__metrics,
+.strategy-control-card__signals {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.strategy-control-card__metrics {
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+}
+
+.strategy-control-card__signals {
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.strategy-control-card__metrics div,
+.strategy-control-card__signals div {
+  padding: 0.7rem 0.75rem;
+  border-radius: 10px;
+  border: 1px solid rgba(146, 162, 183, 0.1);
+  background: rgba(15, 23, 42, 0.42);
+}
+
+.strategy-control-card__metrics span,
+.strategy-control-card__signals span,
+.strategy-control-card__field span {
+  display: block;
+  color: #91a4b8;
+  font-size: 0.74rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.strategy-control-card__metrics strong,
+.strategy-control-card__signals strong {
+  display: block;
+  margin-top: 0.22rem;
+  color: #f8fafc;
+}
+
+.strategy-control-card__configure {
+  padding-top: 0.85rem;
+  border-top: 1px solid rgba(146, 162, 183, 0.1);
+}
+
+.strategy-control-card__field {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.strategy-control-card__field input,
+.strategy-control-card__field select {
+  min-width: 120px;
+}
+
 .strategy-summary-panel__footer {
   margin-top: 0.85rem;
   padding-top: 0.85rem;
@@ -2036,6 +2136,15 @@ body {
 
 .log-panel__message {
   font-weight: 700;
+}
+
+.log-panel__details {
+  display: grid;
+  gap: 0.24rem;
+  margin: 0.45rem 0 0;
+  padding-left: 1rem;
+  color: #a8b7c8;
+  font-size: 0.9rem;
 }
 
 .log-panel__meta,

@@ -29,6 +29,7 @@ import {
   RiskStatus,
   RecentExecution,
   RiskDecision,
+  CockpitMarketDataSnapshot,
   RiskPresetName,
   StrategyRiskProfile,
   StrategyPerformance,
@@ -124,13 +125,19 @@ const formatHealthReason = (reason: string | null | undefined) => {
   return reasonLabels[reason] ?? reason.replace(/_/g, ' ');
 };
 
-const formatMarketDataHint = (state: SystemHealth | null) => {
+const formatMarketDataHint = (
+  state: SystemHealth | null,
+  marketData?: CockpitMarketDataSnapshot | null,
+) => {
   if (!state) return 'Market data status is unavailable.';
   if (state.market_data_status === 'warming_up') {
     return 'Streaming is online; waiting for fresh startup data.';
   }
   if (state.market_data_ok) {
     return `${state.streaming_pairs ?? 0} pairs streaming.`;
+  }
+  if (marketData?.message) {
+    return marketData.message;
   }
   const reason = formatHealthReason(state.market_data_reason);
   if (state.market_data_reason === 'data_stale' && state.market_data_detail) {
@@ -251,27 +258,6 @@ const transformPositions = (payload: PositionPayload[]): PositionRow[] =>
     return { pair: position.pair, side, size, entry, mark, pnl, status };
   });
 
-const transformLogs = (executions: RecentExecution[]) =>
-  executions.map((execution) => {
-    const source = execution.errors[0] || execution.warnings[0] || 'Execution summary';
-    const completedAt = execution.completed_at || execution.started_at;
-    const timestamp = formatTimestamp(completedAt);
-    const orderCount = execution.orders_count ?? execution.orders.length;
-    const pairs = Array.from(new Set(execution.orders.map((order) => order.pair).filter(Boolean))).slice(0, 4);
-    const pairSummary = pairs.length > 0 ? ` on ${pairs.join(', ')}` : '';
-    const orderSummary = orderCount === 1 ? '1 order' : `${orderCount} orders`;
-    const message = `${execution.plan_id} ${execution.success ? 'succeeded' : 'failed'} (${orderSummary}${pairSummary})`;
-    const level: LogEntry['level'] = execution.success ? 'info' : 'error';
-
-    return {
-      level,
-      message,
-      timestamp,
-      source,
-      sortKey: completedAt ? new Date(completedAt).getTime() : undefined,
-    };
-  });
-
 const transformRiskDecisions = (decisions: RiskDecision[]) =>
   decisions
     .filter((decision) => decision.blocked || decision.kill_switch_active)
@@ -296,6 +282,57 @@ const transformRiskDecisions = (decisions: RiskDecision[]) =>
       };
     });
 
+const transformActivityLogs = (
+  executions: RecentExecution[],
+  decisions: RiskDecision[],
+) => {
+  const relevantDecisions = decisions.filter((decision) => decision.blocked || decision.kill_switch_active);
+  const decisionsByPlan = relevantDecisions.reduce<Record<string, RiskDecision[]>>((acc, decision) => {
+    if (!decision.plan_id) return acc;
+    acc[decision.plan_id] = [...(acc[decision.plan_id] ?? []), decision];
+    return acc;
+  }, {});
+  const executionPlanIds = new Set(executions.map((execution) => execution.plan_id));
+
+  const executionLogs = executions.map((execution) => {
+    const source = execution.errors[0] || execution.warnings[0] || 'Execution summary';
+    const completedAt = execution.completed_at || execution.started_at;
+    const timestamp = formatTimestamp(completedAt);
+    const orderCount = execution.orders_count ?? execution.orders.length;
+    const pairs = Array.from(new Set(execution.orders.map((order) => order.pair).filter(Boolean))).slice(0, 4);
+    const planDecisions = decisionsByPlan[execution.plan_id] ?? [];
+    const pairSummary = pairs.length > 0 ? ` on ${pairs.join(', ')}` : '';
+    const orderSummary = orderCount === 1 ? '1 order' : `${orderCount} orders`;
+    const blockedDetails = planDecisions.map((decision) => {
+      const reasons = decision.block_reasons.length
+        ? decision.block_reasons.join(', ')
+        : decision.kill_switch_active
+          ? 'Kill switch active'
+          : 'Risk blocked';
+      return `${decision.pair}: ${reasons}`;
+    });
+    const blockedZeroOrderPlan = execution.success && orderCount === 0 && blockedDetails.length > 0;
+    const message = blockedZeroOrderPlan
+      ? `${execution.plan_id}: no orders placed, blocked by risk limits`
+      : `${execution.plan_id} ${execution.success ? 'succeeded' : 'failed'} (${orderSummary}${pairSummary})`;
+
+    return {
+      level: blockedZeroOrderPlan ? 'warning' as const : (execution.success ? 'info' as const : 'error' as const),
+      message,
+      timestamp,
+      source: blockedZeroOrderPlan ? 'Risk limits' : source,
+      details: blockedDetails,
+      sortKey: completedAt ? new Date(completedAt).getTime() : undefined,
+    };
+  });
+
+  const ungroupedDecisionLogs = transformRiskDecisions(
+    relevantDecisions.filter((decision) => !executionPlanIds.has(decision.plan_id)),
+  );
+
+  return [...executionLogs, ...ungroupedDecisionLogs];
+};
+
 function DashboardShell({ onLogout }: { onLogout: () => void }) {
   const [kpis, setKpis] = useState<Kpi[]>([]);
   const [activePositions, setActivePositions] = useState<PositionRow[]>([]);
@@ -304,6 +341,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [connectionState, setConnectionState] = useState<'connected' | 'degraded'>('degraded');
   const [health, setHealth] = useState<SystemHealth | null>(null);
+  const [marketDataScope, setMarketDataScope] = useState<CockpitMarketDataSnapshot | null>(null);
   const [summary, setSummary] = useState<PortfolioSummary | null>(null);
   const [latestReplay, setLatestReplay] = useState<ReplayLatestSummary | null>(null);
   const [showReplayPanel, setShowReplayPanel] = useState(false);
@@ -475,7 +513,10 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
         const executions = snapshot.activity?.recent_executions ?? null;
         const decisions = snapshot.activity?.risk_decisions ?? null;
         const latestReplaySummary = snapshot.replay;
+        const marketDataSnapshot = snapshot.market_data ?? null;
         const dashboardFailures: string[] = [];
+
+        setMarketDataScope(marketDataSnapshot);
 
         if (portfolioSummary) {
           setSummary(portfolioSummary);
@@ -617,9 +658,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
         }
 
         if (executions || decisions) {
-          const executionLogs = executions ? transformLogs(executions) : [];
-          const decisionLogs = decisions ? transformRiskDecisions(decisions) : [];
-          const merged = [...executionLogs, ...decisionLogs].sort(
+          const merged = transformActivityLogs(executions ?? [], decisions ?? []).sort(
             (a, b) => (b.sortKey ?? 0) - (a.sortKey ?? 0),
           );
           setLogs(merged);
@@ -666,6 +705,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
   useEffect(() => {
     if (!session?.active) {
       setCockpitGeneratedAt(null);
+      setMarketDataScope(null);
     }
   }, [session?.active]);
 
@@ -683,7 +723,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
         hint:
           health.market_data_status === 'warming_up'
             ? 'Awaiting fresh startup ticks'
-            : formatMarketDataHint(health),
+            : formatMarketDataHint(health, marketDataScope),
       },
       {
         label: 'Execution',
@@ -693,7 +733,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
     ];
 
     setKpis([...baseKpis, ...extra]);
-  }, [health, summary]);
+  }, [health, marketDataScope, summary]);
 
   useEffect(() => {
     if (health?.ui_read_only) {
@@ -1503,20 +1543,24 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
     });
   }
   if (health && !health.market_data_ok) {
+    const nonCriticalMarketData =
+      marketDataScope &&
+      !marketDataScope.session_critical &&
+      (marketDataScope.classification === 'watchlist_only' || marketDataScope.classification === 'global_only');
     dashboardAlerts.push({
       id: 'market-data',
       tone:
         health.market_data_status === 'warming_up'
           ? 'info'
-          : (health.market_data_stale ? 'warning' : 'danger'),
+          : (nonCriticalMarketData ? 'info' : (health.market_data_stale ? 'warning' : 'danger')),
       title:
         health.market_data_status === 'warming_up'
           ? 'Market data warming up'
-          : 'Market data degraded',
+          : (nonCriticalMarketData ? 'Non-active market data stale' : 'Session market data degraded'),
       message:
         health.market_data_status === 'warming_up'
           ? 'Streaming is online, but Krakked is still waiting for fresh startup data.'
-          : formatMarketDataHint(health),
+          : formatMarketDataHint(health, marketDataScope),
     });
   }
   if (health?.drift_detected) {
@@ -1566,7 +1610,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
       STARTER_STRATEGY_IDS.includes(strategy.strategy_id as (typeof STARTER_STRATEGY_IDS)[number]) && strategy.enabled,
   ).length;
   const noActiveStrategies = strategies.every((strategy) => !strategy.enabled);
-  const runtimeTrust = getRuntimeTrust(health, connectionState);
+  const runtimeTrust = getRuntimeTrust(health, connectionState, marketDataScope);
 
   const systemStatusItems = [
     {
@@ -1618,7 +1662,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
       hint:
         health?.market_data_status === 'warming_up'
           ? 'Streaming is online; waiting for fresh startup data'
-          : formatMarketDataHint(health),
+          : formatMarketDataHint(health, marketDataScope),
     },
     {
       label: 'Drift',
@@ -1833,7 +1877,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
               <p className="integrity-panel__hint">
                 {health?.market_data_status === 'warming_up'
                   ? 'Streaming is online; waiting for fresh startup data'
-                  : formatMarketDataHint(health)}
+                  : formatMarketDataHint(health, marketDataScope)}
               </p>
             </div>
             <div className="integrity-panel__item">

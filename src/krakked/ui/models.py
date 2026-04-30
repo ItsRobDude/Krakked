@@ -367,6 +367,18 @@ class CockpitActivityPayload(BaseModel):
     risk_decisions: Optional[List[RiskDecisionPayload]] = None
 
 
+class CockpitMarketDataPayload(BaseModel):
+    stale_pairs: List[str] = Field(default_factory=list)
+    session_pairs: List[str] = Field(default_factory=list)
+    watchlist_pairs: List[str] = Field(default_factory=list)
+    session_stale_pairs: List[str] = Field(default_factory=list)
+    watchlist_stale_pairs: List[str] = Field(default_factory=list)
+    global_stale_pairs: List[str] = Field(default_factory=list)
+    classification: str = "healthy"
+    session_critical: bool = False
+    message: Optional[str] = None
+
+
 class CockpitSnapshotPayload(BaseModel):
     schema_version: str = "cockpit.v1"
     generated_at: datetime
@@ -377,4 +389,5 @@ class CockpitSnapshotPayload(BaseModel):
     strategies: Optional[CockpitStrategiesPayload] = None
     activity: Optional[CockpitActivityPayload] = None
     replay: Optional[ReplayLatestPayload] = None
+    market_data: Optional[CockpitMarketDataPayload] = None
     section_errors: Dict[str, str] = Field(default_factory=dict)
