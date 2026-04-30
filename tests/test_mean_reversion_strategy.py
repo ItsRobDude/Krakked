@@ -3,10 +3,10 @@ from unittest.mock import MagicMock
 
 from krakked.config import OHLCBar, StrategyConfig
 from krakked.market_data.api import MarketDataAPI
-from krakked.portfolio.manager import PortfolioService
 from krakked.portfolio.models import SpotPosition
 from krakked.strategy.base import StrategyContext
 from krakked.strategy.strategies.mean_reversion import MeanReversionStrategy
+from tests.runtime_mocks import make_portfolio_service_mock
 
 
 def _make_bar(ts: int, close: float) -> OHLCBar:
@@ -22,7 +22,7 @@ def _make_bar(ts: int, close: float) -> OHLCBar:
 
 def _build_context():
     market = MagicMock(spec=MarketDataAPI)
-    portfolio = MagicMock(spec=PortfolioService)
+    portfolio = make_portfolio_service_mock()
     ctx = StrategyContext(
         now=datetime.now(timezone.utc),
         universe=["BTC/USD", "ETH/USD"],

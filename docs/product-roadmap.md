@@ -72,7 +72,7 @@ Still needing real-world validation or product work:
 
 - Docker smoke testing on an actual deployment host
 - More polished strategy-management and attribution UX
-- Operator polish on cockpit snapshot V1: safe section errors, visible snapshot freshness, and any remaining startup/setup fan-out
+- Remaining cockpit polish around startup/setup fan-out and first-run lifecycle edges
 - A cleaner startup/unlock/session lifecycle model so first-run and reinitialization states stay explicit and predictable
 - Simple/Advanced UI presentation split
 - ML operator controls beyond the checkpoint/resume foundation
@@ -85,7 +85,7 @@ Krakked is now closer to an operator-facing control room than a hobby bot shell,
 
 - Paper mode is a local persistent synthetic wallet that can exercise the strategy, risk, OMS, and portfolio loops without transmitting live orders.
 - Exchange balances are now optional reference context in paper mode, not the paper account baseline.
-- The active dashboard now has cockpit snapshot V1 for coherent active-session refreshes, but it still needs safer section error text, visible freshness, and cleanup around any remaining startup/setup fan-out.
+- The active dashboard now has cockpit snapshot V1 for coherent active-session refreshes, operator-safe section degradation, and visible snapshot freshness. Remaining cockpit work is mostly around startup/setup fan-out and clearer first-run lifecycle states.
 - Startup, unlock, and session-start flows have improved significantly, but they still need a tighter lifecycle model before the product feels fully polished for a first-time operator.
 
 ## UX Recommendation
@@ -145,7 +145,7 @@ The next milestones are product-facing rather than architecture-facing:
 
 2. Operator UX
    - Improve strategy toggles, weights, and per-strategy attribution in the UI.
-   - Polish cockpit snapshot V1 by making section errors operator-safe, surfacing the snapshot freshness time, and trimming any remaining startup/setup fan-out.
+   - Continue cockpit snapshot V1 polish by trimming remaining startup/setup fan-out and tightening first-run lifecycle states.
    - Introduce a clearer Simple vs Advanced presentation model.
    - Surface ML status and training/checkpoint information more directly.
 

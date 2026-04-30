@@ -8,7 +8,6 @@ import pandas as pd
 from krakked.config import PortfolioConfig, RiskConfig
 from krakked.market_data.api import MarketDataAPI
 from krakked.market_data.models import PairMetadata
-from krakked.portfolio.manager import PortfolioService
 from krakked.portfolio.models import (
     AssetExposure,
     DriftMismatchedAsset,
@@ -20,6 +19,7 @@ from krakked.portfolio.models import (
 from krakked.portfolio.portfolio import Portfolio
 from krakked.strategy.models import StrategyIntent
 from krakked.strategy.risk import RiskEngine, compute_atr
+from tests.runtime_mocks import make_portfolio_service_mock
 
 
 def test_compute_atr():
@@ -36,7 +36,7 @@ def test_compute_atr():
 def test_risk_engine_sizing():
     config = RiskConfig(max_risk_per_trade_pct=1.0, volatility_lookback_bars=3)
     market = MagicMock(spec=MarketDataAPI)
-    portfolio = MagicMock(spec=PortfolioService)
+    portfolio = make_portfolio_service_mock()
 
     market.get_latest_price.return_value = 100.0
 
@@ -110,7 +110,7 @@ def test_risk_engine_sizing():
 def test_kill_switch_drawdown():
     config = RiskConfig(max_daily_drawdown_pct=5.0)
     market = MagicMock(spec=MarketDataAPI)
-    portfolio = MagicMock(spec=PortfolioService)
+    portfolio = make_portfolio_service_mock()
 
     real_meta = PairMetadata(
         canonical="XBTUSD",
@@ -157,7 +157,7 @@ def test_kill_switch_drawdown():
 def test_manual_kill_switch_blocks_opens_allows_reductions():
     config = RiskConfig()
     market = MagicMock(spec=MarketDataAPI)
-    portfolio = MagicMock(spec=PortfolioService)
+    portfolio = make_portfolio_service_mock()
 
     market.get_latest_price.return_value = 100.0
 
@@ -246,7 +246,7 @@ def test_manual_kill_switch_blocks_opens_allows_reductions():
 def test_kill_switch_reasons_are_additive():
     config = RiskConfig(kill_switch_on_drift=True)
     market = MagicMock(spec=MarketDataAPI)
-    portfolio = MagicMock(spec=PortfolioService)
+    portfolio = make_portfolio_service_mock()
 
     market.get_latest_price.return_value = 100.0
     real_meta = PairMetadata(
@@ -293,7 +293,7 @@ def test_kill_switch_reasons_are_additive():
 def test_drift_kill_switch_blocks_opening_orders():
     config = RiskConfig(kill_switch_on_drift=True)
     market = MagicMock(spec=MarketDataAPI)
-    portfolio = MagicMock(spec=PortfolioService)
+    portfolio = make_portfolio_service_mock()
 
     market.get_latest_price.return_value = 100.0
     real_meta = PairMetadata(
@@ -376,7 +376,7 @@ def test_drift_kill_switch_blocks_opening_orders():
 def test_max_per_asset():
     config = RiskConfig(max_per_asset_pct=10.0)  # 10% max
     market = MagicMock(spec=MarketDataAPI)
-    portfolio = MagicMock(spec=PortfolioService)
+    portfolio = make_portfolio_service_mock()
     market.get_latest_price.return_value = 100.0
     real_meta = PairMetadata(
         canonical="XBTUSD",
@@ -420,7 +420,7 @@ def test_max_per_asset():
 
 def test_manual_vs_strategy_grouping_and_exposure():
     market = MagicMock(spec=MarketDataAPI)
-    portfolio = MagicMock(spec=PortfolioService)
+    portfolio = make_portfolio_service_mock()
 
     market.get_latest_price.side_effect = lambda pair: {
         "XBTUSD": 100.0,
@@ -511,7 +511,7 @@ def test_userref_falls_back_to_strategy_id_when_missing_mapping():
     market.get_latest_price.return_value = 100.0
     market.get_pair_metadata.return_value = MagicMock(liquidity_24h_usd=1_000_000.0)
 
-    portfolio = MagicMock(spec=PortfolioService)
+    portfolio = make_portfolio_service_mock()
     portfolio.get_equity.return_value = EquityView(
         equity_base=10000.0,
         cash_base=10000.0,
@@ -555,7 +555,7 @@ def test_dust_sell_is_noop():
         max_open_positions=100,
     )
     market = MagicMock(spec=MarketDataAPI)
-    portfolio = MagicMock(spec=PortfolioService)
+    portfolio = make_portfolio_service_mock()
 
     # Price and Metadata
     market.get_latest_price.return_value = 100.0
@@ -628,7 +628,7 @@ def test_untradeable_missing_metadata():
     """Verify that missing metadata forces NO-OP for sell."""
     config = RiskConfig()
     market = MagicMock(spec=MarketDataAPI)
-    portfolio = MagicMock(spec=PortfolioService)
+    portfolio = make_portfolio_service_mock()
 
     market.get_latest_price.return_value = 100.0
     # Simulate missing metadata

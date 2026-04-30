@@ -3,9 +3,9 @@ from unittest.mock import MagicMock
 
 from krakked.config import OHLCBar, StrategyConfig
 from krakked.market_data.api import MarketDataAPI
-from krakked.portfolio.manager import PortfolioService
 from krakked.strategy.base import StrategyContext
 from krakked.strategy.strategies.vol_breakout import VolBreakoutStrategy
+from tests.runtime_mocks import make_portfolio_service_mock
 
 
 def _make_bar(ts: int, close: float, high_offset: float, low_offset: float) -> OHLCBar:
@@ -21,7 +21,7 @@ def _make_bar(ts: int, close: float, high_offset: float, low_offset: float) -> O
 
 def _build_context():
     market = MagicMock(spec=MarketDataAPI)
-    portfolio = MagicMock(spec=PortfolioService)
+    portfolio = make_portfolio_service_mock()
     ctx = StrategyContext(
         now=datetime.now(timezone.utc),
         universe=["XBTUSD"],

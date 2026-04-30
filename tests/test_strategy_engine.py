@@ -7,7 +7,6 @@ from unittest.mock import MagicMock
 from krakked.config import AppConfig, RiskConfig, StrategiesConfig, StrategyConfig
 from krakked.market_data.api import MarketDataAPI
 from krakked.market_data.exceptions import DataStaleError
-from krakked.portfolio.manager import PortfolioService
 from krakked.portfolio.models import SpotPosition
 from krakked.strategy.base import Strategy
 from krakked.strategy.engine import StrategyRiskEngine
@@ -104,7 +103,7 @@ def test_engine_stale_data():
     app_config.risk = RiskConfig()
 
     market = MagicMock(spec=MarketDataAPI)
-    portfolio = MagicMock(spec=PortfolioService)
+    portfolio = make_portfolio_service_mock()
 
     market.get_data_status.return_value = MagicMock(rest_api_reachable=False)
 
@@ -262,7 +261,7 @@ def test_trend_following_ignores_missing_liquidity_metadata():
         [MockBar(close=p) for p in prices],
     ]
 
-    portfolio = MagicMock(spec=PortfolioService)
+    portfolio = make_portfolio_service_mock()
     portfolio.app_config = MagicMock()
     portfolio.app_config.risk = RiskConfig(min_liquidity_24h_usd=100000.0)
     portfolio.get_positions.return_value = []

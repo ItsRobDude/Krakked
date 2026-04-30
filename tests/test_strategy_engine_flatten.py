@@ -2,9 +2,9 @@ from unittest.mock import MagicMock
 
 from krakked.config import AppConfig
 from krakked.market_data.api import MarketDataAPI
-from krakked.portfolio.manager import PortfolioService
 from krakked.portfolio.models import SpotPosition
 from krakked.strategy.engine import StrategyEngine
+from tests.runtime_mocks import make_portfolio_service_mock
 
 
 def test_build_emergency_flatten_plan_skips_dust():
@@ -15,7 +15,7 @@ def test_build_emergency_flatten_plan_skips_dust():
     config.strategies = MagicMock()
     config.strategies.configs = {}
     market = MagicMock(spec=MarketDataAPI)
-    portfolio = MagicMock(spec=PortfolioService)
+    portfolio = make_portfolio_service_mock()
 
     # Metadata Setup
     meta_a = MagicMock()

@@ -1,15 +1,14 @@
 from datetime import datetime, timezone
-from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
 
 from krakked.config import RiskConfig
 from krakked.market_data.exceptions import DataStaleError
-from krakked.portfolio.manager import PortfolioService
-from krakked.portfolio.models import EquityView, SpotPosition
+from krakked.portfolio.models import SpotPosition
 from krakked.strategy.models import StrategyIntent
 from krakked.strategy.risk import RiskContext, RiskEngine
+from tests.runtime_mocks import make_portfolio_service_mock
 
 
 def _build_risk_context(open_positions=None):
@@ -34,18 +33,7 @@ def _build_risk_context(open_positions=None):
 
 
 def _build_portfolio_mock():
-    portfolio = MagicMock(spec=PortfolioService)
-    portfolio.get_equity.return_value = EquityView(
-        equity_base=1000.0,
-        cash_base=1000.0,
-        realized_pnl_base_total=0.0,
-        unrealized_pnl_base_total=0.0,
-        drift_flag=False,
-    )
-    portfolio.get_positions.return_value = []
-    portfolio.get_asset_exposure.return_value = []
-    portfolio.store = SimpleNamespace(get_snapshots=MagicMock(return_value=[]))
-    return portfolio
+    return make_portfolio_service_mock(equity_base=1000.0, cash_base=1000.0)
 
 
 def _intent(strategy_id: str, pair: str, intent_type: str, desired_usd: float = 0.0):
