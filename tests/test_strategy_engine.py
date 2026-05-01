@@ -10,7 +10,6 @@ from krakked.market_data.exceptions import DataStaleError
 from krakked.portfolio.models import SpotPosition
 from krakked.strategy.base import Strategy
 from krakked.strategy.engine import StrategyRiskEngine
-from krakked.strategy.strategies.demo_strategy import TrendFollowingStrategy
 from krakked.strategy.models import (
     DecisionRecord,
     RiskAdjustedAction,
@@ -18,6 +17,7 @@ from krakked.strategy.models import (
     StrategyIntent,
     StrategyState,
 )
+from krakked.strategy.strategies.demo_strategy import TrendFollowingStrategy
 from tests.runtime_mocks import make_portfolio_service_mock
 
 
@@ -62,6 +62,9 @@ def test_engine_cycle():
         close: float
         high: float = 0
         low: float = 0
+        timestamp: int = 0
+        open: float = 0.0
+        volume: float = 0.0
 
     # Provide enough data for MA(20)
     # Slow MA = 20. Need > 20 bars.
@@ -254,6 +257,11 @@ def test_trend_following_ignores_missing_liquidity_metadata():
     @dataclass
     class MockBar:
         close: float
+        high: float = 0.0
+        low: float = 0.0
+        timestamp: int = 0
+        open: float = 0.0
+        volume: float = 0.0
 
     prices = [100 + i for i in range(20)]
     market.get_ohlc.side_effect = [
