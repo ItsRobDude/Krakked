@@ -475,7 +475,7 @@ def test_latest_replay_endpoint_returns_compact_summary(
     assert payload["coverage_status"] == "limited"
     assert payload["blocked_reason_counts"]["Max open positions reached (1)"] == 1
     assert payload["replay_inputs"]["enabled_strategies"] == ["majors_mean_rev"]
-    assert payload["report_path"].endswith("reports\\backtests\\latest.json")
+    assert payload["report_path"].endswith("reports/backtests/latest.json")
 
 
 def test_latest_replay_endpoint_hides_invalid_report(

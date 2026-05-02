@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 
 LATEST_BACKTEST_REPORT_RELATIVE_PATH = Path("reports") / "backtests" / "latest.json"
 

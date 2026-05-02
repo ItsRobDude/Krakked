@@ -53,7 +53,6 @@ RESERVED_RISK_STRATEGY_LIMIT_KEYS = {"manual"}
 
 logger = logging.getLogger(__name__)
 
-
 def _get_path_override(*env_names: str) -> Path | None:
     """Return the first non-empty path override from the provided env vars."""
 
@@ -62,7 +61,6 @@ def _get_path_override(*env_names: str) -> Path | None:
         if value:
             return Path(value).expanduser()
     return None
-
 
 def get_initial_ui_config() -> dict[str, Any]:
     """Return safe UI bind defaults for local and containerized first boot."""
@@ -94,7 +92,6 @@ def get_initial_ui_config() -> dict[str, Any]:
 
     return {"enabled": True, "host": host, "port": port}
 
-
 def get_config_dir() -> Path:
     """
     Returns the OS-specific configuration directory for the bot using appdirs.
@@ -103,7 +100,6 @@ def get_config_dir() -> Path:
     if override is not None:
         return override
     return Path(appdirs.user_config_dir("krakked"))
-
 
 def get_default_ohlc_store_config() -> Dict[str, str]:
     """
@@ -115,7 +111,6 @@ def get_default_ohlc_store_config() -> Dict[str, str]:
         data_dir = Path(appdirs.user_data_dir("krakked"))
     default_root = data_dir / "ohlc"
     return {"root_dir": str(default_root), "backend": "parquet"}
-
 
 def get_default_starter_strategies_config() -> Dict[str, Any]:
     """Return a conservative non-ML starter strategy block for first run."""
@@ -135,7 +130,6 @@ def get_default_starter_strategies_config() -> Dict[str, Any]:
         "configs": configs,
     }
 
-
 def get_default_starter_risk_config() -> Dict[str, Any]:
     """Return explicit first-run risk defaults for the starter pack."""
 
@@ -152,7 +146,6 @@ def get_default_starter_risk_config() -> Dict[str, Any]:
         "min_liquidity_24h_usd": 100000.0,
     }
 
-
 def _has_nonempty_strategy_config(config_data: dict[str, Any]) -> bool:
     strategies = config_data.get("strategies")
     if not isinstance(strategies, dict):
@@ -168,7 +161,6 @@ def _has_nonempty_strategy_config(config_data: dict[str, Any]) -> bool:
 
     return False
 
-
 def _load_yaml_mapping(path: Path) -> dict:
     """
     Helper to load a YAML file as a dict.
@@ -183,7 +175,6 @@ def _load_yaml_mapping(path: Path) -> dict:
     if not isinstance(data, dict):
         return {}
     return data
-
 
 def _strategy_types_from_config(config_data: dict[str, Any]) -> set[str]:
     strategies = config_data.get("strategies")
@@ -202,7 +193,6 @@ def _strategy_types_from_config(config_data: dict[str, Any]) -> set[str]:
                 strategy_types.add(strategy_type)
     return strategy_types
 
-
 def _uses_ml_strategies(*config_layers: dict[str, Any]) -> bool:
     for config_layer in config_layers:
         for strategy_type in _strategy_types_from_config(config_layer):
@@ -210,13 +200,11 @@ def _uses_ml_strategies(*config_layers: dict[str, Any]) -> bool:
                 return True
     return False
 
-
 def _is_legacy_ws_timeframes(value: Any) -> bool:
     if not isinstance(value, list):
         return False
     normalized = [str(item) for item in value]
     return normalized == ["1m", "5m"]
-
 
 def _is_empty_strategy_override(value: Any) -> bool:
     if not isinstance(value, dict):
@@ -224,7 +212,6 @@ def _is_empty_strategy_override(value: Any) -> bool:
     enabled = value.get("enabled")
     configs = value.get("configs")
     return isinstance(enabled, list) and len(enabled) == 0 and isinstance(configs, dict)
-
 
 def _is_bootstrap_risk_override(value: Any) -> bool:
     if not isinstance(value, dict):
@@ -248,7 +235,6 @@ def _is_bootstrap_risk_override(value: Any) -> bool:
     }
     return value == expected
 
-
 def normalize_bootstrap_residue(
     main_config: dict[str, Any],
     profile_config: Optional[dict[str, Any]] = None,
@@ -271,6 +257,30 @@ def normalize_bootstrap_residue(
         normalized_main = dict(normalized_main)
         normalized_main["ml"] = dict(normalized_main["ml"])
         normalized_main["ml"]["enabled"] = False
+        changed = True
+
+    if (
+        isinstance(normalized_profile.get("ml"), dict)
+        and normalized_profile["ml"].get("enabled") is True
+        and not _uses_ml_strategies(normalized_main, normalized_profile, normalized_overrides)
+        and not _has_nonempty_strategy_config(normalized_main)
+        and not _has_nonempty_strategy_config(normalized_profile)
+    ):
+        normalized_profile = dict(normalized_profile)
+        normalized_profile["ml"] = dict(normalized_profile["ml"])
+        normalized_profile["ml"]["enabled"] = False
+        changed = True
+
+    if (
+        isinstance(normalized_profile.get("ml"), dict)
+        and normalized_profile["ml"].get("enabled") is True
+        and not _uses_ml_strategies(normalized_main, normalized_profile, normalized_overrides)
+        and not _has_nonempty_strategy_config(normalized_main)
+        and not _has_nonempty_strategy_config(normalized_profile)
+    ):
+        normalized_profile = dict(normalized_profile)
+        normalized_profile["ml"] = dict(normalized_profile["ml"])
+        normalized_profile["ml"]["enabled"] = False
         changed = True
 
     if (
@@ -318,7 +328,6 @@ def normalize_bootstrap_residue(
         changed = True
 
     return normalized_main, normalized_profile, normalized_overrides, changed
-
 
 def cleanup_active_config_chain(
     config_dir: Optional[Path] = None,
@@ -382,7 +391,6 @@ def cleanup_active_config_chain(
 
     return writes
 
-
 def _coerce_strategy_weight(
     value: Any, strategy_id: str, config_path: Path
 ) -> int:
@@ -421,7 +429,6 @@ def _coerce_strategy_weight(
     )
     return min(max(weight, 1), 100)
 
-
 def _resolve_effective_env(
     env: Optional[str], config_path: Optional[str] = None
 ) -> str:
@@ -444,14 +451,12 @@ def _resolve_effective_env(
         return "paper"
     return initial_env
 
-
 def _load_runtime_overrides(config_dir: Path) -> dict:
     path = config_dir / RUNTIME_OVERRIDES_FILENAME
     try:
         return _load_yaml_mapping(path)
     except Exception:
         raise
-
 
 def dump_runtime_overrides(
     config: AppConfig,
@@ -555,7 +560,6 @@ def dump_runtime_overrides(
             except Exception:
                 pass
 
-
 def write_initial_config(config_data: dict, config_dir: Path | None = None) -> None:
     """
     Writes the initial configuration file to disk.
@@ -588,7 +592,6 @@ def write_initial_config(config_data: dict, config_dir: Path | None = None) -> N
                 tmp_path.unlink()
             except Exception:
                 pass
-
 
 def ensure_starter_profile(
     config: AppConfig,
@@ -658,7 +661,6 @@ def ensure_starter_profile(
     )
     return True
 
-
 def _validate_config_int(
     value: Any, default: int, field_name: str, config_path: Path, min_value: int = 1
 ) -> int:
@@ -700,7 +702,6 @@ def _validate_config_int(
         return _warn_invalid(parsed)
 
     return _warn_invalid(value)
-
 
 def _parse_ui_config(
     ui_data: Dict[str, Any],
@@ -825,7 +826,6 @@ def _parse_ui_config(
             )
 
     return ui_config
-
 
 def parse_app_config(
     raw_config: Dict[str, Any],
@@ -1505,7 +1505,6 @@ def parse_app_config(
         session=session_config,
         ml=ml_config,
     )
-
 
 def load_config(
     config_path: Optional[Path] = None, env: Optional[str] = None
