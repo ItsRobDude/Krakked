@@ -644,9 +644,11 @@ def _build_cockpit_market_data_payload(
     if health is None:
         return None
 
-    stale_pairs = _split_market_data_detail(health.market_data_detail)
-    if not stale_pairs and health.market_data_stale and health.market_data_reason:
-        stale_pairs = [health.market_data_reason]
+    stale_pairs: list[str] = []
+    if health.market_data_stale:
+        stale_pairs = _split_market_data_detail(health.market_data_detail)
+        if not stale_pairs and health.market_data_reason:
+            stale_pairs = [health.market_data_reason]
 
     session_pairs: set[str] = set()
     watchlist_pairs: set[str] = set()

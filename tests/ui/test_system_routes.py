@@ -622,6 +622,38 @@ def test_cockpit_market_data_marks_active_strategy_stale_pair_session_critical(
     assert data["market_data"]["session_stale_pairs"] == ["BTC/USD"]
 
 
+def test_cockpit_market_data_ignores_healthy_streaming_detail(
+    client, system_context
+):
+    system_context.market_data.get_cached_data_status.return_value = SimpleNamespace(
+        rest_api_reachable=True,
+        websocket_connected=True,
+        streaming_pairs=4,
+        stale_pairs=0,
+        subscription_errors=0,
+    )
+    system_context.market_data.get_cached_health_status.return_value = MarketDataStatus(
+        health="streaming",
+        reason="streaming",
+        detail="4 pairs streaming",
+        stale_pairs=[],
+    )
+    system_context.strategy_engine.get_cached_strategy_state.return_value = [
+        _strategy_state("dca_overlay", enabled=True, pairs=["BTC/USD", "ETH/USD"]),
+        _strategy_state("rs_rotation", enabled=False, pairs=["ADA/USD"]),
+    ]
+
+    response = client.get("/api/system/cockpit")
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["health"]["market_data_ok"] is True
+    assert data["market_data"]["classification"] == "healthy"
+    assert data["market_data"]["session_critical"] is False
+    assert data["market_data"]["stale_pairs"] == []
+    assert data["market_data"]["message"] is None
+
+
 def test_cockpit_snapshot_isolates_section_failures(client, system_context):
     system_context.portfolio.get_strategy_performance.side_effect = RuntimeError(
         "performance cache busy at C:\\secret\\portfolio.db"
