@@ -274,3 +274,4 @@ strategies:
     assert app_config.strategies.enabled == DEFAULT_STARTER_STRATEGY_IDS
     assert app_config.risk.max_open_positions == 4
     assert app_config.risk.max_per_strategy_pct["trend_core"] == 5.0
+    assert "manual" not in app_config.risk.max_per_strategy_pct

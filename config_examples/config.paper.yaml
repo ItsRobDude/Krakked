@@ -26,4 +26,3 @@ risk:
     vol_breakout: 5.0
     majors_mean_rev: 5.0
     rs_rotation: 5.0
-    manual: 20.0

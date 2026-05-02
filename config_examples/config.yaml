@@ -73,7 +73,6 @@ risk:
     vol_breakout: 5.0
     majors_mean_rev: 5.0
     rs_rotation: 5.0
-    manual: 20.0
   max_daily_drawdown_pct: 10.0
   kill_switch_on_drift: true
   include_manual_positions: true

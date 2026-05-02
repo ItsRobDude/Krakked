@@ -204,6 +204,7 @@ To run the implemented Phase 4 features, set these keys in `config.yaml`:
 
 *   **Strategy scheduling**: Provide `strategies.enabled` plus per-strategy `timeframes` (or `timeframe`) arrays to run multi-timeframe cycles. 【F:src/krakked/strategy/engine.py†L80-L119】
 *   **Per-strategy caps**: Configure `risk.max_per_strategy_pct` to clamp exposure across strategies and `strategies.configs.<name>.userref` if you need consistent attribution. 【F:src/krakked/config.py†L48-L72】【F:src/krakked/strategy/risk.py†L263-L349】
+*   **Manual exposure**: Manual positions are tracked as a separate risk attribution bucket through `risk.include_manual_positions`; do not add `manual` to `risk.max_per_strategy_pct`.
 *   **Portfolio caps**: Use `risk.max_portfolio_risk_pct`, `risk.max_open_positions`, and `risk.max_per_asset_pct` to enforce total exposure limits. 【F:src/krakked/config.py†L40-L72】【F:src/krakked/strategy/risk.py†L263-L349】
 *   **Liquidity gating**: Set `risk.min_liquidity_24h_usd` to block new exposure when recent volume is too low. 【F:src/krakked/config.py†L60-L72】【F:src/krakked/strategy/risk.py†L203-L249】
 *   **Staleness handling**: Market data staleness and connection checks are enforced before intent generation; strategies surface `DataStaleError` to skip a timeframe when needed. 【F:src/krakked/strategy/engine.py†L33-L120】

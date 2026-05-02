@@ -49,6 +49,7 @@ DEFAULT_STARTER_STRATEGY_LIMITS: Dict[str, float] = {
     "majors_mean_rev": 5.0,
     "rs_rotation": 5.0,
 }
+RESERVED_RISK_STRATEGY_LIMIT_KEYS = {"manual"}
 
 logger = logging.getLogger(__name__)
 
@@ -1105,6 +1106,17 @@ def parse_app_config(
 
     normalized_limits: Dict[str, float] = {}
     for strategy_id, pct_limit in raw_strategy_limits.items():
+        if strategy_id in RESERVED_RISK_STRATEGY_LIMIT_KEYS:
+            logger.info(
+                "Ignoring reserved risk limit key %s",
+                strategy_id,
+                extra={
+                    "event": "config_reserved_strategy_limit_ignored",
+                    "config_path": str(config_path),
+                    "strategy_id": strategy_id,
+                },
+            )
+            continue
         if strategy_id not in strategy_configs:
             logger.warning(
                 "Risk limit references unknown strategy %s; skipping",

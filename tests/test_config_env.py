@@ -325,3 +325,86 @@ risk:
     app_config = load_config()
 
     assert app_config.risk.max_per_strategy_pct["alpha"] == pytest.approx(0.5)
+
+
+def test_manual_strategy_limit_is_ignored_without_warning(
+    monkeypatch, tmp_path: Path, caplog
+):
+    config_dir = tmp_path / "config"
+    data_dir = tmp_path / "data"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    config_path = config_dir / "config.yaml"
+    config_path.write_text(
+        """
+strategies:
+  enabled: ["alpha"]
+  configs:
+    alpha:
+      type: momentum
+      enabled: true
+risk:
+  include_manual_positions: true
+  max_per_strategy_pct:
+    alpha: 10.0
+    manual: 20.0
+""".strip()
+    )
+
+    monkeypatch.setattr(appdirs, "user_config_dir", lambda appname: config_dir)
+    monkeypatch.setattr(appdirs, "user_data_dir", lambda appname: data_dir)
+    monkeypatch.setenv("KRAKKED_ENV", "paper")
+
+    with caplog.at_level("INFO"):
+        app_config = load_config()
+
+    assert app_config.risk.include_manual_positions is True
+    assert app_config.risk.max_per_strategy_pct == {"alpha": 10.0}
+    assert not any(
+        getattr(record, "event", None) == "config_unknown_strategy_limit"
+        and getattr(record, "strategy_id", None) == "manual"
+        for record in caplog.records
+    )
+    assert any(
+        getattr(record, "event", None) == "config_reserved_strategy_limit_ignored"
+        and getattr(record, "strategy_id", None) == "manual"
+        for record in caplog.records
+    )
+
+
+def test_unknown_strategy_limit_still_warns(monkeypatch, tmp_path: Path, caplog):
+    config_dir = tmp_path / "config"
+    data_dir = tmp_path / "data"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    config_path = config_dir / "config.yaml"
+    config_path.write_text(
+        """
+strategies:
+  enabled: ["alpha"]
+  configs:
+    alpha:
+      type: momentum
+      enabled: true
+risk:
+  max_per_strategy_pct:
+    alpha: 10.0
+    typo_strategy: 20.0
+""".strip()
+    )
+
+    monkeypatch.setattr(appdirs, "user_config_dir", lambda appname: config_dir)
+    monkeypatch.setattr(appdirs, "user_data_dir", lambda appname: data_dir)
+    monkeypatch.setenv("KRAKKED_ENV", "paper")
+
+    with caplog.at_level("WARNING"):
+        app_config = load_config()
+
+    assert app_config.risk.max_per_strategy_pct == {"alpha": 10.0}
+    assert any(
+        getattr(record, "event", None) == "config_unknown_strategy_limit"
+        and getattr(record, "strategy_id", None) == "typo_strategy"
+        for record in caplog.records
+    )
