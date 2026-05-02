@@ -277,6 +277,32 @@ def normalize_bootstrap_residue(
         isinstance(normalized_profile.get("ml"), dict)
         and normalized_profile["ml"].get("enabled") is True
         and not _uses_ml_strategies(normalized_main, normalized_profile, normalized_overrides)
+        and not _has_nonempty_strategy_config(normalized_main)
+        and not _has_nonempty_strategy_config(normalized_profile)
+    ):
+        normalized_profile = dict(normalized_profile)
+        normalized_profile["ml"] = dict(normalized_profile["ml"])
+        normalized_profile["ml"]["enabled"] = False
+        changed = True
+
+    if (
+        isinstance(normalized_profile.get("ml"), dict)
+        and normalized_profile["ml"].get("enabled") is True
+        and not _uses_ml_strategies(normalized_main, normalized_profile, normalized_overrides)
+        and not _has_nonempty_strategy_config(normalized_main)
+        and not _has_nonempty_strategy_config(normalized_profile)
+    ):
+        normalized_profile = dict(normalized_profile)
+        normalized_profile["ml"] = dict(normalized_profile["ml"])
+        normalized_profile["ml"]["enabled"] = False
+        changed = True
+
+
+
+    if (
+        isinstance(normalized_profile.get("ml"), dict)
+        and normalized_profile["ml"].get("enabled") is True
+        and not _uses_ml_strategies(normalized_main, normalized_profile, normalized_overrides)
         and not _has_nonempty_strategy_config(normalized_profile)
     ):
         normalized_profile = dict(normalized_profile)

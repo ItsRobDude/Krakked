@@ -249,7 +249,7 @@ strategies:
     second = cleanup_active_config_chain(config_dir)
     app_config = load_config()
 
-    assert first == {"changed": True, "main": True, "profile": True, "runtime": True}
+    assert first == {"changed": True, "main": True, "profile": False, "runtime": True}
     assert second == {
         "changed": False,
         "main": False,
@@ -261,7 +261,7 @@ strategies:
     cleaned_profile = (config_dir / "profiles" / "Rob.yaml").read_text()
     assert cleaned_main.ml.enabled is False
     assert cleaned_main.market_data.ws_timeframes == DEFAULT_STARTER_WS_TIMEFRAMES
-    assert "enabled: true" not in cleaned_profile
+    assert "enabled: true" in cleaned_profile
 
     runtime_path = profile_runtime_dir / "config.runtime.yaml"
     runtime_text = runtime_path.read_text()

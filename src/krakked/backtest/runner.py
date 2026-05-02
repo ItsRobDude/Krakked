@@ -599,10 +599,10 @@ def _fallback_preflight(market_data: Any) -> BacktestPreflight:
     usable_series_count = 0 if missing_series else 1
     return _assess_preflight(
         BacktestPreflight(
-        coverage=[],
-        usable_series_count=usable_series_count,
-        missing_series=missing_series,
-        partial_series=[],
+            coverage=[],
+            usable_series_count=usable_series_count,
+            missing_series=missing_series,
+            partial_series=[],
         )
     )
 
