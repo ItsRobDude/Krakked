@@ -67,7 +67,10 @@ from krakked.ui.models import (
     CockpitRiskPayload,
     CockpitSnapshotPayload,
     CockpitStrategiesPayload,
+    ExecutionResultPayload,
     ExposureBreakdown,
+    LiveReadinessCheckPayload,
+    LiveReadinessPayload,
     PortfolioSummary,
     PositionPayload,
     ReplayLatestPayload,
@@ -708,6 +711,367 @@ def _build_cockpit_market_data_payload(
     )
 
 
+def _live_readiness_check(
+    check_id: str,
+    label: str,
+    status: Literal["passed", "warning", "blocked"],
+    message: str,
+) -> LiveReadinessCheckPayload:
+    return LiveReadinessCheckPayload(
+        id=check_id,
+        label=label,
+        status=status,
+        message=message,
+    )
+
+
+def _sort_readiness_checks(
+    checks: list[LiveReadinessCheckPayload],
+) -> tuple[
+    list[LiveReadinessCheckPayload],
+    list[LiveReadinessCheckPayload],
+    list[LiveReadinessCheckPayload],
+]:
+    blockers = [check for check in checks if check.status == "blocked"]
+    warnings = [check for check in checks if check.status == "warning"]
+    passed = [check for check in checks if check.status == "passed"]
+    return blockers, warnings, passed
+
+
+def _has_recent_activity(
+    recent_executions: list[ExecutionResultPayload] | None,
+    risk_decisions: list[RiskDecisionPayload] | None,
+) -> bool:
+    return bool(recent_executions) or bool(risk_decisions)
+
+
+def _enabled_strategy_states(
+    strategies: list[StrategyStatePayload] | None,
+) -> list[StrategyStatePayload]:
+    return [strategy for strategy in strategies or [] if strategy.enabled]
+
+
+def _build_live_readiness_payload(
+    ctx,
+    *,
+    health: SystemHealthPayload | None = None,
+    session: SessionStatePayload | None = None,
+    risk_status: RiskStatusPayload | None = None,
+    risk_config: RiskConfigPayload | None = None,
+    strategies: list[StrategyStatePayload] | None = None,
+    recent_executions: list[ExecutionResultPayload] | None = None,
+    risk_decisions: list[RiskDecisionPayload] | None = None,
+    replay: ReplayLatestPayload | None = None,
+    market_data: CockpitMarketDataPayload | None = None,
+) -> LiveReadinessPayload:
+    execution_config = ctx.config.execution
+    checks: list[LiveReadinessCheckPayload] = []
+
+    if execution_config.mode != "live":
+        checks.append(
+            _live_readiness_check(
+                "live_gates",
+                "Live submission gates",
+                "blocked",
+                "Live submission gates are closed because this session is in paper mode. This is expected for normal paper trading.",
+            )
+        )
+    elif execution_config.validate_only:
+        checks.append(
+            _live_readiness_check(
+                "live_gates",
+                "Live submission gates",
+                "blocked",
+                "Validate-only execution is enabled, so live orders cannot be submitted.",
+            )
+        )
+    elif not getattr(execution_config, "allow_live_trading", False):
+        checks.append(
+            _live_readiness_check(
+                "live_gates",
+                "Live submission gates",
+                "blocked",
+                "Live trading has not been explicitly enabled through the protected mode switch.",
+            )
+        )
+    elif not getattr(execution_config, "paper_tests_completed", False):
+        checks.append(
+            _live_readiness_check(
+                "live_gates",
+                "Live submission gates",
+                "blocked",
+                "Paper-trading validation has not been certified for this deployment.",
+            )
+        )
+    else:
+        checks.append(
+            _live_readiness_check(
+                "live_gates",
+                "Live submission gates",
+                "passed",
+                "Live submission gates are open in configuration.",
+            )
+        )
+
+    if session and session.active:
+        checks.append(
+            _live_readiness_check(
+                "active_session",
+                "Active session",
+                "passed",
+                f"An active {session.mode} session is running.",
+            )
+        )
+    else:
+        checks.append(
+            _live_readiness_check(
+                "active_session",
+                "Active session",
+                "blocked",
+                "No active session is running. Start and observe a paper session before treating live readiness as meaningful.",
+            )
+        )
+
+    if health is None:
+        checks.append(
+            _live_readiness_check(
+                "system_health",
+                "System health",
+                "blocked",
+                "System health is unavailable.",
+            )
+        )
+    else:
+        checks.append(
+            _live_readiness_check(
+                "portfolio_sync",
+                "Portfolio sync",
+                "passed" if health.portfolio_sync_ok else "blocked",
+                (
+                    "Portfolio sync is healthy."
+                    if health.portfolio_sync_ok
+                    else health.portfolio_sync_reason
+                    or "Portfolio sync is degraded."
+                ),
+            )
+        )
+        checks.append(
+            _live_readiness_check(
+                "drift_monitor",
+                "Drift monitor",
+                "blocked" if health.drift_detected else "passed",
+                (
+                    health.drift_reason or "Portfolio drift is detected."
+                    if health.drift_detected
+                    else "No portfolio drift is currently reported."
+                ),
+            )
+        )
+
+    if market_data and market_data.session_critical:
+        checks.append(
+            _live_readiness_check(
+                "market_data",
+                "Market data",
+                "blocked",
+                market_data.message or "Session-critical market data is degraded.",
+            )
+        )
+    elif market_data and market_data.classification in {"watchlist_only", "global_only"}:
+        checks.append(
+            _live_readiness_check(
+                "market_data",
+                "Market data",
+                "warning",
+                market_data.message or "Non-active market data is stale.",
+            )
+        )
+    elif health and health.market_data_ok:
+        checks.append(
+            _live_readiness_check(
+                "market_data",
+                "Market data",
+                "passed",
+                "Session market data is healthy.",
+            )
+        )
+    else:
+        checks.append(
+            _live_readiness_check(
+                "market_data",
+                "Market data",
+                "blocked",
+                "Market data is unavailable or not yet fresh enough for live readiness.",
+            )
+        )
+
+    kill_switch_active = (
+        risk_status.kill_switch_active
+        if risk_status is not None
+        else (health.kill_switch_active if health is not None else None)
+    )
+    if kill_switch_active is None:
+        checks.append(
+            _live_readiness_check(
+                "kill_switch",
+                "Trading permission",
+                "blocked",
+                "Trading permission state is unavailable.",
+            )
+        )
+    else:
+        checks.append(
+            _live_readiness_check(
+                "kill_switch",
+                "Trading permission",
+                "blocked" if kill_switch_active else "passed",
+                (
+                    "Trading is paused by the kill switch."
+                    if kill_switch_active
+                    else "Trading is not paused by the kill switch."
+                ),
+            )
+        )
+
+    enabled_strategies = _enabled_strategy_states(strategies)
+    if not enabled_strategies:
+        checks.append(
+            _live_readiness_check(
+                "enabled_strategies",
+                "Enabled strategies",
+                "blocked",
+                "No strategies are enabled for the active configuration.",
+            )
+        )
+    else:
+        checks.append(
+            _live_readiness_check(
+                "enabled_strategies",
+                "Enabled strategies",
+                "passed",
+                f"{len(enabled_strategies)} strategy{'ies' if len(enabled_strategies) != 1 else ''} enabled.",
+            )
+        )
+
+    if risk_config is None:
+        checks.append(
+            _live_readiness_check(
+                "strategy_risk_caps",
+                "Strategy risk caps",
+                "blocked",
+                "Risk configuration is unavailable.",
+            )
+        )
+    else:
+        missing_caps = [
+            strategy.strategy_id
+            for strategy in enabled_strategies
+            if strategy.strategy_id not in risk_config.max_per_strategy_pct
+            or risk_config.max_per_strategy_pct.get(strategy.strategy_id, 0) <= 0
+        ]
+        if missing_caps:
+            checks.append(
+                _live_readiness_check(
+                    "strategy_risk_caps",
+                    "Strategy risk caps",
+                    "blocked",
+                    f"Enabled strategies missing explicit risk caps: {', '.join(sorted(missing_caps))}.",
+                )
+            )
+        else:
+            checks.append(
+                _live_readiness_check(
+                    "strategy_risk_caps",
+                    "Strategy risk caps",
+                    "passed",
+                    "Enabled strategies have explicit risk caps.",
+                )
+            )
+
+    missing_heartbeats = [
+        strategy.strategy_id
+        for strategy in enabled_strategies
+        if not (
+            strategy.last_evaluated_at
+            or strategy.last_intents_at
+            or strategy.last_actions_at
+        )
+    ]
+    if missing_heartbeats:
+        checks.append(
+            _live_readiness_check(
+                "strategy_heartbeat",
+                "Strategy heartbeat",
+                "warning",
+                f"Enabled strategies have not evaluated yet: {', '.join(sorted(missing_heartbeats))}.",
+            )
+        )
+    elif enabled_strategies:
+        checks.append(
+            _live_readiness_check(
+                "strategy_heartbeat",
+                "Strategy heartbeat",
+                "passed",
+                "Enabled strategies have recent evaluation state.",
+            )
+        )
+
+    if replay and replay.available:
+        checks.append(
+            _live_readiness_check(
+                "latest_replay",
+                "Latest replay",
+                "passed",
+                "A latest replay report is published.",
+            )
+        )
+    else:
+        checks.append(
+            _live_readiness_check(
+                "latest_replay",
+                "Latest replay",
+                "warning",
+                "No latest replay report is published.",
+            )
+        )
+
+    if _has_recent_activity(recent_executions, risk_decisions):
+        checks.append(
+            _live_readiness_check(
+                "recent_activity",
+                "Recent proof",
+                "passed",
+                "Recent execution or risk-decision proof is available.",
+            )
+        )
+    else:
+        checks.append(
+            _live_readiness_check(
+                "recent_activity",
+                "Recent proof",
+                "warning",
+                "No recent execution or risk-decision proof is available yet.",
+            )
+        )
+
+    blockers, warnings, passed = _sort_readiness_checks(checks)
+    status: Literal["blocked", "warning", "ready"]
+    if blockers:
+        status = "blocked"
+    elif warnings:
+        status = "warning"
+    else:
+        status = "ready"
+
+    return LiveReadinessPayload(
+        status=status,
+        generated_at=datetime.now(timezone.utc),
+        blockers=blockers,
+        warnings=warnings,
+        passed=passed,
+    )
+
+
 _COCKPIT_SECTION_ERROR_MESSAGES = {
     "health": "System health unavailable",
     "session": "Session state unavailable",
@@ -722,6 +1086,7 @@ _COCKPIT_SECTION_ERROR_MESSAGES = {
     "activity.risk_decisions": "Risk decisions unavailable",
     "replay.latest": "Latest replay unavailable",
     "market_data.scope": "Market data scope unavailable",
+    "live_readiness": "Live readiness unavailable",
 }
 
 
@@ -1459,6 +1824,22 @@ async def cockpit_snapshot(request: Request) -> ApiEnvelope[CockpitSnapshotPaylo
                 positions,
             ),
         )
+        live_readiness = _read_section(
+            section_errors,
+            "live_readiness",
+            lambda: _build_live_readiness_payload(
+                ctx,
+                health=health,
+                session=session,
+                risk_status=risk_status,
+                risk_config=risk_config,
+                strategies=strategies,
+                recent_executions=recent_executions,
+                risk_decisions=risk_decisions,
+                replay=replay,
+                market_data=market_data,
+            ),
+        )
 
         payload = CockpitSnapshotPayload(
             generated_at=datetime.now(timezone.utc),
@@ -1480,6 +1861,7 @@ async def cockpit_snapshot(request: Request) -> ApiEnvelope[CockpitSnapshotPaylo
             ),
             replay=replay,
             market_data=market_data,
+            live_readiness=live_readiness,
             section_errors=section_errors,
         )
         return ApiEnvelope(data=payload, error=None)
@@ -1487,6 +1869,76 @@ async def cockpit_snapshot(request: Request) -> ApiEnvelope[CockpitSnapshotPaylo
         logger.exception(
             "Failed to build cockpit snapshot",
             extra=build_request_log_extra(request, event="cockpit_snapshot_failed"),
+        )
+        return ApiEnvelope(data=None, error=str(exc))
+
+
+@router.get("/live-readiness", response_model=ApiEnvelope[LiveReadinessPayload])
+async def live_readiness(request: Request) -> ApiEnvelope[LiveReadinessPayload]:
+    """Return a read-only preflight summary for live trading readiness."""
+
+    try:
+        ctx = _context(request)
+        section_errors: dict[str, str] = {}
+        health = _read_section(
+            section_errors, "health", lambda: _build_system_health_payload(ctx)
+        )
+        session = _read_section(
+            section_errors, "session", lambda: _session_payload(ctx)
+        )
+        positions = _read_section(
+            section_errors, "portfolio.positions", lambda: _build_positions_payload(ctx)
+        )
+        risk_status = _read_section(
+            section_errors, "risk.status", lambda: _build_risk_status_payload(ctx)
+        )
+        risk_config = _read_section(
+            section_errors, "risk.config", lambda: _build_risk_config_payload(ctx)
+        )
+        strategies = _read_section(
+            section_errors,
+            "strategies.state",
+            lambda: _build_strategy_state_payload(ctx),
+        )
+        recent_executions = _read_section(
+            section_errors,
+            "activity.recent_executions",
+            lambda: _build_recent_executions_payload(ctx),
+        )
+        risk_decisions = _read_section(
+            section_errors,
+            "activity.risk_decisions",
+            lambda: _build_risk_decisions_payload(ctx),
+        )
+        replay = _read_section(
+            section_errors, "replay.latest", _build_latest_replay_payload
+        )
+        market_data = _read_section(
+            section_errors,
+            "market_data.scope",
+            lambda: _build_cockpit_market_data_payload(
+                health,
+                strategies,
+                positions,
+            ),
+        )
+        payload = _build_live_readiness_payload(
+            ctx,
+            health=health,
+            session=session,
+            risk_status=risk_status,
+            risk_config=risk_config,
+            strategies=strategies,
+            recent_executions=recent_executions,
+            risk_decisions=risk_decisions,
+            replay=replay,
+            market_data=market_data,
+        )
+        return ApiEnvelope(data=payload, error=None)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.exception(
+            "Failed to build live readiness",
+            extra=build_request_log_extra(request, event="live_readiness_failed"),
         )
         return ApiEnvelope(data=None, error=str(exc))
 

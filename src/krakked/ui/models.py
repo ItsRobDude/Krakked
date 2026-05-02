@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Dict, Generic, List, Optional, TypeVar
+from typing import Any, Dict, Generic, List, Literal, Optional, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -380,6 +380,21 @@ class CockpitMarketDataPayload(BaseModel):
     message: Optional[str] = None
 
 
+class LiveReadinessCheckPayload(BaseModel):
+    id: str
+    label: str
+    status: Literal["passed", "warning", "blocked"]
+    message: str
+
+
+class LiveReadinessPayload(BaseModel):
+    status: Literal["blocked", "warning", "ready"]
+    generated_at: datetime
+    blockers: List[LiveReadinessCheckPayload] = Field(default_factory=list)
+    warnings: List[LiveReadinessCheckPayload] = Field(default_factory=list)
+    passed: List[LiveReadinessCheckPayload] = Field(default_factory=list)
+
+
 class CockpitSnapshotPayload(BaseModel):
     schema_version: str = "cockpit.v1"
     generated_at: datetime
@@ -391,4 +406,5 @@ class CockpitSnapshotPayload(BaseModel):
     activity: Optional[CockpitActivityPayload] = None
     replay: Optional[ReplayLatestPayload] = None
     market_data: Optional[CockpitMarketDataPayload] = None
+    live_readiness: Optional[LiveReadinessPayload] = None
     section_errors: Dict[str, str] = Field(default_factory=dict)

@@ -198,6 +198,23 @@ export type CockpitMarketDataSnapshot = {
   message: string | null;
 };
 
+export type LiveReadinessStatus = 'blocked' | 'warning' | 'ready';
+
+export type LiveReadinessCheck = {
+  id: string;
+  label: string;
+  status: 'passed' | 'warning' | 'blocked';
+  message: string;
+};
+
+export type LiveReadinessPayload = {
+  status: LiveReadinessStatus;
+  generated_at: string;
+  blockers: LiveReadinessCheck[];
+  warnings: LiveReadinessCheck[];
+  passed: LiveReadinessCheck[];
+};
+
 export type CockpitSnapshot = {
   schema_version: string;
   generated_at: string;
@@ -209,6 +226,7 @@ export type CockpitSnapshot = {
   activity: CockpitActivitySnapshot | null;
   replay: ReplayLatestSummary | null;
   market_data: CockpitMarketDataSnapshot | null;
+  live_readiness?: LiveReadinessPayload | null;
   section_errors: Record<string, string>;
 };
 
@@ -423,6 +441,10 @@ export async function fetchLatestReplay(options: ApiRequestOptions = {}): Promis
 
 export async function fetchCockpitSnapshot(options: ApiRequestOptions = {}): Promise<CockpitSnapshot | null> {
   return fetchJson<CockpitSnapshot>('/system/cockpit', options);
+}
+
+export async function fetchLiveReadiness(options: ApiRequestOptions = {}): Promise<LiveReadinessPayload | null> {
+  return fetchJson<LiveReadinessPayload>('/system/live-readiness', options);
 }
 
 export async function fetchSessionState(options: ApiRequestOptions = {}): Promise<SessionStateResponse | null> {

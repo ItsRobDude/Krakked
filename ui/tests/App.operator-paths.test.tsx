@@ -265,6 +265,34 @@ const buildCockpit = (overrides: Partial<CockpitSnapshot> = {}): CockpitSnapshot
     session_critical: false,
     message: null,
   },
+  live_readiness: {
+    status: 'blocked',
+    generated_at: '2026-05-02T03:01:00Z',
+    blockers: [
+      {
+        id: 'live_gates',
+        label: 'Live submission gates',
+        status: 'blocked',
+        message: 'Live submission gates are closed because this session is in paper mode. This is expected for normal paper trading.',
+      },
+    ],
+    warnings: [
+      {
+        id: 'latest_replay',
+        label: 'Latest replay',
+        status: 'warning',
+        message: 'No latest replay report is published.',
+      },
+    ],
+    passed: [
+      {
+        id: 'market_data',
+        label: 'Market data',
+        status: 'passed',
+        message: 'Session market data is healthy.',
+      },
+    ],
+  },
   section_errors: {},
   ...overrides,
 });
@@ -399,5 +427,81 @@ describe('cockpit operator paths', () => {
     expect(
       screen.getByText('BTC/USD: Max per asset limit (718.36 > 500.77)'),
     ).toBeInTheDocument();
+  });
+
+  test('renders live readiness from the cockpit snapshot without mutation actions', async () => {
+    const user = userEvent.setup();
+
+    await renderActiveCockpit();
+    await user.click(await screen.findByTestId('cockpit-tab-risk'));
+
+    const panel = screen.getByRole('region', { name: 'Live Readiness' });
+    expect(within(panel).getByText('Blocked')).toBeInTheDocument();
+    expect(within(panel).getByText('Live submission gates')).toBeInTheDocument();
+    expect(within(panel).getByText(/expected for normal paper trading/i)).toBeInTheDocument();
+    expect(within(panel).getByText('Latest replay')).toBeInTheDocument();
+
+    expect(apiMocks.setExecutionMode).not.toHaveBeenCalled();
+    expect(apiMocks.startSession).not.toHaveBeenCalled();
+  });
+
+  test('shows warning and ready live-readiness states distinctly', async () => {
+    const user = userEvent.setup();
+
+    const { unmount } = await renderActiveCockpit(buildCockpit({
+      live_readiness: {
+        status: 'warning',
+        generated_at: '2026-05-02T03:01:00Z',
+        blockers: [],
+        warnings: [
+          {
+            id: 'watchlist_data',
+            label: 'Market data',
+            status: 'warning',
+            message: 'Watchlist data stale: ADA/USD.',
+          },
+        ],
+        passed: [
+          {
+            id: 'live_gates',
+            label: 'Live submission gates',
+            status: 'passed',
+            message: 'Live submission gates are open in configuration.',
+          },
+        ],
+      },
+    }));
+    await user.click(await screen.findByTestId('cockpit-tab-risk'));
+
+    expect(screen.getByRole('region', { name: 'Live Readiness' })).toHaveTextContent('Needs review');
+    expect(screen.getByText('Watchlist data stale: ADA/USD.')).toBeInTheDocument();
+
+    unmount();
+    vi.clearAllMocks();
+    apiMocks.fetchProfiles.mockResolvedValue([]);
+    apiMocks.fetchSystemHealth.mockResolvedValue(healthyHealth);
+    apiMocks.fetchSystemConfig.mockResolvedValue(null);
+
+    await renderActiveCockpit(buildCockpit({
+      live_readiness: {
+        status: 'ready',
+        generated_at: '2026-05-02T03:01:00Z',
+        blockers: [],
+        warnings: [],
+        passed: [
+          {
+            id: 'live_gates',
+            label: 'Live submission gates',
+            status: 'passed',
+            message: 'Live submission gates are open in configuration.',
+          },
+        ],
+      },
+    }));
+    await user.click(await screen.findByTestId('cockpit-tab-risk'));
+
+    expect(screen.getByRole('region', { name: 'Live Readiness' })).toHaveTextContent('Ready');
+    expect(screen.getByText('No blockers reported.')).toBeInTheDocument();
+    expect(screen.getByText('No warnings reported.')).toBeInTheDocument();
   });
 });

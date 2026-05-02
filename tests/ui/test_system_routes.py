@@ -536,6 +536,105 @@ def test_cockpit_snapshot_returns_expected_sections(client, system_context):
     assert data["replay"]["available"] is False
     assert data["market_data"]["classification"] == "healthy"
     assert data["market_data"]["session_critical"] is False
+    assert data["live_readiness"]["status"] == "blocked"
+    assert any(
+        check["id"] == "live_gates" for check in data["live_readiness"]["blockers"]
+    )
+
+
+def test_live_readiness_reports_normal_paper_mode_as_blocked(client, system_context):
+    system_context.session.active = True
+    system_context.session.mode = "paper"
+    system_context.config.execution.mode = "paper"
+    system_context.config.execution.validate_only = False
+    system_context.config.execution.allow_live_trading = False
+    system_context.config.execution.paper_tests_completed = False
+    system_context.config.risk.max_per_strategy_pct = {"dca_overlay": 20.0}
+    system_context.strategy_engine.get_cached_strategy_state.return_value = [
+        _strategy_state(
+            "dca_overlay",
+            enabled=True,
+            pairs=["BTC/USD"],
+            last_evaluated_at=datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc),
+        )
+    ]
+
+    response = client.get("/api/system/live-readiness")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["error"] is None
+    data = payload["data"]
+    assert data["status"] == "blocked"
+    live_gate = next(check for check in data["blockers"] if check["id"] == "live_gates")
+    assert "paper mode" in live_gate["message"]
+    assert "expected" in live_gate["message"]
+
+
+def test_live_readiness_reports_ready_when_all_checks_pass(
+    client, system_context, monkeypatch: pytest.MonkeyPatch
+):
+    import krakked.ui.routes.system as system_routes
+
+    now = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+    system_context.session.active = True
+    system_context.session.mode = "live"
+    system_context.config.execution.mode = "live"
+    system_context.config.execution.validate_only = False
+    system_context.config.execution.allow_live_trading = True
+    system_context.config.execution.paper_tests_completed = True
+    system_context.config.risk.max_per_strategy_pct = {"dca_overlay": 20.0}
+    system_context.strategy_engine.get_cached_strategy_state.return_value = [
+        _strategy_state(
+            "dca_overlay",
+            enabled=True,
+            pairs=["BTC/USD"],
+            last_evaluated_at=now,
+        )
+    ]
+    monkeypatch.setattr(
+        system_routes,
+        "_build_latest_replay_payload",
+        lambda: system_routes.ReplayLatestPayload(available=True),
+    )
+    monkeypatch.setattr(
+        system_routes,
+        "_build_recent_executions_payload",
+        lambda ctx: [
+            system_routes.ExecutionResultPayload(
+                plan_id="plan-ready",
+                started_at=now,
+                completed_at=now,
+                success=True,
+                orders=[],
+                errors=[],
+                warnings=[],
+            )
+        ],
+    )
+
+    response = client.get("/api/system/live-readiness")
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["status"] == "ready"
+    assert data["blockers"] == []
+    assert data["warnings"] == []
+    assert {check["id"] for check in data["passed"]}.issuperset(
+        {
+            "live_gates",
+            "active_session",
+            "market_data",
+            "portfolio_sync",
+            "drift_monitor",
+            "kill_switch",
+            "enabled_strategies",
+            "strategy_risk_caps",
+            "strategy_heartbeat",
+            "latest_replay",
+            "recent_activity",
+        }
+    )
 
 
 def _strategy_state(
@@ -597,6 +696,12 @@ def test_cockpit_market_data_marks_disabled_strategy_stale_pair_watchlist_only(
     assert data["market_data"]["session_critical"] is False
     assert data["market_data"]["watchlist_stale_pairs"] == ["ADA/USD"]
     assert data["market_data"]["session_stale_pairs"] == []
+    readiness_warning = next(
+        check
+        for check in data["live_readiness"]["warnings"]
+        if check["id"] == "market_data"
+    )
+    assert readiness_warning["message"] == "Watchlist data stale: ADA/USD."
     dca_state = next(
         state
         for state in data["strategies"]["state"]
@@ -633,6 +738,44 @@ def test_cockpit_market_data_marks_active_strategy_stale_pair_session_critical(
     assert data["market_data"]["classification"] == "session_critical"
     assert data["market_data"]["session_critical"] is True
     assert data["market_data"]["session_stale_pairs"] == ["BTC/USD"]
+    readiness_blocker = next(
+        check
+        for check in data["live_readiness"]["blockers"]
+        if check["id"] == "market_data"
+    )
+    assert readiness_blocker["message"] == "Session market data stale: BTC/USD."
+
+
+def test_live_readiness_blocks_missing_enabled_strategy_risk_caps(
+    client, system_context
+):
+    system_context.session.active = True
+    system_context.session.mode = "live"
+    system_context.config.execution.mode = "live"
+    system_context.config.execution.validate_only = False
+    system_context.config.execution.allow_live_trading = True
+    system_context.config.execution.paper_tests_completed = True
+    system_context.config.risk.max_per_strategy_pct = {}
+    system_context.strategy_engine.get_cached_strategy_state.return_value = [
+        _strategy_state(
+            "dca_overlay",
+            enabled=True,
+            pairs=["BTC/USD"],
+            last_evaluated_at=datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc),
+        )
+    ]
+
+    response = client.get("/api/system/live-readiness")
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["status"] == "blocked"
+    cap_blocker = next(
+        check for check in data["blockers"] if check["id"] == "strategy_risk_caps"
+    )
+    assert cap_blocker["message"] == (
+        "Enabled strategies missing explicit risk caps: dca_overlay."
+    )
 
 
 def test_cockpit_market_data_ignores_healthy_streaming_detail(
@@ -691,6 +834,25 @@ def test_cockpit_snapshot_isolates_section_failures(client, system_context):
         data["section_errors"]["activity.recent_executions"]
         == "Recent executions unavailable"
     )
+    assert "secret" not in str(data["section_errors"])
+
+
+def test_cockpit_snapshot_isolates_live_readiness_failure(
+    client, system_context, monkeypatch: pytest.MonkeyPatch
+):
+    import krakked.ui.routes.system as system_routes
+
+    def fail_readiness(*args, **kwargs):
+        raise RuntimeError("live readiness failed at C:\\secret\\readiness.db")
+
+    monkeypatch.setattr(system_routes, "_build_live_readiness_payload", fail_readiness)
+
+    response = client.get("/api/system/cockpit")
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["live_readiness"] is None
+    assert data["section_errors"]["live_readiness"] == "Live readiness unavailable"
     assert "secret" not in str(data["section_errors"])
 
 

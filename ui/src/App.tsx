@@ -30,6 +30,7 @@ import {
   RecentExecution,
   RiskDecision,
   CockpitMarketDataSnapshot,
+  LiveReadinessPayload,
   RiskPresetName,
   StrategyRiskProfile,
   StrategyPerformance,
@@ -209,6 +210,20 @@ const getStrategyMomentum = (strategy: StrategyState, performance?: StrategyPerf
 const getStrategyEvaluationAt = (strategy: StrategyState) =>
   strategy.last_evaluated_at || strategy.last_intents_at || strategy.last_actions_at;
 
+const getLiveReadinessLabel = (status: LiveReadinessPayload['status'] | undefined) => {
+  if (status === 'ready') return 'Ready';
+  if (status === 'warning') return 'Needs review';
+  if (status === 'blocked') return 'Blocked';
+  return 'Pending';
+};
+
+const getLiveReadinessPillClass = (status: LiveReadinessPayload['status'] | undefined) => {
+  if (status === 'ready') return 'pill--success';
+  if (status === 'warning') return 'pill--warning';
+  if (status === 'blocked') return 'pill--danger';
+  return 'pill--muted';
+};
+
 const formatStrategyLatestSignal = (
   strategy: StrategyState,
   latestIntent: NonNullable<StrategyState['last_intents']>[number] | undefined,
@@ -358,6 +373,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
   const [connectionState, setConnectionState] = useState<'connected' | 'degraded'>('degraded');
   const [health, setHealth] = useState<SystemHealth | null>(null);
   const [marketDataScope, setMarketDataScope] = useState<CockpitMarketDataSnapshot | null>(null);
+  const [liveReadiness, setLiveReadiness] = useState<LiveReadinessPayload | null>(null);
   const [summary, setSummary] = useState<PortfolioSummary | null>(null);
   const [latestReplay, setLatestReplay] = useState<ReplayLatestSummary | null>(null);
   const [showReplayPanel, setShowReplayPanel] = useState(false);
@@ -530,9 +546,21 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
         const decisions = snapshot.activity?.risk_decisions ?? null;
         const latestReplaySummary = snapshot.replay;
         const marketDataSnapshot = snapshot.market_data ?? null;
+        const liveReadinessSnapshot = snapshot.live_readiness ?? null;
         const dashboardFailures: string[] = [];
 
         setMarketDataScope(marketDataSnapshot);
+        if (liveReadinessSnapshot) {
+          setLiveReadiness(liveReadinessSnapshot);
+          updateRefreshIssue('live-readiness', null);
+        } else {
+          updateRefreshIssue(
+            'live-readiness',
+            sectionErrors.live_readiness
+              ? `Live readiness refresh failed: ${sectionErrors.live_readiness}`
+              : 'Live readiness refresh failed. Showing the last successful preflight where possible.',
+          );
+        }
 
         if (portfolioSummary) {
           setSummary(portfolioSummary);
@@ -722,6 +750,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
     if (!session?.active) {
       setCockpitGeneratedAt(null);
       setMarketDataScope(null);
+      setLiveReadiness(null);
     }
   }, [session?.active]);
 
@@ -2186,6 +2215,62 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
             <h2 className="section-header__title">Risk controls and budgets</h2>
           </div>
         </div>
+        <section className="panel live-readiness-panel" aria-label="Live Readiness">
+          <div className="panel__header">
+            <div>
+              <h2>Live Readiness</h2>
+              <p className="panel__hint">
+                Read-only preflight. It explains whether live submission would be blocked without changing mode or placing orders.
+              </p>
+            </div>
+            <span className={`pill ${getLiveReadinessPillClass(liveReadiness?.status)}`}>
+              {getLiveReadinessLabel(liveReadiness?.status)}
+            </span>
+          </div>
+          {liveReadiness ? (
+            <>
+              <p className="panel__description">
+                Evaluated {formatDateTime(liveReadiness.generated_at)}. {liveReadiness.passed.length} checks passed.
+              </p>
+              <div className="live-readiness-panel__grid">
+                <div className="live-readiness-panel__column">
+                  <h3>Blockers</h3>
+                  {liveReadiness.blockers.length > 0 ? (
+                    <ul className="live-readiness-panel__list">
+                      {liveReadiness.blockers.map((check) => (
+                        <li key={check.id}>
+                          <strong>{check.label}</strong>
+                          <span>{check.message}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="panel__hint">No blockers reported.</p>
+                  )}
+                </div>
+                <div className="live-readiness-panel__column">
+                  <h3>Warnings</h3>
+                  {liveReadiness.warnings.length > 0 ? (
+                    <ul className="live-readiness-panel__list">
+                      {liveReadiness.warnings.map((check) => (
+                        <li key={check.id}>
+                          <strong>{check.label}</strong>
+                          <span>{check.message}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="panel__hint">No warnings reported.</p>
+                  )}
+                </div>
+              </div>
+            </>
+          ) : (
+            <p className="panel__description">
+              Live readiness has not loaded yet. This does not affect the existing paper session controls.
+            </p>
+          )}
+        </section>
         <RiskPanel
           status={risk}
           riskConfig={riskConfig}
