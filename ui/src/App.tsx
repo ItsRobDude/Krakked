@@ -206,6 +206,22 @@ const getStrategyMomentum = (strategy: StrategyState, performance?: StrategyPerf
   return { label: 'Stable', tone: 'info' as const };
 };
 
+const getStrategyEvaluationAt = (strategy: StrategyState) =>
+  strategy.last_evaluated_at || strategy.last_intents_at || strategy.last_actions_at;
+
+const formatStrategyLatestSignal = (
+  strategy: StrategyState,
+  latestIntent: NonNullable<StrategyState['last_intents']>[number] | undefined,
+) => {
+  if (latestIntent) {
+    return `${latestIntent.side} ${latestIntent.pair} (${latestIntent.timeframe})`;
+  }
+  if (getStrategyEvaluationAt(strategy)) {
+    return 'No action chosen';
+  }
+  return strategy.enabled ? 'Awaiting first evaluation' : 'Not running';
+};
+
 const buildKpis = (summary: PortfolioSummary) => {
   const paperWalletBaseline = isPaperWalletBaseline(summary.portfolio_baseline);
 
@@ -1682,6 +1698,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
       label: 'Flatten All Positions',
       tone: 'danger' as const,
       disabled: Boolean(health?.ui_read_only),
+      testId: 'danger-flatten-all',
       onClick: handleFlattenAll,
     },
     {
@@ -1694,6 +1711,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
   const sidebarMenu = COCKPIT_TABS.map((tab) => ({
     label: tab.label,
     active: activeCockpitTab === tab.id,
+    testId: `sidebar-tab-${tab.id}`,
     onClick: () => setActiveCockpitTab(tab.id),
   }));
 
@@ -1794,6 +1812,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
             key={tab.id}
             type="button"
             className={`cockpit-tabs__button${activeCockpitTab === tab.id ? ' cockpit-tabs__button--active' : ''}`}
+            data-testid={`cockpit-tab-${tab.id}`}
             aria-pressed={activeCockpitTab === tab.id}
             onClick={() => setActiveCockpitTab(tab.id)}
           >
@@ -1967,7 +1986,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
                 const latestConflict = strategy.conflict_summary?.[0];
                 const momentum = getStrategyMomentum(strategy, perf);
                 const drawdown = getDrawdownState(perf?.max_drawdown_pct);
-                const freshAt = strategy.last_actions_at || strategy.last_intents_at;
+                const evaluatedAt = getStrategyEvaluationAt(strategy);
                 return (
                   <article key={strategy.strategy_id} className="strategy-scorecard">
                     <div className="strategy-scorecard__header">
@@ -2010,16 +2029,14 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
                         </strong>
                       </div>
                       <div>
-                        <span className="strategy-scorecard__label">Freshness</span>
-                        <strong>{freshAt ? formatTimestamp(freshAt) : 'No signal yet'}</strong>
+                        <span className="strategy-scorecard__label">Last evaluated</span>
+                        <strong>{evaluatedAt ? formatTimestamp(evaluatedAt) : 'Not yet'}</strong>
                       </div>
                     </div>
                     <div className="strategy-scorecard__detail-row">
                       <span className="strategy-scorecard__detail-label">Latest</span>
                       <span>
-                        {latestIntent
-                          ? `${latestIntent.side} ${latestIntent.pair} (${latestIntent.timeframe})`
-                          : 'No recent signal'}
+                        {formatStrategyLatestSignal(strategy, latestIntent)}
                       </span>
                     </div>
                     <div className="strategy-scorecard__detail-row">

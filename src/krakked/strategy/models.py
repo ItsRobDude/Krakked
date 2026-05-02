@@ -92,3 +92,4 @@ class StrategyState:
     params: Dict[str, Any] = field(default_factory=dict)
     configured_weight: int = 100
     effective_weight_pct: Optional[float] = None
+    last_evaluated_at: Optional[datetime] = None

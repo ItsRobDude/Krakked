@@ -79,7 +79,8 @@ def test_engine_cycle():
     assert len(engine.strategies) == 1
 
     # Run Cycle
-    plan = engine.run_cycle(datetime.now(timezone.utc))
+    now = datetime.now(timezone.utc)
+    plan = engine.run_cycle(now)
 
     assert plan is not None
     assert len(plan.actions) == 1
@@ -222,7 +223,8 @@ def test_data_stale_error_skips_timeframe():
         )
     }
 
-    plan = engine.run_cycle(datetime.now(timezone.utc))
+    now = datetime.now(timezone.utc)
+    plan = engine.run_cycle(now)
 
     engine.risk_engine.process_intents.assert_called_once()
     processed_intents = engine.risk_engine.process_intents.call_args[0][0]
@@ -232,9 +234,77 @@ def test_data_stale_error_skips_timeframe():
     assert plan.actions == []
     assert "risk_status" in plan.metadata
     state = engine.strategy_states["fake"]
+    assert state.last_evaluated_at == now
     assert state.last_intents and state.last_intents[0]["timeframe"] == "4h"
     assert state.pnl_summary["exposure_pct"] == 0.0
     assert state.pnl_summary["realized_pnl_usd"] == 0.0
+
+
+def test_strategy_evaluation_heartbeat_updates_when_no_intents_generated():
+    class QuietStrategy(Strategy):
+        def warmup(self, market_data, portfolio):
+            return None
+
+        def generate_intents(self, ctx):
+            return []
+
+    strat_config = StrategyConfig(
+        name="quiet", type="quiet", enabled=True, params={"timeframes": ["1h"]}
+    )
+    strategies_cfg = StrategiesConfig(enabled=["quiet"], configs={"quiet": strat_config})
+
+    app_config = MagicMock(spec=AppConfig)
+    app_config.strategies = strategies_cfg
+    app_config.risk = RiskConfig()
+    app_config.universe = MagicMock()
+    app_config.universe.include_pairs = ["XBTUSD"]
+
+    market = MagicMock(spec=MarketDataAPI)
+    market.get_data_status.return_value = MagicMock(
+        rest_api_reachable=True,
+        websocket_connected=True,
+        stale_pairs=0,
+    )
+    portfolio = make_portfolio_service_mock()
+
+    engine = StrategyRiskEngine(app_config, market, portfolio)
+    engine._data_ready = MagicMock(return_value=True)
+    engine.risk_engine = MagicMock()
+    engine.risk_engine.process_intents.return_value = []
+    engine.risk_engine.get_status.return_value = RiskStatus(
+        kill_switch_active=False,
+        daily_drawdown_pct=0.0,
+        drift_flag=False,
+        total_exposure_pct=0.0,
+        manual_exposure_pct=0.0,
+        per_asset_exposure_pct={},
+        per_strategy_exposure_pct={},
+    )
+    engine.risk_engine.build_risk_context.return_value = SimpleNamespace(
+        per_strategy_exposure_pct={}
+    )
+    portfolio.get_realized_pnl_by_strategy.return_value = {}
+
+    engine.strategies = {"quiet": QuietStrategy(strat_config)}
+    engine.strategy_states = {
+        "quiet": StrategyState(
+            strategy_id="quiet",
+            enabled=True,
+            last_intents_at=None,
+            last_actions_at=None,
+            current_positions=[],
+            pnl_summary={},
+        )
+    }
+
+    now = datetime.now(timezone.utc)
+    plan = engine.run_cycle(now)
+
+    assert plan.actions == []
+    state = engine.strategy_states["quiet"]
+    assert state.last_evaluated_at == now
+    assert state.last_intents_at == now
+    assert state.last_intents == []
 
 
 def test_trend_following_ignores_missing_liquidity_metadata():

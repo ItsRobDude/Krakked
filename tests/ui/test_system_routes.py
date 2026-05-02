@@ -544,12 +544,14 @@ def _strategy_state(
     enabled: bool,
     pairs: list[str],
     intents: list[dict] | None = None,
+    last_evaluated_at=None,
 ):
     return SimpleNamespace(
         strategy_id=strategy_id,
         enabled=enabled,
         last_intents_at=None,
         last_actions_at=None,
+        last_evaluated_at=last_evaluated_at,
         current_positions=[],
         pnl_summary={"realized_pnl_usd": 0.0, "exposure_pct": 0.0},
         last_intents=intents,
@@ -577,7 +579,12 @@ def test_cockpit_market_data_marks_disabled_strategy_stale_pair_watchlist_only(
         stale_pairs=["ADA/USD"],
     )
     system_context.strategy_engine.get_cached_strategy_state.return_value = [
-        _strategy_state("dca_overlay", enabled=True, pairs=["BTC/USD", "ETH/USD"]),
+        _strategy_state(
+            "dca_overlay",
+            enabled=True,
+            pairs=["BTC/USD", "ETH/USD"],
+            last_evaluated_at=datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc),
+        ),
         _strategy_state("rs_rotation", enabled=False, pairs=["ADA/USD"]),
     ]
 
@@ -590,6 +597,12 @@ def test_cockpit_market_data_marks_disabled_strategy_stale_pair_watchlist_only(
     assert data["market_data"]["session_critical"] is False
     assert data["market_data"]["watchlist_stale_pairs"] == ["ADA/USD"]
     assert data["market_data"]["session_stale_pairs"] == []
+    dca_state = next(
+        state
+        for state in data["strategies"]["state"]
+        if state["strategy_id"] == "dca_overlay"
+    )
+    assert dca_state["last_evaluated_at"] == "2026-01-02T03:04:05Z"
 
 
 def test_cockpit_market_data_marks_active_strategy_stale_pair_session_critical(

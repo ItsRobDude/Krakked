@@ -168,6 +168,7 @@ class StrategyEngine:
                 params=dict(strat_cfg.params),
                 configured_weight=strat_cfg.strategy_weight,
                 effective_weight_pct=0.0 if enabled else None,
+                last_evaluated_at=None,
             )
             self.strategy_states[strat_cfg.name] = state
             return state
@@ -347,6 +348,7 @@ class StrategyEngine:
                 params=dict(state.params),
                 configured_weight=state.configured_weight,
                 effective_weight_pct=state.effective_weight_pct,
+                last_evaluated_at=state.last_evaluated_at,
             )
             for state in self.strategy_states.values()
         ]
@@ -490,6 +492,7 @@ class StrategyEngine:
                                 }
                             )
                     all_intents.extend(intents)
+                    self.strategy_states[name].last_evaluated_at = now
                     self.strategy_states[name].last_intents_at = now
                 except DataStaleError as exc:
                     logger.warning(
@@ -921,6 +924,7 @@ class StrategyEngine:
                 params=dict(state.params),
                 configured_weight=state.configured_weight,
                 effective_weight_pct=state.effective_weight_pct,
+                last_evaluated_at=state.last_evaluated_at,
             )
             for state in self._cached_strategy_state
         ]

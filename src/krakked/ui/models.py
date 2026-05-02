@@ -181,6 +181,7 @@ class StrategyStatePayload(BaseModel):
     enabled: bool
     last_intents_at: Optional[datetime]
     last_actions_at: Optional[datetime]
+    last_evaluated_at: Optional[datetime] = None
     current_positions: List[StrategyPosition]
     pnl_summary: Dict[str, float]
     last_intents: Optional[list[dict[str, Any]]] = None

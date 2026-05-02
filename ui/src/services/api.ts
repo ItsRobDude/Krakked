@@ -238,6 +238,7 @@ export type StrategyState = {
   enabled: boolean;
   last_intents_at: string | null;
   last_actions_at: string | null;
+  last_evaluated_at: string | null;
   pnl_summary: { realized_pnl_usd?: number; exposure_pct?: number };
   last_intents?: StrategyIntentPreview[] | null;
   conflict_summary?: Array<{
@@ -554,6 +555,7 @@ export type ExecutionResultPayload = {
 export async function flattenAllPositions(): Promise<ExecutionResultPayload> {
   const result = await fetchJson<ExecutionResultPayload>('/execution/flatten_all', {
     method: 'POST',
+    body: JSON.stringify({ confirmation: 'FLATTEN ALL' }),
   });
 
   if (result === null) {

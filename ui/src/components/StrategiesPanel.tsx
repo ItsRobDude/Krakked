@@ -15,6 +15,22 @@ const formatTimestamp = (timestamp: string | null) => {
   return parsed.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
 };
 
+const getStrategyEvaluationAt = (strategy: StrategyState) =>
+  strategy.last_evaluated_at || strategy.last_intents_at || strategy.last_actions_at;
+
+const formatLatestSignal = (
+  strategy: StrategyState,
+  latestIntent: NonNullable<StrategyState['last_intents']>[number] | undefined,
+) => {
+  if (latestIntent) {
+    return `${latestIntent.side} ${latestIntent.pair} (${latestIntent.timeframe})`;
+  }
+  if (getStrategyEvaluationAt(strategy)) {
+    return 'No action chosen';
+  }
+  return strategy.enabled ? 'Awaiting first evaluation' : 'Not running';
+};
+
 export type StrategiesPanelProps = {
   strategies: StrategyState[];
   performance: Record<string, StrategyPerformance>;
@@ -144,7 +160,7 @@ export function StrategiesPanel({
         {strategies.map((strategy) => {
           const isBusy = busy.has(strategy.strategy_id);
           const riskProfile = riskSelections[strategy.strategy_id] ?? 'balanced';
-          const lastAction = strategy.last_actions_at || strategy.last_intents_at;
+          const lastEvaluated = getStrategyEvaluationAt(strategy);
           const perf = performance[strategy.strategy_id];
           const drawdown = drawdownBadge(perf?.max_drawdown_pct);
           const latestIntent = strategy.last_intents?.[0];
@@ -203,9 +219,7 @@ export function StrategiesPanel({
                 <div>
                   <span>Latest signal</span>
                   <strong title={latestIntent ? JSON.stringify(latestIntent) : undefined}>
-                    {latestIntent
-                      ? `${latestIntent.side} ${latestIntent.pair} (${latestIntent.timeframe})`
-                      : 'No recent signals'}
+                    {formatLatestSignal(strategy, latestIntent)}
                   </strong>
                 </div>
                 <div>
@@ -217,8 +231,8 @@ export function StrategiesPanel({
                   </strong>
                 </div>
                 <div>
-                  <span>Freshness</span>
-                  <strong>{formatTimestamp(lastAction)}</strong>
+                  <span>Last evaluated</span>
+                  <strong>{lastEvaluated ? formatTimestamp(lastEvaluated) : 'Not yet'}</strong>
                 </div>
               </div>
 

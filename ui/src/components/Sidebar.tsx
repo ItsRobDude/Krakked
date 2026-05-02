@@ -9,6 +9,7 @@ export type SidebarAction = {
   label: string;
   tone?: 'default' | 'danger';
   disabled?: boolean;
+  testId?: string;
   onClick?: () => void;
 };
 
@@ -16,6 +17,7 @@ export type SidebarMenuItem = {
   label: string;
   href?: string;
   active?: boolean;
+  testId?: string;
   onClick?: () => void;
 };
 
@@ -36,6 +38,7 @@ export function Sidebar({ systemStatus, integrity, actions, menu, note }: Sideba
       key={action.label}
       type="button"
       className={`sidebar__action${action.tone === 'danger' ? ' sidebar__action--danger' : ''}`}
+      data-testid={action.testId}
       disabled={action.disabled}
       onClick={action.onClick}
     >
@@ -109,6 +112,7 @@ export function Sidebar({ systemStatus, integrity, actions, menu, note }: Sideba
                 <button
                   type="button"
                   className={`sidebar__menu-link sidebar__menu-button${item.active ? ' sidebar__menu-link--active' : ''}`}
+                  data-testid={item.testId}
                   onClick={item.onClick}
                 >
                   {item.label}
