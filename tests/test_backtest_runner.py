@@ -424,3 +424,44 @@ def test_build_backtest_preflight_accepts_closed_daily_boundary(
     assert result.preflight.status == "ready"
     assert result.preflight.partial_series == []
     assert result.preflight.coverage[0].status == "ok"
+
+
+def test_build_trend_core_warmup_warnings_for_short_daily_window(
+    tmp_path: Path,
+) -> None:
+    config = _build_backtest_config(tmp_path)
+    config.universe.include_pairs = ["BTC/USD"]
+    config.strategies.enabled = ["trend_core"]
+    config.strategies.configs["trend_core"].enabled = True
+    preflight = runner.BacktestPreflight(
+        coverage=[
+            runner.BacktestCoverageItem(
+                pair="BTC/USD",
+                timeframe="1h",
+                bar_count=200,
+                first_bar_at=datetime(2026, 4, 20, tzinfo=UTC),
+                last_bar_at=datetime(2026, 5, 9, tzinfo=UTC),
+                status="ok",
+            ),
+            runner.BacktestCoverageItem(
+                pair="BTC/USD",
+                timeframe="1d",
+                bar_count=19,
+                first_bar_at=datetime(2026, 4, 20, tzinfo=UTC),
+                last_bar_at=datetime(2026, 5, 8, tzinfo=UTC),
+                status="ok",
+            ),
+        ],
+        usable_series_count=2,
+        missing_series=[],
+        partial_series=[],
+        status="ready",
+        summary_note="Coverage looks complete for the requested replay window.",
+        warnings=[],
+    )
+
+    warnings = runner._build_trend_core_warmup_warnings(config, preflight)  # noqa: SLF001
+
+    assert warnings == [
+        "Strategy trend_core may be under-warmed on 1d: requires 20 closed bars, but BTC/USD only have 19 inside the requested window."
+    ]

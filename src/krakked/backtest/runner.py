@@ -25,6 +25,7 @@ from krakked.portfolio.manager import PortfolioService
 from krakked.portfolio.models import AssetBalance
 from krakked.strategy.engine import StrategyEngine
 from krakked.strategy.models import ExecutionPlan
+from krakked.strategy.strategies.demo_strategy import TrendFollowingStrategy
 
 logger = logging.getLogger(__name__)
 
@@ -958,6 +959,7 @@ def _build_backtest_summary(
         "slippage_bps": slippage_bps,
         "strict_data": strict_data,
     }
+    warmup_warnings = _build_trend_core_warmup_warnings(portfolio.app_config, preflight)
     trust_level, trust_note, notable_warnings = _build_replay_diagnostics(
         total_actions=total_actions,
         blocked_actions=blocked_actions,
@@ -965,6 +967,7 @@ def _build_backtest_summary(
         filled_orders=filled_orders,
         execution_errors=execution_errors,
         preflight=preflight,
+        extra_warnings=warmup_warnings,
     )
 
     return BacktestSummary(
@@ -1074,6 +1077,47 @@ def _build_blocked_reason_counts(plans: List[ExecutionPlan]) -> Dict[str, int]:
     return dict(sorted(counts.items(), key=lambda item: (-item[1], item[0])))
 
 
+def _build_trend_core_warmup_warnings(
+    config: AppConfig,
+    preflight: BacktestPreflight,
+) -> List[str]:
+    enabled = list(getattr(config.strategies, "enabled", []))
+    if "trend_core" not in enabled:
+        return []
+
+    trend_cfg = getattr(config.strategies, "configs", {}).get("trend_core")
+    if trend_cfg is None or not getattr(trend_cfg, "enabled", False):
+        return []
+
+    params = TrendFollowingStrategy(trend_cfg).params
+    required_bars = int(params.ma_slow)
+    if required_bars <= 0:
+        return []
+
+    strategy_pairs = (
+        list(params.pairs) if isinstance(params.pairs, list) and params.pairs else _configured_backtest_pairs(config)
+    )
+    coverage_by_key = {
+        (item.pair, item.timeframe): item.bar_count for item in preflight.coverage
+    }
+    deficits = [
+        (pair, coverage_by_key.get((pair, params.regime_timeframe), 0))
+        for pair in strategy_pairs
+        if coverage_by_key.get((pair, params.regime_timeframe), 0) < required_bars
+    ]
+    if not deficits:
+        return []
+
+    pair_list = ", ".join(pair for pair, _ in deficits)
+    counts = sorted({count for _, count in deficits})
+    count_text = str(counts[0]) if len(counts) == 1 else f"{counts[0]}-{counts[-1]}"
+    return [
+        "Strategy trend_core may be under-warmed on "
+        f"{params.regime_timeframe}: requires {required_bars} closed bars, "
+        f"but {pair_list} only have {count_text} inside the requested window."
+    ]
+
+
 def _build_replay_diagnostics(
     *,
     total_actions: int,
@@ -1082,8 +1126,11 @@ def _build_replay_diagnostics(
     filled_orders: int,
     execution_errors: int,
     preflight: BacktestPreflight,
+    extra_warnings: Optional[Iterable[str]] = None,
 ) -> tuple[str, str, List[str]]:
     warnings = list(preflight.warnings)
+    if extra_warnings:
+        warnings.extend(str(warning) for warning in extra_warnings)
 
     if total_actions == 0:
         warnings.append("No strategy actions were generated in this window.")
