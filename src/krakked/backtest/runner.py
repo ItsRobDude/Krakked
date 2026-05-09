@@ -19,6 +19,7 @@ from krakked.execution.router import apply_slippage, round_order_price
 from krakked.market_data.api import ASSET_ALIASES, MarketDataAPI
 from krakked.market_data.metadata_store import PairMetadataStore
 from krakked.market_data.models import ConnectionStatus, OHLCBar, PairMetadata
+from krakked.market_data.ohlc_fetcher import TIMEFRAME_MAP
 from krakked.market_data.ohlc_store import FileOHLCStore
 from krakked.portfolio.manager import PortfolioService
 from krakked.portfolio.models import AssetBalance
@@ -26,6 +27,10 @@ from krakked.strategy.engine import StrategyEngine
 from krakked.strategy.models import ExecutionPlan
 
 logger = logging.getLogger(__name__)
+
+
+def _timeframe_seconds(timeframe: str) -> int:
+    return int(TIMEFRAME_MAP.get(timeframe, 0)) * 60
 
 
 @dataclass
@@ -318,10 +323,13 @@ class BacktestMarketData(MarketDataAPI):
                     last_bar_at = datetime.fromtimestamp(
                         int(bounded[-1].timestamp), tz=UTC
                     )
+                    coverage_end_ts = int(bounded[-1].timestamp) + _timeframe_seconds(
+                        timeframe
+                    )
                     status = (
                         "partial_window"
                         if int(bounded[0].timestamp) > self._start_ts
-                        or int(bounded[-1].timestamp) < self._end_ts
+                        or coverage_end_ts < self._end_ts
                         else "ok"
                     )
                 coverage.append(
