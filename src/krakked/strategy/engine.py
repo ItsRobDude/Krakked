@@ -94,6 +94,7 @@ class StrategyEngine:
             per_strategy_exposure_pct={},
         )
         self._cached_strategy_state: List[StrategyState] = []
+        self.last_cycle_intents: List[StrategyIntent] = []
 
     def initialize(self) -> None:
         logger.info(
@@ -289,7 +290,7 @@ class StrategyEngine:
         snapshots = self.portfolio.store.get_snapshots(since=day_ago)
         current_equity = cached_equity.equity_base
         drift_flag = bool(cached_equity.drift_flag)
-        drift_info = {
+        drift_info: Dict[str, Any] = {
             "expected_position_value_base": None,
             "actual_balance_value_base": None,
             "tolerance_base": None,
@@ -370,21 +371,21 @@ class StrategyEngine:
             if len(strategy_ids) < 2:
                 continue
 
-            ranked_intents = sorted(
-                pair_intents,
-                key=lambda intent: (
-                    self.strategy_states.get(intent.strategy_id).effective_weight_pct
-                    if self.strategy_states.get(intent.strategy_id) is not None
-                    and self.strategy_states[intent.strategy_id].effective_weight_pct
-                    is not None
-                    else 0.0,
-                    intent.confidence,
-                ),
-                reverse=True,
-            )
+            def _rank_key(intent: StrategyIntent) -> tuple[float, float]:
+                state = self.strategy_states.get(intent.strategy_id)
+                effective_weight = (
+                    state.effective_weight_pct
+                    if state is not None and state.effective_weight_pct is not None
+                    else 0.0
+                )
+                return effective_weight, intent.confidence
+
+            ranked_intents = sorted(pair_intents, key=_rank_key, reverse=True)
 
             pair_action = actions_by_pair.get(pair)
-            winner_strategy_id = ranked_intents[0].strategy_id if ranked_intents else None
+            winner_strategy_id = (
+                ranked_intents[0].strategy_id if ranked_intents else None
+            )
             winning_reason = "higher effective share"
 
             if pair_action and pair_action.action_type == "none":
@@ -579,6 +580,7 @@ class StrategyEngine:
         all_intents, intent_summaries = self._collect_intents(
             now, regime, plan_id, weights
         )
+        self.last_cycle_intents = list(all_intents)
 
         scored: List[tuple[StrategyIntent, float]] = []
         for intent in all_intents:

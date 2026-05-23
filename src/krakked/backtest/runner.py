@@ -493,6 +493,26 @@ class BacktestMarketData(MarketDataAPI):
         filtered = self._filtered_bars(pair, timeframe)
         return filtered[-lookback:]
 
+    def get_bar_at_or_before(
+        self, pair: str, timeframe: str, timestamp: int
+    ) -> Optional[OHLCBar]:
+        canonical = self.normalize_pair(pair)
+        bars = self._bar_cache.get((canonical, timeframe), [])
+        for bar in reversed(bars):
+            if int(bar.timestamp) <= int(timestamp):
+                return bar
+        return None
+
+    def get_bar_at_or_after(
+        self, pair: str, timeframe: str, timestamp: int
+    ) -> Optional[OHLCBar]:
+        canonical = self.normalize_pair(pair)
+        bars = self._bar_cache.get((canonical, timeframe), [])
+        for bar in bars:
+            if int(bar.timestamp) >= int(timestamp):
+                return bar
+        return None
+
     def get_ohlc_since(self, pair: str, timeframe: str, since_ts: int) -> List[OHLCBar]:
         filtered = self._filtered_bars(pair, timeframe)
         return [bar for bar in filtered if int(bar.timestamp) >= since_ts]
@@ -590,7 +610,9 @@ def _resolve_simulated_fill_price(
     latest_price: Optional[float],
     config: AppConfig,
 ) -> Optional[float]:
-    reference_price = latest_price if latest_price is not None else order.requested_price
+    reference_price = (
+        latest_price if latest_price is not None else order.requested_price
+    )
     if reference_price is None:
         return None
 
@@ -608,10 +630,10 @@ def _fallback_preflight(market_data: Any) -> BacktestPreflight:
     usable_series_count = 0 if missing_series else 1
     return _assess_preflight(
         BacktestPreflight(
-        coverage=[],
-        usable_series_count=usable_series_count,
-        missing_series=missing_series,
-        partial_series=[],
+            coverage=[],
+            usable_series_count=usable_series_count,
+            missing_series=missing_series,
+            partial_series=[],
         )
     )
 
@@ -632,7 +654,9 @@ def _assess_preflight(preflight: BacktestPreflight) -> BacktestPreflight:
 
     if preflight.usable_series_count <= 0:
         status = "unusable"
-        summary_note = "No usable historical series were found for the requested window."
+        summary_note = (
+            "No usable historical series were found for the requested window."
+        )
     elif missing_series or partial_series:
         status = "limited"
         if missing_series:
@@ -643,7 +667,9 @@ def _assess_preflight(preflight: BacktestPreflight) -> BacktestPreflight:
             warnings.append(
                 f"{len(partial_series)} requested series only partially cover the requested window."
             )
-        if usable_items and all(item.status == "partial_window" for item in usable_items):
+        if usable_items and all(
+            item.status == "partial_window" for item in usable_items
+        ):
             warnings.append(
                 "All usable series are only partially covered for the requested window."
             )
@@ -953,7 +979,9 @@ def _build_backtest_summary(
         "end": end.astimezone(UTC).isoformat(),
         "pairs": list(pairs),
         "timeframes": list(timeframes),
-        "enabled_strategies": list(getattr(portfolio.app_config.strategies, "enabled", [])),
+        "enabled_strategies": list(
+            getattr(portfolio.app_config.strategies, "enabled", [])
+        ),
         "starting_cash_usd": float(starting_cash_usd),
         "fee_bps": float(fee_bps),
         "slippage_bps": slippage_bps,
@@ -1095,7 +1123,9 @@ def _build_trend_core_warmup_warnings(
         return []
 
     strategy_pairs = (
-        list(params.pairs) if isinstance(params.pairs, list) and params.pairs else _configured_backtest_pairs(config)
+        list(params.pairs)
+        if isinstance(params.pairs, list) and params.pairs
+        else _configured_backtest_pairs(config)
     )
     coverage_by_key = {
         (item.pair, item.timeframe): item.bar_count for item in preflight.coverage
@@ -1135,7 +1165,9 @@ def _build_replay_diagnostics(
     if total_actions == 0:
         warnings.append("No strategy actions were generated in this window.")
     if total_orders == 0:
-        warnings.append("No orders were submitted, so this run is weak for execution learning.")
+        warnings.append(
+            "No orders were submitted, so this run is weak for execution learning."
+        )
     elif filled_orders == 0:
         warnings.append(
             "Orders were submitted but none filled, so execution outcomes are limited."
@@ -1145,7 +1177,9 @@ def _build_replay_diagnostics(
     elif total_actions > 0 and blocked_actions / total_actions >= 0.75:
         warnings.append("Most strategy actions were blocked by guardrails.")
     if execution_errors > 0:
-        warnings.append(f"{execution_errors} execution errors occurred during the replay.")
+        warnings.append(
+            f"{execution_errors} execution errors occurred during the replay."
+        )
 
     if execution_errors > 0:
         trust_level = "weak_signal"

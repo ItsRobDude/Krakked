@@ -21,6 +21,7 @@ from krakked.backtest import (
     load_backtest_report,
     publish_latest_backtest_report,
     run_backtest,
+    run_ml_walk_forward,
     write_backtest_report,
 )
 from krakked.connection.exceptions import (
@@ -29,7 +30,12 @@ from krakked.connection.exceptions import (
     RateLimitError,
     ServiceUnavailableError,
 )
-from krakked.config import AppConfig, get_config_dir, get_default_ohlc_store_config, load_config
+from krakked.config import (
+    AppConfig,
+    get_config_dir,
+    get_default_ohlc_store_config,
+    load_config,
+)
 from krakked.connection.rest_client import KrakenRESTClient
 from krakked.credentials import CredentialResult, CredentialStatus
 from krakked.main import run as run_orchestrator
@@ -348,6 +354,37 @@ def _print_backtest_summary(
         print(f"Saved report: {report_path}")
 
 
+def _print_ml_walk_forward_summary(
+    payload: dict[str, Any], report_path: str | None
+) -> None:
+    summary = payload["summary"]
+    metrics = summary["metrics"]
+    print("ML walk-forward completed.")
+    print(f"Strategy: {summary['strategy_id']} | Timeframe: {summary['timeframe']}")
+    print(
+        f"Window: {summary['start']} -> {summary['end']} "
+        f"({summary['fold_count']} folds)"
+    )
+    print(
+        f"Train/test bars: {summary['train_bars']}/{summary['test_bars']} | "
+        f"Pairs: {', '.join(summary['pairs'])}"
+    )
+    print(f"Predictions scored: {metrics['prediction_count']}")
+
+    def _pct(value: Any) -> str:
+        return "n/a" if value is None else f"{float(value) * 100.0:.2f}%"
+
+    print(f"Directional accuracy: {_pct(metrics.get('directional_accuracy'))}")
+    print(f"Fee-adjusted hit rate: {_pct(metrics.get('fee_adjusted_hit_rate'))}")
+    print(f"Long precision: {_pct(metrics.get('precision_long'))}")
+    print(f"Cost hurdle: {summary['round_trip_cost_bps']:.2f} bps estimated round trip")
+    print("Promotion check: " + ("pass" if summary["promotable"] else "blocked"))
+    for reason in summary["promotable_reasons"]:
+        print(f"- {reason}")
+    if report_path:
+        print(f"Saved report: {report_path}")
+
+
 def _write_backtest_report(payload: dict[str, Any], report_path: str) -> str:
     return str(write_backtest_report(payload, report_path))
 
@@ -383,7 +420,9 @@ def _print_backtest_preflight(result: BacktestPreflightResult) -> None:
         )
 
 
-def _format_delta(label: str, baseline: float, candidate: float, suffix: str = "") -> str:
+def _format_delta(
+    label: str, baseline: float, candidate: float, suffix: str = ""
+) -> str:
     delta = candidate - baseline
     return (
         f"{label}: {baseline:,.2f}{suffix} -> {candidate:,.2f}{suffix} "
@@ -591,6 +630,54 @@ def _backtest_command(args: argparse.Namespace) -> int:
         )
         if saved_report_path and published_report_path:
             print(f"Published latest replay: {published_report_path}")
+
+    return 0
+
+
+def _ml_walk_forward_command(args: argparse.Namespace) -> int:
+    """Run a rolling train/test evaluation for one ML strategy."""
+
+    try:
+        start = _parse_datetime_arg(args.start)
+        end = _parse_datetime_arg(args.end)
+    except ValueError as exc:
+        return _print_error(f"Invalid walk-forward datetime: {exc}")
+
+    try:
+        config = _load_backtest_config(args)
+        result = run_ml_walk_forward(
+            config,
+            start=start,
+            end=end,
+            strategy_id=args.strategy,
+            timeframe=args.timeframe,
+            train_bars=int(args.train_bars),
+            test_bars=int(args.test_bars),
+            fee_bps=float(args.fee_bps),
+            db_path=args.db_path,
+            strict_data=bool(args.strict_data),
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _print_error(f"ML walk-forward failed: {exc}")
+
+    payload = result.to_report_dict()
+    payload["summary"]["config_path"] = (
+        str(Path(args.config).expanduser().resolve()) if args.config else None
+    )
+    if args.db_path:
+        payload["sqlite_output"] = str(Path(args.db_path).expanduser().resolve())
+
+    saved_report_path: str | None = None
+    if args.save_report:
+        try:
+            saved_report_path = _write_backtest_report(payload, args.save_report)
+        except Exception as exc:  # noqa: BLE001
+            return _print_error(f"ML walk-forward report write failed: {exc}")
+
+    if args.json:
+        print(json.dumps(payload, indent=2))
+    else:
+        _print_ml_walk_forward_summary(payload, saved_report_path)
 
     return 0
 
@@ -1161,6 +1248,77 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Print the backtest summary as JSON",
     )
     backtest_parser.set_defaults(func=_backtest_command)
+
+    ml_walk_forward_parser = subparsers.add_parser(
+        "ml-walk-forward",
+        help="Evaluate one ML strategy with rolling train/test windows",
+    )
+    ml_walk_forward_parser.add_argument(
+        "--start",
+        required=True,
+        help="Evaluation start time in ISO-8601 form",
+    )
+    ml_walk_forward_parser.add_argument(
+        "--end",
+        required=True,
+        help="Evaluation end time in ISO-8601 form",
+    )
+    ml_walk_forward_parser.add_argument(
+        "--strategy",
+        required=True,
+        help="ML strategy id to evaluate, for example ai_regression",
+    )
+    ml_walk_forward_parser.add_argument(
+        "--timeframe",
+        required=True,
+        help="Single timeframe to evaluate, for example 1h",
+    )
+    ml_walk_forward_parser.add_argument(
+        "--config",
+        help="Optional path to the base config.yaml to use for the evaluation",
+    )
+    ml_walk_forward_parser.add_argument(
+        "--pair",
+        action="append",
+        help="Limit the evaluation to one pair; repeat to include multiple pairs",
+    )
+    ml_walk_forward_parser.add_argument(
+        "--train-bars",
+        type=int,
+        default=500,
+        help="Number of replay bars used for each training window",
+    )
+    ml_walk_forward_parser.add_argument(
+        "--test-bars",
+        type=int,
+        default=100,
+        help="Number of replay bars used for each out-of-sample test window",
+    )
+    ml_walk_forward_parser.add_argument(
+        "--fee-bps",
+        type=float,
+        default=25.0,
+        help="Flat taker fee in basis points used for the cost hurdle",
+    )
+    ml_walk_forward_parser.add_argument(
+        "--db-path",
+        help="Optional SQLite path for ML examples, checkpoints, and decisions",
+    )
+    ml_walk_forward_parser.add_argument(
+        "--save-report",
+        help="Optional JSON path for a durable ML walk-forward report artifact",
+    )
+    ml_walk_forward_parser.add_argument(
+        "--strict-data",
+        action="store_true",
+        help="Fail if any requested pair/timeframe is missing or only partially covered",
+    )
+    ml_walk_forward_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print the ML walk-forward report as JSON",
+    )
+    ml_walk_forward_parser.set_defaults(func=_ml_walk_forward_command)
 
     compare_backtests_parser = subparsers.add_parser(
         "compare-backtests",

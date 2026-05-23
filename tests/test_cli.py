@@ -489,7 +489,10 @@ def test_backtest_subcommand_prints_summary(
     output = capsys.readouterr().out
     assert "Backtest completed." in output
     assert "Wallet: start $10,000.00 -> end $10,250.00 (+250.00, +2.50%)" in output
-    assert "Replay trust: Limited signal: some strategy actions were blocked by guardrails." in output
+    assert (
+        "Replay trust: Limited signal: some strategy actions were blocked by guardrails."
+        in output
+    )
     assert "Cost model: 50 bps slippage + 25.00 bps taker fee" in output
     assert "Missing OHLC series:" in output
     assert "Top blocked reason: Max open positions reached (1) (1)" in output
@@ -707,6 +710,91 @@ def test_backtest_subcommand_publish_latest_is_opt_in(
     assert payload["summary"]["ending_equity_usd"] == pytest.approx(10_100.0)
 
 
+def test_ml_walk_forward_subcommand_writes_report(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    captured: dict[str, Any] = {}
+    start = datetime(2026, 4, 1, tzinfo=UTC)
+    end = datetime(2026, 4, 2, tzinfo=UTC)
+
+    class _FakeWalkForwardResult:
+        def to_report_dict(self) -> dict[str, Any]:
+            return {
+                "report_version": 1,
+                "generated_at": start.isoformat(),
+                "summary": {
+                    "start": start.isoformat(),
+                    "end": end.isoformat(),
+                    "strategy_id": "ai_regression",
+                    "timeframe": "1h",
+                    "train_bars": 12,
+                    "test_bars": 6,
+                    "fold_count": 1,
+                    "pairs": ["BTC/USD"],
+                    "fee_bps": 25.0,
+                    "slippage_bps": 50.0,
+                    "round_trip_cost_bps": 150.0,
+                    "coverage_status": "ready",
+                    "warnings": [],
+                    "metrics": {
+                        "prediction_count": 3,
+                        "directional_accuracy": 2 / 3,
+                        "fee_adjusted_hit_rate": 1 / 3,
+                        "precision_long": 0.5,
+                    },
+                    "promotable": False,
+                    "promotable_reasons": ["Directional accuracy is below 52%."],
+                    "folds": [],
+                },
+                "provenance": {"generated_by": "krakked ml-walk-forward"},
+            }
+
+    def _fake_run_ml_walk_forward(*args: Any, **kwargs: Any) -> _FakeWalkForwardResult:
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return _FakeWalkForwardResult()
+
+    monkeypatch.setattr(
+        cli,
+        "_load_backtest_config",
+        lambda args: load_config(
+            config_path=Path("config_examples/config.yaml"), env="paper"
+        ),
+    )
+    monkeypatch.setattr(cli, "run_ml_walk_forward", _fake_run_ml_walk_forward)
+
+    report_path = tmp_path / "ml-report.json"
+    exit_code = cli.main(
+        [
+            "ml-walk-forward",
+            "--start",
+            "2026-04-01T00:00:00Z",
+            "--end",
+            "2026-04-02T00:00:00Z",
+            "--strategy",
+            "ai_regression",
+            "--timeframe",
+            "1h",
+            "--train-bars",
+            "12",
+            "--test-bars",
+            "6",
+            "--save-report",
+            str(report_path),
+            "--json",
+        ]
+    )
+
+    assert exit_code == 0
+    assert captured["kwargs"]["strategy_id"] == "ai_regression"
+    assert captured["kwargs"]["timeframe"] == "1h"
+    assert captured["kwargs"]["train_bars"] == 12
+    assert captured["kwargs"]["test_bars"] == 6
+    payload = json.loads(report_path.read_text(encoding="utf-8"))
+    assert payload["summary"]["metrics"]["prediction_count"] == 3
+    assert payload["summary"]["config_path"] is None
+
+
 def test_backtest_subcommand_can_save_and_publish_latest(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -806,7 +894,9 @@ def test_backtest_preflight_command_prints_summary(
     start = datetime(2026, 4, 1, tzinfo=UTC)
     end = datetime(2026, 4, 2, tzinfo=UTC)
 
-    def _fake_build_backtest_preflight(*args: Any, **kwargs: Any) -> BacktestPreflightResult:  # noqa: ARG001
+    def _fake_build_backtest_preflight(
+        *args: Any, **kwargs: Any
+    ) -> BacktestPreflightResult:  # noqa: ARG001
         return BacktestPreflightResult(
             start=start,
             end=end,
@@ -866,9 +956,7 @@ def test_compare_backtests_prints_deltas(tmp_path: Path, capsys: Any) -> None:
                     "blocked_actions": 1,
                     "execution_errors": 0,
                     "replay_inputs": {},
-                    "per_strategy": {
-                        "majors_mean_rev": {"realized_pnl_usd": 25.0}
-                    },
+                    "per_strategy": {"majors_mean_rev": {"realized_pnl_usd": 25.0}},
                 },
             }
         ),
@@ -886,9 +974,7 @@ def test_compare_backtests_prints_deltas(tmp_path: Path, capsys: Any) -> None:
                     "blocked_actions": 0,
                     "execution_errors": 0,
                     "replay_inputs": {},
-                    "per_strategy": {
-                        "majors_mean_rev": {"realized_pnl_usd": 55.0}
-                    },
+                    "per_strategy": {"majors_mean_rev": {"realized_pnl_usd": 55.0}},
                 },
             }
         ),

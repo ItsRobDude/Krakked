@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 
 LATEST_BACKTEST_REPORT_RELATIVE_PATH = Path("reports") / "backtests" / "latest.json"
 
@@ -12,7 +12,9 @@ LATEST_BACKTEST_REPORT_RELATIVE_PATH = Path("reports") / "backtests" / "latest.j
 def get_latest_backtest_report_path(config_dir: Path) -> Path:
     """Return the canonical published replay-report path under ``config_dir``."""
 
-    return Path(config_dir).expanduser().resolve() / LATEST_BACKTEST_REPORT_RELATIVE_PATH
+    return (
+        Path(config_dir).expanduser().resolve() / LATEST_BACKTEST_REPORT_RELATIVE_PATH
+    )
 
 
 def write_backtest_report(payload: dict[str, Any], report_path: str | Path) -> Path:
@@ -103,8 +105,12 @@ def summarize_latest_backtest_report(
     preflight = payload.get("preflight") or {}
     replay_inputs = summary.get("replay_inputs") or {}
     blocked_reason_counts = summary.get("blocked_reason_counts") or {}
-    missing_series = list(preflight.get("missing_series") or summary.get("missing_series") or [])
-    partial_series = list(preflight.get("partial_series") or summary.get("partial_series") or [])
+    missing_series = list(
+        preflight.get("missing_series") or summary.get("missing_series") or []
+    )
+    partial_series = list(
+        preflight.get("partial_series") or summary.get("partial_series") or []
+    )
     usable_series_count = int(
         preflight.get(
             "usable_series_count",
