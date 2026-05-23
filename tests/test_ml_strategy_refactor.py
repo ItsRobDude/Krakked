@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -82,7 +83,13 @@ def mock_ctx():
     ctx.now = datetime.now(timezone.utc)
     ctx.market_data = MagicMock()
     ctx.portfolio = MagicMock()
+    ctx.portfolio.app_config = SimpleNamespace(
+        execution=SimpleNamespace(max_slippage_bps=50)
+    )
+    ctx.portfolio.store = None
+    ctx.portfolio.get_positions.return_value = []
     ctx.universe = ["XBT/USD"]
+    ctx.timeframe = None
     return ctx
 
 
@@ -104,7 +111,7 @@ class FakeCheckpointStore:
 
 def test_extract_training_example(strategy, mock_ctx):
     start_ts = 1000000
-    prices = [100.0 + i for i in range(10)]  # 100..109
+    prices = [100.0] * 8 + [100.0, 104.0]
     bars = _make_bars(start_ts, prices)
     mock_ctx.market_data.get_ohlc.return_value = bars
 
@@ -113,6 +120,18 @@ def test_extract_training_example(strategy, mock_ctx):
     assert label == 1.0
     assert len(features) == 3
     mock_ctx.market_data.get_ohlc.assert_called()
+
+
+def test_extract_training_example_filters_micro_move_after_costs(strategy, mock_ctx):
+    start_ts = 1000000
+    prices = [100.0] * 8 + [100.0, 101.0]
+    bars = _make_bars(start_ts, prices)
+    mock_ctx.market_data.get_ohlc.return_value = bars
+
+    features, label = strategy._extract_training_example(mock_ctx, "XBT/USD", "1h")
+
+    assert label == 0.0
+    assert len(features) == 3
 
 
 def test_extract_training_example_down(strategy, mock_ctx):
@@ -223,6 +242,14 @@ def test_classifier_bootstrap_prefers_newer_training_checkpoint(strategy, mock_c
     assert strategy.model.predict([[0.2, 0.1, 0.3]])[0] == 1
 
 
+def test_classifier_model_key_versions_fee_adjusted_labels(strategy, mock_ctx):
+    label_config = strategy._label_config(mock_ctx)
+
+    assert (
+        strategy._model_key("1h", label_config) == "global|1h|fee_adj_fee25_slip50_x2"
+    )
+
+
 def test_alt_strategy_restores_last_observation_from_checkpoint(mock_ctx):
     cfg = StrategyConfig(
         name="ai_alt_test",
@@ -261,3 +288,37 @@ def test_alt_strategy_restores_last_observation_from_checkpoint(mock_ctx):
 
     assert strategy.model_initialized[key] is False
     assert strategy._last_observation[key] == ([0.1, -0.2, 0.3], 123.45)
+
+
+def test_alt_strategy_trains_micro_up_move_as_flat(mock_ctx):
+    cfg = StrategyConfig(
+        name="ai_alt_test",
+        type="ai_predictor_alt",
+        enabled=True,
+        params={
+            "pairs": ["XBT/USD"],
+            "timeframe": "1h",
+            "lookback_bars": 5,
+            "short_window": 2,
+            "long_window": 5,
+            "continuous_learning": True,
+        },
+    )
+    strategy = AIPredictorAltStrategy(cfg)
+    key = ("XBT/USD", "1h")
+    model = MagicMock()
+    model.predict.return_value = [0]
+    model.decision_function.return_value = [-1.0]
+    strategy.models[key] = model
+    strategy.model_initialized[key] = False
+    strategy._last_observation[key] = ([0.1, 0.0, 0.01], 100.0)
+
+    mock_ctx.market_data.get_latest_price.return_value = 101.0
+    mock_ctx.market_data.get_ohlc.return_value = _make_bars(
+        1000000, [100.0] * 8 + [101.0, 101.0]
+    )
+
+    strategy.generate_intents(mock_ctx)
+
+    model.partial_fit.assert_called()
+    assert model.partial_fit.call_args.args[1] == [0]

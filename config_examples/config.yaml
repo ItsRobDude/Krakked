@@ -149,6 +149,8 @@ strategies:
         long_window: 20
         target_exposure_usd: null
         continuous_learning: true
+        label_fee_bps: 25.0
+        label_cost_multiplier: 2.0
         max_positions: 2            # per-strategy cap; risk.max_open_positions still applies
       userref: 1101
 

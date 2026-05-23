@@ -10,6 +10,12 @@ from krakked.config import StrategyConfig
 from krakked.market_data.api import MarketDataAPI
 from krakked.portfolio.manager import PortfolioService
 from krakked.strategy.base import Strategy, StrategyContext
+from krakked.strategy.ml_labels import (
+    FEE_ADJUSTED_CLASSIFICATION_LABEL_TYPE,
+    FeeAdjustedLabelConfig,
+    classify_fee_adjusted_return,
+    label_config_from_context,
+)
 from krakked.strategy.ml_models import PassiveAggressiveClassifier
 from krakked.strategy.ml_persistence import (
     load_model,
@@ -37,6 +43,9 @@ class AIPredictorConfig:
     target_exposure_usd: Optional[float]
     continuous_learning: bool
     max_positions: int
+    label_fee_bps: float
+    label_slippage_bps: float
+    label_cost_multiplier: float
 
 
 class AIPredictorStrategy(Strategy):
@@ -52,6 +61,7 @@ class AIPredictorStrategy(Strategy):
         short_window = max(int(params.get("short_window", 5)), 2)
         long_window = max(int(params.get("long_window", 20)), short_window + 1)
         lookback_bars = max(int(params.get("lookback_bars", 50)), long_window + 1)
+        label_defaults = label_config_from_context(params, None)
 
         self.params = AIPredictorConfig(
             pairs=pairs,
@@ -62,6 +72,9 @@ class AIPredictorStrategy(Strategy):
             target_exposure_usd=params.get("target_exposure_usd"),
             continuous_learning=bool(params.get("continuous_learning", True)),
             max_positions=max(int(params.get("max_positions", 2)), 1),
+            label_fee_bps=label_defaults.fee_bps,
+            label_slippage_bps=label_defaults.slippage_bps,
+            label_cost_multiplier=label_defaults.cost_multiplier,
         )
 
         self.model = PassiveAggressiveClassifier(max_iter=1000, tol=1e-3)
@@ -74,13 +87,36 @@ class AIPredictorStrategy(Strategy):
     def _learning_enabled(self) -> bool:
         return bool(self.config.params.get("continuous_learning", True))
 
-    def _model_key(self, timeframe: str) -> str:
-        return f"global|{timeframe}"
+    def _label_config(self, ctx: StrategyContext) -> FeeAdjustedLabelConfig:
+        return label_config_from_context(self.config.params, ctx)
 
-    def _checkpoint_metadata(self) -> dict[str, object]:
+    def _model_key(
+        self,
+        timeframe: str,
+        label_config: Optional[FeeAdjustedLabelConfig] = None,
+    ) -> str:
+        if label_config is None:
+            label_config = FeeAdjustedLabelConfig(
+                fee_bps=self.params.label_fee_bps,
+                slippage_bps=self.params.label_slippage_bps,
+                cost_multiplier=self.params.label_cost_multiplier,
+            )
+        return f"global|{timeframe}|{label_config.model_key_suffix()}"
+
+    def _checkpoint_metadata(
+        self,
+        label_config: Optional[FeeAdjustedLabelConfig] = None,
+    ) -> dict[str, object]:
+        if label_config is None:
+            label_config = FeeAdjustedLabelConfig(
+                fee_bps=self.params.label_fee_bps,
+                slippage_bps=self.params.label_slippage_bps,
+                cost_multiplier=self.params.label_cost_multiplier,
+            )
         return {
             "model_initialized": self.model_initialized,
             "continuous_learning": self._learning_enabled(),
+            "label": label_config.to_metadata(),
         }
 
     def _save_training_checkpoint(
@@ -89,16 +125,17 @@ class AIPredictorStrategy(Strategy):
         timeframe: str,
         *,
         checkpoint_state: str,
+        label_config: FeeAdjustedLabelConfig,
         extra_metadata: Optional[dict[str, object]] = None,
     ) -> None:
-        metadata = self._checkpoint_metadata()
+        metadata = self._checkpoint_metadata(label_config)
         if extra_metadata:
             metadata.update(extra_metadata)
         save_training_checkpoint(
             ctx,
             strategy_id=self.id,
-            model_key=self._model_key(timeframe),
-            label_type="classification",
+            model_key=self._model_key(timeframe, label_config),
+            label_type=FEE_ADJUSTED_CLASSIFICATION_LABEL_TYPE,
             framework=MODEL_FRAMEWORK,
             model=self.model,
             checkpoint_state=checkpoint_state,
@@ -111,12 +148,15 @@ class AIPredictorStrategy(Strategy):
         if self.model_initialized:
             return
 
-        model_key = self._model_key(timeframe)
+        label_config = self._label_config(ctx)
+        model_key = self._model_key(timeframe, label_config)
         live_model = load_model(ctx, self.id, model_key)
         checkpoint = load_training_checkpoint(ctx, self.id, model_key)
         updated_at = None
 
-        checkpoint_candidate: Optional[tuple[PassiveAggressiveClassifier, datetime, bool]]
+        checkpoint_candidate: Optional[
+            tuple[PassiveAggressiveClassifier, datetime, bool]
+        ]
         checkpoint_candidate = None
         if checkpoint is not None:
             restored_model, checkpoint_updated_at, _state, metadata = checkpoint
@@ -175,6 +215,8 @@ class AIPredictorStrategy(Strategy):
         self, ctx: StrategyContext, timeframe: str, last_updated: datetime
     ) -> None:
         """Backfill training on candles missed while the bot was offline."""
+
+        label_config = self._label_config(ctx)
 
         now = ctx.now
         if not isinstance(now, datetime):
@@ -269,7 +311,12 @@ class AIPredictorStrategy(Strategy):
                     if not features:
                         continue
 
-                    label = 1 if bar_t.close > bar_prev.close else 0
+                    label_result = classify_fee_adjusted_return(
+                        float(bar_prev.close), float(bar_t.close), label_config
+                    )
+                    if label_result is None:
+                        continue
+                    label = label_result.value
 
                     self.model.partial_fit([features], [label], classes=self.classes)
                     training_count += 1
@@ -283,13 +330,14 @@ class AIPredictorStrategy(Strategy):
                 ctx,
                 timeframe,
                 checkpoint_state="ready",
+                label_config=label_config,
                 extra_metadata={"catch_up_examples": training_count},
             )
             save_model(
                 ctx,
                 strategy_id=self.id,
-                model_key=self._model_key(timeframe),
-                label_type="classification",
+                model_key=self._model_key(timeframe, label_config),
+                label_type=FEE_ADJUSTED_CLASSIFICATION_LABEL_TYPE,
                 framework=MODEL_FRAMEWORK,
                 model=self.model,
             )
@@ -338,7 +386,7 @@ class AIPredictorStrategy(Strategy):
 
         Returns (features, label) where:
           - features are calculated from OHLC history up to T-1.
-          - label is 1 if Close(T) > Close(T-1), else 0.
+          - label is 1 only if Close(T) clears the configured cost hurdle.
         """
         # We need OHLC including the just-closed bar (T) and enough history for T-1 features.
         # T-1 features require `lookback` bars ending at T-1.
@@ -359,8 +407,13 @@ class AIPredictorStrategy(Strategy):
         bar_t = ohlc[-1]
         bar_prev = ohlc[-2]
 
-        # Label: did T close higher than T-1?
-        label = 1.0 if bar_t.close > bar_prev.close else 0.0
+        label_config = self._label_config(ctx)
+        label_result = classify_fee_adjusted_return(
+            float(bar_prev.close), float(bar_t.close), label_config
+        )
+        if label_result is None:
+            return None
+        label = float(label_result.value)
 
         # Features for T-1: use window ohlc[:-1] (excluding T)
         # And we take the last `lookback` bars of THAT slice.
@@ -385,7 +438,8 @@ class AIPredictorStrategy(Strategy):
         training_updated = False
 
         timeframe = ctx.timeframe or self.params.timeframe
-        model_key = self._model_key(timeframe)
+        label_config = self._label_config(ctx)
+        model_key = self._model_key(timeframe, label_config)
         self._maybe_bootstrap_from_history(ctx, timeframe)
 
         universe = list(ctx.universe or [])
@@ -420,7 +474,7 @@ class AIPredictorStrategy(Strategy):
                         ctx,
                         strategy_id=self.id,
                         model_key=model_key,
-                        label_type="classification",
+                        label_type=FEE_ADJUSTED_CLASSIFICATION_LABEL_TYPE,
                         features=features_prev,
                         label=label_prev,
                     )
@@ -438,7 +492,11 @@ class AIPredictorStrategy(Strategy):
                             ctx,
                             timeframe,
                             checkpoint_state="training",
-                            extra_metadata={"last_pair": pair, "training_mode": "online"},
+                            label_config=label_config,
+                            extra_metadata={
+                                "last_pair": pair,
+                                "training_mode": "online",
+                            },
                         )
                     except Exception as exc:  # pragma: no cover - defensive
                         logger.debug("Model update failed for %s: %s", pair, exc)
@@ -490,6 +548,7 @@ class AIPredictorStrategy(Strategy):
                     metadata={
                         "prediction": "up" if prediction == 1 else "down",
                         "learning_enabled": self._learning_enabled(),
+                        "label": label_config.to_metadata(),
                         "features": {
                             "pct_change": features[0],
                             "trend_diff": features[1],
@@ -505,13 +564,14 @@ class AIPredictorStrategy(Strategy):
                     ctx,
                     timeframe,
                     checkpoint_state="ready",
+                    label_config=label_config,
                     extra_metadata={"training_mode": "online"},
                 )
             save_model(
                 ctx,
                 strategy_id=self.id,
                 model_key=model_key,
-                label_type="classification",
+                label_type=FEE_ADJUSTED_CLASSIFICATION_LABEL_TYPE,
                 framework=MODEL_FRAMEWORK,
                 model=self.model,
             )

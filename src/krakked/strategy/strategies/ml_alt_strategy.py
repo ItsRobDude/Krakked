@@ -10,6 +10,12 @@ from krakked.market_data.api import MarketDataAPI
 from krakked.market_data.exceptions import DataStaleError
 from krakked.portfolio.manager import PortfolioService
 from krakked.strategy.base import Strategy, StrategyContext
+from krakked.strategy.ml_labels import (
+    FEE_ADJUSTED_CLASSIFICATION_LABEL_TYPE,
+    FeeAdjustedLabelConfig,
+    classify_fee_adjusted_return,
+    label_config_from_context,
+)
 from krakked.strategy.ml_models import PassiveAggressiveClassifier
 from krakked.strategy.ml_persistence import (
     load_model,
@@ -42,6 +48,7 @@ class AIPredictorAltStrategy(Strategy):
         short_window = max(int(params.get("short_window", 5)), 2)
         long_window = max(int(params.get("long_window", 20)), short_window + 1)
         lookback_bars = max(int(params.get("lookback_bars", 50)), long_window + 1)
+        label_defaults = label_config_from_context(params, None)
 
         self.params = AIPredictorConfig(
             pairs=pairs,
@@ -52,6 +59,9 @@ class AIPredictorAltStrategy(Strategy):
             target_exposure_usd=params.get("target_exposure_usd"),
             continuous_learning=bool(params.get("continuous_learning", True)),
             max_positions=max(int(params.get("max_positions", 2)), 1),
+            label_fee_bps=label_defaults.fee_bps,
+            label_slippage_bps=label_defaults.slippage_bps,
+            label_cost_multiplier=label_defaults.cost_multiplier,
         )
 
         self.classes = [0, 1]
@@ -73,13 +83,38 @@ class AIPredictorAltStrategy(Strategy):
             self.model_initialized[key] = False
         return model
 
-    def _model_key(self, pair: str, timeframe: str) -> str:
-        return f"{pair}|{timeframe}"
+    def _label_config(self, ctx: StrategyContext) -> FeeAdjustedLabelConfig:
+        return label_config_from_context(self.config.params, ctx)
 
-    def _checkpoint_metadata(self, key: Tuple[str, str]) -> dict[str, object]:
+    def _model_key(
+        self,
+        pair: str,
+        timeframe: str,
+        label_config: Optional[FeeAdjustedLabelConfig] = None,
+    ) -> str:
+        if label_config is None:
+            label_config = FeeAdjustedLabelConfig(
+                fee_bps=self.params.label_fee_bps,
+                slippage_bps=self.params.label_slippage_bps,
+                cost_multiplier=self.params.label_cost_multiplier,
+            )
+        return f"{pair}|{timeframe}|{label_config.model_key_suffix()}"
+
+    def _checkpoint_metadata(
+        self,
+        key: Tuple[str, str],
+        label_config: Optional[FeeAdjustedLabelConfig] = None,
+    ) -> dict[str, object]:
+        if label_config is None:
+            label_config = FeeAdjustedLabelConfig(
+                fee_bps=self.params.label_fee_bps,
+                slippage_bps=self.params.label_slippage_bps,
+                cost_multiplier=self.params.label_cost_multiplier,
+            )
         metadata: dict[str, object] = {
             "model_initialized": self.model_initialized.get(key, False),
             "continuous_learning": self._learning_enabled(),
+            "label": label_config.to_metadata(),
         }
         observation = self._last_observation.get(key)
         if observation is not None:
@@ -117,17 +152,18 @@ class AIPredictorAltStrategy(Strategy):
         model: PassiveAggressiveClassifier,
         *,
         checkpoint_state: str,
+        label_config: FeeAdjustedLabelConfig,
     ) -> None:
         pair, timeframe = key
         save_training_checkpoint(
             ctx,
             strategy_id=self.id,
-            model_key=self._model_key(pair, timeframe),
-            label_type="classification",
+            model_key=self._model_key(pair, timeframe, label_config),
+            label_type=FEE_ADJUSTED_CLASSIFICATION_LABEL_TYPE,
             framework=MODEL_FRAMEWORK,
             model=model,
             checkpoint_state=checkpoint_state,
-            metadata=self._checkpoint_metadata(key),
+            metadata=self._checkpoint_metadata(key, label_config),
         )
 
     def _maybe_bootstrap_from_history(
@@ -140,7 +176,8 @@ class AIPredictorAltStrategy(Strategy):
             return
 
         pair, timeframe = key
-        model_key = self._model_key(pair, timeframe)
+        label_config = self._label_config(ctx)
+        model_key = self._model_key(pair, timeframe, label_config)
 
         live_model = load_model(ctx, self.id, model_key)
         checkpoint = load_training_checkpoint(ctx, self.id, model_key)
@@ -245,6 +282,7 @@ class AIPredictorAltStrategy(Strategy):
         intents: List[StrategyIntent] = []
 
         timeframe = ctx.timeframe or self.params.timeframe
+        label_config = self._label_config(ctx)
 
         universe = list(ctx.universe or [])
         if not universe:
@@ -268,6 +306,7 @@ class AIPredictorAltStrategy(Strategy):
 
         for pair in pairs:
             key = (pair, timeframe)
+            model_key = self._model_key(pair, timeframe, label_config)
             model = self._get_model(key)
             initialized = self.model_initialized.get(key, False)
 
@@ -290,27 +329,31 @@ class AIPredictorAltStrategy(Strategy):
             training_updated = False
             if last_obs:
                 last_features, last_price = last_obs
-                label = 1 if current_price > last_price else 0
-                record_example(
-                    ctx,
-                    strategy_id=self.id,
-                    model_key=self._model_key(pair, timeframe),
-                    label_type="classification",
-                    features=last_features,
-                    label=float(label),
+                label_result = classify_fee_adjusted_return(
+                    float(last_price), float(current_price), label_config
                 )
-                try:
-                    if not initialized:
-                        model.partial_fit(
-                            [last_features], [label], classes=self.classes
-                        )
-                        initialized = True
-                        self.model_initialized[key] = True
-                    elif self._learning_enabled():
-                        model.partial_fit([last_features], [label])
-                    training_updated = True
-                except Exception as exc:  # pragma: no cover - defensive
-                    logger.debug("Model update failed for %s: %s", pair, exc)
+                if label_result is not None:
+                    label = label_result.value
+                    record_example(
+                        ctx,
+                        strategy_id=self.id,
+                        model_key=model_key,
+                        label_type=FEE_ADJUSTED_CLASSIFICATION_LABEL_TYPE,
+                        features=last_features,
+                        label=float(label),
+                    )
+                    try:
+                        if not initialized:
+                            model.partial_fit(
+                                [last_features], [label], classes=self.classes
+                            )
+                            initialized = True
+                            self.model_initialized[key] = True
+                        elif self._learning_enabled():
+                            model.partial_fit([last_features], [label])
+                        training_updated = True
+                    except Exception as exc:  # pragma: no cover - defensive
+                        logger.debug("Model update failed for %s: %s", pair, exc)
 
             features = self._extract_features(ctx, pair, timeframe)
             if not features:
@@ -322,6 +365,7 @@ class AIPredictorAltStrategy(Strategy):
                 key,
                 model,
                 checkpoint_state="training" if training_updated else "ready",
+                label_config=label_config,
             )
 
             if not initialized:
@@ -365,6 +409,7 @@ class AIPredictorAltStrategy(Strategy):
                     metadata={
                         "prediction": "up" if prediction == 1 else "down",
                         "learning_enabled": self._learning_enabled(),
+                        "label": label_config.to_metadata(),
                         "features": {
                             "pct_change": features[0],
                             "trend_diff": features[1],
@@ -380,12 +425,13 @@ class AIPredictorAltStrategy(Strategy):
                     key,
                     model,
                     checkpoint_state="ready",
+                    label_config=label_config,
                 )
                 save_model(
                     ctx,
                     strategy_id=self.id,
-                    model_key=self._model_key(pair, timeframe),
-                    label_type="classification",
+                    model_key=model_key,
+                    label_type=FEE_ADJUSTED_CLASSIFICATION_LABEL_TYPE,
                     framework=MODEL_FRAMEWORK,
                     model=model,
                 )

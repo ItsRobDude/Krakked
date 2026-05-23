@@ -188,7 +188,7 @@ def _set_strategy_learning(config: AppConfig, strategy_id: str, enabled: bool) -
 
 
 def _prepare_ml_config(
-    config: AppConfig, *, strategy_id: str, timeframe: str
+    config: AppConfig, *, strategy_id: str, timeframe: str, fee_bps: float
 ) -> AppConfig:
     config_copy = copy.deepcopy(config)
     if strategy_id not in config_copy.strategies.configs:
@@ -207,6 +207,8 @@ def _prepare_ml_config(
     strat_cfg.enabled = True
     params = dict(strat_cfg.params or {})
     params["timeframe"] = timeframe
+    if strat_cfg.type in {"machine_learning", "machine_learning_alt"}:
+        params["label_fee_bps"] = float(fee_bps)
     params.pop("timeframes", None)
     strat_cfg.params = params
     return config_copy
@@ -375,6 +377,7 @@ def run_ml_walk_forward(
         config,
         strategy_id=strategy_id,
         timeframe=timeframe,
+        fee_bps=fee_bps,
     )
     pairs = _configured_backtest_pairs(config_copy)
     market_data = BacktestMarketData(config_copy, pairs, [timeframe], start, end)
