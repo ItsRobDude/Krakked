@@ -89,6 +89,39 @@ def _write_ohlc_series(
     frame.to_parquet(bars_path / "XBTUSD.parquet")
 
 
+def _configure_classifier_strategy(config: AppConfig, strategy_id: str, type_: str) -> None:
+    config.strategies.configs[strategy_id] = StrategyConfig(
+        name=strategy_id,
+        type=type_,
+        enabled=True,
+        params={
+            "pairs": ["BTC/USD"],
+            "timeframe": "1h",
+            "lookback_bars": 5,
+            "short_window": 2,
+            "long_window": 5,
+            "continuous_learning": True,
+            "target_exposure_usd": 100.0,
+            "max_positions": 1,
+        },
+    )
+    config.risk.max_per_strategy_pct[strategy_id] = 5.0
+
+
+def _assert_fold_examples_before_test_start(
+    result: Any, base_db_path: Path, stem: str
+) -> None:
+    for fold in result.summary.folds[:2]:
+        fold_path = base_db_path.with_name(f"{stem}.fold-{fold.fold_index:03d}.db")
+        with sqlite3.connect(fold_path) as conn:
+            rows = conn.execute(
+                "SELECT created_at FROM ml_training_examples ORDER BY created_at"
+            ).fetchall()
+        assert rows
+        created_at_values = [datetime.fromisoformat(row[0]) for row in rows]
+        assert max(created_at_values) < fold.test_start
+
+
 def test_build_walk_forward_folds_rolls_by_test_window() -> None:
     timestamps = list(range(10))
 
@@ -206,22 +239,7 @@ def test_ml_walk_forward_alt_does_not_record_test_examples_when_frozen(
     tmp_path: Path,
 ) -> None:
     config = _build_ml_config(tmp_path)
-    config.strategies.configs["ai_predictor_alt"] = StrategyConfig(
-        name="ai_predictor_alt",
-        type="machine_learning_alt",
-        enabled=True,
-        params={
-            "pairs": ["BTC/USD"],
-            "timeframe": "1h",
-            "lookback_bars": 5,
-            "short_window": 2,
-            "long_window": 5,
-            "continuous_learning": True,
-            "target_exposure_usd": 100.0,
-            "max_positions": 1,
-        },
-    )
-    config.risk.max_per_strategy_pct["ai_predictor_alt"] = 5.0
+    _configure_classifier_strategy(config, "ai_predictor_alt", "machine_learning_alt")
     _seed_pair_metadata(config)
     timestamps = [1_700_000_000 + idx * 3600 for idx in range(42)]
     closes = [100.0 + idx * 0.5 for idx in range(42)]
@@ -241,17 +259,44 @@ def test_ml_walk_forward_alt_does_not_record_test_examples_when_frozen(
         strict_data=True,
     )
 
-    for fold in result.summary.folds[:2]:
-        fold_path = base_db_path.with_name(
-            f"ml-alt-walk-forward.fold-{fold.fold_index:03d}.db"
-        )
-        with sqlite3.connect(fold_path) as conn:
-            rows = conn.execute(
-                "SELECT created_at FROM ml_training_examples ORDER BY created_at"
-            ).fetchall()
-        assert rows
-        created_at_values = [datetime.fromisoformat(row[0]) for row in rows]
-        assert max(created_at_values) < fold.test_start
+    _assert_fold_examples_before_test_start(result, base_db_path, "ml-alt-walk-forward")
+
+
+@pytest.mark.parametrize(
+    ("strategy_id", "type_"),
+    [
+        ("ai_predictor", "machine_learning"),
+        ("ai_regression", "machine_learning_regression"),
+    ],
+)
+def test_ml_walk_forward_does_not_record_test_examples_when_frozen(
+    tmp_path: Path, strategy_id: str, type_: str
+) -> None:
+    config = _build_ml_config(tmp_path)
+    if strategy_id == "ai_predictor":
+        _configure_classifier_strategy(config, strategy_id, type_)
+    _seed_pair_metadata(config)
+    timestamps = [1_700_000_000 + idx * 3600 for idx in range(42)]
+    closes = [100.0 + idx * 0.5 for idx in range(42)]
+    _write_ohlc_series(tmp_path, timestamps, closes)
+    base_db_path = tmp_path / "reports" / f"{strategy_id}-walk-forward.db"
+
+    result = run_ml_walk_forward(
+        config,
+        start=datetime.fromtimestamp(timestamps[0], tz=UTC),
+        end=datetime.fromtimestamp(timestamps[-1], tz=UTC),
+        strategy_id=strategy_id,
+        timeframe="1h",
+        train_bars=12,
+        test_bars=6,
+        fee_bps=25.0,
+        db_path=str(base_db_path),
+        strict_data=True,
+    )
+
+    _assert_fold_examples_before_test_start(
+        result, base_db_path, f"{strategy_id}-walk-forward"
+    )
 
 
 def test_ml_walk_forward_fee_bps_controls_regression_edge_metadata(

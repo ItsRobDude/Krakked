@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
+import logging
 import math
 import pickle
 import sqlite3
@@ -28,7 +29,10 @@ from krakked.strategy.ml_labels import (
     NO_POSITIVE_EDGE_PREDICTION,
     POSITIVE_EDGE_PREDICTION,
 )
+from krakked.strategy.features import ML_FEATURE_NAMES
 from krakked.strategy.models import StrategyIntent
+
+logger = logging.getLogger(__name__)
 
 ML_STRATEGY_TYPES = {
     "machine_learning",
@@ -609,6 +613,8 @@ def _model_diagnostic(
         diagnostic["checkpoint_state"] = checkpoint_state
 
     try:
+        # Trust boundary: model blobs are written by this bot into the
+        # operator-owned SQLite DB and are not accepted from remote callers.
         model = pickle.loads(model_blob)
     except Exception as exc:
         diagnostic["load_error"] = str(exc)
@@ -709,6 +715,11 @@ def _collect_model_diagnostics(
                 )
             )
     except Exception:
+        logger.warning(
+            "Failed to collect ML model diagnostics for %s",
+            strategy_id,
+            exc_info=True,
+        )
         return []
     return entries
 
@@ -742,6 +753,11 @@ def _collect_training_diagnostics(store: object, strategy_id: str) -> dict[str, 
         )
         rows = [(str(model_key), float(label)) for model_key, label in cursor.fetchall()]
     except Exception:
+        logger.warning(
+            "Failed to collect ML training diagnostics for %s",
+            strategy_id,
+            exc_info=True,
+        )
         return {"example_count": 0, "label_quantiles": {"count": 0}}
 
     labels = [label for _model_key, label in rows]
@@ -762,7 +778,7 @@ def _features_from_prediction(prediction: MLWalkForwardPrediction) -> Optional[l
     if not isinstance(features, dict):
         return None
     values: list[float] = []
-    for name in ("pct_change", "trend_diff", "volatility"):
+    for name in ML_FEATURE_NAMES:
         value = _finite_float(features.get(name))
         if value is None:
             return None
@@ -815,6 +831,8 @@ def _decision_scores(
     predictions: list[MLWalkForwardPrediction],
     model_entries: list[tuple[dict[str, Any], Optional[object]]],
 ) -> list[float]:
+    # Post-hoc reconstruction from final fold model state; this is meaningful only
+    # because test folds are expected not to mutate models while learning is frozen.
     scores: list[float] = []
     for prediction in predictions:
         if prediction.prediction_target == "signed_return_delta":
