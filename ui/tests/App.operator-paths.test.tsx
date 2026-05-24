@@ -111,7 +111,6 @@ const strategy = (overrides: Partial<StrategyState>): StrategyState => ({
   last_intents_at: '2026-05-02T03:00:00Z',
   last_actions_at: null,
   last_evaluated_at: '2026-05-02T03:00:00Z',
-  current_positions: [],
   pnl_summary: { realized_pnl_usd: 0, exposure_pct: 6.2 },
   last_intents: null,
   conflict_summary: null,
