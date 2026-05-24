@@ -35,7 +35,9 @@ def _build_backtest_config(tmp_path: Path) -> AppConfig:
 
 
 def _seed_pair_metadata(config: AppConfig) -> None:
-    PairMetadataStore(Path(config.market_data.metadata_path)).save(
+    metadata_path = config.market_data.metadata_path
+    assert metadata_path is not None
+    PairMetadataStore(Path(metadata_path)).save(
         [
             PairMetadata(
                 canonical="XBTUSD",
@@ -101,13 +103,15 @@ def test_run_backtest_wires_risk_provider(monkeypatch: pytest.MonkeyPatch) -> No
             return None
 
     class _DummyPortfolioService:
-        def __init__(self, config: AppConfig, *args: Any, **kwargs: Any) -> None:  # noqa: ARG002
+        def __init__(
+            self, config: AppConfig, *args: Any, **kwargs: Any
+        ) -> None:  # noqa: ARG002
             self.store = SimpleNamespace(close=lambda: None)
             self.app_config = config
             self.portfolio = SimpleNamespace(
                 ingest_trades=lambda trades, persist=True: None
             )
-            self.realized_pnl_history = []
+            self.realized_pnl_history: list[Any] = []
 
         def initialize(self) -> None:
             return None
@@ -401,9 +405,7 @@ def test_build_backtest_preflight_accepts_closed_daily_boundary(
     config = _build_backtest_config(tmp_path)
     _seed_pair_metadata(config)
     start = datetime(2026, 4, 20, tzinfo=UTC)
-    timestamps = [
-        int((start + timedelta(days=idx)).timestamp()) for idx in range(19)
-    ]
+    timestamps = [int((start + timedelta(days=idx)).timestamp()) for idx in range(19)]
     closes = [100.0] * len(timestamps)
     _write_ohlc_series(
         tmp_path,
@@ -460,7 +462,9 @@ def test_build_trend_core_warmup_warnings_for_short_daily_window(
         warnings=[],
     )
 
-    warnings = runner._build_trend_core_warmup_warnings(config, preflight)  # noqa: SLF001
+    warnings = runner._build_trend_core_warmup_warnings(
+        config, preflight
+    )  # noqa: SLF001
 
     assert warnings == [
         "Strategy trend_core may be under-warmed on 1d: requires 20 closed bars, but BTC/USD only have 19 inside the requested window."

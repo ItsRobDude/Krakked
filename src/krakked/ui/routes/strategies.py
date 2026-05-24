@@ -40,14 +40,18 @@ def _strategy_label(ctx, strategy_id: str) -> str:
     return strategy_id.replace("_", " ").replace("-", " ").title()
 
 
-@router.get("", response_model=ApiEnvelope[list[StrategyStatePayload]], include_in_schema=False)
+@router.get(
+    "", response_model=ApiEnvelope[list[StrategyStatePayload]], include_in_schema=False
+)
 @router.get("/", response_model=ApiEnvelope[list[StrategyStatePayload]])
 async def get_strategies(request: Request) -> ApiEnvelope[list[StrategyStatePayload]]:
     ctx = _context(request)
 
     def _read_strategies() -> list[StrategyStatePayload]:
         return [
-            StrategyStatePayload(label=_strategy_label(ctx, state.strategy_id), **state.__dict__)
+            StrategyStatePayload(
+                label=_strategy_label(ctx, state.strategy_id), **state.__dict__
+            )
             for state in ctx.strategy_engine.get_cached_strategy_state()
         ]
 
@@ -171,6 +175,7 @@ async def update_strategy_config(
             return ApiEnvelope(data=None, error="No strategy config fields provided")
 
         updated_fields: dict[str, object] = {}
+        updated_params: dict[str, object] = {}
 
         if "strategy_weight" in payload.model_fields_set:
             if payload.strategy_weight is None:
@@ -178,9 +183,9 @@ async def update_strategy_config(
             strat_cfg.strategy_weight = payload.strategy_weight
             updated_fields["strategy_weight"] = payload.strategy_weight
             if strategy_id in ctx.strategy_engine.strategy_states:
-                ctx.strategy_engine.strategy_states[
-                    strategy_id
-                ].configured_weight = payload.strategy_weight
+                ctx.strategy_engine.strategy_states[strategy_id].configured_weight = (
+                    payload.strategy_weight
+                )
 
         if "params" in payload.model_fields_set and payload.params is None:
             return ApiEnvelope(data=None, error="'params' cannot be null")
@@ -188,7 +193,7 @@ async def update_strategy_config(
         profile = payload.params.risk_profile if payload.params else None
         if profile:
             strat_cfg.params["risk_profile"] = profile
-            updated_fields["params"] = {"risk_profile": profile}
+            updated_params["risk_profile"] = profile
             if strategy_id in ctx.strategy_engine.strategy_states:
                 ctx.strategy_engine.strategy_states[strategy_id].params[
                     "risk_profile"
@@ -204,15 +209,14 @@ async def update_strategy_config(
 
         if payload.params and payload.params.continuous_learning is not None:
             strat_cfg.params["continuous_learning"] = payload.params.continuous_learning
-            updated_fields.setdefault("params", {})
-            if isinstance(updated_fields["params"], dict):
-                updated_fields["params"]["continuous_learning"] = (
-                    payload.params.continuous_learning
-                )
+            updated_params["continuous_learning"] = payload.params.continuous_learning
             if strategy_id in ctx.strategy_engine.strategy_states:
                 ctx.strategy_engine.strategy_states[strategy_id].params[
                     "continuous_learning"
                 ] = payload.params.continuous_learning
+
+        if updated_params:
+            updated_fields["params"] = updated_params
 
         ctx.strategy_engine.refresh_strategy_weight_state()
         dump_runtime_overrides(ctx.config)

@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, cast
 
 from krakked.config import AppConfig
 from krakked.connection.rest_client import KrakenRESTClient
@@ -626,7 +626,11 @@ def _resolve_simulated_fill_price(
 
 def _fallback_preflight(market_data: Any) -> BacktestPreflight:
     get_missing_series = getattr(market_data, "get_missing_series", None)
-    missing_series = list(get_missing_series()) if callable(get_missing_series) else []
+    missing_series = (
+        list(cast(Iterable[str], get_missing_series()))
+        if callable(get_missing_series)
+        else []
+    )
     usable_series_count = 0 if missing_series else 1
     return _assess_preflight(
         BacktestPreflight(
@@ -641,8 +645,16 @@ def _fallback_preflight(market_data: Any) -> BacktestPreflight:
 def _get_preflight(market_data: Any) -> BacktestPreflight:
     get_preflight = getattr(market_data, "get_preflight", None)
     if callable(get_preflight):
-        return get_preflight()
+        return cast(BacktestPreflight, get_preflight())
     return _fallback_preflight(market_data)
+
+
+def _summary_pairs(market_data: Any, fallback_pairs: Iterable[str]) -> List[str]:
+    get_universe_metadata = getattr(market_data, "get_universe_metadata", None)
+    if callable(get_universe_metadata):
+        metadata = cast(Iterable[PairMetadata], get_universe_metadata())
+        return [pair_meta.ws_symbol for pair_meta in metadata]
+    return list(fallback_pairs)
 
 
 def _assess_preflight(preflight: BacktestPreflight) -> BacktestPreflight:
@@ -712,12 +724,7 @@ def build_backtest_preflight(
     market_data = BacktestMarketData(config_copy, pairs, frames, start, end)
     try:
         preflight = _get_preflight(market_data)
-        get_universe_metadata = getattr(market_data, "get_universe_metadata", None)
-        summary_pairs = (
-            [pair_meta.ws_symbol for pair_meta in get_universe_metadata()]
-            if callable(get_universe_metadata)
-            else list(pairs)
-        )
+        summary_pairs = _summary_pairs(market_data, pairs)
         return BacktestPreflightResult(
             start=start,
             end=end,
@@ -844,12 +851,7 @@ def run_backtest(
             if callable(maybe_snapshot):
                 maybe_snapshot(now=ts)
 
-        get_universe_metadata = getattr(market_data, "get_universe_metadata", None)
-        summary_pairs = (
-            [pair_meta.ws_symbol for pair_meta in get_universe_metadata()]
-            if callable(get_universe_metadata)
-            else list(pairs)
-        )
+        summary_pairs = _summary_pairs(market_data, pairs)
 
         summary = _build_backtest_summary(
             start=start,
@@ -950,11 +952,8 @@ def _build_backtest_summary(
     rejected_orders = sum(1 for order in orders if order.status == "rejected")
     execution_errors = sum(len(execution.errors) for execution in executions)
     blocked_reason_counts = _build_blocked_reason_counts(plans)
-    get_equity = getattr(portfolio, "get_equity", None)
-    equity_view = get_equity() if callable(get_equity) else None
-    ending_equity = (
-        equity_view.equity_base if equity_view is not None else float(starting_cash_usd)
-    )
+    equity_view = portfolio.get_equity()
+    ending_equity = equity_view.equity_base
     absolute_pnl = ending_equity - float(starting_cash_usd)
     return_pct = (
         (absolute_pnl / float(starting_cash_usd)) * 100.0 if starting_cash_usd else 0.0
@@ -1006,12 +1005,8 @@ def _build_backtest_summary(
         absolute_pnl_usd=absolute_pnl,
         return_pct=return_pct,
         max_drawdown_pct=max_drawdown_pct,
-        realized_pnl_usd=(
-            equity_view.realized_pnl_base_total if equity_view is not None else 0.0
-        ),
-        unrealized_pnl_usd=(
-            equity_view.unrealized_pnl_base_total if equity_view is not None else 0.0
-        ),
+        realized_pnl_usd=equity_view.realized_pnl_base_total,
+        unrealized_pnl_usd=equity_view.unrealized_pnl_base_total,
         pairs=pairs,
         timeframes=timeframes,
         total_cycles=len(plans),

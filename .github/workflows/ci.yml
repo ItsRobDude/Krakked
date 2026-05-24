@@ -170,6 +170,11 @@ jobs:
             poetry run pyright src ui
           fi
 
+      - name: Typecheck UI tests
+        if: matrix.check == 'pyright'
+        working-directory: ui
+        run: npm run typecheck:tests
+
   package:
     runs-on: ubuntu-latest
     needs: [tests, lint, static-typing, pre-commit]
@@ -276,6 +281,10 @@ jobs:
       - name: Lint UI
         working-directory: ui
         run: npm run lint
+
+      - name: Test UI
+        working-directory: ui
+        run: npm run test:run
 
       - name: Build UI
         working-directory: ui

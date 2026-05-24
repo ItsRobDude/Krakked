@@ -33,6 +33,8 @@ The Git tag should match the version in [`pyproject.toml`](../pyproject.toml).
    - `poetry run pytest -q`
    - `poetry run flake8 src tests`
    - `poetry run mypy src tests`
+   - `poetry run pyright src ui`
+   - `cd ui && npm ci && npm run lint && npm run typecheck:tests && npm run test:run && npm run build`
    - `poetry build`
 4. If possible, run one real Docker smoke test:
    - local build via `docker compose -f compose.yaml -f compose.dev.yaml up --build`

@@ -6,7 +6,7 @@ import logging
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 import yaml  # type: ignore[import-untyped]
 from fastapi import APIRouter, HTTPException, Request
@@ -488,9 +488,11 @@ def _build_portfolio_summary_payload(ctx) -> PortfolioSummary:
     equity = ctx.portfolio.get_cached_equity()
     last_snapshot_ts = ctx.portfolio.get_cached_last_snapshot_ts()
     reference_reader = getattr(ctx.portfolio, "get_exchange_reference_summary", None)
-    reference_summary = (
-        reference_reader() if callable(reference_reader) else None
-    ) or {}
+    reference_summary: Dict[str, Any] = {}
+    if callable(reference_reader):
+        raw_reference_summary = reference_reader()
+        if isinstance(raw_reference_summary, dict):
+            reference_summary = raw_reference_summary
     return PortfolioSummary(
         equity_usd=equity.equity_base,
         cash_usd=equity.cash_base,
@@ -666,7 +668,9 @@ def _build_cockpit_market_data_payload(
             session_pairs.update(strategy_pairs)
 
     stale_by_key = {
-        _canonical_market_pair(pair): pair for pair in stale_pairs if _canonical_market_pair(pair)
+        _canonical_market_pair(pair): pair
+        for pair in stale_pairs
+        if _canonical_market_pair(pair)
     }
     session_stale = [
         display for key, display in stale_by_key.items() if key in session_pairs
@@ -850,8 +854,7 @@ def _build_live_readiness_payload(
                 (
                     "Portfolio sync is healthy."
                     if health.portfolio_sync_ok
-                    else health.portfolio_sync_reason
-                    or "Portfolio sync is degraded."
+                    else health.portfolio_sync_reason or "Portfolio sync is degraded."
                 ),
             )
         )
@@ -877,7 +880,10 @@ def _build_live_readiness_payload(
                 market_data.message or "Session-critical market data is degraded.",
             )
         )
-    elif market_data and market_data.classification in {"watchlist_only", "global_only"}:
+    elif market_data and market_data.classification in {
+        "watchlist_only",
+        "global_only",
+    }:
         checks.append(
             _live_readiness_check(
                 "market_data",

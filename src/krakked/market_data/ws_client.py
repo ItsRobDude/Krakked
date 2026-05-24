@@ -79,9 +79,7 @@ class KrakenWSClientV2:
     @property
     def is_connected(self) -> bool:
         """Returns True if the WebSocket connection is open."""
-        return (
-            self._websocket is not None and self._websocket.state is State.OPEN
-        )
+        return self._websocket is not None and self._websocket.state is State.OPEN
 
     def start(self):
         """Starts the WebSocket client in a separate thread."""
@@ -229,7 +227,9 @@ class KrakenWSClientV2:
                 error_message or "unknown error",
             )
 
-    def _extract_ws_symbol(self, data: dict[str, Any], payload: list[Any]) -> Optional[str]:
+    def _extract_ws_symbol(
+        self, data: dict[str, Any], payload: list[Any]
+    ) -> Optional[str]:
         ws_symbol = data.get("symbol")
         if isinstance(ws_symbol, str) and ws_symbol:
             return ws_symbol
@@ -360,6 +360,15 @@ class KrakenWSClientV2:
                     return
 
                 interval = self._extract_ohlc_interval(data, candle_data)
+                if interval is None:
+                    logger.warning(
+                        "Received OHLC data without an interval",
+                        extra={
+                            "event": "ws_ohlc_interval_missing",
+                            "symbol": ws_symbol,
+                        },
+                    )
+                    return
                 timeframe_key = self._get_timeframe_from_interval(interval)
                 if not timeframe_key:
                     logger.warning(

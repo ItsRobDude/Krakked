@@ -81,10 +81,14 @@ async def get_portfolio_summary(request: Request) -> ApiEnvelope[PortfolioSummar
     def _read_summary() -> PortfolioSummary:
         equity = ctx.portfolio.get_cached_equity()
         last_snapshot_ts = ctx.portfolio.get_cached_last_snapshot_ts()
-        reference_reader = getattr(ctx.portfolio, "get_exchange_reference_summary", None)
-        reference_summary = (
-            reference_reader() if callable(reference_reader) else None
-        ) or {}
+        reference_reader = getattr(
+            ctx.portfolio, "get_exchange_reference_summary", None
+        )
+        reference_summary: Dict[str, Any] = {}
+        if callable(reference_reader):
+            raw_reference_summary = reference_reader()
+            if isinstance(raw_reference_summary, dict):
+                reference_summary = raw_reference_summary
         return PortfolioSummary(
             equity_usd=equity.equity_base,
             cash_usd=equity.cash_base,

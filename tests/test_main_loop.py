@@ -40,7 +40,7 @@ class StubPortfolioService:
             mismatched_assets=[],
         )
         self.last_sync_ok = True
-        self.ingested_results = []
+        self.ingested_results: list[object] = []
 
     def initialize(self) -> None: ...
 

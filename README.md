@@ -366,7 +366,8 @@ The CI workflow is the source of truth for what must pass before packaging/deplo
 * **Install (dev mode)**: `poetry install --with dev --extras tui` to match CI, or `pip install -e .[tui]` if you are not using Poetry.
 * **Tests**: `poetry run pytest` from the repo root; set `KRAKEN_LIVE_TESTS=1` to opt into Kraken-backed integration tests (requires valid credentials).
 * **Lint**: `poetry run flake8 src tests` (same scope as CI).
-* **Static typing**: `poetry run mypy src tests` and `poetry run pyright src ui` (run `npm ci` in `ui/` first so Pyright picks up the built UI types, as in CI).【F:.github/workflows/ci.yml†L60-L95】
+* **Static typing**: `poetry run mypy src tests`, `poetry run pyright src ui`, and `npm run typecheck:tests` from `ui/` after `npm ci`.【F:.github/workflows/ci.yml†L60-L95】
+* **UI checks**: from `ui/`, run `npm ci`, `npm run lint`, `npm run test:run`, and `npm run build` to mirror the CI UI job.
 * **Packaging sanity**: `poetry build` if you need to mirror the release artifact validation done in CI.
 
 ## 🐳 Docker

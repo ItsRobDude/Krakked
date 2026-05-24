@@ -40,7 +40,11 @@ DEFAULT_PROFILE_PAPER_DB_NAME = "portfolio.paper.db"
 
 
 def resolve_portfolio_db_path(config: AppConfig, db_path: Optional[str] = None) -> str:
-    configured_path = db_path or getattr(config.portfolio, "db_path", DEFAULT_PORTFOLIO_DB_NAME)
+    configured_path = str(
+        db_path
+        or getattr(config.portfolio, "db_path", None)
+        or DEFAULT_PORTFOLIO_DB_NAME
+    )
     if (
         getattr(config.execution, "mode", None) == "paper"
         and configured_path == DEFAULT_PORTFOLIO_DB_NAME
@@ -48,10 +52,7 @@ def resolve_portfolio_db_path(config: AppConfig, db_path: Optional[str] = None) 
     ):
         profile_name = str(config.session.profile_name)
         target = (
-            get_config_dir()
-            / "profiles"
-            / profile_name
-            / DEFAULT_PROFILE_PAPER_DB_NAME
+            get_config_dir() / "profiles" / profile_name / DEFAULT_PROFILE_PAPER_DB_NAME
         )
         target.parent.mkdir(parents=True, exist_ok=True)
         return str(target)
@@ -185,6 +186,7 @@ class PortfolioService:
                 self._seed_paper_wallet()
                 self._save_balance_snapshot(datetime.now(timezone.utc))
             else:
+                assert snapshot is not None
                 self.portfolio.balances = dict(snapshot.balances)
 
             self.portfolio.positions.clear()
@@ -454,7 +456,9 @@ class PortfolioService:
         self.portfolio.balances[base_asset] = base_balance
         self.portfolio.balances[quote_asset] = quote_balance
 
-    def ingest_filled_orders(self, execution: "ExecutionResult", fee_bps: float = 0.0) -> None:
+    def ingest_filled_orders(
+        self, execution: "ExecutionResult", fee_bps: float = 0.0
+    ) -> None:
         trades: List[Dict[str, Any]] = []
         for order in getattr(execution, "orders", []):
             trade = self._trade_from_filled_order(order, fee_bps=fee_bps)
@@ -767,7 +771,7 @@ class PortfolioService:
     def drift_flag(self) -> bool:
         return self.portfolio.drift_flag
 
-    def get_equity(self, include_manual: Optional[bool] = None):
+    def get_equity(self, include_manual: Optional[bool] = None) -> EquityView:
         return self.portfolio.equity_view(include_manual=include_manual)
 
     def get_cached_equity(self) -> EquityView:
