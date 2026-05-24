@@ -725,7 +725,7 @@ def test_ml_walk_forward_subcommand_writes_report(
     class _FakeWalkForwardResult:
         def to_report_dict(self) -> dict[str, Any]:
             return {
-                "report_version": 3,
+                "report_version": 4,
                 "generated_at": start.isoformat(),
                 "summary": {
                     "start": start.isoformat(),
@@ -755,6 +755,7 @@ def test_ml_walk_forward_subcommand_writes_report(
                         "precision_long": 0.5,
                     },
                     "confidence_buckets": [],
+                    "diagnostic_warnings": [],
                     "promotable": False,
                     "promotable_reasons": ["Directional accuracy is below 52%."],
                     "folds": [],

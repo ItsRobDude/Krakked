@@ -439,3 +439,46 @@ def test_alt_strategy_trains_micro_up_move_as_flat(mock_ctx):
 
     model.partial_fit.assert_called()
     assert model.partial_fit.call_args.args[1] == [0]
+
+
+def test_alt_strategy_freeze_does_not_record_or_update_training(mock_ctx):
+    cfg = StrategyConfig(
+        name="ai_alt_test",
+        type="ai_predictor_alt",
+        enabled=True,
+        params={
+            "pairs": ["XBT/USD"],
+            "timeframe": "1h",
+            "lookback_bars": 5,
+            "short_window": 2,
+            "long_window": 5,
+            "continuous_learning": False,
+        },
+    )
+    strategy = AIPredictorAltStrategy(cfg)
+    key = ("XBT/USD", "1h")
+    model = MagicMock()
+    model.predict.return_value = [0]
+    model.decision_function.return_value = [-1.0]
+    strategy.models[key] = model
+    strategy.model_initialized[key] = True
+    strategy._last_observation[key] = ([0.1, 0.0, 0.01], 100.0)
+    store = MagicMock()
+
+    mock_ctx.portfolio.store = store
+    mock_ctx.market_data.get_latest_price.return_value = 101.0
+    mock_ctx.market_data.get_ohlc.return_value = _make_bars(
+        1000000, [100.0] * 8 + [101.0, 101.0]
+    )
+
+    intents = strategy.generate_intents(mock_ctx)
+
+    model.partial_fit.assert_not_called()
+    store.record_ml_example.assert_not_called()
+    checkpoint_states = [
+        call.kwargs["checkpoint_state"]
+        for call in store.save_ml_model_checkpoint.call_args_list
+    ]
+    assert "training" not in checkpoint_states
+    assert intents
+    assert intents[0].metadata["learning_enabled"] is False

@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import copy
+import json
 import math
+import pickle
+import sqlite3
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -11,6 +14,7 @@ from tempfile import TemporaryDirectory
 from typing import Any, Iterable, Optional
 
 from krakked import APP_VERSION
+from krakked.backtest.ml_reporting import ML_WALK_FORWARD_REPORT_VERSION
 from krakked.backtest.runner import (
     BacktestMarketData,
     BacktestPortfolioService,
@@ -33,6 +37,9 @@ ML_STRATEGY_TYPES = {
 }
 EVALUATION_MODE = "rolling_window_isolated"
 EDGE_SCORING_MODE = "intent_hurdle_aligned"
+DIAGNOSTIC_RETURN_THRESHOLDS = (0.003, 0.005, 0.01, 0.015)
+NEAR_ZERO_THRESHOLD = 1e-12
+RARE_POSITIVE_LABEL_RATE = 0.01
 
 
 @dataclass
@@ -98,6 +105,7 @@ class MLWalkForwardFold:
     train_cycles: int
     test_cycles: int
     predictions: list[MLWalkForwardPrediction] = field(default_factory=list)
+    diagnostics: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -111,6 +119,7 @@ class MLWalkForwardFold:
             "prediction_count": len(self.predictions),
             "metrics": _build_prediction_metrics(self.predictions),
             "confidence_buckets": _build_confidence_buckets(self.predictions),
+            "diagnostics": copy.deepcopy(self.diagnostics),
         }
 
 
@@ -137,7 +146,14 @@ class MLWalkForwardSummary:
             prediction for fold in self.folds for prediction in fold.predictions
         ]
         metrics = _build_prediction_metrics(predictions)
+        fold_dicts = [fold.to_dict() for fold in self.folds]
+        diagnostic_warnings = _build_diagnostic_warnings(fold_dicts)
         promotable, promotable_reasons = _assess_promotability(metrics)
+        if not promotable:
+            for warning in diagnostic_warnings:
+                reason = f"Diagnostic warning: {warning}"
+                if reason not in promotable_reasons:
+                    promotable_reasons.append(reason)
         return {
             "start": self.start.astimezone(UTC).isoformat(),
             "end": self.end.astimezone(UTC).isoformat(),
@@ -159,9 +175,10 @@ class MLWalkForwardSummary:
             "warnings": list(self.warnings),
             "metrics": metrics,
             "confidence_buckets": _build_confidence_buckets(predictions),
+            "diagnostic_warnings": diagnostic_warnings,
             "promotable": promotable,
             "promotable_reasons": promotable_reasons,
-            "folds": [fold.to_dict() for fold in self.folds],
+            "folds": fold_dicts,
         }
 
 
@@ -171,7 +188,7 @@ class MLWalkForwardResult:
 
     def to_report_dict(self) -> dict[str, Any]:
         return {
-            "report_version": 3,
+            "report_version": ML_WALK_FORWARD_REPORT_VERSION,
             "generated_at": datetime.now(UTC).isoformat(),
             "summary": self.summary.to_dict(),
             "provenance": {
@@ -443,6 +460,684 @@ def _average(values: Iterable[float]) -> Optional[float]:
     return sum(collected) / len(collected)
 
 
+def _finite_float(value: object) -> Optional[float]:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    parsed = float(value)
+    if not math.isfinite(parsed):
+        return None
+    return parsed
+
+
+def _flatten_numbers(value: object) -> list[float]:
+    tolist = getattr(value, "tolist", None)
+    if callable(tolist):
+        value = tolist()
+    parsed = _finite_float(value)
+    if parsed is not None:
+        return [parsed]
+    if isinstance(value, (list, tuple)):
+        flattened: list[float] = []
+        for item in value:
+            flattened.extend(_flatten_numbers(item))
+        return flattened
+    return []
+
+
+def _json_numeric(value: object) -> Any:
+    tolist = getattr(value, "tolist", None)
+    if callable(tolist):
+        value = tolist()
+    parsed = _finite_float(value)
+    if parsed is not None:
+        return parsed
+    if isinstance(value, (list, tuple)):
+        return [_json_numeric(item) for item in value]
+    return None
+
+
+def _quantiles(values: Iterable[object]) -> dict[str, Any]:
+    numbers = sorted(
+        parsed for value in values if (parsed := _finite_float(value)) is not None
+    )
+    count = len(numbers)
+    if count == 0:
+        return {"count": 0}
+
+    def percentile(q: float) -> float:
+        if count == 1:
+            return numbers[0]
+        position = (count - 1) * q
+        lower = math.floor(position)
+        upper = math.ceil(position)
+        if lower == upper:
+            return numbers[int(position)]
+        lower_value = numbers[lower]
+        upper_value = numbers[upper]
+        return lower_value + (upper_value - lower_value) * (position - lower)
+
+    avg = sum(numbers) / count
+    variance = sum((value - avg) ** 2 for value in numbers) / count
+    return {
+        "count": count,
+        "min": numbers[0],
+        "p1": percentile(0.01),
+        "p25": percentile(0.25),
+        "p50": percentile(0.50),
+        "p75": percentile(0.75),
+        "p99": percentile(0.99),
+        "max": numbers[-1],
+        "avg": avg,
+        "std": math.sqrt(variance),
+    }
+
+
+def _threshold_counts(values: list[float]) -> list[dict[str, Any]]:
+    total = len(values)
+    return [
+        {
+            "threshold": threshold,
+            "count": sum(1 for value in values if value > threshold),
+            "rate": _rate(sum(1 for value in values if value > threshold), total),
+        }
+        for threshold in DIAGNOSTIC_RETURN_THRESHOLDS
+    ]
+
+
+def _binary_class_balance(labels: list[float]) -> Optional[dict[str, Any]]:
+    if not labels:
+        return None
+    rounded: list[int] = []
+    for label in labels:
+        rounded_label = round(label)
+        if rounded_label not in {0, 1} or abs(label - rounded_label) > 1e-9:
+            return None
+        rounded.append(int(rounded_label))
+    positive_count = sum(1 for label in rounded if label == 1)
+    negative_count = len(rounded) - positive_count
+    return {
+        "negative_label_count": negative_count,
+        "positive_label_count": positive_count,
+        "positive_label_rate": _rate(positive_count, len(rounded)),
+    }
+
+
+def _store_connection(store: object) -> Optional[sqlite3.Connection]:
+    get_conn = getattr(store, "_get_conn", None)
+    if not callable(get_conn):
+        return None
+    try:
+        conn = get_conn()
+    except Exception:
+        return None
+    return conn if isinstance(conn, sqlite3.Connection) else None
+
+
+def _model_initialized(model: object, metadata: dict[str, Any]) -> bool:
+    metadata_value = metadata.get("model_initialized")
+    if isinstance(metadata_value, bool):
+        return metadata_value
+    return bool(
+        hasattr(model, "coef_")
+        or hasattr(model, "intercept_")
+        or hasattr(model, "classes_")
+    )
+
+
+def _model_diagnostic(
+    *,
+    source: str,
+    model_key: str,
+    label_type: str,
+    framework: str,
+    version: int,
+    updated_at: str,
+    model_blob: bytes,
+    checkpoint_state: Optional[str] = None,
+    metadata: Optional[dict[str, Any]] = None,
+) -> tuple[dict[str, Any], Optional[object]]:
+    metadata = metadata or {}
+    diagnostic: dict[str, Any] = {
+        "source": source,
+        "model_key": model_key,
+        "label_type": label_type,
+        "framework": framework,
+        "version": version,
+        "updated_at": updated_at,
+    }
+    if checkpoint_state is not None:
+        diagnostic["checkpoint_state"] = checkpoint_state
+
+    try:
+        model = pickle.loads(model_blob)
+    except Exception as exc:
+        diagnostic["load_error"] = str(exc)
+        diagnostic["initialized"] = False
+        return diagnostic, None
+
+    coef = getattr(model, "coef_", None)
+    intercept = getattr(model, "intercept_", None)
+    coef_values = _flatten_numbers(coef)
+    diagnostic.update(
+        {
+            "initialized": _model_initialized(model, metadata),
+            "coef": _json_numeric(coef),
+            "intercept": _json_numeric(intercept),
+            "coefficient_norm": (
+                math.sqrt(sum(value * value for value in coef_values))
+                if coef_values
+                else None
+            ),
+            "n_iter": _json_numeric(getattr(model, "n_iter_", None)),
+            "t": _json_numeric(getattr(model, "t_", None)),
+        }
+    )
+    return diagnostic, model
+
+
+def _collect_model_diagnostics(
+    store: object, strategy_id: str
+) -> list[tuple[dict[str, Any], Optional[object]]]:
+    conn = _store_connection(store)
+    if conn is None:
+        return []
+
+    entries: list[tuple[dict[str, Any], Optional[object]]] = []
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT model_key, label_type, framework, version, updated_at, model_blob
+            FROM ml_models
+            WHERE strategy_id = ?
+            ORDER BY model_key
+            """,
+            (strategy_id,),
+        )
+        for model_key, label_type, framework, version, updated_at, model_blob in (
+            cursor.fetchall()
+        ):
+            entries.append(
+                _model_diagnostic(
+                    source="live_model",
+                    model_key=str(model_key),
+                    label_type=str(label_type),
+                    framework=str(framework),
+                    version=int(version or 1),
+                    updated_at=str(updated_at),
+                    model_blob=model_blob,
+                )
+            )
+
+        cursor.execute(
+            """
+            SELECT
+                model_key,
+                label_type,
+                framework,
+                version,
+                updated_at,
+                checkpoint_state,
+                metadata_json,
+                model_blob
+            FROM ml_model_checkpoints
+            WHERE strategy_id = ?
+            ORDER BY model_key, checkpoint_kind
+            """,
+            (strategy_id,),
+        )
+        for row in cursor.fetchall():
+            metadata: dict[str, Any] = {}
+            if row[6]:
+                try:
+                    parsed = json.loads(row[6])
+                    if isinstance(parsed, dict):
+                        metadata = parsed
+                except json.JSONDecodeError:
+                    metadata = {}
+            entries.append(
+                _model_diagnostic(
+                    source="checkpoint",
+                    model_key=str(row[0]),
+                    label_type=str(row[1]),
+                    framework=str(row[2]),
+                    version=int(row[3] or 1),
+                    updated_at=str(row[4]),
+                    checkpoint_state=str(row[5] or "ready"),
+                    metadata=metadata,
+                    model_blob=row[7],
+                )
+            )
+    except Exception:
+        return []
+    return entries
+
+
+def _training_label_summary(labels: list[float]) -> dict[str, Any]:
+    balance = _binary_class_balance(labels)
+    summary: dict[str, Any] = {
+        "example_count": len(labels),
+        "label_quantiles": _quantiles(labels),
+    }
+    if balance is not None:
+        summary["class_balance"] = balance
+    return summary
+
+
+def _collect_training_diagnostics(store: object, strategy_id: str) -> dict[str, Any]:
+    conn = _store_connection(store)
+    if conn is None:
+        return {"example_count": 0, "label_quantiles": {"count": 0}}
+
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT model_key, label
+            FROM ml_training_examples
+            WHERE strategy_id = ?
+            ORDER BY model_key, created_at
+            """,
+            (strategy_id,),
+        )
+        rows = [(str(model_key), float(label)) for model_key, label in cursor.fetchall()]
+    except Exception:
+        return {"example_count": 0, "label_quantiles": {"count": 0}}
+
+    labels = [label for _model_key, label in rows]
+    by_model_key: dict[str, list[float]] = {}
+    for model_key, label in rows:
+        by_model_key.setdefault(model_key, []).append(label)
+
+    summary = _training_label_summary(labels)
+    summary["by_model_key"] = {
+        model_key: _training_label_summary(model_labels)
+        for model_key, model_labels in by_model_key.items()
+    }
+    return summary
+
+
+def _features_from_prediction(prediction: MLWalkForwardPrediction) -> Optional[list[float]]:
+    features = prediction.metadata.get("features")
+    if not isinstance(features, dict):
+        return None
+    values: list[float] = []
+    for name in ("pct_change", "trend_diff", "volatility"):
+        value = _finite_float(features.get(name))
+        if value is None:
+            return None
+        values.append(value)
+    return values
+
+
+def _model_matches_prediction(
+    model_key: str, prediction: MLWalkForwardPrediction
+) -> bool:
+    parts = model_key.split("|")
+    if len(parts) < 2:
+        return False
+    if parts[0] == "global":
+        return parts[1] == prediction.timeframe
+    return parts[0] == prediction.pair and parts[1] == prediction.timeframe
+
+
+def _select_model_for_prediction(
+    model_entries: list[tuple[dict[str, Any], Optional[object]]],
+    prediction: MLWalkForwardPrediction,
+) -> Optional[object]:
+    candidates = [
+        (entry, model)
+        for entry, model in model_entries
+        if model is not None
+        and entry.get("source") == "live_model"
+        and _model_matches_prediction(str(entry.get("model_key") or ""), prediction)
+    ]
+    if not candidates:
+        candidates = [
+            (entry, model)
+            for entry, model in model_entries
+            if model is not None
+            and _model_matches_prediction(str(entry.get("model_key") or ""), prediction)
+        ]
+    if not candidates:
+        live_models = [
+            model
+            for entry, model in model_entries
+            if model is not None and entry.get("source") == "live_model"
+        ]
+        if len(live_models) == 1:
+            return live_models[0]
+        return None
+    return candidates[0][1]
+
+
+def _decision_scores(
+    predictions: list[MLWalkForwardPrediction],
+    model_entries: list[tuple[dict[str, Any], Optional[object]]],
+) -> list[float]:
+    scores: list[float] = []
+    for prediction in predictions:
+        if prediction.prediction_target == "signed_return_delta":
+            continue
+        features = _features_from_prediction(prediction)
+        if features is None:
+            continue
+        model = _select_model_for_prediction(model_entries, prediction)
+        decision_function = getattr(model, "decision_function", None)
+        if not callable(decision_function):
+            continue
+        try:
+            result: Any = decision_function([features])
+            raw_score = result[0]
+        except Exception:
+            continue
+        score = _finite_float(raw_score)
+        if score is not None:
+            scores.append(score)
+    return scores
+
+
+def _build_prediction_diagnostics(
+    predictions: list[MLWalkForwardPrediction],
+    model_entries: list[tuple[dict[str, Any], Optional[object]]],
+) -> dict[str, Any]:
+    predicted_deltas = [
+        float(prediction.metadata["predicted_delta"])
+        for prediction in predictions
+        if _finite_float(prediction.metadata.get("predicted_delta")) is not None
+    ]
+    decision_scores = _decision_scores(predictions, model_entries)
+    positive_count = sum(1 for prediction in predictions if prediction.predicted_positive_edge)
+    diagnostics: dict[str, Any] = {
+        "prediction_count": len(predictions),
+        "positive_edge_prediction_count": positive_count,
+        "no_positive_edge_prediction_count": len(predictions) - positive_count,
+        "confidence_quantiles": _quantiles(
+            prediction.confidence for prediction in predictions
+        ),
+    }
+    if predicted_deltas:
+        diagnostics["predicted_delta_quantiles"] = _quantiles(predicted_deltas)
+    if decision_scores:
+        diagnostics["decision_score_quantiles"] = _quantiles(decision_scores)
+    if predictions:
+        diagnostics["predicted_class_counts"] = {
+            "positive_edge": positive_count,
+            "no_positive_edge": len(predictions) - positive_count,
+        }
+    return diagnostics
+
+
+def _build_outcome_diagnostics(
+    predictions: list[MLWalkForwardPrediction],
+) -> dict[str, Any]:
+    realized_returns = [prediction.realized_return for prediction in predictions]
+    above_hurdle_count = sum(
+        1
+        for prediction in predictions
+        if prediction.realized_return > prediction.evaluation_hurdle_pct
+    )
+    return {
+        "realized_return_quantiles": _quantiles(realized_returns),
+        "above_evaluation_hurdle": {
+            "count": above_hurdle_count,
+            "rate": _rate(above_hurdle_count, len(predictions)),
+        },
+        "evaluation_hurdle_sources": sorted(
+            {prediction.evaluation_hurdle_source for prediction in predictions}
+        ),
+        "evaluation_hurdle_quantiles": _quantiles(
+            prediction.evaluation_hurdle_pct for prediction in predictions
+        ),
+        "fixed_threshold_counts": _threshold_counts(realized_returns),
+    }
+
+
+def _build_fold_diagnostics(
+    *,
+    store: object,
+    strategy_id: str,
+    predictions: list[MLWalkForwardPrediction],
+) -> dict[str, Any]:
+    model_entries = _collect_model_diagnostics(store, strategy_id)
+    return {
+        "models": [copy.deepcopy(entry) for entry, _model in model_entries],
+        "training": _collect_training_diagnostics(store, strategy_id),
+        "predictions": _build_prediction_diagnostics(predictions, model_entries),
+        "outcomes": _build_outcome_diagnostics(predictions),
+    }
+
+
+def _fold_indexes_with(
+    fold_dicts: list[dict[str, Any]], predicate: Any
+) -> list[int]:
+    indexes: list[int] = []
+    for fold in fold_dicts:
+        try:
+            fold_index = int(fold.get("fold_index") or 0)
+        except (TypeError, ValueError):
+            fold_index = 0
+        if fold_index > 0 and predicate(fold):
+            indexes.append(fold_index)
+    return indexes
+
+
+def _format_fold_list(indexes: list[int]) -> str:
+    return ", ".join(str(index) for index in indexes)
+
+
+def _build_diagnostic_warnings(fold_dicts: list[dict[str, Any]]) -> list[str]:
+    warnings: list[str] = []
+    model_snapshots = [
+        model
+        for fold in fold_dicts
+        for model in ((fold.get("diagnostics") or {}).get("models") or [])
+        if isinstance(model, dict)
+    ]
+    uninitialized_count = sum(1 for model in model_snapshots if not model.get("initialized"))
+    zero_coef_count = sum(
+        1
+        for model in model_snapshots
+        if _finite_float(model.get("coefficient_norm")) is not None
+        and float(model["coefficient_norm"]) <= NEAR_ZERO_THRESHOLD
+    )
+    if uninitialized_count:
+        warnings.append(f"{uninitialized_count} model snapshot(s) are uninitialized.")
+    if zero_coef_count:
+        warnings.append(
+            f"Linear model coefficients are all zero or near-zero in {zero_coef_count} model snapshot(s)."
+        )
+
+    no_prediction_folds = _fold_indexes_with(
+        fold_dicts,
+        lambda fold: int(
+            (((fold.get("diagnostics") or {}).get("predictions") or {}).get(
+                "prediction_count"
+            ))
+            or 0
+        )
+        == 0,
+    )
+    if no_prediction_folds:
+        warnings.append(
+            "No scored predictions were produced in folds: "
+            + _format_fold_list(no_prediction_folds)
+            + "."
+        )
+
+    no_positive_prediction_folds = _fold_indexes_with(
+        fold_dicts,
+        lambda fold: int(
+            (((fold.get("diagnostics") or {}).get("predictions") or {}).get(
+                "prediction_count"
+            ))
+            or 0
+        )
+        > 0
+        and int(
+            (((fold.get("diagnostics") or {}).get("predictions") or {}).get(
+                "positive_edge_prediction_count"
+            ))
+            or 0
+        )
+        == 0,
+    )
+    if no_positive_prediction_folds:
+        warnings.append(
+            "No positive-edge predictions were produced in folds: "
+            + _format_fold_list(no_positive_prediction_folds)
+            + "."
+        )
+
+    constant_delta_folds = _fold_indexes_with(
+        fold_dicts,
+        lambda fold: (
+            _finite_float(
+                (
+                    ((fold.get("diagnostics") or {}).get("predictions") or {}).get(
+                        "predicted_delta_quantiles"
+                    )
+                    or {}
+                ).get("std")
+            )
+            is not None
+            and float(
+                (
+                    ((fold.get("diagnostics") or {}).get("predictions") or {}).get(
+                        "predicted_delta_quantiles"
+                    )
+                    or {}
+                )["std"]
+            )
+            <= NEAR_ZERO_THRESHOLD
+        ),
+    )
+    if constant_delta_folds:
+        warnings.append(
+            "Regression predicted deltas are constant or near-constant in folds: "
+            + _format_fold_list(constant_delta_folds)
+            + "."
+        )
+
+    constant_score_folds = _fold_indexes_with(
+        fold_dicts,
+        lambda fold: (
+            _finite_float(
+                (
+                    ((fold.get("diagnostics") or {}).get("predictions") or {}).get(
+                        "decision_score_quantiles"
+                    )
+                    or {}
+                ).get("std")
+            )
+            is not None
+            and float(
+                (
+                    ((fold.get("diagnostics") or {}).get("predictions") or {}).get(
+                        "decision_score_quantiles"
+                    )
+                    or {}
+                )["std"]
+            )
+            <= NEAR_ZERO_THRESHOLD
+        ),
+    )
+    if constant_score_folds:
+        warnings.append(
+            "Classifier decision scores are constant or near-constant in folds: "
+            + _format_fold_list(constant_score_folds)
+            + "."
+        )
+
+    no_realized_edge_folds = _fold_indexes_with(
+        fold_dicts,
+        lambda fold: int(
+            (
+                ((fold.get("diagnostics") or {}).get("outcomes") or {}).get(
+                    "above_evaluation_hurdle"
+                )
+                or {}
+            ).get("count")
+            or 0
+        )
+        == 0,
+    )
+    if no_realized_edge_folds:
+        warnings.append(
+            "No realized returns beat the evaluation hurdle in folds: "
+            + _format_fold_list(no_realized_edge_folds)
+            + "."
+        )
+
+    no_positive_label_folds = _fold_indexes_with(
+        fold_dicts,
+        lambda fold: (
+            (((fold.get("diagnostics") or {}).get("training") or {}).get(
+                "class_balance"
+            ))
+            is not None
+            and int(
+                (
+                    (((fold.get("diagnostics") or {}).get("training") or {}).get(
+                        "class_balance"
+                    ))
+                    or {}
+                ).get("positive_label_count")
+                or 0
+            )
+            == 0
+        ),
+    )
+    if no_positive_label_folds:
+        warnings.append(
+            "No positive labels were recorded in folds: "
+            + _format_fold_list(no_positive_label_folds)
+            + "."
+        )
+
+    rare_positive_label_folds = _fold_indexes_with(
+        fold_dicts,
+        lambda fold: (
+            (((fold.get("diagnostics") or {}).get("training") or {}).get(
+                "class_balance"
+            ))
+            is not None
+            and (
+                _finite_float(
+                    (
+                        (((fold.get("diagnostics") or {}).get("training") or {}).get(
+                            "class_balance"
+                        ))
+                        or {}
+                    ).get("positive_label_rate")
+                )
+                or 0.0
+            )
+            > 0.0
+            and (
+                _finite_float(
+                    (
+                        (((fold.get("diagnostics") or {}).get("training") or {}).get(
+                            "class_balance"
+                        ))
+                        or {}
+                    ).get("positive_label_rate")
+                )
+                or 0.0
+            )
+            < RARE_POSITIVE_LABEL_RATE
+        ),
+    )
+    if rare_positive_label_folds:
+        warnings.append(
+            "Positive labels are extremely rare in folds: "
+            + _format_fold_list(rare_positive_label_folds)
+            + "."
+        )
+
+    return warnings
+
+
 def _build_prediction_metrics(
     predictions: list[MLWalkForwardPrediction],
 ) -> dict[str, Any]:
@@ -708,6 +1403,11 @@ def run_ml_walk_forward(
                         if scored is not None:
                             predictions.append(scored)
 
+                diagnostics = _build_fold_diagnostics(
+                    store=portfolio_service.store,
+                    strategy_id=strategy_id,
+                    predictions=predictions,
+                )
                 folds.append(
                     MLWalkForwardFold(
                         fold_index=fold_index,
@@ -718,6 +1418,7 @@ def run_ml_walk_forward(
                         train_cycles=len(train_timestamps),
                         test_cycles=len(test_timestamps),
                         predictions=predictions,
+                        diagnostics=diagnostics,
                     )
                 )
             finally:

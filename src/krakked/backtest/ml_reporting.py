@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-ML_WALK_FORWARD_REPORT_VERSION = 3
+ML_WALK_FORWARD_REPORT_VERSION = 4
 LATEST_ML_WALK_FORWARD_REPORT_RELATIVE_PATH = Path("reports") / "ml" / "latest.json"
 
 
@@ -55,6 +55,7 @@ def validate_ml_walk_forward_report_payload(
         "warnings",
         "metrics",
         "confidence_buckets",
+        "diagnostic_warnings",
         "promotable",
         "promotable_reasons",
         "folds",
@@ -72,6 +73,15 @@ def validate_ml_walk_forward_report_payload(
         raise ValueError(f"ML report folds are invalid in {resolved_path}")
     if not isinstance(summary.get("confidence_buckets"), list):
         raise ValueError(f"ML report confidence buckets are invalid in {resolved_path}")
+    if not isinstance(summary.get("diagnostic_warnings"), list):
+        raise ValueError(f"ML report diagnostic warnings are invalid in {resolved_path}")
+    for index, fold in enumerate(summary.get("folds") or [], start=1):
+        if not isinstance(fold, dict):
+            raise ValueError(f"ML report fold {index} is invalid in {resolved_path}")
+        if not isinstance(fold.get("diagnostics"), dict):
+            raise ValueError(
+                f"ML report fold {index} diagnostics are invalid in {resolved_path}"
+            )
 
     provenance = payload.get("provenance")
     if not isinstance(provenance, dict):
@@ -146,6 +156,7 @@ def summarize_latest_ml_walk_forward_report(
         "promotable_reasons": list(summary.get("promotable_reasons") or []),
         "coverage_status": summary.get("coverage_status"),
         "warnings": list(summary.get("warnings") or []),
+        "diagnostic_warnings": list(summary.get("diagnostic_warnings") or []),
         "confidence_buckets": list(summary.get("confidence_buckets") or []),
     }
 

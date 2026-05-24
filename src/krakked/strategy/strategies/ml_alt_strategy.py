@@ -327,7 +327,8 @@ class AIPredictorAltStrategy(Strategy):
 
             last_obs = self._last_observation.get(key)
             training_updated = False
-            if last_obs:
+            learning_enabled = self._learning_enabled()
+            if last_obs and learning_enabled:
                 last_features, last_price = last_obs
                 label_result = classify_fee_adjusted_return(
                     float(last_price), float(current_price), label_config
@@ -349,7 +350,7 @@ class AIPredictorAltStrategy(Strategy):
                             )
                             initialized = True
                             self.model_initialized[key] = True
-                        elif self._learning_enabled():
+                        else:
                             model.partial_fit([last_features], [label])
                         training_updated = True
                     except Exception as exc:  # pragma: no cover - defensive
