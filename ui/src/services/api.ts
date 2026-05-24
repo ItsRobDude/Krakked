@@ -403,7 +403,7 @@ async function fetchJsonStrict<T>(path: string, options: ApiRequestOptions = {})
     return payload.data;
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') {
-      throw new Error(`Request timed out for ${path}`);
+      throw new Error(`Request timed out for ${path}`, { cause: error });
     }
     throw error;
   } finally {

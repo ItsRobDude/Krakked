@@ -1211,7 +1211,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
       window.URL.revokeObjectURL(url);
 
       setSystemMessage({ tone: 'success', message: 'Config downloaded.' });
-    } catch (error) {
+    } catch {
       setSystemMessage({
         tone: 'error',
         message: 'Failed to download config. Check network or logs.',
@@ -1266,7 +1266,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
     try {
       await setStrategyEnabled(strategyId, enabled);
       setStrategyFeedback(`Strategy ${strategyId} ${enabled ? 'enabled' : 'disabled'}.`);
-    } catch (error) {
+    } catch {
       setStrategies(previousStrategies);
       setStrategyFeedback(`Unable to update ${strategyId}. Please try again.`);
     } finally {
@@ -1347,7 +1347,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
     try {
       await patchStrategyConfig(strategyId, { params: { risk_profile: profile } });
       setStrategyFeedback(`Updated ${strategyId} risk profile to ${profile}.`);
-    } catch (error) {
+    } catch {
       setStrategyRisk((current) => ({ ...current, [strategyId]: previousProfile }));
       setStrategyFeedback(`Unable to update risk profile for ${strategyId}.`);
     } finally {
@@ -1386,7 +1386,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
         ),
       ));
       setStrategyFeedback(`Updated ${strategyId} weight to ${weight}.`);
-    } catch (error) {
+    } catch {
       setStrategies((current) =>
         current.map((strategy) =>
           strategy.strategy_id === strategyId
@@ -1444,7 +1444,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
         setStrategies(refreshed);
       }
       setStrategyFeedback('Starter strategy pack restored and enabled.');
-    } catch (error) {
+    } catch {
       setStrategies(previousStrategies);
       setStrategyFeedback('Unable to restore the starter strategy pack.');
     } finally {
@@ -1474,7 +1474,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
     try {
       await patchStrategyConfig(strategyId, { params: { continuous_learning: enabled } });
       setStrategyFeedback(`Updated ${strategyId} learning ${enabled ? 'on' : 'off'}.`);
-    } catch (error) {
+    } catch {
       setStrategyLearning((current) => ({ ...current, [strategyId]: previous }));
       setStrategies((current) =>
         current.map((strategy) =>
