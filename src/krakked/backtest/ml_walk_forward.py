@@ -42,6 +42,7 @@ ML_STRATEGY_TYPES = {
 EVALUATION_MODE = "rolling_window_isolated"
 EDGE_SCORING_MODE = "intent_hurdle_aligned"
 DIAGNOSTIC_RETURN_THRESHOLDS = (0.003, 0.005, 0.01, 0.015)
+PREDICTED_DELTA_QUANTILE_THRESHOLDS = (0.75, 0.90, 0.95)
 NEAR_ZERO_THRESHOLD = 1e-12
 RARE_POSITIVE_LABEL_RATE = 0.01
 
@@ -123,6 +124,9 @@ class MLWalkForwardFold:
             "prediction_count": len(self.predictions),
             "metrics": _build_prediction_metrics(self.predictions),
             "confidence_buckets": _build_confidence_buckets(self.predictions),
+            "regression_calibration": _build_regression_calibration(
+                self.predictions
+            ),
             "diagnostics": copy.deepcopy(self.diagnostics),
         }
 
@@ -151,7 +155,15 @@ class MLWalkForwardSummary:
         ]
         metrics = _build_prediction_metrics(predictions)
         fold_dicts = [fold.to_dict() for fold in self.folds]
+        regression_calibration = _build_regression_calibration(predictions)
         diagnostic_warnings = _build_diagnostic_warnings(fold_dicts)
+        if (
+            regression_calibration.get("monotonicity", {}).get("upper_half_improves")
+            is False
+        ):
+            diagnostic_warnings.append(
+                "Higher predicted-delta buckets did not improve realized returns overall."
+            )
         promotable, promotable_reasons = _assess_promotability(metrics)
         if not promotable:
             for warning in diagnostic_warnings:
@@ -179,6 +191,7 @@ class MLWalkForwardSummary:
             "warnings": list(self.warnings),
             "metrics": metrics,
             "confidence_buckets": _build_confidence_buckets(predictions),
+            "regression_calibration": regression_calibration,
             "diagnostic_warnings": diagnostic_warnings,
             "promotable": promotable,
             "promotable_reasons": promotable_reasons,
@@ -238,7 +251,12 @@ def _set_strategy_learning(config: AppConfig, strategy_id: str, enabled: bool) -
 
 
 def _prepare_ml_config(
-    config: AppConfig, *, strategy_id: str, timeframe: str, fee_bps: float
+    config: AppConfig,
+    *,
+    strategy_id: str,
+    timeframe: str,
+    fee_bps: float,
+    slippage_bps: Optional[float] = None,
 ) -> AppConfig:
     config_copy = copy.deepcopy(config)
     if strategy_id not in config_copy.strategies.configs:
@@ -252,6 +270,8 @@ def _prepare_ml_config(
     config_copy.execution.validate_only = False
     config_copy.execution.allow_live_trading = False
     config_copy.execution.max_plan_age_seconds = 0
+    if slippage_bps is not None:
+        config_copy.execution.max_slippage_bps = int(round(slippage_bps))
     config_copy.ml.enabled = True
     config_copy.strategies.enabled = [strategy_id]
     strat_cfg.enabled = True
@@ -259,8 +279,12 @@ def _prepare_ml_config(
     params["timeframe"] = timeframe
     if strat_cfg.type in {"machine_learning", "machine_learning_alt"}:
         params["label_fee_bps"] = float(fee_bps)
+        if slippage_bps is not None:
+            params["label_slippage_bps"] = float(slippage_bps)
     if strat_cfg.type == "machine_learning_regression":
         params["edge_fee_bps"] = float(fee_bps)
+        if slippage_bps is not None:
+            params["edge_slippage_bps"] = float(slippage_bps)
     params.pop("timeframes", None)
     strat_cfg.params = params
     return config_copy
@@ -464,6 +488,17 @@ def _average(values: Iterable[float]) -> Optional[float]:
     return sum(collected) / len(collected)
 
 
+def _median(values: Iterable[float]) -> Optional[float]:
+    numbers = sorted(values)
+    count = len(numbers)
+    if count == 0:
+        return None
+    midpoint = count // 2
+    if count % 2 == 1:
+        return numbers[midpoint]
+    return (numbers[midpoint - 1] + numbers[midpoint]) / 2.0
+
+
 def _finite_float(value: object) -> Optional[float]:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
@@ -500,6 +535,20 @@ def _json_numeric(value: object) -> Any:
     return None
 
 
+def _percentile_sorted(numbers: list[float], q: float) -> float:
+    count = len(numbers)
+    if count == 1:
+        return numbers[0]
+    position = (count - 1) * q
+    lower = math.floor(position)
+    upper = math.ceil(position)
+    if lower == upper:
+        return numbers[int(position)]
+    lower_value = numbers[lower]
+    upper_value = numbers[upper]
+    return lower_value + (upper_value - lower_value) * (position - lower)
+
+
 def _quantiles(values: Iterable[object]) -> dict[str, Any]:
     numbers = sorted(
         parsed for value in values if (parsed := _finite_float(value)) is not None
@@ -508,28 +557,18 @@ def _quantiles(values: Iterable[object]) -> dict[str, Any]:
     if count == 0:
         return {"count": 0}
 
-    def percentile(q: float) -> float:
-        if count == 1:
-            return numbers[0]
-        position = (count - 1) * q
-        lower = math.floor(position)
-        upper = math.ceil(position)
-        if lower == upper:
-            return numbers[int(position)]
-        lower_value = numbers[lower]
-        upper_value = numbers[upper]
-        return lower_value + (upper_value - lower_value) * (position - lower)
-
     avg = sum(numbers) / count
     variance = sum((value - avg) ** 2 for value in numbers) / count
     return {
         "count": count,
         "min": numbers[0],
-        "p1": percentile(0.01),
-        "p25": percentile(0.25),
-        "p50": percentile(0.50),
-        "p75": percentile(0.75),
-        "p99": percentile(0.99),
+        "p1": _percentile_sorted(numbers, 0.01),
+        "p25": _percentile_sorted(numbers, 0.25),
+        "p50": _percentile_sorted(numbers, 0.50),
+        "p75": _percentile_sorted(numbers, 0.75),
+        "p90": _percentile_sorted(numbers, 0.90),
+        "p95": _percentile_sorted(numbers, 0.95),
+        "p99": _percentile_sorted(numbers, 0.99),
         "max": numbers[-1],
         "avg": avg,
         "std": math.sqrt(variance),
@@ -546,6 +585,254 @@ def _threshold_counts(values: list[float]) -> list[dict[str, Any]]:
         }
         for threshold in DIAGNOSTIC_RETURN_THRESHOLDS
     ]
+
+
+def _regression_rows(
+    predictions: list[MLWalkForwardPrediction],
+) -> list[dict[str, float]]:
+    rows: list[dict[str, float]] = []
+    for prediction in predictions:
+        predicted_delta = _finite_float(prediction.metadata.get("predicted_delta"))
+        if predicted_delta is None:
+            continue
+        rows.append(
+            {
+                "predicted_delta": predicted_delta,
+                "realized_return": prediction.realized_return,
+                "evaluation_hurdle_pct": prediction.evaluation_hurdle_pct,
+            }
+        )
+    return rows
+
+
+def _regression_sweep_row(
+    rows: list[dict[str, float]],
+    *,
+    name: str,
+    selection_threshold_source: str,
+    realized_threshold_source: str,
+    selection_threshold_pct: Optional[float] = None,
+    realized_threshold_pct: Optional[float] = None,
+    quantile: Optional[float] = None,
+) -> dict[str, Any]:
+    if selection_threshold_pct is None:
+        selected = [
+            row
+            for row in rows
+            if row["predicted_delta"] > row["evaluation_hurdle_pct"]
+        ]
+    else:
+        selected = [
+            row for row in rows if row["predicted_delta"] > selection_threshold_pct
+        ]
+
+    if realized_threshold_pct is None:
+        hits = [
+            row for row in rows if row["realized_return"] > row["evaluation_hurdle_pct"]
+        ]
+        true_positive = [
+            row
+            for row in selected
+            if row["realized_return"] > row["evaluation_hurdle_pct"]
+        ]
+    else:
+        hits = [row for row in rows if row["realized_return"] > realized_threshold_pct]
+        true_positive = [
+            row
+            for row in selected
+            if row["realized_return"] > realized_threshold_pct
+        ]
+
+    total = len(rows)
+    predicted_long_count = len(selected)
+    realized_hit_count = len(hits)
+    precision = _rate(len(true_positive), predicted_long_count)
+    base_rate = _rate(realized_hit_count, total)
+    payload: dict[str, Any] = {
+        "name": name,
+        "selection_threshold_source": selection_threshold_source,
+        "realized_threshold_source": realized_threshold_source,
+        "prediction_count": total,
+        "predicted_long_count": predicted_long_count,
+        "predicted_long_rate": _rate(predicted_long_count, total),
+        "realized_hit_count": realized_hit_count,
+        "realized_hit_rate": base_rate,
+        "true_positive_count": len(true_positive),
+        "precision": precision,
+        "recall": _rate(len(true_positive), realized_hit_count),
+        "lift_over_base_rate": (
+            precision / base_rate
+            if precision is not None and base_rate is not None and base_rate != 0.0
+            else None
+        ),
+        "avg_predicted_delta_selected": _average(
+            row["predicted_delta"] for row in selected
+        ),
+        "avg_realized_return_selected": _average(
+            row["realized_return"] for row in selected
+        ),
+        "median_realized_return_selected": _median(
+            row["realized_return"] for row in selected
+        ),
+    }
+    if selection_threshold_pct is not None:
+        payload["selection_threshold_pct"] = selection_threshold_pct
+    else:
+        payload["selection_threshold_quantiles"] = _quantiles(
+            row["evaluation_hurdle_pct"] for row in rows
+        )
+    if realized_threshold_pct is not None:
+        payload["realized_threshold_pct"] = realized_threshold_pct
+    else:
+        payload["realized_threshold_quantiles"] = _quantiles(
+            row["evaluation_hurdle_pct"] for row in rows
+        )
+    if quantile is not None:
+        payload["quantile"] = quantile
+    return payload
+
+
+def _build_predicted_delta_deciles(
+    rows: list[dict[str, float]],
+) -> list[dict[str, Any]]:
+    if not rows:
+        return []
+
+    sorted_rows = sorted(rows, key=lambda row: row["predicted_delta"])
+    total = len(sorted_rows)
+    buckets: list[dict[str, Any]] = []
+    for index in range(10):
+        start = math.floor(total * index / 10)
+        end = math.floor(total * (index + 1) / 10)
+        bucket_rows = sorted_rows[start:end]
+        if not bucket_rows:
+            continue
+        hit_count = sum(
+            1
+            for row in bucket_rows
+            if row["realized_return"] > row["evaluation_hurdle_pct"]
+        )
+        buckets.append(
+            {
+                "bucket": f"decile_{index + 1:02d}",
+                "rank": index + 1,
+                "prediction_count": len(bucket_rows),
+                "min_predicted_delta": bucket_rows[0]["predicted_delta"],
+                "max_predicted_delta": bucket_rows[-1]["predicted_delta"],
+                "avg_predicted_delta": _average(
+                    row["predicted_delta"] for row in bucket_rows
+                ),
+                "avg_realized_return": _average(
+                    row["realized_return"] for row in bucket_rows
+                ),
+                "median_realized_return": _median(
+                    row["realized_return"] for row in bucket_rows
+                ),
+                "avg_evaluation_hurdle_pct": _average(
+                    row["evaluation_hurdle_pct"] for row in bucket_rows
+                ),
+                "hit_rate_above_evaluation_hurdle": _rate(
+                    hit_count,
+                    len(bucket_rows),
+                ),
+            }
+        )
+    return buckets
+
+
+def _decile_monotonicity(deciles: list[dict[str, Any]]) -> dict[str, Any]:
+    avg_values = [
+        float(value)
+        for decile in deciles
+        if (value := _finite_float(decile.get("avg_realized_return"))) is not None
+    ]
+    if len(avg_values) < 2:
+        return {"available": False}
+
+    midpoint = len(avg_values) // 2
+    lower_avg = _average(avg_values[:midpoint])
+    upper_avg = _average(avg_values[midpoint:])
+    non_decreasing = all(
+        later + NEAR_ZERO_THRESHOLD >= earlier
+        for earlier, later in zip(avg_values, avg_values[1:])
+    )
+    upper_improves = (
+        bool(upper_avg > lower_avg)
+        if upper_avg is not None and lower_avg is not None
+        else None
+    )
+    return {
+        "available": True,
+        "avg_realized_return_non_decreasing": non_decreasing,
+        "lower_half_avg_realized_return": lower_avg,
+        "upper_half_avg_realized_return": upper_avg,
+        "upper_minus_lower_avg_realized_return": (
+            upper_avg - lower_avg
+            if upper_avg is not None and lower_avg is not None
+            else None
+        ),
+        "upper_half_improves": upper_improves,
+    }
+
+
+def _build_regression_calibration(
+    predictions: list[MLWalkForwardPrediction],
+) -> dict[str, Any]:
+    rows = _regression_rows(predictions)
+    if not rows:
+        return {
+            "prediction_count": 0,
+            "threshold_sweeps": [],
+            "predicted_delta_deciles": [],
+            "monotonicity": {"available": False},
+        }
+
+    predicted_deltas = sorted(row["predicted_delta"] for row in rows)
+    threshold_sweeps = [
+        _regression_sweep_row(
+            rows,
+            name="evaluation_hurdle",
+            selection_threshold_source="evaluation_hurdle_pct",
+            realized_threshold_source="evaluation_hurdle_pct",
+        )
+    ]
+    for threshold in DIAGNOSTIC_RETURN_THRESHOLDS:
+        threshold_sweeps.append(
+            _regression_sweep_row(
+                rows,
+                name=f"fixed_{str(threshold).replace('.', 'p')}",
+                selection_threshold_source="fixed_threshold",
+                realized_threshold_source="fixed_threshold",
+                selection_threshold_pct=threshold,
+                realized_threshold_pct=threshold,
+            )
+        )
+    for quantile in PREDICTED_DELTA_QUANTILE_THRESHOLDS:
+        threshold = _percentile_sorted(predicted_deltas, quantile)
+        threshold_sweeps.append(
+            _regression_sweep_row(
+                rows,
+                name=f"predicted_delta_p{int(quantile * 100)}",
+                selection_threshold_source="predicted_delta_quantile",
+                realized_threshold_source="evaluation_hurdle_pct",
+                selection_threshold_pct=threshold,
+                quantile=quantile,
+            )
+        )
+
+    deciles = _build_predicted_delta_deciles(rows)
+    return {
+        "prediction_count": len(rows),
+        "predicted_delta_quantiles": _quantiles(
+            row["predicted_delta"] for row in rows
+        ),
+        "realized_return_quantiles": _quantiles(
+            row["realized_return"] for row in rows
+        ),
+        "threshold_sweeps": threshold_sweeps,
+        "predicted_delta_deciles": deciles,
+        "monotonicity": _decile_monotonicity(deciles),
+    }
 
 
 def _binary_class_balance(labels: list[float]) -> Optional[dict[str, Any]]:
@@ -1162,6 +1449,25 @@ def _build_diagnostic_warnings(fold_dicts: list[dict[str, Any]]) -> list[str]:
             + "."
         )
 
+    non_monotonic_delta_folds = _fold_indexes_with(
+        fold_dicts,
+        lambda fold: (
+            (
+                (
+                    (fold.get("regression_calibration") or {}).get("monotonicity")
+                    or {}
+                ).get("upper_half_improves")
+            )
+            is False
+        ),
+    )
+    if non_monotonic_delta_folds:
+        warnings.append(
+            "Higher predicted-delta buckets did not improve realized returns in folds: "
+            + _format_fold_list(non_monotonic_delta_folds)
+            + "."
+        )
+
     return warnings
 
 
@@ -1328,6 +1634,7 @@ def run_ml_walk_forward(
     train_bars: int,
     test_bars: int,
     fee_bps: float = 25.0,
+    slippage_bps: Optional[float] = None,
     db_path: Optional[str] = None,
     strict_data: bool = False,
 ) -> MLWalkForwardResult:
@@ -1337,12 +1644,20 @@ def run_ml_walk_forward(
         raise ValueError("Walk-forward end must be after start")
     if fee_bps < 0:
         raise ValueError("fee_bps must be greater than or equal to 0")
+    if slippage_bps is not None and slippage_bps < 0:
+        raise ValueError("slippage_bps must be greater than or equal to 0")
 
     config_copy = _prepare_ml_config(
         config,
         strategy_id=strategy_id,
         timeframe=timeframe,
         fee_bps=fee_bps,
+        slippage_bps=slippage_bps,
+    )
+    effective_slippage_bps = float(
+        slippage_bps
+        if slippage_bps is not None
+        else config_copy.execution.max_slippage_bps
     )
     pairs = _configured_backtest_pairs(config_copy)
     market_data = BacktestMarketData(config_copy, pairs, [timeframe], start, end)
@@ -1425,7 +1740,7 @@ def run_ml_walk_forward(
                             market_data=market_data,
                             generated_at=now,
                             fee_bps=fee_bps,
-                            slippage_bps=float(fold_config.execution.max_slippage_bps),
+                            slippage_bps=effective_slippage_bps,
                         )
                         if scored is not None:
                             predictions.append(scored)
@@ -1471,7 +1786,7 @@ def run_ml_walk_forward(
         test_bars=test_bars,
         folds=folds,
         fee_bps=float(fee_bps),
-        slippage_bps=float(config_copy.execution.max_slippage_bps),
+        slippage_bps=effective_slippage_bps,
         pairs=display_pairs,
         coverage_status=preflight.status,
         warnings=list(preflight.warnings),

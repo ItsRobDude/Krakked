@@ -20,7 +20,7 @@ from krakked.backtest.ml_reporting import (
 def _sample_report() -> dict[str, Any]:
     generated_at = datetime(2026, 5, 23, tzinfo=UTC).isoformat()
     return {
-        "report_version": 4,
+        "report_version": 5,
         "generated_at": generated_at,
         "summary": {
             "start": generated_at,
@@ -53,6 +53,12 @@ def _sample_report() -> dict[str, Any]:
                     "edge_prediction_accuracy": 2 / 3,
                 }
             ],
+            "regression_calibration": {
+                "prediction_count": 0,
+                "threshold_sweeps": [],
+                "predicted_delta_deciles": [],
+                "monotonicity": {"available": False},
+            },
             "diagnostic_warnings": [],
             "promotable": False,
             "promotable_reasons": ["Fewer than 20 scored out-of-sample predictions."],
@@ -78,6 +84,7 @@ def test_ml_report_write_load_and_summarize(tmp_path: Path) -> None:
     assert summary["edge_prediction_accuracy"] == pytest.approx(2 / 3)
     assert summary["diagnostic_warnings"] == []
     assert summary["confidence_buckets"][0]["bucket"] == "0.70-0.80"
+    assert summary["regression_calibration"]["prediction_count"] == 0
 
 
 def test_ml_report_publish_latest_uses_ml_specific_path(tmp_path: Path) -> None:

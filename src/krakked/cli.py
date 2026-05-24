@@ -672,6 +672,9 @@ def _ml_walk_forward_command(args: argparse.Namespace) -> int:
             train_bars=int(args.train_bars),
             test_bars=int(args.test_bars),
             fee_bps=float(args.fee_bps),
+            slippage_bps=(
+                float(args.slippage_bps) if args.slippage_bps is not None else None
+            ),
             db_path=args.db_path,
             strict_data=bool(args.strict_data),
         )
@@ -1419,6 +1422,12 @@ def _build_parser() -> argparse.ArgumentParser:
         type=float,
         default=25.0,
         help="Flat taker fee in basis points used for the cost hurdle",
+    )
+    ml_walk_forward_parser.add_argument(
+        "--slippage-bps",
+        type=float,
+        default=None,
+        help="Override estimated slippage basis points used for the cost hurdle",
     )
     ml_walk_forward_parser.add_argument(
         "--db-path",

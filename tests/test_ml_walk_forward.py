@@ -9,8 +9,12 @@ import pandas as pd
 import pytest
 
 from krakked.backtest.ml_walk_forward import (
+    MLWalkForwardFold,
+    MLWalkForwardPrediction,
+    MLWalkForwardSummary,
     _build_diagnostic_warnings,
     _build_prediction_metrics,
+    _build_regression_calibration,
     _build_walk_forward_folds,
     _score_intent,
     _set_strategy_learning,
@@ -156,7 +160,7 @@ def test_run_ml_walk_forward_scores_out_of_sample_predictions(tmp_path: Path) ->
     report = result.to_report_dict()
     summary = report["summary"]
 
-    assert report["report_version"] == 4
+    assert report["report_version"] == 5
     assert report["provenance"]["generated_by"] == "krakked ml-walk-forward"
     assert summary["strategy_id"] == "ai_regression"
     assert summary["timeframe"] == "1h"
@@ -171,8 +175,12 @@ def test_run_ml_walk_forward_scores_out_of_sample_predictions(tmp_path: Path) ->
     assert isinstance(summary["diagnostic_warnings"], list)
     assert summary["round_trip_cost_bps"] == pytest.approx(150.0)
     assert summary["confidence_buckets"]
+    assert summary["regression_calibration"]["prediction_count"] > 0
+    assert summary["regression_calibration"]["threshold_sweeps"]
+    assert summary["regression_calibration"]["predicted_delta_deciles"]
     assert summary["folds"][0]["prediction_count"] > 0
     assert summary["folds"][0]["confidence_buckets"]
+    assert summary["folds"][0]["regression_calibration"]["threshold_sweeps"]
     fold_diagnostics = summary["folds"][0]["diagnostics"]
     assert fold_diagnostics["models"]
     assert "coef" in fold_diagnostics["models"][0]
@@ -331,6 +339,38 @@ def test_ml_walk_forward_fee_bps_controls_regression_edge_metadata(
     assert "predicted_positive_edge" in prediction.metadata
     assert prediction.evaluation_hurdle_pct == pytest.approx(0.025)
     assert prediction.evaluation_hurdle_source == "effective_min_edge_pct"
+
+
+def test_ml_walk_forward_slippage_bps_controls_regression_edge_metadata(
+    tmp_path: Path,
+) -> None:
+    config = _build_ml_config(tmp_path)
+    _seed_pair_metadata(config)
+    timestamps = [1_700_000_000 + idx * 3600 for idx in range(30)]
+    closes = [100.0 + idx * 0.4 for idx in range(30)]
+    _write_ohlc_series(tmp_path, timestamps, closes)
+
+    result = run_ml_walk_forward(
+        config,
+        start=datetime.fromtimestamp(timestamps[0], tz=UTC),
+        end=datetime.fromtimestamp(timestamps[-1], tz=UTC),
+        strategy_id="ai_regression",
+        timeframe="1h",
+        train_bars=12,
+        test_bars=6,
+        fee_bps=10.0,
+        slippage_bps=20.0,
+        strict_data=True,
+    )
+
+    summary = result.to_report_dict()["summary"]
+    prediction = result.summary.folds[0].predictions[0]
+    assert summary["slippage_bps"] == pytest.approx(20.0)
+    assert summary["round_trip_cost_bps"] == pytest.approx(60.0)
+    assert prediction.metadata["edge_fee_bps"] == pytest.approx(10.0)
+    assert prediction.metadata["edge_slippage_bps"] == pytest.approx(20.0)
+    assert prediction.metadata["round_trip_cost_pct"] == pytest.approx(0.006)
+    assert prediction.evaluation_hurdle_pct == pytest.approx(0.006)
 
 
 @pytest.mark.parametrize(
@@ -553,6 +593,135 @@ def test_ml_walk_forward_falls_back_to_round_trip_hurdle() -> None:
     )
     assert prediction.evaluation_hurdle_source == "round_trip_cost_pct"
     assert prediction.fee_adjusted_correct is True
+
+
+def _regression_prediction(
+    *,
+    predicted_delta: float,
+    realized_return: float,
+    evaluation_hurdle_pct: float = 0.005,
+    fold_index: int = 1,
+) -> MLWalkForwardPrediction:
+    return MLWalkForwardPrediction(
+        fold_index=fold_index,
+        generated_at=datetime.fromtimestamp(1_700_000_000, tz=UTC),
+        strategy_id="ai_regression",
+        pair="BTC/USD",
+        timeframe="1h",
+        side="long" if predicted_delta > evaluation_hurdle_pct else "flat",
+        intent_type="enter",
+        confidence=0.5,
+        prediction_target="signed_return_delta",
+        predicted_positive_edge=predicted_delta > evaluation_hurdle_pct,
+        predicted_direction="up" if predicted_delta > 0 else "down",
+        current_close=100.0,
+        future_close=100.0 * (1.0 + realized_return),
+        realized_return=realized_return,
+        round_trip_cost_pct=evaluation_hurdle_pct,
+        evaluation_hurdle_pct=evaluation_hurdle_pct,
+        evaluation_hurdle_source="effective_min_edge_pct",
+        directional_correct=(predicted_delta > 0) == (realized_return > 0),
+        evaluation_hurdle_correct=(
+            (predicted_delta > evaluation_hurdle_pct)
+            == (realized_return > evaluation_hurdle_pct)
+        ),
+        metadata={"predicted_delta": predicted_delta},
+    )
+
+
+def test_regression_calibration_reports_threshold_lift_and_deciles() -> None:
+    predictions = [
+        _regression_prediction(predicted_delta=-0.004, realized_return=-0.002),
+        _regression_prediction(predicted_delta=0.001, realized_return=0.000),
+        _regression_prediction(predicted_delta=0.004, realized_return=0.002),
+        _regression_prediction(predicted_delta=0.006, realized_return=0.006),
+        _regression_prediction(predicted_delta=0.010, realized_return=0.012),
+        _regression_prediction(predicted_delta=0.020, realized_return=0.018),
+    ]
+
+    calibration = _build_regression_calibration(predictions)
+
+    assert calibration["prediction_count"] == 6
+    fixed_0p005 = next(
+        row for row in calibration["threshold_sweeps"] if row["name"] == "fixed_0p005"
+    )
+    assert fixed_0p005["predicted_long_count"] == 3
+    assert fixed_0p005["true_positive_count"] == 3
+    assert fixed_0p005["precision"] == pytest.approx(1.0)
+    assert fixed_0p005["recall"] == pytest.approx(1.0)
+    assert fixed_0p005["lift_over_base_rate"] == pytest.approx(2.0)
+    assert calibration["predicted_delta_deciles"]
+    assert calibration["monotonicity"]["upper_half_improves"] is True
+
+
+def test_diagnostic_warnings_surface_non_monotonic_regression_calibration() -> None:
+    warnings = _build_diagnostic_warnings(
+        [
+            {
+                "fold_index": 1,
+                "diagnostics": {
+                    "models": [],
+                    "training": {},
+                    "predictions": {"prediction_count": 4},
+                    "outcomes": {
+                        "above_evaluation_hurdle": {"count": 1, "rate": 0.25}
+                    },
+                },
+                "regression_calibration": {
+                    "monotonicity": {
+                        "available": True,
+                        "upper_half_improves": False,
+                    }
+                },
+            }
+        ]
+    )
+
+    assert any("predicted-delta buckets" in warning for warning in warnings)
+
+
+def test_summary_warns_when_aggregate_regression_calibration_is_non_monotonic() -> None:
+    predictions = [
+        _regression_prediction(predicted_delta=-0.004, realized_return=0.010),
+        _regression_prediction(predicted_delta=0.001, realized_return=0.008),
+        _regression_prediction(predicted_delta=0.004, realized_return=0.006),
+        _regression_prediction(predicted_delta=0.006, realized_return=0.000),
+        _regression_prediction(predicted_delta=0.010, realized_return=-0.002),
+        _regression_prediction(predicted_delta=0.020, realized_return=-0.004),
+    ]
+    now = datetime.fromtimestamp(1_700_000_000, tz=UTC)
+    summary = MLWalkForwardSummary(
+        start=now,
+        end=now,
+        strategy_id="ai_regression",
+        timeframe="1h",
+        train_bars=3,
+        test_bars=3,
+        folds=[
+            MLWalkForwardFold(
+                fold_index=1,
+                train_start=now,
+                train_end=now,
+                test_start=now,
+                test_end=now,
+                train_cycles=3,
+                test_cycles=3,
+                predictions=predictions,
+            )
+        ],
+        fee_bps=10.0,
+        slippage_bps=20.0,
+        pairs=["BTC/USD"],
+        coverage_status="ready",
+        warnings=[],
+    )
+
+    payload = summary.to_dict()
+
+    assert (
+        "Higher predicted-delta buckets did not improve realized returns overall."
+        in payload["diagnostic_warnings"]
+    )
 
 
 def test_diagnostic_warnings_surface_collapsed_model_and_constant_predictions() -> None:
