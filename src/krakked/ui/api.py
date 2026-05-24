@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import secrets as std_secrets
 from pathlib import Path
 from typing import Callable
 from uuid import uuid4
@@ -16,7 +17,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from krakked.ui.context import AppContext
 from krakked.ui.logging import build_request_log_extra
-from krakked.ui.middleware import LifecycleMiddleware
+from krakked.ui.middleware import LifecycleMiddleware, SecurityHeadersMiddleware
 from krakked.ui.routes import (
     config_router,
     execution_router,
@@ -73,7 +74,9 @@ class AuthMiddleware(BaseHTTPMiddleware):
         ):
             auth_header = request.headers.get("Authorization") or ""
             expected = f"Bearer {self._token}" if self._token else ""
-            if auth_header != expected:
+            if not std_secrets.compare_digest(
+                auth_header.encode("utf-8"), expected.encode("utf-8")
+            ):
                 logger.warning(
                     "Unauthorized UI API request",
                     extra=build_request_log_extra(
@@ -93,6 +96,7 @@ def create_api(context: AppContext) -> FastAPI:
     base_path = context.config.ui.base_path.rstrip("/") or ""
 
     middleware = [
+        Middleware(SecurityHeadersMiddleware),
         Middleware(LifecycleMiddleware, base_path=base_path),
     ]
     auth_config = context.config.ui.auth

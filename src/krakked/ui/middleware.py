@@ -118,3 +118,14 @@ class LifecycleMiddleware(BaseHTTPMiddleware):
 
         # Non-API paths (static files etc) are allowed
         return await call_next(request)
+
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """Attach baseline browser hardening headers to every response."""
+
+    async def dispatch(self, request: Request, call_next: Callable):
+        response = await call_next(request)
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Referrer-Policy"] = "same-origin"
+        return response
