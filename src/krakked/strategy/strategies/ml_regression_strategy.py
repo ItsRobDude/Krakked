@@ -4,7 +4,7 @@ import logging
 import math
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, cast
 
 from krakked.config import StrategyConfig
 from krakked.market_data.api import MarketDataAPI
@@ -19,7 +19,15 @@ from krakked.strategy.ml_labels import (
     MLEdgeCostConfig,
     edge_cost_config_from_context,
 )
-from krakked.strategy.ml_models import PassiveAggressiveRegressor
+from krakked.strategy.ml_models import (
+    DEFAULT_REGRESSION_EPSILON_PCT,
+    MLOnlineModelBundle,
+    ML_STANDARD_SCALER_SCHEMA_VERSION,
+    PassiveAggressiveRegressor,
+    StandardScaler,
+    is_passive_aggressive_regressor_model,
+    regression_model_config_key,
+)
 from krakked.strategy.ml_persistence import (
     load_model,
     load_training_checkpoint,
@@ -36,6 +44,18 @@ TRAINING_WINDOW_EXAMPLES = 5000
 MODEL_FRAMEWORK = "sklearn_passive_aggressive_regressor"
 
 
+def _nonnegative_float(value: object, default: float) -> float:
+    if not isinstance(value, (int, float, str)):
+        return default
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return default
+    if not math.isfinite(parsed):
+        return default
+    return max(parsed, 0.0)
+
+
 @dataclass
 class AIRegressionConfig:
     pairs: List[str]
@@ -50,6 +70,7 @@ class AIRegressionConfig:
     edge_fee_bps: float = 25.0
     edge_slippage_bps: float = 50.0
     edge_cost_multiplier: float = 1.0
+    regression_epsilon_pct: float = DEFAULT_REGRESSION_EPSILON_PCT
 
 
 class AIRegressionStrategy(Strategy):
@@ -80,10 +101,27 @@ class AIRegressionStrategy(Strategy):
             edge_fee_bps=edge_defaults.fee_bps,
             edge_slippage_bps=edge_defaults.slippage_bps,
             edge_cost_multiplier=edge_defaults.cost_multiplier,
+            regression_epsilon_pct=_nonnegative_float(
+                params.get("regression_epsilon_pct"),
+                DEFAULT_REGRESSION_EPSILON_PCT,
+            ),
         )
 
-        self.model = PassiveAggressiveRegressor(max_iter=1000, tol=1e-3)
+        self.model = self._new_model()
         self.model_initialized = False
+
+    def _model_config_key(self) -> str:
+        return regression_model_config_key(self.params.regression_epsilon_pct)
+
+    def _new_model(self) -> MLOnlineModelBundle:
+        return MLOnlineModelBundle(
+            model=PassiveAggressiveRegressor(
+                max_iter=1000,
+                tol=1e-3,
+                epsilon=self.params.regression_epsilon_pct,
+            ),
+            scaler=StandardScaler(),
+        )
 
     def warmup(self, market_data: MarketDataAPI, portfolio: PortfolioService) -> None:
         return None
@@ -92,7 +130,10 @@ class AIRegressionStrategy(Strategy):
         return bool(self.config.params.get("continuous_learning", True))
 
     def _model_key(self, timeframe: str) -> str:
-        return f"global|{timeframe}|features_{ML_FEATURE_SCHEMA_VERSION}"
+        return (
+            f"global|{timeframe}|features_{ML_FEATURE_SCHEMA_VERSION}|"
+            f"{self._model_config_key()}"
+        )
 
     def _edge_cost_config(self, ctx: StrategyContext) -> MLEdgeCostConfig:
         return edge_cost_config_from_context(self.config.params, ctx)
@@ -102,6 +143,12 @@ class AIRegressionStrategy(Strategy):
             "model_initialized": self.model_initialized,
             "continuous_learning": self._learning_enabled(),
             "feature_schema_version": ML_FEATURE_SCHEMA_VERSION,
+            "model_config_key": self._model_config_key(),
+            "regression_epsilon_pct": self.params.regression_epsilon_pct,
+            "scaler_schema_version": ML_STANDARD_SCALER_SCHEMA_VERSION,
+            "scaler_initialized": bool(
+                getattr(self.model, "scaler_initialized", False)
+            ),
         }
 
     def _save_training_checkpoint(
@@ -137,39 +184,37 @@ class AIRegressionStrategy(Strategy):
         checkpoint = load_training_checkpoint(ctx, self.id, model_key)
         updated_at = None
 
-        checkpoint_candidate: Optional[
-            tuple[PassiveAggressiveRegressor, datetime, bool]
-        ]
+        checkpoint_candidate: Optional[tuple[object, datetime, bool]]
         checkpoint_candidate = None
         if checkpoint is not None:
             restored_model, checkpoint_updated_at, _state, metadata = checkpoint
-            if isinstance(restored_model, PassiveAggressiveRegressor):
+            if is_passive_aggressive_regressor_model(restored_model):
                 checkpoint_candidate = (
                     restored_model,
                     checkpoint_updated_at,
                     bool(metadata.get("model_initialized", True)),
                 )
 
-        live_candidate: Optional[tuple[PassiveAggressiveRegressor, datetime]]
+        live_candidate: Optional[tuple[object, datetime]]
         live_candidate = None
         if live_model is not None:
             restored_model, updated_at = live_model
-            if isinstance(restored_model, PassiveAggressiveRegressor):
+            if is_passive_aggressive_regressor_model(restored_model):
                 live_candidate = (restored_model, updated_at)
 
         if checkpoint_candidate and checkpoint_candidate[2]:
             if live_candidate is None or checkpoint_candidate[1] >= live_candidate[1]:
-                self.model = checkpoint_candidate[0]
+                self.model = cast(MLOnlineModelBundle, checkpoint_candidate[0])
                 self.model_initialized = True
                 updated_at = checkpoint_candidate[1]
 
         if not self.model_initialized and live_candidate is not None:
-            self.model = live_candidate[0]
+            self.model = cast(MLOnlineModelBundle, live_candidate[0])
             self.model_initialized = True
             updated_at = live_candidate[1]
 
         if not self.model_initialized and checkpoint_candidate is not None:
-            self.model = checkpoint_candidate[0]
+            self.model = cast(MLOnlineModelBundle, checkpoint_candidate[0])
             self.model_initialized = checkpoint_candidate[2]
             updated_at = checkpoint_candidate[1]
 

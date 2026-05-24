@@ -178,6 +178,8 @@ def test_run_ml_walk_forward_scores_out_of_sample_predictions(tmp_path: Path) ->
     assert "coef" in fold_diagnostics["models"][0]
     assert "intercept" in fold_diagnostics["models"][0]
     assert "n_iter" in fold_diagnostics["models"][0]
+    assert fold_diagnostics["models"][0]["scaler_schema_version"] == "standard_v1"
+    assert fold_diagnostics["models"][0]["scaler_initialized"] is True
     assert "predicted_delta_quantiles" in fold_diagnostics["predictions"]
     assert "realized_return_quantiles" in fold_diagnostics["outcomes"]
     assert "above_evaluation_hurdle" in fold_diagnostics["outcomes"]

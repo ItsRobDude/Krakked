@@ -638,6 +638,15 @@ def _model_diagnostic(
             "t": _json_numeric(getattr(model, "t_", None)),
         }
     )
+    scaler_schema_version = getattr(
+        model, "scaler_schema_version", metadata.get("scaler_schema_version")
+    )
+    if scaler_schema_version is not None:
+        diagnostic["scaler_schema_version"] = str(scaler_schema_version)
+    if hasattr(model, "scaler_initialized") or "scaler_initialized" in metadata:
+        diagnostic["scaler_initialized"] = bool(
+            getattr(model, "scaler_initialized", metadata.get("scaler_initialized"))
+        )
     return diagnostic, model
 
 

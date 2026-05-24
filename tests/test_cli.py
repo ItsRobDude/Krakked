@@ -814,8 +814,8 @@ def _seed_ml_prune_artifacts(db_path: Path) -> None:
     try:
         now = datetime(2026, 4, 1, tzinfo=UTC)
         for model_key in (
-            "global|1h|features_ohlc_v1",
-            "global|4h|features_ohlc_v1",
+            "global|1h|features_ohlc_v1|pa_reg_eps0p001_scalerstdv1",
+            "global|4h|features_ohlc_v1|pa_reg_eps0p001_scalerstdv1",
         ):
             store.record_ml_example(
                 strategy_id="ai_regression",
@@ -828,14 +828,14 @@ def _seed_ml_prune_artifacts(db_path: Path) -> None:
             )
         store.save_ml_model(
             strategy_id="ai_regression",
-            model_key="global|4h|features_ohlc_v1",
+            model_key="global|4h|features_ohlc_v1|pa_reg_eps0p001_scalerstdv1",
             label_type="regression",
             framework="dummy",
             model=SimpleNamespace(value=1),
         )
         store.save_ml_model_checkpoint(
             strategy_id="ai_regression",
-            model_key="global|4h|features_ohlc_v1",
+            model_key="global|4h|features_ohlc_v1|pa_reg_eps0p001_scalerstdv1",
             checkpoint_kind="training",
             label_type="regression",
             framework="dummy",
@@ -853,7 +853,7 @@ def _ml_artifact_counts(db_path: Path) -> dict[str, int]:
                 SELECT COUNT(*)
                 FROM ml_training_examples
                 WHERE strategy_id = 'ai_regression'
-                    AND model_key = 'global|1h|features_ohlc_v1'
+                    AND model_key = 'global|1h|features_ohlc_v1|pa_reg_eps0p001_scalerstdv1'
                 """
             ).fetchone()[0],
             "stale_examples": conn.execute(
@@ -861,7 +861,7 @@ def _ml_artifact_counts(db_path: Path) -> dict[str, int]:
                 SELECT COUNT(*)
                 FROM ml_training_examples
                 WHERE strategy_id = 'ai_regression'
-                    AND model_key = 'global|4h|features_ohlc_v1'
+                    AND model_key = 'global|4h|features_ohlc_v1|pa_reg_eps0p001_scalerstdv1'
                 """
             ).fetchone()[0],
             "stale_models": conn.execute(
@@ -869,7 +869,7 @@ def _ml_artifact_counts(db_path: Path) -> dict[str, int]:
                 SELECT COUNT(*)
                 FROM ml_models
                 WHERE strategy_id = 'ai_regression'
-                    AND model_key = 'global|4h|features_ohlc_v1'
+                    AND model_key = 'global|4h|features_ohlc_v1|pa_reg_eps0p001_scalerstdv1'
                 """
             ).fetchone()[0],
             "stale_checkpoints": conn.execute(
@@ -877,7 +877,7 @@ def _ml_artifact_counts(db_path: Path) -> dict[str, int]:
                 SELECT COUNT(*)
                 FROM ml_model_checkpoints
                 WHERE strategy_id = 'ai_regression'
-                    AND model_key = 'global|4h|features_ohlc_v1'
+                    AND model_key = 'global|4h|features_ohlc_v1|pa_reg_eps0p001_scalerstdv1'
                 """
             ).fetchone()[0],
         }
@@ -902,7 +902,7 @@ def test_ml_prune_stale_dry_run_reports_without_deleting(
     output = capsys.readouterr().out
     assert exit_code == 0
     assert "ML stale artifact prune dry run." in output
-    assert "global|4h|features_ohlc_v1" in output
+    assert "global|4h|features_ohlc_v1|pa_reg_eps0p001_scalerstdv1" in output
     assert "timeframe_mismatch" in output
     assert _ml_artifact_counts(db_path) == {
         "current_examples": 1,
@@ -923,14 +923,14 @@ def test_ml_prune_stale_retains_plural_timeframe_artifacts() -> None:
     groups = [
         MLArtifactGroup(
             strategy_id="ai_regression",
-            model_key="global|4h|features_ohlc_v1",
+            model_key="global|4h|features_ohlc_v1|pa_reg_eps0p001_scalerstdv1",
             example_count=1,
             live_model_count=0,
             checkpoint_count=0,
         ),
         MLArtifactGroup(
             strategy_id="ai_regression",
-            model_key="global|1d|features_ohlc_v1",
+            model_key="global|1d|features_ohlc_v1|pa_reg_eps0p001_scalerstdv1",
             example_count=1,
             live_model_count=0,
             checkpoint_count=0,
@@ -940,7 +940,7 @@ def test_ml_prune_stale_retains_plural_timeframe_artifacts() -> None:
     candidates = find_stale_ml_artifact_groups(config, groups)
 
     assert [candidate.group.model_key for candidate in candidates] == [
-        "global|1d|features_ohlc_v1"
+        "global|1d|features_ohlc_v1|pa_reg_eps0p001_scalerstdv1"
     ]
     assert candidates[0].stale_reason == "timeframe_mismatch"
 

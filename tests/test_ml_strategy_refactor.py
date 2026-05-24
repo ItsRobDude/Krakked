@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+import pickle
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock
@@ -15,8 +16,13 @@ from krakked.strategy.ml_labels import (
     POSITIVE_EDGE_PREDICTION,
 )
 from krakked.strategy.ml_models import (
+    DEFAULT_REGRESSION_EPSILON_PCT,
+    MLOnlineModelBundle,
     PassiveAggressiveClassifier,
     PassiveAggressiveRegressor,
+    StandardScaler,
+    classifier_model_config_key,
+    regression_model_config_key,
     supports_partial_fit_sample_weight,
 )
 from krakked.strategy.strategies.ml_alt_strategy import AIPredictorAltStrategy
@@ -319,12 +325,39 @@ def test_classifier_model_key_versions_fee_adjusted_labels(strategy, mock_ctx):
 
     assert (
         strategy._model_key("1h", label_config)
-        == "global|1h|features_ohlc_v1|fee_adj_fee25_slip50_x2"
+        == "global|1h|features_ohlc_v1|fee_adj_fee25_slip50_x2|"
+        "pa_cls_scalerstdv1"
     )
 
 
 def test_regression_model_key_versions_feature_schema(regression_strategy):
-    assert regression_strategy._model_key("1h") == "global|1h|features_ohlc_v1"
+    assert (
+        regression_strategy._model_key("1h")
+        == "global|1h|features_ohlc_v1|pa_reg_eps0p001_scalerstdv1"
+    )
+
+
+def test_regression_epsilon_changes_model_key():
+    cfg = StrategyConfig(
+        name="reg_test",
+        type="ai_regression",
+        enabled=True,
+        params={
+            "pairs": ["XBT/USD"],
+            "timeframe": "1h",
+            "lookback_bars": 5,
+            "short_window": 2,
+            "long_window": 5,
+            "continuous_learning": True,
+            "regression_epsilon_pct": 0.0025,
+        },
+    )
+    strategy = AIRegressionStrategy(cfg)
+
+    assert (
+        strategy._model_key("1h")
+        == "global|1h|features_ohlc_v1|pa_reg_eps0p0025_scalerstdv1"
+    )
 
 
 def test_ml_feature_values_are_shared_across_strategies(
@@ -365,6 +398,42 @@ def test_ml_feature_values_are_shared_across_strategies(
 def test_passive_aggressive_models_do_not_support_sample_weight_guard():
     assert supports_partial_fit_sample_weight(PassiveAggressiveClassifier()) is False
     assert supports_partial_fit_sample_weight(PassiveAggressiveRegressor()) is False
+    assert supports_partial_fit_sample_weight(regression_strategy_model()) is False
+
+
+def regression_strategy_model() -> MLOnlineModelBundle:
+    return MLOnlineModelBundle(
+        model=PassiveAggressiveRegressor(
+            max_iter=1000,
+            tol=1e-3,
+            epsilon=DEFAULT_REGRESSION_EPSILON_PCT,
+        ),
+        scaler=StandardScaler(),
+    )
+
+
+def test_online_model_bundle_persists_scaler_state():
+    bundle = regression_strategy_model()
+
+    bundle.partial_fit(
+        [[1.0, 10.0, 100.0], [2.0, 20.0, 200.0]],
+        [0.01, 0.02],
+    )
+    restored = pickle.loads(pickle.dumps(bundle))
+
+    assert isinstance(restored, MLOnlineModelBundle)
+    assert restored.scaler_initialized is True
+    assert restored.scaler_schema_version == "standard_v1"
+    assert restored.scaler.mean_[0] == pytest.approx(1.5)
+    assert len(restored.predict([[3.0, 30.0, 300.0]])) == 1
+
+
+def test_model_config_key_helpers_are_stable():
+    assert classifier_model_config_key() == "pa_cls_scalerstdv1"
+    assert (
+        regression_model_config_key(DEFAULT_REGRESSION_EPSILON_PCT)
+        == "pa_reg_eps0p001_scalerstdv1"
+    )
 
 
 def test_alt_strategy_restores_last_observation_from_checkpoint(mock_ctx):

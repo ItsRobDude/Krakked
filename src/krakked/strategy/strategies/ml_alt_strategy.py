@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import math
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, cast
 
 from krakked.config import StrategyConfig
 from krakked.market_data.api import MarketDataAPI
@@ -24,7 +24,14 @@ from krakked.strategy.ml_labels import (
     classify_fee_adjusted_return,
     label_config_from_context,
 )
-from krakked.strategy.ml_models import PassiveAggressiveClassifier
+from krakked.strategy.ml_models import (
+    MLOnlineModelBundle,
+    ML_STANDARD_SCALER_SCHEMA_VERSION,
+    PassiveAggressiveClassifier,
+    StandardScaler,
+    classifier_model_config_key,
+    is_passive_aggressive_classifier_model,
+)
 from krakked.strategy.ml_persistence import (
     load_model,
     load_training_checkpoint,
@@ -73,9 +80,18 @@ class AIPredictorAltStrategy(Strategy):
         )
 
         self.classes = [0, 1]
-        self.models: Dict[Tuple[str, str], PassiveAggressiveClassifier] = {}
+        self.models: Dict[Tuple[str, str], MLOnlineModelBundle] = {}
         self.model_initialized: Dict[Tuple[str, str], bool] = {}
         self._last_observation: Dict[Tuple[str, str], Tuple[List[float], float]] = {}
+
+    def _model_config_key(self) -> str:
+        return classifier_model_config_key()
+
+    def _new_model(self) -> MLOnlineModelBundle:
+        return MLOnlineModelBundle(
+            model=PassiveAggressiveClassifier(max_iter=1000, tol=1e-3),
+            scaler=StandardScaler(),
+        )
 
     def warmup(self, market_data: MarketDataAPI, portfolio: PortfolioService) -> None:
         return None
@@ -83,10 +99,10 @@ class AIPredictorAltStrategy(Strategy):
     def _learning_enabled(self) -> bool:
         return bool(self.config.params.get("continuous_learning", True))
 
-    def _get_model(self, key: Tuple[str, str]) -> PassiveAggressiveClassifier:
+    def _get_model(self, key: Tuple[str, str]) -> MLOnlineModelBundle:
         model = self.models.get(key)
         if model is None:
-            model = PassiveAggressiveClassifier(max_iter=1000, tol=1e-3)
+            model = self._new_model()
             self.models[key] = model
             self.model_initialized[key] = False
         return model
@@ -108,7 +124,7 @@ class AIPredictorAltStrategy(Strategy):
             )
         return (
             f"{pair}|{timeframe}|features_{ML_FEATURE_SCHEMA_VERSION}|"
-            f"{label_config.model_key_suffix()}"
+            f"{label_config.model_key_suffix()}|{self._model_config_key()}"
         )
 
     def _checkpoint_metadata(
@@ -126,6 +142,11 @@ class AIPredictorAltStrategy(Strategy):
             "model_initialized": self.model_initialized.get(key, False),
             "continuous_learning": self._learning_enabled(),
             "feature_schema_version": ML_FEATURE_SCHEMA_VERSION,
+            "model_config_key": self._model_config_key(),
+            "scaler_schema_version": ML_STANDARD_SCALER_SCHEMA_VERSION,
+            "scaler_initialized": bool(
+                getattr(self.models.get(key), "scaler_initialized", False)
+            ),
             "label": label_config.to_metadata(),
         }
         observation = self._last_observation.get(key)
@@ -161,7 +182,7 @@ class AIPredictorAltStrategy(Strategy):
         self,
         ctx: StrategyContext,
         key: Tuple[str, str],
-        model: PassiveAggressiveClassifier,
+        model: object,
         *,
         checkpoint_state: str,
         label_config: FeeAdjustedLabelConfig,
@@ -182,7 +203,7 @@ class AIPredictorAltStrategy(Strategy):
         self,
         ctx: StrategyContext,
         key: Tuple[str, str],
-        model: PassiveAggressiveClassifier,
+        model: MLOnlineModelBundle,
     ) -> None:
         if self.model_initialized.get(key):
             return
@@ -194,12 +215,11 @@ class AIPredictorAltStrategy(Strategy):
         live_model = load_model(ctx, self.id, model_key)
         checkpoint = load_training_checkpoint(ctx, self.id, model_key)
 
-        checkpoint_candidate: Optional[
-            tuple[PassiveAggressiveClassifier, datetime, bool, dict[str, object]]
-        ] = None
+        checkpoint_candidate: Optional[tuple[object, datetime, bool, dict[str, object]]]
+        checkpoint_candidate = None
         if checkpoint is not None:
             restored_model, checkpoint_updated_at, _state, metadata = checkpoint
-            if isinstance(restored_model, PassiveAggressiveClassifier):
+            if is_passive_aggressive_classifier_model(restored_model):
                 checkpoint_candidate = (
                     restored_model,
                     checkpoint_updated_at,
@@ -207,26 +227,26 @@ class AIPredictorAltStrategy(Strategy):
                     metadata,
                 )
 
-        live_candidate: Optional[tuple[PassiveAggressiveClassifier, datetime]] = None
+        live_candidate: Optional[tuple[object, datetime]] = None
         if live_model is not None:
             restored_model, live_updated_at = live_model
-            if isinstance(restored_model, PassiveAggressiveClassifier):
+            if is_passive_aggressive_classifier_model(restored_model):
                 live_candidate = (restored_model, live_updated_at)
 
         if checkpoint_candidate and checkpoint_candidate[2]:
             if live_candidate is None or checkpoint_candidate[1] >= live_candidate[1]:
-                self.models[key] = checkpoint_candidate[0]
+                self.models[key] = cast(MLOnlineModelBundle, checkpoint_candidate[0])
                 self.model_initialized[key] = True
                 self._restore_checkpoint_metadata(key, checkpoint_candidate[3])
                 return
 
         if live_candidate is not None:
-            self.models[key] = live_candidate[0]
+            self.models[key] = cast(MLOnlineModelBundle, live_candidate[0])
             self.model_initialized[key] = True
             return
 
         if checkpoint_candidate is not None:
-            self.models[key] = checkpoint_candidate[0]
+            self.models[key] = cast(MLOnlineModelBundle, checkpoint_candidate[0])
             self.model_initialized[key] = checkpoint_candidate[2]
             self._restore_checkpoint_metadata(key, checkpoint_candidate[3])
             return
@@ -269,10 +289,14 @@ class AIPredictorAltStrategy(Strategy):
         return list(vector.values) if vector is not None else None
 
     def _confidence(
-        self, model: PassiveAggressiveClassifier, features: List[float]
+        self, model: object, features: List[float]
     ) -> float:
+        decision_function = getattr(model, "decision_function", None)
+        if not callable(decision_function):
+            return 0.5
         try:
-            score = float(model.decision_function([features])[0])
+            result: Any = decision_function([features])
+            score = float(result[0])
         except Exception:
             return 0.5
         magnitude = abs(score)
