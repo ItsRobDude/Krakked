@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 ARG PYTHON_VERSION=3.11
-ARG NODE_VERSION=20
+ARG NODE_VERSION=24
 ARG POETRY_VERSION=2.2.1
 
 # Build the UI assets with the same toolchain used in CI
