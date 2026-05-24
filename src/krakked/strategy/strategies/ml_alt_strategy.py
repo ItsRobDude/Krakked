@@ -10,6 +10,11 @@ from krakked.market_data.api import MarketDataAPI
 from krakked.market_data.exceptions import DataStaleError
 from krakked.portfolio.manager import PortfolioService
 from krakked.strategy.base import Strategy, StrategyContext
+from krakked.strategy.features import (
+    ML_FEATURE_SCHEMA_VERSION,
+    MLFeatureVector,
+    compute_feature_vector_from_ohlc,
+)
 from krakked.strategy.ml_labels import (
     FEE_ADJUSTED_CLASSIFICATION_LABEL_TYPE,
     FeeAdjustedLabelConfig,
@@ -98,7 +103,10 @@ class AIPredictorAltStrategy(Strategy):
                 slippage_bps=self.params.label_slippage_bps,
                 cost_multiplier=self.params.label_cost_multiplier,
             )
-        return f"{pair}|{timeframe}|{label_config.model_key_suffix()}"
+        return (
+            f"{pair}|{timeframe}|features_{ML_FEATURE_SCHEMA_VERSION}|"
+            f"{label_config.model_key_suffix()}"
+        )
 
     def _checkpoint_metadata(
         self,
@@ -114,6 +122,7 @@ class AIPredictorAltStrategy(Strategy):
         metadata: dict[str, object] = {
             "model_initialized": self.model_initialized.get(key, False),
             "continuous_learning": self._learning_enabled(),
+            "feature_schema_version": ML_FEATURE_SCHEMA_VERSION,
             "label": label_config.to_metadata(),
         }
         observation = self._last_observation.get(key)
@@ -234,39 +243,27 @@ class AIPredictorAltStrategy(Strategy):
         except Exception as exc:  # pragma: no cover - defensive
             logger.debug("ML bootstrap failed for %s key=%s: %s", self.id, key, exc)
 
-    def _extract_features(
+    def _extract_feature_vector(
         self, ctx: StrategyContext, pair: str, timeframe: str
-    ) -> Optional[List[float]]:
+    ) -> Optional[MLFeatureVector]:
         lookback = max(
             self.params.lookback_bars,
             self.params.long_window + 1,
             self.params.short_window + 1,
         )
         ohlc = ctx.market_data.get_ohlc(pair, timeframe, lookback=lookback)
-        if not ohlc or len(ohlc) < 3:
-            return None
+        return compute_feature_vector_from_ohlc(
+            ohlc,
+            self.params.short_window,
+            self.params.long_window,
+            self.params.lookback_bars,
+        )
 
-        closes = [float(bar.close) for bar in ohlc]
-        last_close, prev_close = closes[-1], closes[-2]
-        if prev_close <= 0:
-            return None
-
-        pct_change = (last_close - prev_close) / prev_close
-
-        short_len = min(self.params.short_window, len(closes))
-        long_len = min(self.params.long_window, len(closes))
-        short_ma = sum(closes[-short_len:]) / short_len if short_len > 0 else 0.0
-        long_ma = sum(closes[-long_len:]) / long_len if long_len > 0 else 0.0
-        trend_diff = ((short_ma - long_ma) / long_ma) if long_ma > 0 else 0.0
-
-        window = closes[-self.params.lookback_bars :]
-        mean_close = sum(window) / len(window)
-        volatility = 0.0
-        if mean_close > 0 and len(window) > 1:
-            variance = sum((c - mean_close) ** 2 for c in window) / len(window)
-            volatility = math.sqrt(variance) / mean_close
-
-        return [pct_change, trend_diff, volatility]
+    def _extract_features(
+        self, ctx: StrategyContext, pair: str, timeframe: str
+    ) -> Optional[List[float]]:
+        vector = self._extract_feature_vector(ctx, pair, timeframe)
+        return list(vector.values) if vector is not None else None
 
     def _confidence(
         self, model: PassiveAggressiveClassifier, features: List[float]
@@ -355,9 +352,10 @@ class AIPredictorAltStrategy(Strategy):
                     except Exception as exc:  # pragma: no cover - defensive
                         logger.debug("Model update failed for %s: %s", pair, exc)
 
-            features = self._extract_features(ctx, pair, timeframe)
-            if not features:
+            feature_vector = self._extract_feature_vector(ctx, pair, timeframe)
+            if not feature_vector:
                 continue
+            features = feature_vector.values
 
             self._last_observation[key] = (features, current_price)
             self._save_training_checkpoint(
@@ -409,12 +407,10 @@ class AIPredictorAltStrategy(Strategy):
                     metadata={
                         "prediction": "up" if prediction == 1 else "down",
                         "learning_enabled": self._learning_enabled(),
+                        "confidence_source": "decision_function_magnitude",
+                        "feature_schema_version": feature_vector.schema_version,
                         "label": label_config.to_metadata(),
-                        "features": {
-                            "pct_change": features[0],
-                            "trend_diff": features[1],
-                            "volatility": features[2],
-                        },
+                        "features": feature_vector.to_metadata(),
                     },
                 )
             )

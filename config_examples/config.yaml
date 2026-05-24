@@ -166,6 +166,8 @@ strategies:
         long_window: 20
         target_exposure_usd: null
         continuous_learning: true
+        edge_fee_bps: 25.0
+        edge_cost_multiplier: 1.0
         max_positions: 2            # per-strategy cap; risk.max_open_positions still applies
       userref: 1102
 

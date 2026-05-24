@@ -8,7 +8,12 @@ import pytest
 
 from krakked.config import StrategyConfig
 from krakked.strategy.base import StrategyContext
-from krakked.strategy.ml_models import PassiveAggressiveClassifier
+from krakked.strategy.features import ML_FEATURE_SCHEMA_VERSION
+from krakked.strategy.ml_models import (
+    PassiveAggressiveClassifier,
+    PassiveAggressiveRegressor,
+    supports_partial_fit_sample_weight,
+)
 from krakked.strategy.strategies.ml_alt_strategy import AIPredictorAltStrategy
 from krakked.strategy.strategies.ml_regression_strategy import AIRegressionStrategy
 from krakked.strategy.strategies.ml_strategy import AIPredictorStrategy
@@ -179,6 +184,8 @@ def test_generate_intents_trains_and_predicts(strategy, mock_ctx):
     assert strategy.model.predict.called
     assert len(intents) == 1
     assert intents[0].side == "long"
+    assert intents[0].metadata["confidence_source"] == "decision_function_magnitude"
+    assert intents[0].metadata["feature_schema_version"] == ML_FEATURE_SCHEMA_VERSION
 
 
 def test_regression_extract_training_example(regression_strategy, mock_ctx):
@@ -213,6 +220,40 @@ def test_regression_min_edge_pct(regression_strategy, mock_ctx):
     regression_strategy.model.predict.return_value = [0.06]
     intents = regression_strategy.generate_intents(mock_ctx)
     assert intents[0].side == "long"
+    assert intents[0].metadata["effective_min_edge_pct"] == pytest.approx(0.05)
+
+
+def test_regression_cost_hurdle_blocks_sub_cost_prediction(mock_ctx):
+    cfg = StrategyConfig(
+        name="reg_cost_test",
+        type="ai_regression",
+        enabled=True,
+        params={
+            "pairs": ["XBT/USD"],
+            "timeframe": "1h",
+            "lookback_bars": 5,
+            "short_window": 2,
+            "long_window": 5,
+            "continuous_learning": True,
+            "min_edge_pct": 0.001,
+        },
+    )
+    strategy = AIRegressionStrategy(cfg)
+    strategy.model = MagicMock()
+    strategy.model_initialized = True
+    mock_ctx.market_data.get_ohlc.return_value = _make_bars(
+        1000000, [100 + i for i in range(20)]
+    )
+
+    strategy.model.predict.return_value = [0.014]
+    intents = strategy.generate_intents(mock_ctx)
+    assert intents[0].side == "flat"
+    assert intents[0].metadata["effective_min_edge_pct"] == pytest.approx(0.015)
+    assert intents[0].metadata["confidence_source"] == "predicted_delta_magnitude"
+
+    strategy.model.predict.return_value = [0.016]
+    intents = strategy.generate_intents(mock_ctx)
+    assert intents[0].side == "long"
 
 
 def test_classifier_bootstrap_prefers_newer_training_checkpoint(strategy, mock_ctx):
@@ -246,8 +287,53 @@ def test_classifier_model_key_versions_fee_adjusted_labels(strategy, mock_ctx):
     label_config = strategy._label_config(mock_ctx)
 
     assert (
-        strategy._model_key("1h", label_config) == "global|1h|fee_adj_fee25_slip50_x2"
+        strategy._model_key("1h", label_config)
+        == "global|1h|features_ohlc_v1|fee_adj_fee25_slip50_x2"
     )
+
+
+def test_regression_model_key_versions_feature_schema(regression_strategy):
+    assert regression_strategy._model_key("1h") == "global|1h|features_ohlc_v1"
+
+
+def test_ml_feature_values_are_shared_across_strategies(
+    strategy, regression_strategy, mock_ctx
+):
+    cfg = StrategyConfig(
+        name="ai_alt_test",
+        type="ai_predictor_alt",
+        enabled=True,
+        params={
+            "pairs": ["XBT/USD"],
+            "timeframe": "1h",
+            "lookback_bars": 5,
+            "short_window": 2,
+            "long_window": 5,
+            "continuous_learning": True,
+        },
+    )
+    alt_strategy = AIPredictorAltStrategy(cfg)
+    bars = _make_bars(1000000, [100.0, 102.0, 101.0, 103.0, 105.0])
+    mock_ctx.market_data.get_ohlc.return_value = bars
+
+    classifier_vector = strategy._extract_feature_vector(mock_ctx, "XBT/USD", "1h")
+    alt_vector = alt_strategy._extract_feature_vector(mock_ctx, "XBT/USD", "1h")
+    regression_vector = regression_strategy._extract_feature_vector(
+        mock_ctx, "XBT/USD", "1h"
+    )
+
+    assert classifier_vector is not None
+    assert alt_vector is not None
+    assert regression_vector is not None
+    assert classifier_vector.names == ["pct_change", "trend_diff", "volatility"]
+    assert classifier_vector.schema_version == ML_FEATURE_SCHEMA_VERSION
+    assert classifier_vector.values == pytest.approx(alt_vector.values)
+    assert classifier_vector.values == pytest.approx(regression_vector.values)
+
+
+def test_passive_aggressive_models_do_not_support_sample_weight_guard():
+    assert supports_partial_fit_sample_weight(PassiveAggressiveClassifier()) is False
+    assert supports_partial_fit_sample_weight(PassiveAggressiveRegressor()) is False
 
 
 def test_alt_strategy_restores_last_observation_from_checkpoint(mock_ctx):

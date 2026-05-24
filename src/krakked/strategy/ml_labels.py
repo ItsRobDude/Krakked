@@ -8,6 +8,8 @@ FEE_ADJUSTED_CLASSIFICATION_LABEL_TYPE = "fee_adjusted_classification"
 DEFAULT_LABEL_FEE_BPS = 25.0
 DEFAULT_LABEL_SLIPPAGE_BPS = 50.0
 DEFAULT_LABEL_COST_MULTIPLIER = 2.0
+DEFAULT_EDGE_FEE_BPS = 25.0
+DEFAULT_EDGE_COST_MULTIPLIER = 1.0
 
 
 def _nonnegative_float(value: Any, default: float) -> float:
@@ -80,6 +82,36 @@ class FeeAdjustedClassificationLabel:
     hurdle_bps: float
 
 
+@dataclass(frozen=True)
+class MLEdgeCostConfig:
+    fee_bps: float = DEFAULT_EDGE_FEE_BPS
+    slippage_bps: float = DEFAULT_LABEL_SLIPPAGE_BPS
+    cost_multiplier: float = DEFAULT_EDGE_COST_MULTIPLIER
+
+    @property
+    def round_trip_cost_bps(self) -> float:
+        return 2.0 * (self.fee_bps + self.slippage_bps)
+
+    @property
+    def round_trip_cost_pct(self) -> float:
+        return self.round_trip_cost_bps / 10_000.0
+
+    @property
+    def hurdle_pct(self) -> float:
+        return self.round_trip_cost_pct * self.cost_multiplier
+
+    def effective_min_edge_pct(self, configured_min_edge_pct: float) -> float:
+        return max(configured_min_edge_pct, self.hurdle_pct)
+
+    def to_metadata(self) -> dict[str, float]:
+        return {
+            "edge_fee_bps": self.fee_bps,
+            "edge_slippage_bps": self.slippage_bps,
+            "edge_cost_multiplier": self.cost_multiplier,
+            "round_trip_cost_pct": self.round_trip_cost_pct,
+        }
+
+
 def label_config_from_context(
     params: Mapping[str, object],
     ctx: Any,
@@ -95,6 +127,27 @@ def label_config_from_context(
         params.get("label_cost_multiplier"), DEFAULT_LABEL_COST_MULTIPLIER
     )
     return FeeAdjustedLabelConfig(
+        fee_bps=fee_bps,
+        slippage_bps=slippage_bps,
+        cost_multiplier=cost_multiplier,
+    )
+
+
+def edge_cost_config_from_context(
+    params: Mapping[str, object],
+    ctx: Any,
+) -> MLEdgeCostConfig:
+    fee_bps = _nonnegative_float(params.get("edge_fee_bps"), DEFAULT_EDGE_FEE_BPS)
+    slippage_source = params.get("edge_slippage_bps")
+    slippage_bps = (
+        _nonnegative_float(slippage_source, DEFAULT_LABEL_SLIPPAGE_BPS)
+        if slippage_source is not None
+        else _execution_slippage_bps(ctx)
+    )
+    cost_multiplier = _nonnegative_float(
+        params.get("edge_cost_multiplier"), DEFAULT_EDGE_COST_MULTIPLIER
+    )
+    return MLEdgeCostConfig(
         fee_bps=fee_bps,
         slippage_bps=slippage_bps,
         cost_multiplier=cost_multiplier,
@@ -121,11 +174,15 @@ def classify_fee_adjusted_return(
 
 __all__ = [
     "DEFAULT_LABEL_COST_MULTIPLIER",
+    "DEFAULT_EDGE_COST_MULTIPLIER",
+    "DEFAULT_EDGE_FEE_BPS",
     "DEFAULT_LABEL_FEE_BPS",
     "DEFAULT_LABEL_SLIPPAGE_BPS",
     "FEE_ADJUSTED_CLASSIFICATION_LABEL_TYPE",
     "FeeAdjustedClassificationLabel",
     "FeeAdjustedLabelConfig",
+    "MLEdgeCostConfig",
     "classify_fee_adjusted_return",
+    "edge_cost_config_from_context",
     "label_config_from_context",
 ]

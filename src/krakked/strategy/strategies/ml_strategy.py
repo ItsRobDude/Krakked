@@ -10,6 +10,11 @@ from krakked.config import StrategyConfig
 from krakked.market_data.api import MarketDataAPI
 from krakked.portfolio.manager import PortfolioService
 from krakked.strategy.base import Strategy, StrategyContext
+from krakked.strategy.features import (
+    ML_FEATURE_SCHEMA_VERSION,
+    MLFeatureVector,
+    compute_feature_vector_from_ohlc,
+)
 from krakked.strategy.ml_labels import (
     FEE_ADJUSTED_CLASSIFICATION_LABEL_TYPE,
     FeeAdjustedLabelConfig,
@@ -101,7 +106,10 @@ class AIPredictorStrategy(Strategy):
                 slippage_bps=self.params.label_slippage_bps,
                 cost_multiplier=self.params.label_cost_multiplier,
             )
-        return f"global|{timeframe}|{label_config.model_key_suffix()}"
+        return (
+            f"global|{timeframe}|features_{ML_FEATURE_SCHEMA_VERSION}|"
+            f"{label_config.model_key_suffix()}"
+        )
 
     def _checkpoint_metadata(
         self,
@@ -116,6 +124,7 @@ class AIPredictorStrategy(Strategy):
         return {
             "model_initialized": self.model_initialized,
             "continuous_learning": self._learning_enabled(),
+            "feature_schema_version": ML_FEATURE_SCHEMA_VERSION,
             "label": label_config.to_metadata(),
         }
 
@@ -342,42 +351,36 @@ class AIPredictorStrategy(Strategy):
                 model=self.model,
             )
 
+    def _compute_feature_vector_from_window(
+        self, ohlc_window: list
+    ) -> Optional[MLFeatureVector]:
+        return compute_feature_vector_from_ohlc(
+            ohlc_window,
+            self.params.short_window,
+            self.params.long_window,
+            self.params.lookback_bars,
+        )
+
     def _compute_features_from_window(self, ohlc_window: list) -> Optional[List[float]]:
-        if not ohlc_window or len(ohlc_window) < 3:
-            return None
+        vector = self._compute_feature_vector_from_window(ohlc_window)
+        return list(vector.values) if vector is not None else None
 
-        closes = [float(bar.close) for bar in ohlc_window]
-        last_close, prev_close = closes[-1], closes[-2]
-        if prev_close <= 0:
-            return None
-
-        pct_change = (last_close - prev_close) / prev_close
-
-        short_len = min(self.params.short_window, len(closes))
-        long_len = min(self.params.long_window, len(closes))
-        short_ma = sum(closes[-short_len:]) / short_len if short_len > 0 else 0.0
-        long_ma = sum(closes[-long_len:]) / long_len if long_len > 0 else 0.0
-        trend_diff = ((short_ma - long_ma) / long_ma) if long_ma > 0 else 0.0
-
-        mean_close = sum(closes) / len(closes)
-        volatility = 0.0
-        if mean_close > 0 and len(closes) > 1:
-            variance = sum((c - mean_close) ** 2 for c in closes) / len(closes)
-            volatility = math.sqrt(variance) / mean_close
-
-        return [pct_change, trend_diff, volatility]
-
-    def _extract_features(
+    def _extract_feature_vector(
         self, ctx: StrategyContext, pair: str, timeframe: str
-    ) -> Optional[List[float]]:
-        # This wrapper retrieves OHLC and delegates to _compute_features_from_window
+    ) -> Optional[MLFeatureVector]:
         lookback = max(
             self.params.lookback_bars,
             self.params.long_window + 1,
             self.params.short_window + 1,
         )
         ohlc = ctx.market_data.get_ohlc(pair, timeframe, lookback=lookback)
-        return self._compute_features_from_window(ohlc)
+        return self._compute_feature_vector_from_window(ohlc)
+
+    def _extract_features(
+        self, ctx: StrategyContext, pair: str, timeframe: str
+    ) -> Optional[List[float]]:
+        vector = self._extract_feature_vector(ctx, pair, timeframe)
+        return list(vector.values) if vector is not None else None
 
     def _extract_training_example(
         self, ctx: StrategyContext, pair: str, timeframe: str
@@ -502,9 +505,10 @@ class AIPredictorStrategy(Strategy):
                         logger.debug("Model update failed for %s: %s", pair, exc)
 
             # 2. Predict for the current state (T) to target T+1
-            features = self._extract_features(ctx, pair, timeframe)
-            if not features:
+            feature_vector = self._extract_feature_vector(ctx, pair, timeframe)
+            if not feature_vector:
                 continue
+            features = feature_vector.values
 
             if not self.model_initialized:
                 continue
@@ -548,12 +552,10 @@ class AIPredictorStrategy(Strategy):
                     metadata={
                         "prediction": "up" if prediction == 1 else "down",
                         "learning_enabled": self._learning_enabled(),
+                        "confidence_source": "decision_function_magnitude",
+                        "feature_schema_version": feature_vector.schema_version,
                         "label": label_config.to_metadata(),
-                        "features": {
-                            "pct_change": features[0],
-                            "trend_diff": features[1],
-                            "volatility": features[2],
-                        },
+                        "features": feature_vector.to_metadata(),
                     },
                 )
             )

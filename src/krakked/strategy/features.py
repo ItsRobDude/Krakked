@@ -1,10 +1,30 @@
+from __future__ import annotations
+
 import math
-from typing import List, Optional
+from dataclasses import dataclass
+from typing import List, Optional, Sequence
+
+ML_FEATURE_SCHEMA_VERSION = "ohlc_v1"
+ML_FEATURE_NAMES = ("pct_change", "trend_diff", "volatility")
 
 
-def compute_features_from_window(
-    closes: List[float], short_window: int, long_window: int, lookback_bars: int
-) -> Optional[List[float]]:
+@dataclass(frozen=True)
+class MLFeatureVector:
+    values: List[float]
+    names: List[str]
+    schema_version: str
+
+    def to_metadata(self) -> dict[str, float | str]:
+        metadata: dict[str, float | str] = {
+            name: value for name, value in zip(self.names, self.values)
+        }
+        metadata["feature_schema_version"] = self.schema_version
+        return metadata
+
+
+def compute_feature_vector_from_closes(
+    closes: Sequence[float], short_window: int, long_window: int, lookback_bars: int
+) -> Optional[MLFeatureVector]:
     """
     Compute ML features from a list of close prices.
 
@@ -21,7 +41,7 @@ def compute_features_from_window(
         lookback_bars: Period for volatility calc.
 
     Returns:
-        List of [pct_change, trend_diff, volatility] or None if insufficient data.
+        Feature vector or None if insufficient data.
     """
     if not closes or len(closes) < 3:
         return None
@@ -45,4 +65,45 @@ def compute_features_from_window(
         variance = sum((c - mean_close) ** 2 for c in window) / len(window)
         volatility = math.sqrt(variance) / mean_close
 
-    return [pct_change, trend_diff, volatility]
+    return MLFeatureVector(
+        values=[pct_change, trend_diff, volatility],
+        names=list(ML_FEATURE_NAMES),
+        schema_version=ML_FEATURE_SCHEMA_VERSION,
+    )
+
+
+def compute_feature_vector_from_ohlc(
+    ohlc_window: Sequence[object],
+    short_window: int,
+    long_window: int,
+    lookback_bars: int,
+) -> Optional[MLFeatureVector]:
+    closes = [float(getattr(bar, "close")) for bar in ohlc_window]
+    return compute_feature_vector_from_closes(
+        closes,
+        short_window,
+        long_window,
+        lookback_bars,
+    )
+
+
+def compute_features_from_window(
+    closes: List[float], short_window: int, long_window: int, lookback_bars: int
+) -> Optional[List[float]]:
+    vector = compute_feature_vector_from_closes(
+        closes,
+        short_window,
+        long_window,
+        lookback_bars,
+    )
+    return list(vector.values) if vector is not None else None
+
+
+__all__ = [
+    "ML_FEATURE_NAMES",
+    "ML_FEATURE_SCHEMA_VERSION",
+    "MLFeatureVector",
+    "compute_feature_vector_from_closes",
+    "compute_feature_vector_from_ohlc",
+    "compute_features_from_window",
+]

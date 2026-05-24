@@ -10,7 +10,15 @@ from krakked.config import StrategyConfig
 from krakked.market_data.api import MarketDataAPI
 from krakked.portfolio.manager import PortfolioService
 from krakked.strategy.base import Strategy, StrategyContext
-from krakked.strategy.features import compute_features_from_window
+from krakked.strategy.features import (
+    ML_FEATURE_SCHEMA_VERSION,
+    MLFeatureVector,
+    compute_feature_vector_from_ohlc,
+)
+from krakked.strategy.ml_labels import (
+    MLEdgeCostConfig,
+    edge_cost_config_from_context,
+)
 from krakked.strategy.ml_models import PassiveAggressiveRegressor
 from krakked.strategy.ml_persistence import (
     load_model,
@@ -39,6 +47,9 @@ class AIRegressionConfig:
     continuous_learning: bool
     max_positions: int
     min_edge_pct: float = 0.003
+    edge_fee_bps: float = 25.0
+    edge_slippage_bps: float = 50.0
+    edge_cost_multiplier: float = 1.0
 
 
 class AIRegressionStrategy(Strategy):
@@ -54,6 +65,7 @@ class AIRegressionStrategy(Strategy):
         short_window = max(int(params.get("short_window", 5)), 2)
         long_window = max(int(params.get("long_window", 20)), short_window + 1)
         lookback_bars = max(int(params.get("lookback_bars", 50)), long_window + 1)
+        edge_defaults = edge_cost_config_from_context(params, None)
 
         self.params = AIRegressionConfig(
             pairs=pairs,
@@ -65,6 +77,9 @@ class AIRegressionStrategy(Strategy):
             continuous_learning=bool(params.get("continuous_learning", True)),
             max_positions=max(int(params.get("max_positions", 2)), 1),
             min_edge_pct=float(params.get("min_edge_pct", 0.003)),
+            edge_fee_bps=edge_defaults.fee_bps,
+            edge_slippage_bps=edge_defaults.slippage_bps,
+            edge_cost_multiplier=edge_defaults.cost_multiplier,
         )
 
         self.model = PassiveAggressiveRegressor(max_iter=1000, tol=1e-3)
@@ -77,12 +92,16 @@ class AIRegressionStrategy(Strategy):
         return bool(self.config.params.get("continuous_learning", True))
 
     def _model_key(self, timeframe: str) -> str:
-        return f"global|{timeframe}"
+        return f"global|{timeframe}|features_{ML_FEATURE_SCHEMA_VERSION}"
+
+    def _edge_cost_config(self, ctx: StrategyContext) -> MLEdgeCostConfig:
+        return edge_cost_config_from_context(self.config.params, ctx)
 
     def _checkpoint_metadata(self) -> dict[str, object]:
         return {
             "model_initialized": self.model_initialized,
             "continuous_learning": self._learning_enabled(),
+            "feature_schema_version": ML_FEATURE_SCHEMA_VERSION,
         }
 
     def _save_training_checkpoint(
@@ -118,7 +137,9 @@ class AIRegressionStrategy(Strategy):
         checkpoint = load_training_checkpoint(ctx, self.id, model_key)
         updated_at = None
 
-        checkpoint_candidate: Optional[tuple[PassiveAggressiveRegressor, datetime, bool]]
+        checkpoint_candidate: Optional[
+            tuple[PassiveAggressiveRegressor, datetime, bool]
+        ]
         checkpoint_candidate = None
         if checkpoint is not None:
             restored_model, checkpoint_updated_at, _state, metadata = checkpoint
@@ -268,25 +289,36 @@ class AIRegressionStrategy(Strategy):
                 model=self.model,
             )
 
-    def _compute_features_from_window(self, ohlc_window: list) -> Optional[List[float]]:
-        closes = [float(bar.close) for bar in ohlc_window]
-        return compute_features_from_window(
-            closes,
+    def _compute_feature_vector_from_window(
+        self, ohlc_window: list
+    ) -> Optional[MLFeatureVector]:
+        return compute_feature_vector_from_ohlc(
+            ohlc_window,
             self.params.short_window,
             self.params.long_window,
             self.params.lookback_bars,
         )
 
-    def _extract_features(
+    def _compute_features_from_window(self, ohlc_window: list) -> Optional[List[float]]:
+        vector = self._compute_feature_vector_from_window(ohlc_window)
+        return list(vector.values) if vector is not None else None
+
+    def _extract_feature_vector(
         self, ctx: StrategyContext, pair: str, timeframe: str
-    ) -> Optional[List[float]]:
+    ) -> Optional[MLFeatureVector]:
         lookback = max(
             self.params.lookback_bars,
             self.params.long_window + 1,
             self.params.short_window + 1,
         )
         ohlc = ctx.market_data.get_ohlc(pair, timeframe, lookback=lookback)
-        return self._compute_features_from_window(ohlc)
+        return self._compute_feature_vector_from_window(ohlc)
+
+    def _extract_features(
+        self, ctx: StrategyContext, pair: str, timeframe: str
+    ) -> Optional[List[float]]:
+        vector = self._extract_feature_vector(ctx, pair, timeframe)
+        return list(vector.values) if vector is not None else None
 
     def _extract_training_example(
         self, ctx: StrategyContext, pair: str, timeframe: str
@@ -381,15 +413,19 @@ class AIRegressionStrategy(Strategy):
                             ctx,
                             timeframe,
                             checkpoint_state="training",
-                            extra_metadata={"last_pair": pair, "training_mode": "online"},
+                            extra_metadata={
+                                "last_pair": pair,
+                                "training_mode": "online",
+                            },
                         )
                     except Exception as exc:  # pragma: no cover - defensive
                         logger.debug("Model update failed for %s: %s", pair, exc)
 
             # 2. Predict T
-            features = self._extract_features(ctx, pair, timeframe)
-            if not features:
+            feature_vector = self._extract_feature_vector(ctx, pair, timeframe)
+            if not feature_vector:
                 continue
+            features = feature_vector.values
 
             if not self.model_initialized:
                 continue
@@ -401,11 +437,14 @@ class AIRegressionStrategy(Strategy):
                 continue
 
             confidence = self._confidence(predicted_delta)
+            edge_config = self._edge_cost_config(ctx)
+            effective_min_edge_pct = edge_config.effective_min_edge_pct(
+                self.params.min_edge_pct
+            )
             position = positions_by_pair.get(pair)
             has_long = bool(position and getattr(position, "base_size", 0) > 0)
 
-            # Check profit threshold
-            if predicted_delta > self.params.min_edge_pct:
+            if predicted_delta > effective_min_edge_pct:
                 if not has_long and open_positions_count >= self.params.max_positions:
                     continue
 
@@ -432,12 +471,13 @@ class AIRegressionStrategy(Strategy):
                     generated_at=ctx.now,
                     metadata={
                         "predicted_delta": predicted_delta,
+                        "min_edge_pct": self.params.min_edge_pct,
+                        "effective_min_edge_pct": effective_min_edge_pct,
+                        **edge_config.to_metadata(),
                         "learning_enabled": self._learning_enabled(),
-                        "features": {
-                            "pct_change": features[0],
-                            "trend_diff": features[1],
-                            "volatility": features[2],
-                        },
+                        "confidence_source": "predicted_delta_magnitude",
+                        "feature_schema_version": feature_vector.schema_version,
+                        "features": feature_vector.to_metadata(),
                     },
                 )
             )

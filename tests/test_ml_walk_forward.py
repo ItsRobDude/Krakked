@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
+import sqlite3
 
 import pandas as pd
 import pytest
@@ -113,15 +114,85 @@ def test_run_ml_walk_forward_scores_out_of_sample_predictions(tmp_path: Path) ->
     report = result.to_report_dict()
     summary = report["summary"]
 
-    assert report["report_version"] == 1
+    assert report["report_version"] == 2
     assert report["provenance"]["generated_by"] == "krakked ml-walk-forward"
     assert summary["strategy_id"] == "ai_regression"
     assert summary["timeframe"] == "1h"
+    assert summary["evaluation_mode"] == "rolling_window_isolated"
+    assert summary["model_state_reused_across_folds"] is False
     assert summary["fold_count"] >= 1
     assert summary["metrics"]["prediction_count"] > 0
     assert summary["metrics"]["directional_accuracy"] is not None
     assert summary["round_trip_cost_bps"] == pytest.approx(150.0)
+    assert summary["confidence_buckets"]
     assert summary["folds"][0]["prediction_count"] > 0
+    assert summary["folds"][0]["confidence_buckets"]
+
+
+def test_run_ml_walk_forward_uses_isolated_fold_databases(
+    tmp_path: Path,
+) -> None:
+    config = _build_ml_config(tmp_path)
+    _seed_pair_metadata(config)
+    timestamps = [1_700_000_000 + idx * 3600 for idx in range(42)]
+    closes = [100.0 + idx * 0.5 for idx in range(42)]
+    _write_ohlc_series(tmp_path, timestamps, closes)
+    base_db_path = tmp_path / "reports" / "ml-walk-forward.db"
+
+    result = run_ml_walk_forward(
+        config,
+        start=datetime.fromtimestamp(timestamps[0], tz=UTC),
+        end=datetime.fromtimestamp(timestamps[-1], tz=UTC),
+        strategy_id="ai_regression",
+        timeframe="1h",
+        train_bars=12,
+        test_bars=6,
+        fee_bps=25.0,
+        db_path=str(base_db_path),
+        strict_data=True,
+    )
+
+    assert result.summary.to_dict()["evaluation_mode"] == "rolling_window_isolated"
+    assert not base_db_path.exists()
+    fold_paths = [
+        base_db_path.with_name("ml-walk-forward.fold-001.db"),
+        base_db_path.with_name("ml-walk-forward.fold-002.db"),
+    ]
+    for fold_path in fold_paths:
+        assert fold_path.exists()
+        with sqlite3.connect(fold_path) as conn:
+            (count,) = conn.execute(
+                "SELECT COUNT(*) FROM ml_training_examples"
+            ).fetchone()
+        assert 0 < count <= 12
+
+
+def test_ml_walk_forward_fee_bps_controls_regression_edge_metadata(
+    tmp_path: Path,
+) -> None:
+    config = _build_ml_config(tmp_path)
+    _seed_pair_metadata(config)
+    timestamps = [1_700_000_000 + idx * 3600 for idx in range(30)]
+    closes = [100.0 + idx * 0.4 for idx in range(30)]
+    _write_ohlc_series(tmp_path, timestamps, closes)
+
+    result = run_ml_walk_forward(
+        config,
+        start=datetime.fromtimestamp(timestamps[0], tz=UTC),
+        end=datetime.fromtimestamp(timestamps[-1], tz=UTC),
+        strategy_id="ai_regression",
+        timeframe="1h",
+        train_bars=12,
+        test_bars=6,
+        fee_bps=75.0,
+        strict_data=True,
+    )
+
+    prediction = result.summary.folds[0].predictions[0]
+    assert prediction.metadata["edge_fee_bps"] == pytest.approx(75.0)
+    assert prediction.metadata["round_trip_cost_pct"] == pytest.approx(0.025)
+    assert prediction.metadata["effective_min_edge_pct"] == pytest.approx(0.025)
+    assert prediction.metadata["confidence_source"] == "predicted_delta_magnitude"
 
 
 def test_run_ml_walk_forward_rejects_non_ml_strategy(tmp_path: Path) -> None:

@@ -25,6 +25,7 @@ ML_STRATEGY_TYPES = {
     "machine_learning_alt",
     "machine_learning_regression",
 }
+EVALUATION_MODE = "rolling_window_isolated"
 
 
 @dataclass
@@ -89,6 +90,7 @@ class MLWalkForwardFold:
             "test_cycles": self.test_cycles,
             "prediction_count": len(self.predictions),
             "metrics": _build_prediction_metrics(self.predictions),
+            "confidence_buckets": _build_confidence_buckets(self.predictions),
         }
 
 
@@ -106,6 +108,8 @@ class MLWalkForwardSummary:
     pairs: list[str]
     coverage_status: str
     warnings: list[str]
+    evaluation_mode: str = EVALUATION_MODE
+    model_state_reused_across_folds: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         predictions = [
@@ -120,6 +124,8 @@ class MLWalkForwardSummary:
             "timeframe": self.timeframe,
             "train_bars": self.train_bars,
             "test_bars": self.test_bars,
+            "evaluation_mode": self.evaluation_mode,
+            "model_state_reused_across_folds": self.model_state_reused_across_folds,
             "fold_count": len(self.folds),
             "pairs": list(self.pairs),
             "fee_bps": self.fee_bps,
@@ -130,6 +136,7 @@ class MLWalkForwardSummary:
             "coverage_status": self.coverage_status,
             "warnings": list(self.warnings),
             "metrics": metrics,
+            "confidence_buckets": _build_confidence_buckets(predictions),
             "promotable": promotable,
             "promotable_reasons": promotable_reasons,
             "folds": [fold.to_dict() for fold in self.folds],
@@ -142,7 +149,7 @@ class MLWalkForwardResult:
 
     def to_report_dict(self) -> dict[str, Any]:
         return {
-            "report_version": 1,
+            "report_version": 2,
             "generated_at": datetime.now(UTC).isoformat(),
             "summary": self.summary.to_dict(),
             "provenance": {
@@ -209,9 +216,29 @@ def _prepare_ml_config(
     params["timeframe"] = timeframe
     if strat_cfg.type in {"machine_learning", "machine_learning_alt"}:
         params["label_fee_bps"] = float(fee_bps)
+    if strat_cfg.type == "machine_learning_regression":
+        params["edge_fee_bps"] = float(fee_bps)
     params.pop("timeframes", None)
     strat_cfg.params = params
     return config_copy
+
+
+def _fold_db_path(base_path: Path, fold_index: int) -> Path:
+    suffix = base_path.suffix or ".db"
+    return base_path.with_name(f"{base_path.stem}.fold-{fold_index:03d}{suffix}")
+
+
+def _reset_sqlite_path(db_path: Path) -> None:
+    for candidate in (
+        db_path,
+        Path(str(db_path) + "-wal"),
+        Path(str(db_path) + "-shm"),
+        Path(str(db_path) + "-journal"),
+    ):
+        try:
+            candidate.unlink(missing_ok=True)
+        except PermissionError:
+            raise ValueError(f"Cannot reset existing fold database: {candidate}")
 
 
 def _prediction_direction(intent: StrategyIntent) -> str:
@@ -332,6 +359,58 @@ def _build_prediction_metrics(
     }
 
 
+def _build_confidence_buckets(
+    predictions: list[MLWalkForwardPrediction],
+) -> list[dict[str, Any]]:
+    ranges = [
+        (0.0, 0.5),
+        (0.5, 0.6),
+        (0.6, 0.7),
+        (0.7, 0.8),
+        (0.8, 0.9),
+        (0.9, 1.000000001),
+    ]
+    buckets: list[dict[str, Any]] = []
+    for lower, upper in ranges:
+        bucket_predictions = [
+            prediction
+            for prediction in predictions
+            if lower <= prediction.confidence < upper
+        ]
+        if not bucket_predictions:
+            continue
+        display_upper = 1.0 if upper > 1.0 else upper
+        total = len(bucket_predictions)
+        buckets.append(
+            {
+                "bucket": f"{lower:.2f}-{display_upper:.2f}",
+                "min_confidence": lower,
+                "max_confidence": display_upper,
+                "prediction_count": total,
+                "directional_accuracy": _rate(
+                    sum(
+                        1
+                        for prediction in bucket_predictions
+                        if prediction.directional_correct
+                    ),
+                    total,
+                ),
+                "fee_adjusted_hit_rate": _rate(
+                    sum(
+                        1
+                        for prediction in bucket_predictions
+                        if prediction.fee_adjusted_correct
+                    ),
+                    total,
+                ),
+                "avg_realized_return": _average(
+                    prediction.realized_return for prediction in bucket_predictions
+                ),
+            }
+        )
+    return buckets
+
+
 def _metric_value(metrics: dict[str, Any], key: str) -> float:
     value = metrics.get(key)
     return float(value) if isinstance(value, (int, float)) else 0.0
@@ -408,74 +487,80 @@ def run_ml_walk_forward(
 
     temp_dir: Optional[TemporaryDirectory[str]] = None
     if db_path:
-        resolved_db_path = Path(db_path).expanduser().resolve()
-        resolved_db_path.parent.mkdir(parents=True, exist_ok=True)
+        resolved_db_base_path = Path(db_path).expanduser().resolve()
+        resolved_db_base_path.parent.mkdir(parents=True, exist_ok=True)
     else:
         temp_dir = TemporaryDirectory(prefix="krakked-ml-walk-forward-")
-        resolved_db_path = Path(temp_dir.name) / "ml-walk-forward.db"
+        resolved_db_base_path = Path(temp_dir.name) / "ml-walk-forward.db"
 
     folds: list[MLWalkForwardFold] = []
     try:
-        portfolio_service = BacktestPortfolioService(
-            config_copy,
-            market_data,
-            db_path=str(resolved_db_path),
-            starting_cash_usd=10_000.0,
-        )
-        strategy_engine = StrategyEngine(config_copy, market_data, portfolio_service)
-        strategy_engine.initialize()
-
         for fold_index, (train_timestamps, test_timestamps) in enumerate(
             fold_ranges,
             start=1,
         ):
-            _set_strategy_learning(config_copy, strategy_id, True)
-            for ts in train_timestamps:
-                now = datetime.fromtimestamp(ts, tz=UTC)
-                market_data.set_time(now)
-                strategy_engine.run_cycle(now=now)
-
-            predictions: list[MLWalkForwardPrediction] = []
-            _set_strategy_learning(config_copy, strategy_id, False)
-            for ts in test_timestamps:
-                now = datetime.fromtimestamp(ts, tz=UTC)
-                market_data.set_time(now)
-                strategy_engine.run_cycle(now=now)
-                intents = [
-                    intent
-                    for intent in strategy_engine.last_cycle_intents
-                    if intent.strategy_id == strategy_id
-                    and intent.timeframe == timeframe
-                ]
-                for intent in intents:
-                    scored = _score_intent(
-                        fold_index=fold_index,
-                        intent=intent,
-                        market_data=market_data,
-                        generated_at=now,
-                        fee_bps=fee_bps,
-                        slippage_bps=float(config_copy.execution.max_slippage_bps),
-                    )
-                    if scored is not None:
-                        predictions.append(scored)
-
-            folds.append(
-                MLWalkForwardFold(
-                    fold_index=fold_index,
-                    train_start=datetime.fromtimestamp(train_timestamps[0], tz=UTC),
-                    train_end=datetime.fromtimestamp(train_timestamps[-1], tz=UTC),
-                    test_start=datetime.fromtimestamp(test_timestamps[0], tz=UTC),
-                    test_end=datetime.fromtimestamp(test_timestamps[-1], tz=UTC),
-                    train_cycles=len(train_timestamps),
-                    test_cycles=len(test_timestamps),
-                    predictions=predictions,
-                )
+            fold_config = copy.deepcopy(config_copy)
+            fold_db_path = _fold_db_path(resolved_db_base_path, fold_index)
+            _reset_sqlite_path(fold_db_path)
+            portfolio_service = BacktestPortfolioService(
+                fold_config,
+                market_data,
+                db_path=str(fold_db_path),
+                starting_cash_usd=10_000.0,
             )
+            try:
+                _set_strategy_learning(fold_config, strategy_id, True)
+                strategy_engine = StrategyEngine(
+                    fold_config, market_data, portfolio_service
+                )
+                strategy_engine.initialize()
+
+                for ts in train_timestamps:
+                    now = datetime.fromtimestamp(ts, tz=UTC)
+                    market_data.set_time(now)
+                    strategy_engine.run_cycle(now=now)
+
+                predictions: list[MLWalkForwardPrediction] = []
+                _set_strategy_learning(fold_config, strategy_id, False)
+                for ts in test_timestamps:
+                    now = datetime.fromtimestamp(ts, tz=UTC)
+                    market_data.set_time(now)
+                    strategy_engine.run_cycle(now=now)
+                    intents = [
+                        intent
+                        for intent in strategy_engine.last_cycle_intents
+                        if intent.strategy_id == strategy_id
+                        and intent.timeframe == timeframe
+                    ]
+                    for intent in intents:
+                        scored = _score_intent(
+                            fold_index=fold_index,
+                            intent=intent,
+                            market_data=market_data,
+                            generated_at=now,
+                            fee_bps=fee_bps,
+                            slippage_bps=float(fold_config.execution.max_slippage_bps),
+                        )
+                        if scored is not None:
+                            predictions.append(scored)
+
+                folds.append(
+                    MLWalkForwardFold(
+                        fold_index=fold_index,
+                        train_start=datetime.fromtimestamp(train_timestamps[0], tz=UTC),
+                        train_end=datetime.fromtimestamp(train_timestamps[-1], tz=UTC),
+                        test_start=datetime.fromtimestamp(test_timestamps[0], tz=UTC),
+                        test_end=datetime.fromtimestamp(test_timestamps[-1], tz=UTC),
+                        train_cycles=len(train_timestamps),
+                        test_cycles=len(test_timestamps),
+                        predictions=predictions,
+                    )
+                )
+            finally:
+                close_store = getattr(portfolio_service.store, "close", None)
+                if callable(close_store):
+                    close_store()
     finally:
-        if "portfolio_service" in locals():
-            close_store = getattr(portfolio_service.store, "close", None)
-            if callable(close_store):
-                close_store()
         shutdown = getattr(market_data, "shutdown", None)
         if callable(shutdown):
             shutdown()

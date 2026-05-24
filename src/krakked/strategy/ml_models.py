@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import inspect
 import logging
 from typing import Iterable, List, Protocol
 
@@ -100,4 +101,19 @@ class PassiveAggressiveRegressor(_PassiveAggressiveRegressorImpl):
     pass
 
 
-__all__ = ["PassiveAggressiveClassifier", "PassiveAggressiveRegressor"]
+def supports_partial_fit_sample_weight(model: object) -> bool:
+    partial_fit = getattr(model, "partial_fit", None)
+    if partial_fit is None:
+        return False
+    try:
+        signature = inspect.signature(partial_fit)
+    except (TypeError, ValueError):
+        return False
+    return "sample_weight" in signature.parameters
+
+
+__all__ = [
+    "PassiveAggressiveClassifier",
+    "PassiveAggressiveRegressor",
+    "supports_partial_fit_sample_weight",
+]
