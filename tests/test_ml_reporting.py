@@ -88,11 +88,13 @@ def test_ml_report_publish_latest_uses_ml_specific_path(tmp_path: Path) -> None:
     assert json.loads(published.read_text(encoding="utf-8")) == payload
 
 
-def test_ml_report_validation_rejects_backtest_report_version(tmp_path: Path) -> None:
+def test_ml_report_validation_rejects_old_report_version_with_regenerate_hint(
+    tmp_path: Path,
+) -> None:
     payload = _sample_report()
-    payload["report_version"] = 1
+    payload["report_version"] = 2
 
-    with pytest.raises(ValueError, match="Unsupported ML report version"):
+    with pytest.raises(ValueError, match="regenerate with `krakked ml-walk-forward`"):
         validate_ml_walk_forward_report_payload(
             payload, resolved_path=tmp_path / "bad.json"
         )

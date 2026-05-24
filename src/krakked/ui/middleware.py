@@ -20,7 +20,7 @@ BASELINE_CSP = (
     "style-src 'self' 'unsafe-inline'; "
     "img-src 'self' data:; "
     "font-src 'self' data:; "
-    "connect-src 'self' ws: wss:"
+    "connect-src 'self'"
 )
 
 

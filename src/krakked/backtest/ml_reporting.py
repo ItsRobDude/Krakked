@@ -25,9 +25,11 @@ def validate_ml_walk_forward_report_payload(
     """Validate the minimal ML walk-forward report contract."""
 
     if payload.get("report_version") != ML_WALK_FORWARD_REPORT_VERSION:
+        version = payload.get("report_version")
         raise ValueError(
-            f"Unsupported ML report version in {resolved_path}: "
-            f"{payload.get('report_version')}"
+            f"Unsupported ML report version in {resolved_path}: {version}. "
+            f"Current ML report version is {ML_WALK_FORWARD_REPORT_VERSION}; "
+            "regenerate with `krakked ml-walk-forward`."
         )
 
     summary = payload.get("summary")

@@ -55,8 +55,12 @@ class MLWalkForwardPrediction:
     evaluation_hurdle_pct: float
     evaluation_hurdle_source: str
     directional_correct: Optional[bool]
-    fee_adjusted_correct: bool
+    evaluation_hurdle_correct: bool
     metadata: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def fee_adjusted_correct(self) -> bool:
+        return self.evaluation_hurdle_correct
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -78,6 +82,7 @@ class MLWalkForwardPrediction:
             "evaluation_hurdle_pct": self.evaluation_hurdle_pct,
             "evaluation_hurdle_source": self.evaluation_hurdle_source,
             "directional_correct": self.directional_correct,
+            "evaluation_hurdle_correct": self.evaluation_hurdle_correct,
             "fee_adjusted_correct": self.fee_adjusted_correct,
             "metadata": copy.deepcopy(self.metadata),
         }
@@ -420,7 +425,7 @@ def _score_intent(
         evaluation_hurdle_pct=evaluation_hurdle,
         evaluation_hurdle_source=evaluation_hurdle_source,
         directional_correct=directional_correct,
-        fee_adjusted_correct=predicted_positive_edge == tradeable_up,
+        evaluation_hurdle_correct=predicted_positive_edge == tradeable_up,
         metadata=copy.deepcopy(intent.metadata),
     )
 

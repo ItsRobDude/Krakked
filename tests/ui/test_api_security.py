@@ -17,7 +17,9 @@ from krakked.ui.middleware import SecurityHeadersMiddleware
 def _assert_baseline_csp(value: str) -> None:
     assert "default-src 'self'" in value
     assert "frame-ancestors 'none'" in value
-    assert "connect-src 'self' ws: wss:" in value
+    assert "connect-src 'self'" in value
+    assert " ws:" not in value
+    assert " wss:" not in value
 
 
 @pytest.mark.parametrize("ui_auth_enabled", [True], indirect=True)

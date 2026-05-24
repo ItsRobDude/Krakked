@@ -11,16 +11,17 @@ import pytest
 from krakked.backtest.ml_walk_forward import (
     _build_prediction_metrics,
     _build_walk_forward_folds,
-    _prepare_ml_config,
     _score_intent,
     _set_strategy_learning,
     run_ml_walk_forward,
 )
-from krakked.config import AppConfig, load_config
+from krakked.config import AppConfig, StrategyConfig, load_config
 from krakked.market_data.metadata_store import PairMetadataStore
 from krakked.market_data.models import PairMetadata
 from krakked.strategy.models import StrategyIntent
+from krakked.strategy.strategies.ml_alt_strategy import AIPredictorAltStrategy
 from krakked.strategy.strategies.ml_regression_strategy import AIRegressionStrategy
+from krakked.strategy.strategies.ml_strategy import AIPredictorStrategy
 
 
 def _build_ml_config(tmp_path: Path) -> AppConfig:
@@ -223,20 +224,35 @@ def test_ml_walk_forward_fee_bps_controls_regression_edge_metadata(
     assert prediction.evaluation_hurdle_source == "effective_min_edge_pct"
 
 
+@pytest.mark.parametrize(
+    ("strategy_id", "strategy_cls"),
+    [
+        ("ai_predictor", AIPredictorStrategy),
+        ("ai_predictor_alt", AIPredictorAltStrategy),
+        ("ai_regression", AIRegressionStrategy),
+    ],
+)
 def test_set_strategy_learning_updates_instantiated_strategy_config_reference(
-    tmp_path: Path,
+    tmp_path: Path, strategy_id: str, strategy_cls: Any
 ) -> None:
-    config = _prepare_ml_config(
-        _build_ml_config(tmp_path),
-        strategy_id="ai_regression",
-        timeframe="1h",
-        fee_bps=25.0,
-    )
-    strategy = AIRegressionStrategy(config.strategies.configs["ai_regression"])
+    config = _build_ml_config(tmp_path)
+    if strategy_id == "ai_predictor":
+        config.strategies.configs[strategy_id] = StrategyConfig(
+            name=strategy_id,
+            type="machine_learning",
+            enabled=True,
+            params={
+                "pairs": ["BTC/USD"],
+                "timeframe": "1h",
+                "lookback_bars": 60,
+                "continuous_learning": True,
+            },
+        )
+    strategy = strategy_cls(config.strategies.configs[strategy_id])
 
     assert strategy._learning_enabled() is True  # noqa: SLF001
 
-    _set_strategy_learning(config, "ai_regression", False)
+    _set_strategy_learning(config, strategy_id, False)
 
     assert strategy._learning_enabled() is False  # noqa: SLF001
 
@@ -283,7 +299,10 @@ def test_ml_walk_forward_scores_classifier_no_edge_without_fake_down_call() -> N
     assert prediction.predicted_direction is None
     assert prediction.predicted_positive_edge is False
     assert prediction.directional_correct is None
+    assert prediction.evaluation_hurdle_correct is True
     assert prediction.fee_adjusted_correct is True
+    assert prediction.to_dict()["evaluation_hurdle_correct"] is True
+    assert prediction.to_dict()["fee_adjusted_correct"] is True
     metrics = _build_prediction_metrics([prediction])
     assert metrics["directional_accuracy"] is None
     assert metrics["edge_prediction_accuracy"] == pytest.approx(1.0)

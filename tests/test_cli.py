@@ -20,7 +20,12 @@ from krakked.backtest.runner import (
 from krakked.config import load_config
 from krakked.credentials import CredentialResult, CredentialStatus
 from krakked.portfolio.exceptions import PortfolioSchemaError
-from krakked.portfolio.store import CURRENT_SCHEMA_VERSION, SQLitePortfolioStore
+from krakked.portfolio.store import (
+    CURRENT_SCHEMA_VERSION,
+    MLArtifactGroup,
+    SQLitePortfolioStore,
+)
+from krakked.strategy.ml_pruning import find_stale_ml_artifact_groups
 
 
 class _DummyClient:
@@ -904,6 +909,39 @@ def test_ml_prune_stale_dry_run_reports_without_deleting(
         "stale_models": 1,
         "stale_checkpoints": 1,
     }
+
+
+def test_ml_prune_stale_retains_plural_timeframe_artifacts() -> None:
+    config = load_config(config_path=Path("config_examples/config.yaml"), env="paper")
+    strat_cfg = config.strategies.configs["ai_regression"]
+    params = dict(strat_cfg.params or {})
+    params.pop("timeframe", None)
+    params["timeframes"] = ["1h", "4h"]
+    strat_cfg.params = params
+
+    groups = [
+        MLArtifactGroup(
+            strategy_id="ai_regression",
+            model_key="global|4h|features_ohlc_v1",
+            example_count=1,
+            live_model_count=0,
+            checkpoint_count=0,
+        ),
+        MLArtifactGroup(
+            strategy_id="ai_regression",
+            model_key="global|1d|features_ohlc_v1",
+            example_count=1,
+            live_model_count=0,
+            checkpoint_count=0,
+        ),
+    ]
+
+    candidates = find_stale_ml_artifact_groups(config, groups)
+
+    assert [candidate.group.model_key for candidate in candidates] == [
+        "global|1d|features_ohlc_v1"
+    ]
+    assert candidates[0].stale_reason == "timeframe_mismatch"
 
 
 def test_ml_prune_stale_apply_deletes_stale_artifacts_only(

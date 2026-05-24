@@ -34,8 +34,21 @@ def _label_context(config: AppConfig) -> SimpleNamespace:
     return SimpleNamespace(portfolio=SimpleNamespace(app_config=config))
 
 
-def _strategy_timeframe(strat_cfg: StrategyConfig) -> str:
-    return str((strat_cfg.params or {}).get("timeframe") or "1h")
+def _coerce_timeframes(value: object) -> list[str]:
+    if isinstance(value, (list, tuple)):
+        return [str(timeframe) for timeframe in value if timeframe]
+    if value:
+        return [str(value)]
+    return []
+
+
+def _strategy_timeframes(strat_cfg: StrategyConfig) -> list[str]:
+    params = strat_cfg.params or {}
+    timeframes = _coerce_timeframes(params.get("timeframes"))
+    timeframes.extend(_coerce_timeframes(params.get("timeframe")))
+    if not timeframes:
+        timeframes = ["1h"]
+    return list(dict.fromkeys(timeframes))
 
 
 def _feature_key() -> str:
@@ -49,25 +62,28 @@ def _label_suffix(config: AppConfig, strat_cfg: StrategyConfig) -> str:
     ).model_key_suffix()
 
 
-def _classifier_key(config: AppConfig, strat_cfg: StrategyConfig) -> str:
-    return (
-        f"global|{_strategy_timeframe(strat_cfg)}|{_feature_key()}|"
-        f"{_label_suffix(config, strat_cfg)}"
-    )
+def _classifier_keys(config: AppConfig, strat_cfg: StrategyConfig) -> set[str]:
+    return {
+        f"global|{timeframe}|{_feature_key()}|{_label_suffix(config, strat_cfg)}"
+        for timeframe in _strategy_timeframes(strat_cfg)
+    }
 
 
-def _regression_key(strat_cfg: StrategyConfig) -> str:
-    return f"global|{_strategy_timeframe(strat_cfg)}|{_feature_key()}"
+def _regression_keys(strat_cfg: StrategyConfig) -> set[str]:
+    return {
+        f"global|{timeframe}|{_feature_key()}"
+        for timeframe in _strategy_timeframes(strat_cfg)
+    }
 
 
 def _classify_global_key(
     group: MLArtifactGroup,
     *,
-    expected_key: str,
-    expected_timeframe: str,
+    expected_keys: set[str],
+    expected_timeframes: set[str],
     expected_label_suffix: Optional[str] = None,
 ) -> Optional[str]:
-    if group.model_key == expected_key:
+    if group.model_key in expected_keys:
         return None
 
     parts = group.model_key.split("|")
@@ -76,7 +92,7 @@ def _classify_global_key(
         return "model_key_format_mismatch"
     if parts[0] != "global":
         return "model_scope_mismatch"
-    if parts[1] != expected_timeframe:
+    if parts[1] not in expected_timeframes:
         return "timeframe_mismatch"
     if parts[2] != _feature_key():
         return "feature_schema_mismatch"
@@ -102,7 +118,7 @@ def _classify_alt_key(
         return "model_key_format_mismatch"
 
     pair, timeframe, feature_key, label_suffix = parts
-    if timeframe != _strategy_timeframe(strat_cfg):
+    if timeframe not in set(_strategy_timeframes(strat_cfg)):
         return "timeframe_mismatch"
     if feature_key != _feature_key():
         return "feature_schema_mismatch"
@@ -128,15 +144,15 @@ def _stale_reason(
     if strat_cfg.type == "machine_learning":
         return _classify_global_key(
             group,
-            expected_key=_classifier_key(config, strat_cfg),
-            expected_timeframe=_strategy_timeframe(strat_cfg),
+            expected_keys=_classifier_keys(config, strat_cfg),
+            expected_timeframes=set(_strategy_timeframes(strat_cfg)),
             expected_label_suffix=_label_suffix(config, strat_cfg),
         )
     if strat_cfg.type == "machine_learning_regression":
         return _classify_global_key(
             group,
-            expected_key=_regression_key(strat_cfg),
-            expected_timeframe=_strategy_timeframe(strat_cfg),
+            expected_keys=_regression_keys(strat_cfg),
+            expected_timeframes=set(_strategy_timeframes(strat_cfg)),
         )
     return _classify_alt_key(config, group, strat_cfg)
 
