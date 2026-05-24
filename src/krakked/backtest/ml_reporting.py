@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-ML_WALK_FORWARD_REPORT_VERSION = 2
+ML_WALK_FORWARD_REPORT_VERSION = 3
 LATEST_ML_WALK_FORWARD_REPORT_RELATIVE_PATH = Path("reports") / "ml" / "latest.json"
 
 
@@ -42,6 +42,7 @@ def validate_ml_walk_forward_report_payload(
         "train_bars",
         "test_bars",
         "evaluation_mode",
+        "edge_scoring_mode",
         "model_state_reused_across_folds",
         "fold_count",
         "pairs",
@@ -129,6 +130,7 @@ def summarize_latest_ml_walk_forward_report(
         "strategy_id": summary.get("strategy_id"),
         "timeframe": summary.get("timeframe"),
         "evaluation_mode": summary.get("evaluation_mode"),
+        "edge_scoring_mode": summary.get("edge_scoring_mode"),
         "model_state_reused_across_folds": summary.get(
             "model_state_reused_across_folds"
         ),

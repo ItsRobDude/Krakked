@@ -11,6 +11,18 @@ from krakked.ui.logging import build_request_log_extra
 
 logger = logging.getLogger(__name__)
 
+BASELINE_CSP = (
+    "default-src 'self'; "
+    "base-uri 'self'; "
+    "frame-ancestors 'none'; "
+    "object-src 'none'; "
+    "script-src 'self'; "
+    "style-src 'self' 'unsafe-inline'; "
+    "img-src 'self' data:; "
+    "font-src 'self' data:; "
+    "connect-src 'self' ws: wss:"
+)
+
 
 class LifecycleMiddleware(BaseHTTPMiddleware):
     """
@@ -128,4 +140,6 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "same-origin"
+        if "Content-Security-Policy" not in response.headers:
+            response.headers["Content-Security-Policy"] = BASELINE_CSP
         return response

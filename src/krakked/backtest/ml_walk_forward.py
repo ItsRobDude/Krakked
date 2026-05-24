@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import math
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -31,6 +32,7 @@ ML_STRATEGY_TYPES = {
     "machine_learning_regression",
 }
 EVALUATION_MODE = "rolling_window_isolated"
+EDGE_SCORING_MODE = "intent_hurdle_aligned"
 
 
 @dataclass
@@ -50,6 +52,8 @@ class MLWalkForwardPrediction:
     future_close: float
     realized_return: float
     round_trip_cost_pct: float
+    evaluation_hurdle_pct: float
+    evaluation_hurdle_source: str
     directional_correct: Optional[bool]
     fee_adjusted_correct: bool
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -71,6 +75,8 @@ class MLWalkForwardPrediction:
             "future_close": self.future_close,
             "realized_return": self.realized_return,
             "round_trip_cost_pct": self.round_trip_cost_pct,
+            "evaluation_hurdle_pct": self.evaluation_hurdle_pct,
+            "evaluation_hurdle_source": self.evaluation_hurdle_source,
             "directional_correct": self.directional_correct,
             "fee_adjusted_correct": self.fee_adjusted_correct,
             "metadata": copy.deepcopy(self.metadata),
@@ -118,6 +124,7 @@ class MLWalkForwardSummary:
     coverage_status: str
     warnings: list[str]
     evaluation_mode: str = EVALUATION_MODE
+    edge_scoring_mode: str = EDGE_SCORING_MODE
     model_state_reused_across_folds: bool = False
 
     def to_dict(self) -> dict[str, Any]:
@@ -134,6 +141,7 @@ class MLWalkForwardSummary:
             "train_bars": self.train_bars,
             "test_bars": self.test_bars,
             "evaluation_mode": self.evaluation_mode,
+            "edge_scoring_mode": self.edge_scoring_mode,
             "model_state_reused_across_folds": self.model_state_reused_across_folds,
             "fold_count": len(self.folds),
             "pairs": list(self.pairs),
@@ -158,7 +166,7 @@ class MLWalkForwardResult:
 
     def to_report_dict(self) -> dict[str, Any]:
         return {
-            "report_version": 2,
+            "report_version": 3,
             "generated_at": datetime.now(UTC).isoformat(),
             "summary": self.summary.to_dict(),
             "provenance": {
@@ -262,6 +270,18 @@ def _coerce_bool(value: object) -> Optional[bool]:
     return None
 
 
+def _coerce_float(value: object) -> Optional[float]:
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(parsed) or parsed < 0:
+        return None
+    return parsed
+
+
 def _prediction_target(intent: StrategyIntent) -> str:
     target = intent.metadata.get("prediction_target")
     if isinstance(target, str) and target:
@@ -313,6 +333,36 @@ def _prediction_direction(intent: StrategyIntent) -> Optional[str]:
     return "up" if intent.side == "long" else None
 
 
+def _evaluation_hurdle(
+    intent: StrategyIntent,
+    *,
+    prediction_target: str,
+    round_trip_cost_pct: float,
+) -> tuple[float, str]:
+    if (
+        prediction_target == "signed_return_delta"
+        or "predicted_delta" in intent.metadata
+    ):
+        effective_min_edge_pct = _coerce_float(
+            intent.metadata.get("effective_min_edge_pct")
+        )
+        if effective_min_edge_pct is not None:
+            return effective_min_edge_pct, "effective_min_edge_pct"
+
+    if prediction_target == FEE_ADJUSTED_EDGE_PREDICTION_TARGET:
+        label_metadata = intent.metadata.get("label")
+        if isinstance(label_metadata, dict):
+            label_hurdle_bps = _coerce_float(label_metadata.get("label_hurdle_bps"))
+            if label_hurdle_bps is not None:
+                return label_hurdle_bps / 10_000.0, "label_hurdle_bps"
+
+        label_hurdle_bps = _coerce_float(intent.metadata.get("label_hurdle_bps"))
+        if label_hurdle_bps is not None:
+            return label_hurdle_bps / 10_000.0, "label_hurdle_bps"
+
+    return round_trip_cost_pct, "round_trip_cost_pct"
+
+
 def _score_intent(
     *,
     fold_index: int,
@@ -341,7 +391,12 @@ def _score_intent(
     predicted_direction = _prediction_direction(intent)
     realized_up = realized_return > 0.0
     round_trip_cost = _round_trip_cost_pct(fee_bps=fee_bps, slippage_bps=slippage_bps)
-    tradeable_up = realized_return > round_trip_cost
+    evaluation_hurdle, evaluation_hurdle_source = _evaluation_hurdle(
+        intent,
+        prediction_target=prediction_target,
+        round_trip_cost_pct=round_trip_cost,
+    )
+    tradeable_up = realized_return > evaluation_hurdle
     directional_correct = None
     if predicted_direction is not None:
         predicted_up = predicted_direction == "up"
@@ -362,6 +417,8 @@ def _score_intent(
         future_close=future_close,
         realized_return=realized_return,
         round_trip_cost_pct=round_trip_cost,
+        evaluation_hurdle_pct=evaluation_hurdle,
+        evaluation_hurdle_source=evaluation_hurdle_source,
         directional_correct=directional_correct,
         fee_adjusted_correct=predicted_positive_edge == tradeable_up,
         metadata=copy.deepcopy(intent.metadata),
@@ -401,7 +458,7 @@ def _build_prediction_metrics(
     tradeable_long_hits = [
         prediction
         for prediction in positive_edge_predictions
-        if prediction.realized_return > prediction.round_trip_cost_pct
+        if prediction.realized_return > prediction.evaluation_hurdle_pct
     ]
     return {
         "prediction_count": total,

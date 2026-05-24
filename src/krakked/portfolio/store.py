@@ -60,6 +60,83 @@ def _utc_now_iso() -> str:
     return datetime.now(UTC).isoformat()
 
 
+def _parse_optional_datetime(value: Optional[str]) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
+@dataclass(frozen=True)
+class MLArtifactGroup:
+    strategy_id: str
+    model_key: str
+    example_count: int
+    live_model_count: int
+    checkpoint_count: int
+    first_example_at: Optional[datetime] = None
+    last_example_at: Optional[datetime] = None
+    live_model_updated_at: Optional[datetime] = None
+    checkpoint_updated_at: Optional[datetime] = None
+
+    @property
+    def total_count(self) -> int:
+        return self.example_count + self.live_model_count + self.checkpoint_count
+
+    @property
+    def last_updated_at(self) -> Optional[datetime]:
+        candidates = [
+            value
+            for value in (
+                self.last_example_at,
+                self.live_model_updated_at,
+                self.checkpoint_updated_at,
+            )
+            if value is not None
+        ]
+        return max(candidates) if candidates else None
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "strategy_id": self.strategy_id,
+            "model_key": self.model_key,
+            "example_count": self.example_count,
+            "live_model_count": self.live_model_count,
+            "checkpoint_count": self.checkpoint_count,
+            "total_count": self.total_count,
+            "first_example_at": (
+                self.first_example_at.isoformat()
+                if self.first_example_at is not None
+                else None
+            ),
+            "last_example_at": (
+                self.last_example_at.isoformat()
+                if self.last_example_at is not None
+                else None
+            ),
+            "live_model_updated_at": (
+                self.live_model_updated_at.isoformat()
+                if self.live_model_updated_at is not None
+                else None
+            ),
+            "checkpoint_updated_at": (
+                self.checkpoint_updated_at.isoformat()
+                if self.checkpoint_updated_at is not None
+                else None
+            ),
+            "last_updated_at": (
+                self.last_updated_at.isoformat()
+                if self.last_updated_at is not None
+                else None
+            ),
+        }
+
+
 def ensure_portfolio_schema(
     conn: sqlite3.Connection | str,
     target_version: int = CURRENT_SCHEMA_VERSION,
@@ -2233,3 +2310,129 @@ class SQLitePortfolioStore(PortfolioStore):
             return model, updated_at, checkpoint_state, metadata
         except Exception:
             return None
+
+    def list_ml_artifact_groups(self) -> List[MLArtifactGroup]:
+        """List persisted ML examples, live models, and checkpoints by model key."""
+
+        with self._lock:
+            conn = self._get_conn()
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                WITH artifact_rows AS (
+                    SELECT
+                        strategy_id,
+                        model_key,
+                        COUNT(*) AS example_count,
+                        0 AS live_model_count,
+                        0 AS checkpoint_count,
+                        MIN(created_at) AS first_example_at,
+                        MAX(created_at) AS last_example_at,
+                        NULL AS live_model_updated_at,
+                        NULL AS checkpoint_updated_at
+                    FROM ml_training_examples
+                    GROUP BY strategy_id, model_key
+                    UNION ALL
+                    SELECT
+                        strategy_id,
+                        model_key,
+                        0 AS example_count,
+                        COUNT(*) AS live_model_count,
+                        0 AS checkpoint_count,
+                        NULL AS first_example_at,
+                        NULL AS last_example_at,
+                        MAX(updated_at) AS live_model_updated_at,
+                        NULL AS checkpoint_updated_at
+                    FROM ml_models
+                    GROUP BY strategy_id, model_key
+                    UNION ALL
+                    SELECT
+                        strategy_id,
+                        model_key,
+                        0 AS example_count,
+                        0 AS live_model_count,
+                        COUNT(*) AS checkpoint_count,
+                        NULL AS first_example_at,
+                        NULL AS last_example_at,
+                        NULL AS live_model_updated_at,
+                        MAX(updated_at) AS checkpoint_updated_at
+                    FROM ml_model_checkpoints
+                    GROUP BY strategy_id, model_key
+                )
+                SELECT
+                    strategy_id,
+                    model_key,
+                    SUM(example_count) AS example_count,
+                    SUM(live_model_count) AS live_model_count,
+                    SUM(checkpoint_count) AS checkpoint_count,
+                    MIN(first_example_at) AS first_example_at,
+                    MAX(last_example_at) AS last_example_at,
+                    MAX(live_model_updated_at) AS live_model_updated_at,
+                    MAX(checkpoint_updated_at) AS checkpoint_updated_at
+                FROM artifact_rows
+                GROUP BY strategy_id, model_key
+                ORDER BY strategy_id, model_key
+                """
+            )
+            rows = cursor.fetchall()
+
+        groups: List[MLArtifactGroup] = []
+        for row in rows:
+            groups.append(
+                MLArtifactGroup(
+                    strategy_id=str(row[0]),
+                    model_key=str(row[1]),
+                    example_count=int(row[2] or 0),
+                    live_model_count=int(row[3] or 0),
+                    checkpoint_count=int(row[4] or 0),
+                    first_example_at=_parse_optional_datetime(row[5]),
+                    last_example_at=_parse_optional_datetime(row[6]),
+                    live_model_updated_at=_parse_optional_datetime(row[7]),
+                    checkpoint_updated_at=_parse_optional_datetime(row[8]),
+                )
+            )
+        return groups
+
+    def delete_ml_artifact_group(
+        self, strategy_id: str, model_key: str
+    ) -> Dict[str, int]:
+        """Delete all ML artifacts for one strategy/model key in one transaction."""
+
+        with self._lock:
+            conn = self._get_conn()
+            cursor = conn.cursor()
+
+            counts: Dict[str, int] = {}
+            for table, key in (
+                ("ml_training_examples", "example_count"),
+                ("ml_models", "live_model_count"),
+                ("ml_model_checkpoints", "checkpoint_count"),
+            ):
+                cursor.execute(
+                    f"""
+                    SELECT COUNT(*)
+                    FROM {table}
+                    WHERE strategy_id = ? AND model_key = ?
+                    """,
+                    (strategy_id, model_key),
+                )
+                row = cursor.fetchone()
+                counts[key] = int(row[0] if row else 0)
+
+            for table in (
+                "ml_training_examples",
+                "ml_models",
+                "ml_model_checkpoints",
+            ):
+                cursor.execute(
+                    f"""
+                    DELETE FROM {table}
+                    WHERE strategy_id = ? AND model_key = ?
+                    """,
+                    (strategy_id, model_key),
+                )
+
+            conn.commit()
+
+        counts["total_count"] = sum(counts.values())
+        return counts

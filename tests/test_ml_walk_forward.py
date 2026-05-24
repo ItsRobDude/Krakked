@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
-import sqlite3
 from typing import Any
 
 import pandas as pd
@@ -11,13 +11,16 @@ import pytest
 from krakked.backtest.ml_walk_forward import (
     _build_prediction_metrics,
     _build_walk_forward_folds,
+    _prepare_ml_config,
     _score_intent,
+    _set_strategy_learning,
     run_ml_walk_forward,
 )
 from krakked.config import AppConfig, load_config
 from krakked.market_data.metadata_store import PairMetadataStore
 from krakked.market_data.models import PairMetadata
 from krakked.strategy.models import StrategyIntent
+from krakked.strategy.strategies.ml_regression_strategy import AIRegressionStrategy
 
 
 def _build_ml_config(tmp_path: Path) -> AppConfig:
@@ -118,11 +121,12 @@ def test_run_ml_walk_forward_scores_out_of_sample_predictions(tmp_path: Path) ->
     report = result.to_report_dict()
     summary = report["summary"]
 
-    assert report["report_version"] == 2
+    assert report["report_version"] == 3
     assert report["provenance"]["generated_by"] == "krakked ml-walk-forward"
     assert summary["strategy_id"] == "ai_regression"
     assert summary["timeframe"] == "1h"
     assert summary["evaluation_mode"] == "rolling_window_isolated"
+    assert summary["edge_scoring_mode"] == "intent_hurdle_aligned"
     assert summary["model_state_reused_across_folds"] is False
     assert summary["fold_count"] >= 1
     assert summary["metrics"]["prediction_count"] > 0
@@ -133,6 +137,14 @@ def test_run_ml_walk_forward_scores_out_of_sample_predictions(tmp_path: Path) ->
     assert summary["confidence_buckets"]
     assert summary["folds"][0]["prediction_count"] > 0
     assert summary["folds"][0]["confidence_buckets"]
+    scored_learning_flags = [
+        prediction.metadata.get("learning_enabled")
+        for fold in result.summary.folds
+        for prediction in fold.predictions
+        if "learning_enabled" in prediction.metadata
+    ]
+    assert scored_learning_flags
+    assert all(flag is False for flag in scored_learning_flags)
 
 
 def test_run_ml_walk_forward_uses_isolated_fold_databases(
@@ -167,10 +179,16 @@ def test_run_ml_walk_forward_uses_isolated_fold_databases(
     for fold_path in fold_paths:
         assert fold_path.exists()
         with sqlite3.connect(fold_path) as conn:
-            (count,) = conn.execute(
-                "SELECT COUNT(*) FROM ml_training_examples"
-            ).fetchone()
+            rows = conn.execute(
+                "SELECT created_at FROM ml_training_examples ORDER BY created_at"
+            ).fetchall()
+        assert rows
+        count = len(rows)
         assert 0 < count <= 12
+        fold_index = int(fold_path.stem.rsplit("-", 1)[-1])
+        fold = result.summary.folds[fold_index - 1]
+        created_at_values = [datetime.fromisoformat(row[0]) for row in rows]
+        assert max(created_at_values) < fold.test_start
 
 
 def test_ml_walk_forward_fee_bps_controls_regression_edge_metadata(
@@ -201,6 +219,26 @@ def test_ml_walk_forward_fee_bps_controls_regression_edge_metadata(
     assert prediction.metadata["confidence_source"] == "predicted_delta_magnitude"
     assert prediction.metadata["prediction_target"] == "signed_return_delta"
     assert "predicted_positive_edge" in prediction.metadata
+    assert prediction.evaluation_hurdle_pct == pytest.approx(0.025)
+    assert prediction.evaluation_hurdle_source == "effective_min_edge_pct"
+
+
+def test_set_strategy_learning_updates_instantiated_strategy_config_reference(
+    tmp_path: Path,
+) -> None:
+    config = _prepare_ml_config(
+        _build_ml_config(tmp_path),
+        strategy_id="ai_regression",
+        timeframe="1h",
+        fee_bps=25.0,
+    )
+    strategy = AIRegressionStrategy(config.strategies.configs["ai_regression"])
+
+    assert strategy._learning_enabled() is True  # noqa: SLF001
+
+    _set_strategy_learning(config, "ai_regression", False)
+
+    assert strategy._learning_enabled() is False  # noqa: SLF001
 
 
 def test_ml_walk_forward_scores_classifier_no_edge_without_fake_down_call() -> None:
@@ -249,6 +287,144 @@ def test_ml_walk_forward_scores_classifier_no_edge_without_fake_down_call() -> N
     metrics = _build_prediction_metrics([prediction])
     assert metrics["directional_accuracy"] is None
     assert metrics["edge_prediction_accuracy"] == pytest.approx(1.0)
+
+
+def test_ml_walk_forward_scores_classifier_against_label_hurdle() -> None:
+    now = datetime.fromtimestamp(1_700_000_000, tz=UTC)
+    current_bar = type("Bar", (), {"close": 100.0})()
+    future_bar = type("Bar", (), {"close": 102.0})()
+    market_data: Any = type(
+        "FakeMarketData",
+        (),
+        {
+            "get_bar_at_or_before": lambda self, pair, timeframe, ts: current_bar,
+            "get_bar_at_or_after": lambda self, pair, timeframe, ts: future_bar,
+            "get_display_pair": lambda self, pair: pair,
+        },
+    )()
+    intent = StrategyIntent(
+        strategy_id="ai_predictor",
+        pair="BTC/USD",
+        side="long",
+        intent_type="enter",
+        desired_exposure_usd=100.0,
+        confidence=0.8,
+        timeframe="1h",
+        generated_at=now,
+        metadata={
+            "prediction": "positive_edge",
+            "prediction_target": "fee_adjusted_positive_edge",
+            "predicted_positive_edge": True,
+            "label": {"label_hurdle_bps": 300.0},
+        },
+    )
+
+    prediction = _score_intent(
+        fold_index=1,
+        intent=intent,
+        market_data=market_data,
+        generated_at=now,
+        fee_bps=25.0,
+        slippage_bps=50.0,
+    )
+
+    assert prediction is not None
+    assert prediction.realized_return == pytest.approx(0.02)
+    assert prediction.round_trip_cost_pct == pytest.approx(0.015)
+    assert prediction.evaluation_hurdle_pct == pytest.approx(0.03)
+    assert prediction.evaluation_hurdle_source == "label_hurdle_bps"
+    assert prediction.fee_adjusted_correct is False
+    assert _build_prediction_metrics([prediction])["precision_long"] == pytest.approx(
+        0.0
+    )
+
+
+def test_ml_walk_forward_scores_regression_against_effective_min_edge() -> None:
+    now = datetime.fromtimestamp(1_700_000_000, tz=UTC)
+    current_bar = type("Bar", (), {"close": 100.0})()
+    future_bar = type("Bar", (), {"close": 102.0})()
+    market_data: Any = type(
+        "FakeMarketData",
+        (),
+        {
+            "get_bar_at_or_before": lambda self, pair, timeframe, ts: current_bar,
+            "get_bar_at_or_after": lambda self, pair, timeframe, ts: future_bar,
+            "get_display_pair": lambda self, pair: pair,
+        },
+    )()
+    intent = StrategyIntent(
+        strategy_id="ai_regression",
+        pair="BTC/USD",
+        side="long",
+        intent_type="enter",
+        desired_exposure_usd=100.0,
+        confidence=0.8,
+        timeframe="1h",
+        generated_at=now,
+        metadata={
+            "predicted_delta": 0.04,
+            "prediction_target": "signed_return_delta",
+            "predicted_positive_edge": True,
+            "effective_min_edge_pct": 0.025,
+        },
+    )
+
+    prediction = _score_intent(
+        fold_index=1,
+        intent=intent,
+        market_data=market_data,
+        generated_at=now,
+        fee_bps=25.0,
+        slippage_bps=50.0,
+    )
+
+    assert prediction is not None
+    assert prediction.evaluation_hurdle_pct == pytest.approx(0.025)
+    assert prediction.evaluation_hurdle_source == "effective_min_edge_pct"
+    assert prediction.fee_adjusted_correct is False
+
+
+def test_ml_walk_forward_falls_back_to_round_trip_hurdle() -> None:
+    now = datetime.fromtimestamp(1_700_000_000, tz=UTC)
+    current_bar = type("Bar", (), {"close": 100.0})()
+    future_bar = type("Bar", (), {"close": 102.0})()
+    market_data: Any = type(
+        "FakeMarketData",
+        (),
+        {
+            "get_bar_at_or_before": lambda self, pair, timeframe, ts: current_bar,
+            "get_bar_at_or_after": lambda self, pair, timeframe, ts: future_bar,
+            "get_display_pair": lambda self, pair: pair,
+        },
+    )()
+    intent = StrategyIntent(
+        strategy_id="legacy_ml",
+        pair="BTC/USD",
+        side="long",
+        intent_type="enter",
+        desired_exposure_usd=100.0,
+        confidence=0.8,
+        timeframe="1h",
+        generated_at=now,
+        metadata={"prediction": "up"},
+    )
+
+    prediction = _score_intent(
+        fold_index=1,
+        intent=intent,
+        market_data=market_data,
+        generated_at=now,
+        fee_bps=25.0,
+        slippage_bps=50.0,
+    )
+
+    assert prediction is not None
+    assert prediction.round_trip_cost_pct == pytest.approx(0.015)
+    assert prediction.evaluation_hurdle_pct == pytest.approx(
+        prediction.round_trip_cost_pct
+    )
+    assert prediction.evaluation_hurdle_source == "round_trip_cost_pct"
+    assert prediction.fee_adjusted_correct is True
 
 
 def test_run_ml_walk_forward_rejects_non_ml_strategy(tmp_path: Path) -> None:

@@ -20,7 +20,7 @@ from krakked.backtest.runner import (
 from krakked.config import load_config
 from krakked.credentials import CredentialResult, CredentialStatus
 from krakked.portfolio.exceptions import PortfolioSchemaError
-from krakked.portfolio.store import CURRENT_SCHEMA_VERSION
+from krakked.portfolio.store import CURRENT_SCHEMA_VERSION, SQLitePortfolioStore
 
 
 class _DummyClient:
@@ -720,7 +720,7 @@ def test_ml_walk_forward_subcommand_writes_report(
     class _FakeWalkForwardResult:
         def to_report_dict(self) -> dict[str, Any]:
             return {
-                "report_version": 2,
+                "report_version": 3,
                 "generated_at": start.isoformat(),
                 "summary": {
                     "start": start.isoformat(),
@@ -730,6 +730,7 @@ def test_ml_walk_forward_subcommand_writes_report(
                     "train_bars": 12,
                     "test_bars": 6,
                     "evaluation_mode": "rolling_window_isolated",
+                    "edge_scoring_mode": "intent_hurdle_aligned",
                     "model_state_reused_across_folds": False,
                     "fold_count": 1,
                     "pairs": ["BTC/USD"],
@@ -800,6 +801,137 @@ def test_ml_walk_forward_subcommand_writes_report(
     payload = json.loads(report_path.read_text(encoding="utf-8"))
     assert payload["summary"]["metrics"]["prediction_count"] == 3
     assert payload["summary"]["config_path"] is None
+
+
+def _seed_ml_prune_artifacts(db_path: Path) -> None:
+    store = SQLitePortfolioStore(str(db_path))
+    try:
+        now = datetime(2026, 4, 1, tzinfo=UTC)
+        for model_key in (
+            "global|1h|features_ohlc_v1",
+            "global|4h|features_ohlc_v1",
+        ):
+            store.record_ml_example(
+                strategy_id="ai_regression",
+                model_key=model_key,
+                created_at=now,
+                source_mode="paper",
+                label_type="regression",
+                features=[1.0, 2.0, 3.0],
+                label=0.01,
+            )
+        store.save_ml_model(
+            strategy_id="ai_regression",
+            model_key="global|4h|features_ohlc_v1",
+            label_type="regression",
+            framework="dummy",
+            model=SimpleNamespace(value=1),
+        )
+        store.save_ml_model_checkpoint(
+            strategy_id="ai_regression",
+            model_key="global|4h|features_ohlc_v1",
+            checkpoint_kind="training",
+            label_type="regression",
+            framework="dummy",
+            model=SimpleNamespace(value=2),
+        )
+    finally:
+        store.close()
+
+
+def _ml_artifact_counts(db_path: Path) -> dict[str, int]:
+    with sqlite3.connect(db_path) as conn:
+        return {
+            "current_examples": conn.execute(
+                """
+                SELECT COUNT(*)
+                FROM ml_training_examples
+                WHERE strategy_id = 'ai_regression'
+                    AND model_key = 'global|1h|features_ohlc_v1'
+                """
+            ).fetchone()[0],
+            "stale_examples": conn.execute(
+                """
+                SELECT COUNT(*)
+                FROM ml_training_examples
+                WHERE strategy_id = 'ai_regression'
+                    AND model_key = 'global|4h|features_ohlc_v1'
+                """
+            ).fetchone()[0],
+            "stale_models": conn.execute(
+                """
+                SELECT COUNT(*)
+                FROM ml_models
+                WHERE strategy_id = 'ai_regression'
+                    AND model_key = 'global|4h|features_ohlc_v1'
+                """
+            ).fetchone()[0],
+            "stale_checkpoints": conn.execute(
+                """
+                SELECT COUNT(*)
+                FROM ml_model_checkpoints
+                WHERE strategy_id = 'ai_regression'
+                    AND model_key = 'global|4h|features_ohlc_v1'
+                """
+            ).fetchone()[0],
+        }
+
+
+def test_ml_prune_stale_dry_run_reports_without_deleting(
+    tmp_path: Path, capsys: Any
+) -> None:
+    db_path = tmp_path / "ml-prune.db"
+    _seed_ml_prune_artifacts(db_path)
+
+    exit_code = cli.main(
+        [
+            "ml-prune-stale",
+            "--config",
+            "config_examples/config.yaml",
+            "--db-path",
+            str(db_path),
+        ]
+    )
+
+    output = capsys.readouterr().out
+    assert exit_code == 0
+    assert "ML stale artifact prune dry run." in output
+    assert "global|4h|features_ohlc_v1" in output
+    assert "timeframe_mismatch" in output
+    assert _ml_artifact_counts(db_path) == {
+        "current_examples": 1,
+        "stale_examples": 1,
+        "stale_models": 1,
+        "stale_checkpoints": 1,
+    }
+
+
+def test_ml_prune_stale_apply_deletes_stale_artifacts_only(
+    tmp_path: Path, capsys: Any
+) -> None:
+    db_path = tmp_path / "ml-prune.db"
+    _seed_ml_prune_artifacts(db_path)
+
+    exit_code = cli.main(
+        [
+            "ml-prune-stale",
+            "--config",
+            "config_examples/config.yaml",
+            "--db-path",
+            str(db_path),
+            "--apply",
+        ]
+    )
+
+    output = capsys.readouterr().out
+    assert exit_code == 0
+    assert "Deleted stale ML artifact groups:" in output
+    assert _ml_artifact_counts(db_path) == {
+        "current_examples": 1,
+        "stale_examples": 0,
+        "stale_models": 0,
+        "stale_checkpoints": 0,
+    }
 
 
 def test_backtest_subcommand_can_save_and_publish_latest(

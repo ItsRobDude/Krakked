@@ -145,3 +145,60 @@ def test_ml_checkpoint_and_live_model_are_stored_independently(tmp_path):
     assert isinstance(checkpoint_model, DummyModel)
     assert live_model.value == 42
     assert checkpoint_model.value == 99
+
+
+def test_ml_artifact_group_listing_and_delete(tmp_path):
+    store = _new_store(tmp_path)
+    now = datetime.now(timezone.utc)
+
+    store.record_ml_example(
+        strategy_id="ai_regression",
+        model_key="global|1h|features_ohlc_v1",
+        created_at=now,
+        source_mode="paper",
+        label_type="regression",
+        features=[1.0, 2.0, 3.0],
+        label=0.01,
+    )
+    store.save_ml_model(
+        strategy_id="ai_regression",
+        model_key="global|1h|features_ohlc_v1",
+        label_type="regression",
+        framework="dummy",
+        model=DummyModel(1),
+    )
+    store.save_ml_model_checkpoint(
+        strategy_id="ai_regression",
+        model_key="global|1h|features_ohlc_v1",
+        checkpoint_kind="training",
+        label_type="regression",
+        framework="dummy",
+        model=DummyModel(2),
+    )
+
+    groups = store.list_ml_artifact_groups()
+
+    group = next(
+        item
+        for item in groups
+        if item.strategy_id == "ai_regression"
+        and item.model_key == "global|1h|features_ohlc_v1"
+    )
+    assert group.example_count == 1
+    assert group.live_model_count == 1
+    assert group.checkpoint_count == 1
+    assert group.total_count == 3
+    assert group.last_updated_at is not None
+
+    deleted = store.delete_ml_artifact_group(
+        "ai_regression",
+        "global|1h|features_ohlc_v1",
+    )
+
+    assert deleted == {
+        "example_count": 1,
+        "live_model_count": 1,
+        "checkpoint_count": 1,
+        "total_count": 3,
+    }
+    assert store.list_ml_artifact_groups() == []

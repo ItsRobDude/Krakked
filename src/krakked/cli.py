@@ -19,24 +19,24 @@ from krakked.backtest import (
     BacktestResult,
     build_backtest_preflight,
     load_backtest_report,
-    publish_latest_ml_walk_forward_report,
     publish_latest_backtest_report,
+    publish_latest_ml_walk_forward_report,
     run_backtest,
     run_ml_walk_forward,
     write_backtest_report,
     write_ml_walk_forward_report,
-)
-from krakked.connection.exceptions import (
-    AuthError,
-    KrakenAPIError,
-    RateLimitError,
-    ServiceUnavailableError,
 )
 from krakked.config import (
     AppConfig,
     get_config_dir,
     get_default_ohlc_store_config,
     load_config,
+)
+from krakked.connection.exceptions import (
+    AuthError,
+    KrakenAPIError,
+    RateLimitError,
+    ServiceUnavailableError,
 )
 from krakked.connection.rest_client import KrakenRESTClient
 from krakked.credentials import CredentialResult, CredentialStatus
@@ -45,10 +45,12 @@ from krakked.portfolio.exceptions import PortfolioSchemaError
 from krakked.portfolio.store import (
     CURRENT_SCHEMA_VERSION,
     SchemaStatus,
+    SQLitePortfolioStore,
     ensure_portfolio_schema,
     ensure_portfolio_tables,
 )
 from krakked.scripts import run_strategy_once
+from krakked.strategy.ml_pruning import find_stale_ml_artifact_groups
 from krakked.utils.io import backup_file
 
 DEFAULT_DB_PATH = "portfolio.db"
@@ -366,6 +368,8 @@ def _print_ml_walk_forward_summary(
     print(
         "Evaluation: "
         f"{summary.get('evaluation_mode', 'unknown')} | "
+        "Edge scoring: "
+        f"{summary.get('edge_scoring_mode', 'unknown')} | "
         "Model state reused: "
         f"{summary.get('model_state_reused_across_folds', 'unknown')}"
     )
@@ -708,6 +712,93 @@ def _ml_walk_forward_command(args: argparse.Namespace) -> int:
         if saved_report_path and published_report_path:
             print(f"Published latest ML walk-forward report: {published_report_path}")
 
+    return 0
+
+
+def _ml_prune_stale_command(args: argparse.Namespace) -> int:
+    """Report or delete stale ML examples, models, and checkpoints."""
+
+    if args.older_than_days is not None and int(args.older_than_days) < 0:
+        return _print_error("--older-than-days must be greater than or equal to 0")
+
+    db_path = Path(args.db_path).expanduser().resolve()
+    if not db_path.exists():
+        return _print_error(f"DB file not found: {db_path}")
+
+    config_path = Path(args.config).expanduser().resolve() if args.config else None
+    try:
+        config = load_config(config_path=config_path, env="paper")
+    except Exception as exc:  # noqa: BLE001
+        return _print_error(f"Failed to load config: {exc}")
+
+    store = SQLitePortfolioStore(str(db_path))
+    try:
+        groups = store.list_ml_artifact_groups()
+        candidates = find_stale_ml_artifact_groups(
+            config,
+            groups,
+            strategy_id=args.strategy,
+            older_than_days=args.older_than_days,
+        )
+
+        deleted: list[dict[str, Any]] = []
+        if args.apply:
+            for candidate in candidates:
+                counts = store.delete_ml_artifact_group(
+                    candidate.group.strategy_id,
+                    candidate.group.model_key,
+                )
+                deleted.append(
+                    {
+                        **candidate.to_dict(),
+                        "deleted": counts,
+                    }
+                )
+
+        payload = {
+            "db_path": str(db_path),
+            "config_path": str(config_path) if config_path else None,
+            "apply": bool(args.apply),
+            "strategy": args.strategy,
+            "older_than_days": args.older_than_days,
+            "stale_count": len(candidates),
+            "deleted_count": len(deleted),
+            "candidates": [candidate.to_dict() for candidate in candidates],
+            "deleted": deleted,
+        }
+    except Exception as exc:  # noqa: BLE001
+        return _print_error(f"ML stale prune failed: {exc}")
+    finally:
+        store.close()
+
+    if args.json:
+        print(json.dumps(payload, indent=2))
+        return 0
+
+    action = "deleted" if args.apply else "dry run"
+    print(f"ML stale artifact prune {action}.")
+    print(f"DB path: {db_path}")
+    if not candidates:
+        print("No stale ML artifact groups found.")
+        return 0
+
+    heading = (
+        "Deleted stale ML artifact groups:"
+        if args.apply
+        else "Stale ML artifact groups:"
+    )
+    print(heading)
+    for item in deleted if args.apply else payload["candidates"]:
+        print(
+            "- "
+            f"{item['strategy_id']} {item['model_key']} "
+            f"({item['stale_reason']}; "
+            f"examples={item['example_count']}, "
+            f"models={item['live_model_count']}, "
+            f"checkpoints={item['checkpoint_count']})"
+        )
+    if not args.apply:
+        print("Re-run with --apply to delete these groups.")
     return 0
 
 
@@ -1353,6 +1444,40 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Print the ML walk-forward report as JSON",
     )
     ml_walk_forward_parser.set_defaults(func=_ml_walk_forward_command)
+
+    ml_prune_stale_parser = subparsers.add_parser(
+        "ml-prune-stale",
+        help="Report or delete stale persisted ML examples, models, and checkpoints",
+    )
+    ml_prune_stale_parser.add_argument(
+        "--config",
+        help="Optional path to the base config.yaml used to identify current ML keys",
+    )
+    ml_prune_stale_parser.add_argument(
+        "--db-path",
+        default=DEFAULT_DB_PATH,
+        help=f"Path to the SQLite portfolio store (defaults to {DEFAULT_DB_PATH})",
+    )
+    ml_prune_stale_parser.add_argument(
+        "--strategy",
+        help="Limit stale detection to one strategy id",
+    )
+    ml_prune_stale_parser.add_argument(
+        "--older-than-days",
+        type=int,
+        help="Only include stale groups whose latest artifact is older than N days",
+    )
+    ml_prune_stale_parser.add_argument(
+        "--apply",
+        action="store_true",
+        help="Delete stale groups; without this flag the command is a dry run",
+    )
+    ml_prune_stale_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print stale ML artifact candidates as JSON",
+    )
+    ml_prune_stale_parser.set_defaults(func=_ml_prune_stale_command)
 
     compare_backtests_parser = subparsers.add_parser(
         "compare-backtests",

@@ -21,6 +21,7 @@ def test_create_api_uses_ui_dist_dir_env_override(
 
     assert response.status_code == 200
     assert "Krakked UI" in response.text
+    assert "default-src 'self'" in response.headers["Content-Security-Policy"]
 
 
 def test_create_api_serves_ui_under_base_path(
@@ -46,3 +47,5 @@ def test_create_api_serves_ui_under_base_path(
     assert response.status_code == 200
     assert "Krakked UI" in response.text
     assert asset.status_code == 200
+    assert "default-src 'self'" in response.headers["Content-Security-Policy"]
+    assert "default-src 'self'" in asset.headers["Content-Security-Policy"]
