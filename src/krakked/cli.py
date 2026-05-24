@@ -19,10 +19,12 @@ from krakked.backtest import (
     BacktestResult,
     build_backtest_preflight,
     load_backtest_report,
+    publish_latest_ml_walk_forward_report,
     publish_latest_backtest_report,
     run_backtest,
     run_ml_walk_forward,
     write_backtest_report,
+    write_ml_walk_forward_report,
 )
 from krakked.connection.exceptions import (
     AuthError,
@@ -362,6 +364,12 @@ def _print_ml_walk_forward_summary(
     print("ML walk-forward completed.")
     print(f"Strategy: {summary['strategy_id']} | Timeframe: {summary['timeframe']}")
     print(
+        "Evaluation: "
+        f"{summary.get('evaluation_mode', 'unknown')} | "
+        "Model state reused: "
+        f"{summary.get('model_state_reused_across_folds', 'unknown')}"
+    )
+    print(
         f"Window: {summary['start']} -> {summary['end']} "
         f"({summary['fold_count']} folds)"
     )
@@ -375,7 +383,9 @@ def _print_ml_walk_forward_summary(
         return "n/a" if value is None else f"{float(value) * 100.0:.2f}%"
 
     print(f"Directional accuracy: {_pct(metrics.get('directional_accuracy'))}")
-    print(f"Fee-adjusted hit rate: {_pct(metrics.get('fee_adjusted_hit_rate'))}")
+    print(
+        "Edge prediction accuracy: " f"{_pct(metrics.get('edge_prediction_accuracy'))}"
+    )
     print(f"Long precision: {_pct(metrics.get('precision_long'))}")
     print(f"Cost hurdle: {summary['round_trip_cost_bps']:.2f} bps estimated round trip")
     print("Promotion check: " + ("pass" if summary["promotable"] else "blocked"))
@@ -387,6 +397,10 @@ def _print_ml_walk_forward_summary(
 
 def _write_backtest_report(payload: dict[str, Any], report_path: str) -> str:
     return str(write_backtest_report(payload, report_path))
+
+
+def _write_ml_walk_forward_report(payload: dict[str, Any], report_path: str) -> str:
+    return str(write_ml_walk_forward_report(payload, report_path))
 
 
 def _load_backtest_report(report_path: str) -> dict[str, Any]:
@@ -670,14 +684,29 @@ def _ml_walk_forward_command(args: argparse.Namespace) -> int:
     saved_report_path: str | None = None
     if args.save_report:
         try:
-            saved_report_path = _write_backtest_report(payload, args.save_report)
+            saved_report_path = _write_ml_walk_forward_report(payload, args.save_report)
         except Exception as exc:  # noqa: BLE001
             return _print_error(f"ML walk-forward report write failed: {exc}")
+
+    published_report_path: str | None = None
+    if args.publish_latest:
+        try:
+            published_report_path = str(
+                publish_latest_ml_walk_forward_report(
+                    payload, config_dir=get_config_dir()
+                )
+            )
+        except Exception as exc:  # noqa: BLE001
+            return _print_error(f"ML walk-forward latest-report publish failed: {exc}")
 
     if args.json:
         print(json.dumps(payload, indent=2))
     else:
-        _print_ml_walk_forward_summary(payload, saved_report_path)
+        _print_ml_walk_forward_summary(
+            payload, saved_report_path or published_report_path
+        )
+        if saved_report_path and published_report_path:
+            print(f"Published latest ML walk-forward report: {published_report_path}")
 
     return 0
 
@@ -1307,6 +1336,11 @@ def _build_parser() -> argparse.ArgumentParser:
     ml_walk_forward_parser.add_argument(
         "--save-report",
         help="Optional JSON path for a durable ML walk-forward report artifact",
+    )
+    ml_walk_forward_parser.add_argument(
+        "--publish-latest",
+        action="store_true",
+        help="Write this ML walk-forward report to the canonical latest report path",
     )
     ml_walk_forward_parser.add_argument(
         "--strict-data",

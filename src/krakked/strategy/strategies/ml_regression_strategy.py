@@ -471,6 +471,8 @@ class AIRegressionStrategy(Strategy):
                     generated_at=ctx.now,
                     metadata={
                         "predicted_delta": predicted_delta,
+                        "prediction_target": "signed_return_delta",
+                        "predicted_positive_edge": side == "long",
                         "min_edge_pct": self.params.min_edge_pct,
                         "effective_min_edge_pct": effective_min_edge_pct,
                         **edge_config.to_metadata(),

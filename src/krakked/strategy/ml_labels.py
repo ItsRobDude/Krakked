@@ -5,6 +5,9 @@ from dataclasses import dataclass
 from typing import Any, Mapping, Optional
 
 FEE_ADJUSTED_CLASSIFICATION_LABEL_TYPE = "fee_adjusted_classification"
+FEE_ADJUSTED_EDGE_PREDICTION_TARGET = "fee_adjusted_positive_edge"
+POSITIVE_EDGE_PREDICTION = "positive_edge"
+NO_POSITIVE_EDGE_PREDICTION = "no_positive_edge"
 DEFAULT_LABEL_FEE_BPS = 25.0
 DEFAULT_LABEL_SLIPPAGE_BPS = 50.0
 DEFAULT_LABEL_COST_MULTIPLIER = 2.0
@@ -178,10 +181,13 @@ __all__ = [
     "DEFAULT_EDGE_FEE_BPS",
     "DEFAULT_LABEL_FEE_BPS",
     "DEFAULT_LABEL_SLIPPAGE_BPS",
+    "FEE_ADJUSTED_EDGE_PREDICTION_TARGET",
     "FEE_ADJUSTED_CLASSIFICATION_LABEL_TYPE",
     "FeeAdjustedClassificationLabel",
     "FeeAdjustedLabelConfig",
     "MLEdgeCostConfig",
+    "NO_POSITIVE_EDGE_PREDICTION",
+    "POSITIVE_EDGE_PREDICTION",
     "classify_fee_adjusted_return",
     "edge_cost_config_from_context",
     "label_config_from_context",

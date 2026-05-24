@@ -18,6 +18,11 @@ from krakked.backtest.runner import (
 )
 from krakked.config import AppConfig
 from krakked.strategy.engine import StrategyEngine
+from krakked.strategy.ml_labels import (
+    FEE_ADJUSTED_EDGE_PREDICTION_TARGET,
+    NO_POSITIVE_EDGE_PREDICTION,
+    POSITIVE_EDGE_PREDICTION,
+)
 from krakked.strategy.models import StrategyIntent
 
 ML_STRATEGY_TYPES = {
@@ -38,12 +43,14 @@ class MLWalkForwardPrediction:
     side: str
     intent_type: str
     confidence: float
-    predicted_direction: str
+    prediction_target: str
+    predicted_positive_edge: bool
+    predicted_direction: Optional[str]
     current_close: float
     future_close: float
     realized_return: float
     round_trip_cost_pct: float
-    directional_correct: bool
+    directional_correct: Optional[bool]
     fee_adjusted_correct: bool
     metadata: dict[str, Any] = field(default_factory=dict)
 
@@ -57,6 +64,8 @@ class MLWalkForwardPrediction:
             "side": self.side,
             "intent_type": self.intent_type,
             "confidence": self.confidence,
+            "prediction_target": self.prediction_target,
+            "predicted_positive_edge": self.predicted_positive_edge,
             "predicted_direction": self.predicted_direction,
             "current_close": self.current_close,
             "future_close": self.future_close,
@@ -241,16 +250,67 @@ def _reset_sqlite_path(db_path: Path) -> None:
             raise ValueError(f"Cannot reset existing fold database: {candidate}")
 
 
-def _prediction_direction(intent: StrategyIntent) -> str:
+def _coerce_bool(value: object) -> Optional[bool]:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes"}:
+            return True
+        if normalized in {"false", "0", "no"}:
+            return False
+    return None
+
+
+def _prediction_target(intent: StrategyIntent) -> str:
+    target = intent.metadata.get("prediction_target")
+    if isinstance(target, str) and target:
+        return target
+    if "predicted_delta" in intent.metadata:
+        return "signed_return_delta"
+    prediction = intent.metadata.get("prediction")
+    if prediction in {POSITIVE_EDGE_PREDICTION, NO_POSITIVE_EDGE_PREDICTION}:
+        return FEE_ADJUSTED_EDGE_PREDICTION_TARGET
+    if prediction in {"up", "down"}:
+        return "signed_return_direction"
+    return "strategy_intent"
+
+
+def _predicted_positive_edge(intent: StrategyIntent) -> bool:
+    metadata_value = _coerce_bool(intent.metadata.get("predicted_positive_edge"))
+    if metadata_value is not None:
+        return metadata_value
+    prediction = intent.metadata.get("prediction")
+    if prediction == POSITIVE_EDGE_PREDICTION:
+        return True
+    if prediction == NO_POSITIVE_EDGE_PREDICTION:
+        return False
+    if prediction == "up":
+        return True
+    if prediction == "down":
+        return False
+    return intent.side == "long"
+
+
+def _prediction_direction(intent: StrategyIntent) -> Optional[str]:
+    prediction = intent.metadata.get("prediction")
+    if prediction == POSITIVE_EDGE_PREDICTION:
+        return "up"
+    if prediction == NO_POSITIVE_EDGE_PREDICTION:
+        return None
     if "predicted_delta" in intent.metadata:
         try:
-            return "up" if float(intent.metadata["predicted_delta"]) > 0 else "down"
+            predicted_delta = float(intent.metadata["predicted_delta"])
+            if predicted_delta > 0:
+                return "up"
+            if predicted_delta < 0:
+                return "down"
+            return None
         except (TypeError, ValueError):
-            return "up" if intent.side == "long" else "down"
-    prediction = intent.metadata.get("prediction")
+            return "up" if intent.side == "long" else None
     if prediction in {"up", "down"}:
         return str(prediction)
-    return "up" if intent.side == "long" else "down"
+    return "up" if intent.side == "long" else None
 
 
 def _score_intent(
@@ -276,11 +336,16 @@ def _score_intent(
         return None
 
     realized_return = (future_close - current_close) / current_close
+    prediction_target = _prediction_target(intent)
+    predicted_positive_edge = _predicted_positive_edge(intent)
     predicted_direction = _prediction_direction(intent)
-    predicted_up = predicted_direction == "up"
     realized_up = realized_return > 0.0
     round_trip_cost = _round_trip_cost_pct(fee_bps=fee_bps, slippage_bps=slippage_bps)
     tradeable_up = realized_return > round_trip_cost
+    directional_correct = None
+    if predicted_direction is not None:
+        predicted_up = predicted_direction == "up"
+        directional_correct = predicted_up == realized_up
     return MLWalkForwardPrediction(
         fold_index=fold_index,
         generated_at=generated_at,
@@ -290,13 +355,15 @@ def _score_intent(
         side=intent.side,
         intent_type=intent.intent_type,
         confidence=float(intent.confidence),
+        prediction_target=prediction_target,
+        predicted_positive_edge=predicted_positive_edge,
         predicted_direction=predicted_direction,
         current_close=current_close,
         future_close=future_close,
         realized_return=realized_return,
         round_trip_cost_pct=round_trip_cost,
-        directional_correct=predicted_up == realized_up,
-        fee_adjusted_correct=predicted_up == tradeable_up,
+        directional_correct=directional_correct,
+        fee_adjusted_correct=predicted_positive_edge == tradeable_up,
         metadata=copy.deepcopy(intent.metadata),
     )
 
@@ -318,42 +385,58 @@ def _build_prediction_metrics(
     predictions: list[MLWalkForwardPrediction],
 ) -> dict[str, Any]:
     total = len(predictions)
-    long_predictions = [
-        prediction
-        for prediction in predictions
-        if prediction.predicted_direction == "up"
+    positive_edge_predictions = [
+        prediction for prediction in predictions if prediction.predicted_positive_edge
     ]
-    flat_predictions = [
+    no_positive_edge_predictions = [
         prediction
         for prediction in predictions
-        if prediction.predicted_direction != "up"
+        if not prediction.predicted_positive_edge
+    ]
+    directional_predictions = [
+        prediction
+        for prediction in predictions
+        if prediction.directional_correct is not None
     ]
     tradeable_long_hits = [
         prediction
-        for prediction in long_predictions
+        for prediction in positive_edge_predictions
         if prediction.realized_return > prediction.round_trip_cost_pct
     ]
     return {
         "prediction_count": total,
-        "long_prediction_count": len(long_predictions),
-        "flat_prediction_count": len(flat_predictions),
+        "positive_edge_prediction_count": len(positive_edge_predictions),
+        "no_positive_edge_prediction_count": len(no_positive_edge_predictions),
+        "long_prediction_count": len(positive_edge_predictions),
+        "flat_prediction_count": len(no_positive_edge_predictions),
+        "directional_prediction_count": len(directional_predictions),
         "directional_accuracy": _rate(
-            sum(1 for prediction in predictions if prediction.directional_correct),
+            sum(
+                1
+                for prediction in directional_predictions
+                if prediction.directional_correct
+            ),
+            len(directional_predictions),
+        ),
+        "edge_prediction_accuracy": _rate(
+            sum(1 for prediction in predictions if prediction.fee_adjusted_correct),
             total,
         ),
         "fee_adjusted_hit_rate": _rate(
             sum(1 for prediction in predictions if prediction.fee_adjusted_correct),
             total,
         ),
-        "precision_long": _rate(len(tradeable_long_hits), len(long_predictions)),
+        "precision_long": _rate(
+            len(tradeable_long_hits), len(positive_edge_predictions)
+        ),
         "avg_realized_return": _average(
             prediction.realized_return for prediction in predictions
         ),
         "avg_realized_return_when_long": _average(
-            prediction.realized_return for prediction in long_predictions
+            prediction.realized_return for prediction in positive_edge_predictions
         ),
         "avg_realized_return_when_flat": _average(
-            prediction.realized_return for prediction in flat_predictions
+            prediction.realized_return for prediction in no_positive_edge_predictions
         ),
         "avg_confidence": _average(prediction.confidence for prediction in predictions),
     }
@@ -387,13 +470,25 @@ def _build_confidence_buckets(
                 "min_confidence": lower,
                 "max_confidence": display_upper,
                 "prediction_count": total,
+                "edge_prediction_accuracy": _rate(
+                    sum(
+                        1
+                        for prediction in bucket_predictions
+                        if prediction.fee_adjusted_correct
+                    ),
+                    total,
+                ),
                 "directional_accuracy": _rate(
                     sum(
                         1
                         for prediction in bucket_predictions
                         if prediction.directional_correct
                     ),
-                    total,
+                    sum(
+                        1
+                        for prediction in bucket_predictions
+                        if prediction.directional_correct is not None
+                    ),
                 ),
                 "fee_adjusted_hit_rate": _rate(
                     sum(
@@ -418,12 +513,19 @@ def _metric_value(metrics: dict[str, Any], key: str) -> float:
 
 def _assess_promotability(metrics: dict[str, Any]) -> tuple[bool, list[str]]:
     reasons: list[str] = []
-    if int(metrics.get("prediction_count") or 0) < 20:
+    prediction_count = int(metrics.get("prediction_count") or 0)
+    directional_count = int(metrics.get("directional_prediction_count") or 0)
+    if prediction_count < 20:
         reasons.append("Fewer than 20 scored out-of-sample predictions.")
-    if _metric_value(metrics, "directional_accuracy") < 0.52:
+    if int(metrics.get("positive_edge_prediction_count") or 0) <= 0:
+        reasons.append("No positive-edge predictions were scored.")
+    if (
+        directional_count == prediction_count
+        and _metric_value(metrics, "directional_accuracy") < 0.52
+    ):
         reasons.append("Directional accuracy is below 52%.")
-    if _metric_value(metrics, "fee_adjusted_hit_rate") < 0.50:
-        reasons.append("Fee-adjusted hit rate is below 50%.")
+    if _metric_value(metrics, "edge_prediction_accuracy") < 0.50:
+        reasons.append("Edge prediction accuracy is below 50%.")
     precision_long = metrics.get("precision_long")
     if precision_long is not None and float(precision_long) < 0.50:
         reasons.append("Long precision is below 50% after estimated costs.")

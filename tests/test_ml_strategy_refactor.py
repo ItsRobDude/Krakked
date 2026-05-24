@@ -9,6 +9,11 @@ import pytest
 from krakked.config import StrategyConfig
 from krakked.strategy.base import StrategyContext
 from krakked.strategy.features import ML_FEATURE_SCHEMA_VERSION
+from krakked.strategy.ml_labels import (
+    FEE_ADJUSTED_EDGE_PREDICTION_TARGET,
+    NO_POSITIVE_EDGE_PREDICTION,
+    POSITIVE_EDGE_PREDICTION,
+)
 from krakked.strategy.ml_models import (
     PassiveAggressiveClassifier,
     PassiveAggressiveRegressor,
@@ -184,8 +189,34 @@ def test_generate_intents_trains_and_predicts(strategy, mock_ctx):
     assert strategy.model.predict.called
     assert len(intents) == 1
     assert intents[0].side == "long"
+    assert intents[0].metadata["prediction"] == POSITIVE_EDGE_PREDICTION
+    assert (
+        intents[0].metadata["prediction_target"] == FEE_ADJUSTED_EDGE_PREDICTION_TARGET
+    )
+    assert intents[0].metadata["predicted_positive_edge"] is True
     assert intents[0].metadata["confidence_source"] == "decision_function_magnitude"
     assert intents[0].metadata["feature_schema_version"] == ML_FEATURE_SCHEMA_VERSION
+
+
+def test_generate_intents_reports_no_positive_edge_as_flat(strategy, mock_ctx):
+    strategy.model = MagicMock()
+    strategy.model_initialized = True
+    strategy.model.predict.return_value = [0]
+    strategy.model.decision_function.return_value = [-1.0]
+
+    bars = _make_bars(1000000, [100 + i for i in range(20)])
+    mock_ctx.market_data.get_ohlc.return_value = bars
+    mock_ctx.market_data.get_latest_price.return_value = 120.0
+
+    intents = strategy.generate_intents(mock_ctx)
+
+    assert len(intents) == 1
+    assert intents[0].side == "flat"
+    assert intents[0].metadata["prediction"] == NO_POSITIVE_EDGE_PREDICTION
+    assert (
+        intents[0].metadata["prediction_target"] == FEE_ADJUSTED_EDGE_PREDICTION_TARGET
+    )
+    assert intents[0].metadata["predicted_positive_edge"] is False
 
 
 def test_regression_extract_training_example(regression_strategy, mock_ctx):

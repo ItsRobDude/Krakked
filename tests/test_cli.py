@@ -720,7 +720,7 @@ def test_ml_walk_forward_subcommand_writes_report(
     class _FakeWalkForwardResult:
         def to_report_dict(self) -> dict[str, Any]:
             return {
-                "report_version": 1,
+                "report_version": 2,
                 "generated_at": start.isoformat(),
                 "summary": {
                     "start": start.isoformat(),
@@ -729,6 +729,8 @@ def test_ml_walk_forward_subcommand_writes_report(
                     "timeframe": "1h",
                     "train_bars": 12,
                     "test_bars": 6,
+                    "evaluation_mode": "rolling_window_isolated",
+                    "model_state_reused_across_folds": False,
                     "fold_count": 1,
                     "pairs": ["BTC/USD"],
                     "fee_bps": 25.0,
@@ -738,10 +740,15 @@ def test_ml_walk_forward_subcommand_writes_report(
                     "warnings": [],
                     "metrics": {
                         "prediction_count": 3,
+                        "positive_edge_prediction_count": 1,
+                        "no_positive_edge_prediction_count": 2,
+                        "directional_prediction_count": 3,
                         "directional_accuracy": 2 / 3,
+                        "edge_prediction_accuracy": 1 / 3,
                         "fee_adjusted_hit_rate": 1 / 3,
                         "precision_long": 0.5,
                     },
+                    "confidence_buckets": [],
                     "promotable": False,
                     "promotable_reasons": ["Directional accuracy is below 52%."],
                     "folds": [],

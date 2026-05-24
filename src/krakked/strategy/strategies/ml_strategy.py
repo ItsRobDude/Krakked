@@ -17,7 +17,10 @@ from krakked.strategy.features import (
 )
 from krakked.strategy.ml_labels import (
     FEE_ADJUSTED_CLASSIFICATION_LABEL_TYPE,
+    FEE_ADJUSTED_EDGE_PREDICTION_TARGET,
     FeeAdjustedLabelConfig,
+    NO_POSITIVE_EDGE_PREDICTION,
+    POSITIVE_EDGE_PREDICTION,
     classify_fee_adjusted_return,
     label_config_from_context,
 )
@@ -520,10 +523,11 @@ class AIPredictorStrategy(Strategy):
                 continue
 
             confidence = self._confidence(features)
+            predicted_positive_edge = prediction == 1
             position = positions_by_pair.get(pair)
             has_long = bool(position and getattr(position, "base_size", 0) > 0)
 
-            if prediction == 1:
+            if predicted_positive_edge:
                 # respect per-strategy cap on new positions
                 if not has_long and open_positions_count >= self.params.max_positions:
                     continue
@@ -550,7 +554,13 @@ class AIPredictorStrategy(Strategy):
                     timeframe=timeframe,
                     generated_at=ctx.now,
                     metadata={
-                        "prediction": "up" if prediction == 1 else "down",
+                        "prediction": (
+                            POSITIVE_EDGE_PREDICTION
+                            if predicted_positive_edge
+                            else NO_POSITIVE_EDGE_PREDICTION
+                        ),
+                        "prediction_target": FEE_ADJUSTED_EDGE_PREDICTION_TARGET,
+                        "predicted_positive_edge": predicted_positive_edge,
                         "learning_enabled": self._learning_enabled(),
                         "confidence_source": "decision_function_magnitude",
                         "feature_schema_version": feature_vector.schema_version,

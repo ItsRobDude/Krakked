@@ -3,17 +3,21 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 import sqlite3
+from typing import Any
 
 import pandas as pd
 import pytest
 
 from krakked.backtest.ml_walk_forward import (
+    _build_prediction_metrics,
     _build_walk_forward_folds,
+    _score_intent,
     run_ml_walk_forward,
 )
 from krakked.config import AppConfig, load_config
 from krakked.market_data.metadata_store import PairMetadataStore
 from krakked.market_data.models import PairMetadata
+from krakked.strategy.models import StrategyIntent
 
 
 def _build_ml_config(tmp_path: Path) -> AppConfig:
@@ -122,7 +126,9 @@ def test_run_ml_walk_forward_scores_out_of_sample_predictions(tmp_path: Path) ->
     assert summary["model_state_reused_across_folds"] is False
     assert summary["fold_count"] >= 1
     assert summary["metrics"]["prediction_count"] > 0
-    assert summary["metrics"]["directional_accuracy"] is not None
+    assert "directional_accuracy" in summary["metrics"]
+    assert summary["metrics"]["edge_prediction_accuracy"] is not None
+    assert "positive_edge_prediction_count" in summary["metrics"]
     assert summary["round_trip_cost_bps"] == pytest.approx(150.0)
     assert summary["confidence_buckets"]
     assert summary["folds"][0]["prediction_count"] > 0
@@ -193,6 +199,56 @@ def test_ml_walk_forward_fee_bps_controls_regression_edge_metadata(
     assert prediction.metadata["round_trip_cost_pct"] == pytest.approx(0.025)
     assert prediction.metadata["effective_min_edge_pct"] == pytest.approx(0.025)
     assert prediction.metadata["confidence_source"] == "predicted_delta_magnitude"
+    assert prediction.metadata["prediction_target"] == "signed_return_delta"
+    assert "predicted_positive_edge" in prediction.metadata
+
+
+def test_ml_walk_forward_scores_classifier_no_edge_without_fake_down_call() -> None:
+    now = datetime.fromtimestamp(1_700_000_000, tz=UTC)
+    current_bar = type("Bar", (), {"close": 100.0})()
+    future_bar = type("Bar", (), {"close": 101.0})()
+    market_data: Any = type(
+        "FakeMarketData",
+        (),
+        {
+            "get_bar_at_or_before": lambda self, pair, timeframe, ts: current_bar,
+            "get_bar_at_or_after": lambda self, pair, timeframe, ts: future_bar,
+            "get_display_pair": lambda self, pair: pair,
+        },
+    )()
+    intent = StrategyIntent(
+        strategy_id="ai_predictor",
+        pair="BTC/USD",
+        side="flat",
+        intent_type="exit",
+        desired_exposure_usd=0.0,
+        confidence=0.7,
+        timeframe="1h",
+        generated_at=now,
+        metadata={
+            "prediction": "no_positive_edge",
+            "prediction_target": "fee_adjusted_positive_edge",
+            "predicted_positive_edge": False,
+        },
+    )
+
+    prediction = _score_intent(
+        fold_index=1,
+        intent=intent,
+        market_data=market_data,
+        generated_at=now,
+        fee_bps=25.0,
+        slippage_bps=50.0,
+    )
+
+    assert prediction is not None
+    assert prediction.predicted_direction is None
+    assert prediction.predicted_positive_edge is False
+    assert prediction.directional_correct is None
+    assert prediction.fee_adjusted_correct is True
+    metrics = _build_prediction_metrics([prediction])
+    assert metrics["directional_accuracy"] is None
+    assert metrics["edge_prediction_accuracy"] == pytest.approx(1.0)
 
 
 def test_run_ml_walk_forward_rejects_non_ml_strategy(tmp_path: Path) -> None:
