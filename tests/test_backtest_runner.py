@@ -315,7 +315,7 @@ def test_run_backtest_marks_partial_series_and_strict_data_fails(
     assert result.summary is not None
     assert result.summary.partial_series == ["BTC/USD@1h"]
     assert result.summary.trust_level == "weak_signal"
-    assert "no strategy actions" in result.summary.trust_note
+    assert "emitted no intents" in result.summary.trust_note
     strategy_summary = result.summary.per_strategy["majors_mean_rev"]
     assert strategy_summary["cycles_evaluated"] == len(timestamps)
     assert strategy_summary["contexts_evaluated"] == len(timestamps)
@@ -412,6 +412,37 @@ def test_build_backtest_preflight_reports_readiness(tmp_path: Path) -> None:
     assert result.preflight.status == "ready"
     assert "complete" in result.preflight.summary_note
     assert result.pairs == ["BTC/USD"]
+
+
+def test_build_backtest_preflight_warns_on_strategy_timeframe_gap(
+    tmp_path: Path,
+) -> None:
+    config = _build_backtest_config(tmp_path)
+    config.strategies.enabled = ["vol_breakout"]
+    config.strategies.configs["vol_breakout"].enabled = True
+    config.strategies.configs["vol_breakout"].params = {
+        "pairs": ["BTC/USD"],
+        "timeframes": ["15m", "1h"],
+        "lookback_bars": 20,
+    }
+    config.market_data.backfill_timeframes = ["1h"]
+    _seed_pair_metadata(config)
+    timestamps = [1_700_000_000 + (idx * 3600) for idx in range(6)]
+    closes = [100.0] * len(timestamps)
+    _write_ohlc_series(tmp_path, timestamps=timestamps, closes=closes)
+
+    start = datetime.fromtimestamp(timestamps[0], tz=UTC)
+    end = datetime.fromtimestamp(timestamps[-1], tz=UTC)
+
+    result = runner.build_backtest_preflight(config, start=start, end=end)
+
+    assert result.timeframes == ["15m", "1h"]
+    assert result.preflight.status == "limited"
+    assert result.preflight.missing_series == ["BTC/USD@15m"]
+    assert (
+        "Strategy vol_breakout requested incomplete OHLC series: BTC/USD@15m."
+        in result.preflight.warnings
+    )
 
 
 def test_build_backtest_preflight_accepts_closed_daily_boundary(

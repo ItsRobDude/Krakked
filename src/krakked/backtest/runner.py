@@ -707,6 +707,76 @@ def _assess_preflight(preflight: BacktestPreflight) -> BacktestPreflight:
     )
 
 
+def _strategy_timeframes_from_params(params: Dict[str, Any]) -> List[str]:
+    value = params.get("timeframes")
+    if isinstance(value, (list, tuple)):
+        return [str(item) for item in value if item]
+    if value:
+        return [str(value)]
+
+    single_timeframe = params.get("timeframe")
+    return [str(single_timeframe)] if single_timeframe else ["1h"]
+
+
+def _strategy_pairs_from_config(config: AppConfig, params: Dict[str, Any]) -> List[str]:
+    pair_values = params.get("pairs")
+    if isinstance(pair_values, list) and pair_values:
+        return [str(pair) for pair in pair_values if pair]
+    return [str(pair) for pair in config.universe.include_pairs or [] if pair]
+
+
+def _build_strategy_coverage_warnings(
+    config: AppConfig,
+    preflight: BacktestPreflight,
+) -> List[str]:
+    coverage_status = {item.series_key: item.status for item in preflight.coverage}
+    warnings: List[str] = []
+
+    for strategy_id in config.strategies.enabled:
+        strat_cfg = config.strategies.configs.get(strategy_id)
+        if strat_cfg is None or not strat_cfg.enabled:
+            continue
+        params = strat_cfg.params or {}
+        problem_series: List[str] = []
+        for pair in _strategy_pairs_from_config(config, params):
+            for timeframe in _strategy_timeframes_from_params(params):
+                series_key = f"{pair}@{timeframe}"
+                status = coverage_status.get(series_key)
+                if status in {"missing", "partial_window"}:
+                    problem_series.append(
+                        series_key if status == "missing" else f"{series_key} ({status})"
+                    )
+
+        if problem_series:
+            warnings.append(
+                f"Strategy {strategy_id} requested incomplete OHLC series: "
+                + ", ".join(problem_series)
+                + "."
+            )
+
+    return warnings
+
+
+def _with_strategy_coverage_warnings(
+    config: AppConfig,
+    preflight: BacktestPreflight,
+) -> BacktestPreflight:
+    warnings = list(preflight.warnings)
+    for warning in _build_strategy_coverage_warnings(config, preflight):
+        if warning not in warnings:
+            warnings.append(warning)
+
+    return BacktestPreflight(
+        coverage=list(preflight.coverage),
+        usable_series_count=preflight.usable_series_count,
+        missing_series=list(preflight.missing_series),
+        partial_series=list(preflight.partial_series),
+        status=preflight.status,
+        summary_note=preflight.summary_note,
+        warnings=warnings,
+    )
+
+
 def build_backtest_preflight(
     config: AppConfig,
     start: datetime,
@@ -723,7 +793,9 @@ def build_backtest_preflight(
     pairs = _configured_backtest_pairs(config_copy)
     market_data = BacktestMarketData(config_copy, pairs, frames, start, end)
     try:
-        preflight = _get_preflight(market_data)
+        preflight = _with_strategy_coverage_warnings(
+            config_copy, _get_preflight(market_data)
+        )
         summary_pairs = _summary_pairs(market_data, pairs)
         return BacktestPreflightResult(
             start=start,
@@ -770,7 +842,9 @@ def run_backtest(
     pairs = _configured_backtest_pairs(config_copy)
 
     market_data = BacktestMarketData(config_copy, pairs, frames, start, end)
-    preflight = _get_preflight(market_data)
+    preflight = _with_strategy_coverage_warnings(
+        config_copy, _get_preflight(market_data)
+    )
     if preflight.usable_series_count == 0:
         requested = ", ".join(
             f"{pair}@{timeframe}" for pair in pairs for timeframe in frames
@@ -892,15 +966,10 @@ def _default_backtest_timeframes(config: AppConfig) -> List[str]:
         if strat_cfg is None:
             continue
         params = strat_cfg.params or {}
-        value = params.get("timeframes")
-        if isinstance(value, (list, tuple)):
-            discovered.extend(str(item) for item in value if item)
-        elif value:
-            discovered.append(str(value))
+        discovered.extend(_strategy_timeframes_from_params(params))
 
-        for key in ("timeframe", "regime_timeframe"):
-            if params.get(key):
-                discovered.append(str(params[key]))
+        if params.get("regime_timeframe"):
+            discovered.append(str(params["regime_timeframe"]))
 
     for timeframe in getattr(config.market_data, "backfill_timeframes", []) or []:
         discovered.append(str(timeframe))
@@ -994,6 +1063,7 @@ def _build_backtest_summary(
         filled_orders=filled_orders,
         execution_errors=execution_errors,
         preflight=preflight,
+        per_strategy=per_strategy,
         extra_warnings=warmup_warnings,
     )
 
@@ -1193,14 +1263,30 @@ def _build_replay_diagnostics(
     filled_orders: int,
     execution_errors: int,
     preflight: BacktestPreflight,
+    per_strategy: Dict[str, Dict[str, Any]],
     extra_warnings: Optional[Iterable[str]] = None,
 ) -> tuple[str, str, List[str]]:
     warnings = list(preflight.warnings)
     if extra_warnings:
         warnings.extend(str(warning) for warning in extra_warnings)
+    total_contexts_evaluated = sum(
+        int(entry.get("contexts_evaluated", 0) or 0)
+        for entry in per_strategy.values()
+    )
+    total_intents_emitted = sum(
+        int(entry.get("intents_emitted", 0) or 0) for entry in per_strategy.values()
+    )
+    strategies_evaluated_without_intents = (
+        total_contexts_evaluated > 0 and total_intents_emitted == 0
+    )
 
     if total_actions == 0:
-        warnings.append("No strategy actions were generated in this window.")
+        if strategies_evaluated_without_intents:
+            warnings.append(
+                "Strategies were evaluated but emitted no intents in this window."
+            )
+        else:
+            warnings.append("No strategy actions were generated in this window.")
     if total_orders == 0:
         warnings.append(
             "No orders were submitted, so this run is weak for execution learning."
@@ -1221,6 +1307,11 @@ def _build_replay_diagnostics(
     if execution_errors > 0:
         trust_level = "weak_signal"
         trust_note = "Weak signal: execution errors occurred during the replay."
+    elif total_actions == 0 and strategies_evaluated_without_intents:
+        trust_level = "weak_signal"
+        trust_note = (
+            "Weak signal: strategies were evaluated but emitted no intents in this window."
+        )
     elif total_actions == 0:
         trust_level = "weak_signal"
         trust_note = "Weak signal: no strategy actions were generated in this window."
