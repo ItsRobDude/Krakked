@@ -52,6 +52,20 @@ def _seed_pair_metadata(config: AppConfig) -> None:
                 min_order_size=0.0001,
                 status="online",
                 liquidity_24h_usd=1_000_000.0,
+            ),
+            PairMetadata(
+                canonical="ETHUSD",
+                base="XETH",
+                quote="USD",
+                rest_symbol="ETH/USD",
+                ws_symbol="ETH/USD",
+                raw_name="ETHUSD",
+                price_decimals=2,
+                volume_decimals=8,
+                lot_size=1.0,
+                min_order_size=0.0001,
+                status="online",
+                liquidity_24h_usd=1_000_000.0,
             )
         ]
     )
@@ -63,6 +77,7 @@ def _write_ohlc_series(
     timestamps: list[int],
     closes: list[float],
     timeframe: str = "1h",
+    canonical: str = "XBTUSD",
 ) -> None:
     bars_path = tmp_path / "ohlc" / timeframe
     bars_path.mkdir(parents=True, exist_ok=True)
@@ -79,7 +94,7 @@ def _write_ohlc_series(
             for ts, close in zip(timestamps, closes)
         ]
     ).set_index("timestamp")
-    frame.to_parquet(bars_path / "XBTUSD.parquet")
+    frame.to_parquet(bars_path / f"{canonical}.parquet")
 
 
 def test_run_backtest_wires_risk_provider(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -442,6 +457,7 @@ def test_backtest_reports_resolved_strategy_inputs_for_mixed_params(
     tmp_path: Path,
 ) -> None:
     config = _build_backtest_config(tmp_path)
+    config.universe.include_pairs = ["BTC/USD", "ETH/USD"]
     config.strategies.enabled = ["majors_mean_rev", "rs_rotation"]
     config.strategies.configs["majors_mean_rev"].enabled = True
     config.strategies.configs["majors_mean_rev"].params = {
@@ -456,6 +472,9 @@ def test_backtest_reports_resolved_strategy_inputs_for_mixed_params(
     timestamps = [1_700_000_000 + (idx * 3600) for idx in range(6)]
     closes = [100.0] * len(timestamps)
     _write_ohlc_series(tmp_path, timestamps=timestamps, closes=closes)
+    _write_ohlc_series(
+        tmp_path, timestamps=timestamps, closes=closes, canonical="ETHUSD"
+    )
 
     start = datetime.fromtimestamp(timestamps[0], tz=UTC)
     end = datetime.fromtimestamp(timestamps[-1], tz=UTC)
@@ -485,15 +504,37 @@ def test_backtest_reports_resolved_strategy_inputs_for_mixed_params(
         == "strategy_constructor_defaults"
     )
     assert strategy_inputs["strategies"]["rs_rotation"]["params"] == {}
+    assert strategy_inputs["strategies"]["rs_rotation"]["configured_pairs"] == []
+    assert (
+        strategy_inputs["strategies"]["rs_rotation"]["configured_timeframes"] == []
+    )
+    assert strategy_inputs["strategies"]["rs_rotation"]["constructor_pairs"] == [
+        "BTC/USD",
+        "ETH/USD",
+    ]
+    assert strategy_inputs["strategies"]["rs_rotation"]["constructor_timeframes"] == [
+        "4h"
+    ]
+    assert strategy_inputs["strategies"]["rs_rotation"]["evaluation_timeframes"] == [
+        "1h"
+    ]
+    assert (
+        strategy_inputs["strategies"]["rs_rotation"]["pair_normalization_applied"]
+        is True
+    )
     assert strategy_inputs["strategies"]["rs_rotation"]["resolved_pairs"] == [
-        "BTC/USD"
+        "BTC/USD",
+        "ETH/USD",
     ]
     assert strategy_inputs["strategies"]["rs_rotation"]["resolved_timeframes"] == [
         "1h"
     ]
     assert strategy_inputs["strategies"]["rs_rotation"][
         "requested_ohlc_series"
-    ] == [{"pair": "BTC/USD", "timeframe": "1h"}]
+    ] == [
+        {"pair": "BTC/USD", "timeframe": "1h"},
+        {"pair": "ETH/USD", "timeframe": "1h"},
+    ]
 
     result = runner.run_backtest(
         config,
@@ -506,6 +547,36 @@ def test_backtest_reports_resolved_strategy_inputs_for_mixed_params(
         "strategy_inputs"
     ]
     assert report_strategy_inputs == strategy_inputs
+
+
+def test_backtest_strategy_inputs_exposes_constructor_default_pair_gap(
+    tmp_path: Path,
+) -> None:
+    config = _build_backtest_config(tmp_path)
+    config.universe.include_pairs = ["BTC/USD", "ETH/USD"]
+    config.strategies.enabled = ["rs_rotation"]
+    config.strategies.configs["rs_rotation"].enabled = True
+    config.strategies.configs["rs_rotation"].params = {}
+    _seed_pair_metadata(config)
+
+    start = datetime(2026, 5, 1, tzinfo=UTC)
+    end = datetime(2026, 5, 2, tzinfo=UTC)
+
+    result = runner.build_backtest_preflight(config, start=start, end=end)
+    strategy_input = result.to_dict()["strategy_inputs"]["strategies"]["rs_rotation"]
+
+    assert strategy_input["params_source"] == "strategy_constructor_defaults"
+    assert strategy_input["configured_pairs"] == []
+    assert strategy_input["constructor_pairs"] == ["BTC/USD", "ETH/USD"]
+    assert strategy_input["resolved_pairs"] == ["BTC/USD", "ETH/USD"]
+    assert strategy_input["configured_timeframes"] == []
+    assert strategy_input["constructor_timeframes"] == ["4h"]
+    assert strategy_input["evaluation_timeframes"] == ["1h"]
+    assert strategy_input["resolved_timeframes"] == ["1h"]
+    assert strategy_input["requested_ohlc_series"] == [
+        {"pair": "BTC/USD", "timeframe": "1h"},
+        {"pair": "ETH/USD", "timeframe": "1h"},
+    ]
 
 
 def test_build_backtest_preflight_warns_on_strategy_timeframe_gap(

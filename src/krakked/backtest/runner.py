@@ -23,7 +23,7 @@ from krakked.market_data.ohlc_fetcher import TIMEFRAME_MAP
 from krakked.market_data.ohlc_store import FileOHLCStore
 from krakked.portfolio.manager import PortfolioService
 from krakked.portfolio.models import AssetBalance
-from krakked.strategy.engine import StrategyEngine
+from krakked.strategy.engine import StrategyEngine, _strategy_registry
 from krakked.strategy.models import ExecutionPlan
 from krakked.strategy.strategies.demo_strategy import TrendFollowingStrategy
 
@@ -728,6 +728,25 @@ def _strategy_timeframes_from_params(params: Dict[str, Any]) -> List[str]:
     return [str(single_timeframe)] if single_timeframe else ["1h"]
 
 
+def _coerce_string_list(value: Any) -> List[str]:
+    if isinstance(value, (list, tuple)):
+        return [str(item) for item in value if item]
+    if value:
+        return [str(value)]
+    return []
+
+
+def _configured_pairs_from_params(params: Dict[str, Any]) -> List[str]:
+    return _coerce_string_list(params.get("pairs"))
+
+
+def _configured_timeframes_from_params(params: Dict[str, Any]) -> List[str]:
+    timeframes = _coerce_string_list(params.get("timeframes"))
+    if timeframes:
+        return timeframes
+    return _coerce_string_list(params.get("timeframe"))
+
+
 def _strategy_pairs_from_config(config: AppConfig, params: Dict[str, Any]) -> List[str]:
     pair_values = params.get("pairs")
     if isinstance(pair_values, list) and pair_values:
@@ -745,12 +764,65 @@ def _build_requested_ohlc_series(
     ]
 
 
+def _display_pair(pair: str, market_data: Optional[Any]) -> tuple[str, bool]:
+    if market_data is None:
+        return str(pair), False
+    get_display_pair = getattr(market_data, "get_display_pair", None)
+    if not callable(get_display_pair):
+        return str(pair), False
+    display_pair = str(get_display_pair(str(pair)))
+    return display_pair, display_pair != str(pair)
+
+
+def _display_pairs(
+    pairs: List[str], market_data: Optional[Any]
+) -> tuple[List[str], bool]:
+    normalized: List[str] = []
+    normalization_applied = False
+    for pair in pairs:
+        display_pair, changed = _display_pair(pair, market_data)
+        normalization_applied = normalization_applied or changed
+        if display_pair not in normalized:
+            normalized.append(display_pair)
+    return normalized, normalization_applied
+
+
+def _constructor_strategy_inputs(
+    strat_cfg: Any,
+) -> tuple[List[str], List[str]]:
+    registry = _strategy_registry()
+    strat_class = registry.get(strat_cfg.type)
+    if strat_class is None:
+        return [], []
+
+    try:
+        strategy = strat_class(strat_cfg)
+    except Exception:  # pragma: no cover - defensive against plugin strategies
+        return [], []
+
+    resolved_params = getattr(strategy, "params", None)
+    if resolved_params is None:
+        return [], []
+
+    constructor_pairs = _coerce_string_list(getattr(resolved_params, "pairs", None))
+    constructor_timeframes = _coerce_string_list(
+        getattr(resolved_params, "timeframes", None)
+    )
+    if not constructor_timeframes:
+        constructor_timeframes = _coerce_string_list(
+            getattr(resolved_params, "timeframe", None)
+        )
+
+    return constructor_pairs, constructor_timeframes
+
+
 def _build_strategy_inputs(
     config: AppConfig,
     *,
     config_source: str = "provided_config",
     resolved_config_path: Optional[str] = None,
     config_arg_supplied: bool = False,
+    market_data: Optional[Any] = None,
 ) -> Dict[str, Any]:
     enabled_strategies = list(getattr(config.strategies, "enabled", []))
     strategies: Dict[str, Dict[str, Any]] = {}
@@ -763,6 +835,12 @@ def _build_strategy_inputs(
                 "enabled": False,
                 "params_source": "missing_config",
                 "params": {},
+                "configured_pairs": [],
+                "configured_timeframes": [],
+                "constructor_pairs": [],
+                "constructor_timeframes": [],
+                "evaluation_timeframes": [],
+                "pair_normalization_applied": False,
                 "resolved_pairs": [],
                 "resolved_timeframes": [],
                 "requested_ohlc_series": [],
@@ -770,8 +848,23 @@ def _build_strategy_inputs(
             continue
 
         params = copy.deepcopy(strat_cfg.params or {})
-        resolved_pairs = _strategy_pairs_from_config(config, params)
-        resolved_timeframes = _strategy_timeframes_from_params(params)
+        configured_pairs = _configured_pairs_from_params(params)
+        configured_timeframes = _configured_timeframes_from_params(params)
+        engine_pairs = _strategy_pairs_from_config(config, params)
+        constructor_pairs, constructor_timeframes = _constructor_strategy_inputs(
+            strat_cfg
+        )
+        actual_pairs = constructor_pairs or engine_pairs
+        resolved_pairs, pair_normalization_applied = _display_pairs(
+            actual_pairs, market_data
+        )
+        constructor_display_pairs, constructor_pair_normalized = _display_pairs(
+            constructor_pairs, market_data
+        )
+        configured_display_pairs, configured_pair_normalized = _display_pairs(
+            configured_pairs, market_data
+        )
+        evaluation_timeframes = _strategy_timeframes_from_params(params)
         strategies[strategy_id] = {
             "type": strat_cfg.type,
             "enabled": bool(strat_cfg.enabled),
@@ -779,10 +872,20 @@ def _build_strategy_inputs(
                 "config_params" if params else "strategy_constructor_defaults"
             ),
             "params": params,
+            "configured_pairs": configured_display_pairs,
+            "configured_timeframes": configured_timeframes,
+            "constructor_pairs": constructor_display_pairs,
+            "constructor_timeframes": constructor_timeframes,
+            "evaluation_timeframes": evaluation_timeframes,
+            "pair_normalization_applied": bool(
+                pair_normalization_applied
+                or constructor_pair_normalized
+                or configured_pair_normalized
+            ),
             "resolved_pairs": resolved_pairs,
-            "resolved_timeframes": resolved_timeframes,
+            "resolved_timeframes": evaluation_timeframes,
             "requested_ohlc_series": _build_requested_ohlc_series(
-                resolved_pairs, resolved_timeframes
+                resolved_pairs, evaluation_timeframes
             ),
         }
 
@@ -831,26 +934,31 @@ def _build_strategy_coverage_gaps(
 
 
 def _build_strategy_coverage_warnings(
-    config: AppConfig,
+    strategy_inputs: Dict[str, Any],
     preflight: BacktestPreflight,
 ) -> List[str]:
     coverage_status = {item.series_key: item.status for item in preflight.coverage}
     warnings: List[str] = []
 
-    for strategy_id in config.strategies.enabled:
-        strat_cfg = config.strategies.configs.get(strategy_id)
-        if strat_cfg is None or not strat_cfg.enabled:
+    for strategy_id, strategy_input in (
+        strategy_inputs.get("strategies") or {}
+    ).items():
+        if not isinstance(strategy_input, dict) or not strategy_input.get("enabled"):
             continue
-        params = strat_cfg.params or {}
         problem_series: List[str] = []
-        for pair in _strategy_pairs_from_config(config, params):
-            for timeframe in _strategy_timeframes_from_params(params):
-                series_key = f"{pair}@{timeframe}"
-                status = coverage_status.get(series_key)
-                if status in {"missing", "partial_window"}:
-                    problem_series.append(
-                        series_key if status == "missing" else f"{series_key} ({status})"
-                    )
+        for series in strategy_input.get("requested_ohlc_series") or []:
+            if not isinstance(series, dict):
+                continue
+            pair = series.get("pair")
+            timeframe = series.get("timeframe")
+            if not pair or not timeframe:
+                continue
+            series_key = f"{pair}@{timeframe}"
+            status = coverage_status.get(series_key)
+            if status in {"missing", "partial_window"}:
+                problem_series.append(
+                    series_key if status == "missing" else f"{series_key} ({status})"
+                )
 
         if problem_series:
             warnings.append(
@@ -868,7 +976,7 @@ def _with_strategy_coverage_warnings(
     strategy_inputs: Dict[str, Any],
 ) -> BacktestPreflight:
     warnings = list(preflight.warnings)
-    for warning in _build_strategy_coverage_warnings(config, preflight):
+    for warning in _build_strategy_coverage_warnings(strategy_inputs, preflight):
         if warning not in warnings:
             warnings.append(warning)
     strategy_coverage_gaps = _build_strategy_coverage_gaps(
@@ -912,6 +1020,7 @@ def build_backtest_preflight(
             config_source=config_source,
             resolved_config_path=resolved_config_path,
             config_arg_supplied=config_arg_supplied,
+            market_data=market_data,
         )
         preflight = _with_strategy_coverage_warnings(
             config_copy, _get_preflight(market_data), strategy_inputs
@@ -971,6 +1080,7 @@ def run_backtest(
         config_source=config_source,
         resolved_config_path=resolved_config_path,
         config_arg_supplied=config_arg_supplied,
+        market_data=market_data,
     )
     preflight = _with_strategy_coverage_warnings(
         config_copy, _get_preflight(market_data), strategy_inputs
