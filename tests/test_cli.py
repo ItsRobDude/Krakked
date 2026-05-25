@@ -725,7 +725,7 @@ def test_ml_walk_forward_subcommand_writes_report(
     class _FakeWalkForwardResult:
         def to_report_dict(self) -> dict[str, Any]:
             return {
-                "report_version": 6,
+                "report_version": 7,
                 "generated_at": start.isoformat(),
                 "summary": {
                     "start": start.isoformat(),
@@ -762,6 +762,28 @@ def test_ml_walk_forward_subcommand_writes_report(
                         "monotonicity": {"available": False},
                     },
                     "diagnostic_warnings": [],
+                    "promotion_tier": "blocked",
+                    "promotion_tiers": {
+                        "research_promising": {
+                            "tier": "research_promising",
+                            "clears": False,
+                            "reasons": ["Directional accuracy is below 52%."],
+                        },
+                        "risk_overlay_candidate": {
+                            "tier": "risk_overlay_candidate",
+                            "clears": False,
+                            "reasons": [
+                                "Earlier tier research promising did not clear."
+                            ],
+                        },
+                        "self_standing": {
+                            "tier": "self_standing",
+                            "clears": False,
+                            "reasons": [
+                                "Earlier tier research promising did not clear."
+                            ],
+                        },
+                    },
                     "promotable": False,
                     "promotable_reasons": ["Directional accuracy is below 52%."],
                     "folds": [],

@@ -45,6 +45,25 @@ DIAGNOSTIC_RETURN_THRESHOLDS = (0.003, 0.005, 0.01, 0.015)
 PREDICTED_DELTA_QUANTILE_THRESHOLDS = (0.75, 0.90, 0.95)
 NEAR_ZERO_THRESHOLD = 1e-12
 RARE_POSITIVE_LABEL_RATE = 0.01
+MONOTONICITY_INSUFFICIENT_DATA = "insufficient_data"
+MIN_TOTAL_ROWS_FOR_MONOTONICITY = 60
+MIN_ROWS_PER_HALF_FOR_MONOTONICITY = 30
+PROMOTION_TIER_BLOCKED = "blocked"
+PROMOTION_TIER_RESEARCH = "research_promising"
+PROMOTION_TIER_RISK_OVERLAY = "risk_overlay_candidate"
+PROMOTION_TIER_SELF_STANDING = "self_standing"
+PROMOTION_TIERS_ORDERED: tuple[str, ...] = (
+    PROMOTION_TIER_RESEARCH,
+    PROMOTION_TIER_RISK_OVERLAY,
+    PROMOTION_TIER_SELF_STANDING,
+)
+PROMOTION_TIERS_OPERATIONAL: frozenset[str] = frozenset(
+    {PROMOTION_TIER_RISK_OVERLAY, PROMOTION_TIER_SELF_STANDING}
+)
+RISK_OVERLAY_MIN_PRECISION_LIFT = 1.20
+RISK_OVERLAY_MIN_P95_LIFT = 1.30
+SELF_STANDING_MIN_PRECISION_LONG = 0.50
+SELF_STANDING_SELECTED_RETURN_COST_MULTIPLE = 2.0
 SCALED_FEATURE_MEDIAN_ABS_WARNING_THRESHOLD = 0.75
 SCALED_FEATURE_STD_MIN_WARNING_THRESHOLD = 0.5
 SCALED_FEATURE_STD_MAX_WARNING_THRESHOLD = 2.0
@@ -178,7 +197,28 @@ class MLWalkForwardSummary:
             diagnostic_warnings.append(
                 "Higher predicted-delta buckets did not improve realized returns overall."
             )
-        promotable, promotable_reasons = _assess_promotability(metrics)
+        round_trip_cost_pct = _round_trip_cost_pct(
+            fee_bps=self.fee_bps, slippage_bps=self.slippage_bps
+        )
+        assessment = _assess_promotability(
+            metrics=metrics,
+            regression_calibration=regression_calibration,
+            fold_dicts=fold_dicts,
+            round_trip_cost_pct=round_trip_cost_pct,
+        )
+        promotable = assessment.is_operational
+        if assessment.tier == PROMOTION_TIER_SELF_STANDING:
+            promotable_reasons = [_tier_pass_message(PROMOTION_TIER_SELF_STANDING)]
+        elif assessment.tier == PROMOTION_TIER_RISK_OVERLAY:
+            promotable_reasons = assessment.reasons_for_tier(
+                PROMOTION_TIER_SELF_STANDING
+            )
+        elif assessment.tier == PROMOTION_TIER_RESEARCH:
+            promotable_reasons = assessment.reasons_for_tier(
+                PROMOTION_TIER_RISK_OVERLAY
+            )
+        else:
+            promotable_reasons = assessment.reasons_for_tier(PROMOTION_TIER_RESEARCH)
         if not promotable:
             for warning in diagnostic_warnings:
                 reason = f"Diagnostic warning: {warning}"
@@ -207,6 +247,8 @@ class MLWalkForwardSummary:
             "confidence_buckets": _build_confidence_buckets(predictions),
             "regression_calibration": regression_calibration,
             "diagnostic_warnings": diagnostic_warnings,
+            "promotion_tier": assessment.tier,
+            "promotion_tiers": assessment.to_dict()["tiers"],
             "promotable": promotable,
             "promotable_reasons": promotable_reasons,
             "folds": fold_dicts,
@@ -755,14 +797,19 @@ def _build_predicted_delta_deciles(
 
 
 def _decile_monotonicity(deciles: list[dict[str, Any]]) -> dict[str, Any]:
-    avg_values = [
-        float(value)
+    eligible = [
+        (
+            float(value),
+            int(decile.get("prediction_count") or 0),
+        )
         for decile in deciles
         if (value := _finite_float(decile.get("avg_realized_return"))) is not None
     ]
-    if len(avg_values) < 2:
+    if len(eligible) < 2:
         return {"available": False}
 
+    avg_values = [value for value, _count in eligible]
+    decile_counts = [count for _value, count in eligible]
     midpoint = len(avg_values) // 2
     lower_avg = _average(avg_values[:midpoint])
     upper_avg = _average(avg_values[midpoint:])
@@ -770,14 +817,35 @@ def _decile_monotonicity(deciles: list[dict[str, Any]]) -> dict[str, Any]:
         later + NEAR_ZERO_THRESHOLD >= earlier
         for earlier, later in zip(avg_values, avg_values[1:])
     )
-    upper_improves = (
-        bool(upper_avg > lower_avg)
-        if upper_avg is not None and lower_avg is not None
-        else None
-    )
-    return {
+
+    total_rows = sum(decile_counts)
+    lower_half_rows = sum(decile_counts[:midpoint])
+    upper_half_rows = sum(decile_counts[midpoint:])
+    insufficient_reasons: list[str] = []
+    if total_rows < MIN_TOTAL_ROWS_FOR_MONOTONICITY:
+        insufficient_reasons.append(
+            f"Fewer than {MIN_TOTAL_ROWS_FOR_MONOTONICITY} regression rows across deciles "
+            f"({total_rows})."
+        )
+    if (
+        lower_half_rows < MIN_ROWS_PER_HALF_FOR_MONOTONICITY
+        or upper_half_rows < MIN_ROWS_PER_HALF_FOR_MONOTONICITY
+    ):
+        insufficient_reasons.append(
+            f"Each decile half needs at least {MIN_ROWS_PER_HALF_FOR_MONOTONICITY} rows "
+            f"(lower={lower_half_rows}, upper={upper_half_rows})."
+        )
+
+    if insufficient_reasons or upper_avg is None or lower_avg is None:
+        upper_improves: bool | str | None = MONOTONICITY_INSUFFICIENT_DATA
+        non_decreasing_flag: bool | str | None = MONOTONICITY_INSUFFICIENT_DATA
+    else:
+        upper_improves = bool(upper_avg > lower_avg)
+        non_decreasing_flag = non_decreasing
+
+    payload: dict[str, Any] = {
         "available": True,
-        "avg_realized_return_non_decreasing": non_decreasing,
+        "avg_realized_return_non_decreasing": non_decreasing_flag,
         "lower_half_avg_realized_return": lower_avg,
         "upper_half_avg_realized_return": upper_avg,
         "upper_minus_lower_avg_realized_return": (
@@ -786,7 +854,15 @@ def _decile_monotonicity(deciles: list[dict[str, Any]]) -> dict[str, Any]:
             else None
         ),
         "upper_half_improves": upper_improves,
+        "total_decile_rows": total_rows,
+        "lower_half_decile_rows": lower_half_rows,
+        "upper_half_decile_rows": upper_half_rows,
+        "min_total_rows_for_monotonicity": MIN_TOTAL_ROWS_FOR_MONOTONICITY,
+        "min_rows_per_half_for_monotonicity": MIN_ROWS_PER_HALF_FOR_MONOTONICITY,
     }
+    if insufficient_reasons:
+        payload["insufficient_data_reasons"] = insufficient_reasons
+    return payload
 
 
 def _build_regression_calibration(
@@ -1938,6 +2014,25 @@ def _build_diagnostic_warnings(fold_dicts: list[dict[str, Any]]) -> list[str]:
             + "."
         )
 
+    insufficient_monotonicity_folds = _fold_indexes_with(
+        fold_dicts,
+        lambda fold: (
+            (
+                (
+                    (fold.get("regression_calibration") or {}).get("monotonicity")
+                    or {}
+                ).get("upper_half_improves")
+            )
+            == MONOTONICITY_INSUFFICIENT_DATA
+        ),
+    )
+    if insufficient_monotonicity_folds:
+        warnings.append(
+            "Predicted-delta monotonicity check skipped for insufficient data in folds: "
+            + _format_fold_list(insufficient_monotonicity_folds)
+            + "."
+        )
+
     return warnings
 
 
@@ -2071,7 +2166,102 @@ def _metric_value(metrics: dict[str, Any], key: str) -> float:
     return float(value) if isinstance(value, (int, float)) else 0.0
 
 
-def _assess_promotability(metrics: dict[str, Any]) -> tuple[bool, list[str]]:
+def _sweep_row_value(
+    calibration: dict[str, Any], sweep_name: str, field_name: str
+) -> Optional[float]:
+    for row in calibration.get("threshold_sweeps") or []:
+        if isinstance(row, dict) and row.get("name") == sweep_name:
+            return _finite_float(row.get(field_name))
+    return None
+
+
+def _base_hit_rate_from_calibration(calibration: dict[str, Any]) -> Optional[float]:
+    return _sweep_row_value(calibration, "evaluation_hurdle", "realized_hit_rate")
+
+
+def _fold_non_monotonic(fold: dict[str, Any]) -> bool:
+    return (
+        (
+            (fold.get("regression_calibration") or {}).get("monotonicity") or {}
+        ).get("upper_half_improves")
+        is False
+    )
+
+
+def _format_fold_failure(fold_index: int, message: str) -> str:
+    return f"fold {fold_index}: {message}"
+
+
+def _per_fold_self_standing_failures(
+    fold_dicts: list[dict[str, Any]],
+) -> list[str]:
+    failures: list[str] = []
+    for fold in fold_dicts:
+        try:
+            fold_index = int(fold.get("fold_index") or 0)
+        except (TypeError, ValueError):
+            fold_index = 0
+        if fold_index <= 0:
+            continue
+        fold_metrics = fold.get("metrics") or {}
+        if int(fold_metrics.get("positive_edge_prediction_count") or 0) <= 0:
+            failures.append(
+                _format_fold_failure(fold_index, "no positive-edge predictions")
+            )
+        if _metric_value(fold_metrics, "edge_prediction_accuracy") < 0.50:
+            failures.append(
+                _format_fold_failure(fold_index, "edge prediction accuracy below 50%")
+            )
+        if _fold_non_monotonic(fold):
+            failures.append(
+                _format_fold_failure(
+                    fold_index, "predicted-delta deciles non-monotonic"
+                )
+            )
+    return failures
+
+
+@dataclass(frozen=True)
+class PromotionTierResult:
+    """Per-tier promotion outcome with the reasons that decided it."""
+
+    tier: str
+    clears: bool
+    reasons: tuple[str, ...]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "tier": self.tier,
+            "clears": self.clears,
+            "reasons": list(self.reasons),
+        }
+
+
+@dataclass(frozen=True)
+class PromotionAssessment:
+    """Highest promotion tier cleared and per-tier breakdown of reasons."""
+
+    tier: str
+    tier_results: tuple[PromotionTierResult, ...]
+
+    @property
+    def is_operational(self) -> bool:
+        return self.tier in PROMOTION_TIERS_OPERATIONAL
+
+    def reasons_for_tier(self, tier: str) -> list[str]:
+        for result in self.tier_results:
+            if result.tier == tier:
+                return list(result.reasons)
+        return []
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "tier": self.tier,
+            "tiers": {result.tier: result.to_dict() for result in self.tier_results},
+        }
+
+
+def _assess_tier_research_promising(metrics: dict[str, Any]) -> list[str]:
     reasons: list[str] = []
     prediction_count = int(metrics.get("prediction_count") or 0)
     directional_count = int(metrics.get("directional_prediction_count") or 0)
@@ -2086,12 +2276,217 @@ def _assess_promotability(metrics: dict[str, Any]) -> tuple[bool, list[str]]:
         reasons.append("Directional accuracy is below 52%.")
     if _metric_value(metrics, "edge_prediction_accuracy") < 0.50:
         reasons.append("Edge prediction accuracy is below 50%.")
-    precision_long = metrics.get("precision_long")
-    if precision_long is not None and float(precision_long) < 0.50:
-        reasons.append("Long precision is below 50% after estimated costs.")
-    if reasons:
-        return False, reasons
-    return True, ["Walk-forward metrics clear the initial promotion thresholds."]
+    return reasons
+
+
+def _assess_tier_risk_overlay(
+    metrics: dict[str, Any],
+    calibration: dict[str, Any],
+    fold_dicts: list[dict[str, Any]],
+) -> list[str]:
+    reasons: list[str] = []
+    base_rate = _base_hit_rate_from_calibration(calibration)
+    precision_long = _finite_float(metrics.get("precision_long"))
+    if precision_long is None:
+        reasons.append("Long precision is not available.")
+    elif base_rate is None or base_rate <= 0:
+        reasons.append("Base hit rate is unavailable to evaluate precision lift.")
+    else:
+        lift = precision_long / base_rate
+        if lift < RISK_OVERLAY_MIN_PRECISION_LIFT:
+            reasons.append(
+                f"Precision lift over base hit rate is {lift:.2f}x "
+                f"(need >= {RISK_OVERLAY_MIN_PRECISION_LIFT:.2f}x)."
+            )
+
+    selected_avg = _sweep_row_value(
+        calibration, "predicted_delta_p95", "avg_realized_return_selected"
+    )
+    if selected_avg is None:
+        reasons.append("p95 selected average realized return is not available.")
+    elif selected_avg <= 0:
+        reasons.append(
+            f"p95 selected average realized return is non-positive "
+            f"({selected_avg:.4%})."
+        )
+
+    p95_lift = _sweep_row_value(
+        calibration, "predicted_delta_p95", "lift_over_base_rate"
+    )
+    if p95_lift is None:
+        reasons.append("p95 lift over base rate is not available.")
+    elif p95_lift < RISK_OVERLAY_MIN_P95_LIFT:
+        reasons.append(
+            f"p95 lift over base rate is {p95_lift:.2f}x "
+            f"(need >= {RISK_OVERLAY_MIN_P95_LIFT:.2f}x)."
+        )
+
+    non_monotonic_folds = sorted(
+        int(fold.get("fold_index") or 0)
+        for fold in fold_dicts
+        if _fold_non_monotonic(fold)
+    )
+    non_monotonic_folds = [index for index in non_monotonic_folds if index > 0]
+    if non_monotonic_folds:
+        reasons.append(
+            "Predicted-delta deciles non-monotonic in folds: "
+            + ", ".join(str(index) for index in non_monotonic_folds)
+            + "."
+        )
+
+    return reasons
+
+
+def _assess_tier_self_standing(
+    metrics: dict[str, Any],
+    calibration: dict[str, Any],
+    fold_dicts: list[dict[str, Any]],
+    round_trip_cost_pct: float,
+) -> list[str]:
+    reasons: list[str] = []
+    precision_long = _finite_float(metrics.get("precision_long"))
+    if precision_long is None or precision_long < SELF_STANDING_MIN_PRECISION_LONG:
+        reasons.append(
+            f"Long precision is below {SELF_STANDING_MIN_PRECISION_LONG:.0%} "
+            "after estimated costs."
+        )
+
+    selected_avg = _sweep_row_value(
+        calibration, "predicted_delta_p95", "avg_realized_return_selected"
+    )
+    cost_floor = SELF_STANDING_SELECTED_RETURN_COST_MULTIPLE * max(
+        round_trip_cost_pct, 0.0
+    )
+    if selected_avg is None:
+        reasons.append("p95 selected average realized return is not available.")
+    elif selected_avg < cost_floor:
+        reasons.append(
+            f"p95 selected average realized return ({selected_avg:.4%}) is below "
+            f"{SELF_STANDING_SELECTED_RETURN_COST_MULTIPLE:.0f}x round-trip cost "
+            f"({cost_floor:.4%})."
+        )
+
+    fold_failures = _per_fold_self_standing_failures(fold_dicts)
+    if fold_failures:
+        reasons.append("Per-fold strict checks failed: " + "; ".join(fold_failures))
+
+    return reasons
+
+
+def _tier_pass_message(tier: str) -> str:
+    return f"Walk-forward metrics clear the {tier.replace('_', ' ')} thresholds."
+
+
+def _tier_blocked_message(blocked_by_tier: str) -> str:
+    return f"Earlier tier {blocked_by_tier.replace('_', ' ')} did not clear."
+
+
+def _assess_promotability(
+    *,
+    metrics: dict[str, Any],
+    regression_calibration: dict[str, Any],
+    fold_dicts: list[dict[str, Any]],
+    round_trip_cost_pct: float,
+) -> PromotionAssessment:
+    """Evaluate promotion tiers from loosest (research) to strictest (self-standing).
+
+    Each tier is gated by the prior one: if research-promising fails, the higher
+    tiers carry a placeholder reason so operators see which gate actually fired.
+    """
+
+    research_reasons = _assess_tier_research_promising(metrics)
+    if research_reasons:
+        return PromotionAssessment(
+            tier=PROMOTION_TIER_BLOCKED,
+            tier_results=(
+                PromotionTierResult(
+                    tier=PROMOTION_TIER_RESEARCH,
+                    clears=False,
+                    reasons=tuple(research_reasons),
+                ),
+                PromotionTierResult(
+                    tier=PROMOTION_TIER_RISK_OVERLAY,
+                    clears=False,
+                    reasons=(_tier_blocked_message(PROMOTION_TIER_RESEARCH),),
+                ),
+                PromotionTierResult(
+                    tier=PROMOTION_TIER_SELF_STANDING,
+                    clears=False,
+                    reasons=(_tier_blocked_message(PROMOTION_TIER_RESEARCH),),
+                ),
+            ),
+        )
+
+    risk_overlay_reasons = _assess_tier_risk_overlay(
+        metrics, regression_calibration, fold_dicts
+    )
+    if risk_overlay_reasons:
+        return PromotionAssessment(
+            tier=PROMOTION_TIER_RESEARCH,
+            tier_results=(
+                PromotionTierResult(
+                    tier=PROMOTION_TIER_RESEARCH,
+                    clears=True,
+                    reasons=(_tier_pass_message(PROMOTION_TIER_RESEARCH),),
+                ),
+                PromotionTierResult(
+                    tier=PROMOTION_TIER_RISK_OVERLAY,
+                    clears=False,
+                    reasons=tuple(risk_overlay_reasons),
+                ),
+                PromotionTierResult(
+                    tier=PROMOTION_TIER_SELF_STANDING,
+                    clears=False,
+                    reasons=(_tier_blocked_message(PROMOTION_TIER_RISK_OVERLAY),),
+                ),
+            ),
+        )
+
+    self_standing_reasons = _assess_tier_self_standing(
+        metrics, regression_calibration, fold_dicts, round_trip_cost_pct
+    )
+    if self_standing_reasons:
+        return PromotionAssessment(
+            tier=PROMOTION_TIER_RISK_OVERLAY,
+            tier_results=(
+                PromotionTierResult(
+                    tier=PROMOTION_TIER_RESEARCH,
+                    clears=True,
+                    reasons=(_tier_pass_message(PROMOTION_TIER_RESEARCH),),
+                ),
+                PromotionTierResult(
+                    tier=PROMOTION_TIER_RISK_OVERLAY,
+                    clears=True,
+                    reasons=(_tier_pass_message(PROMOTION_TIER_RISK_OVERLAY),),
+                ),
+                PromotionTierResult(
+                    tier=PROMOTION_TIER_SELF_STANDING,
+                    clears=False,
+                    reasons=tuple(self_standing_reasons),
+                ),
+            ),
+        )
+
+    return PromotionAssessment(
+        tier=PROMOTION_TIER_SELF_STANDING,
+        tier_results=(
+            PromotionTierResult(
+                tier=PROMOTION_TIER_RESEARCH,
+                clears=True,
+                reasons=(_tier_pass_message(PROMOTION_TIER_RESEARCH),),
+            ),
+            PromotionTierResult(
+                tier=PROMOTION_TIER_RISK_OVERLAY,
+                clears=True,
+                reasons=(_tier_pass_message(PROMOTION_TIER_RISK_OVERLAY),),
+            ),
+            PromotionTierResult(
+                tier=PROMOTION_TIER_SELF_STANDING,
+                clears=True,
+                reasons=(_tier_pass_message(PROMOTION_TIER_SELF_STANDING),),
+            ),
+        ),
+    )
 
 
 def run_ml_walk_forward(

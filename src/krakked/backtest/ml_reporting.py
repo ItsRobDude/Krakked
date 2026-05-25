@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-ML_WALK_FORWARD_REPORT_VERSION = 6
+ML_WALK_FORWARD_REPORT_VERSION = 7
 LATEST_ML_WALK_FORWARD_REPORT_RELATIVE_PATH = Path("reports") / "ml" / "latest.json"
 
 
@@ -57,6 +57,8 @@ def validate_ml_walk_forward_report_payload(
         "confidence_buckets",
         "regression_calibration",
         "diagnostic_warnings",
+        "promotion_tier",
+        "promotion_tiers",
         "promotable",
         "promotable_reasons",
         "folds",
@@ -80,6 +82,10 @@ def validate_ml_walk_forward_report_payload(
         )
     if not isinstance(summary.get("diagnostic_warnings"), list):
         raise ValueError(f"ML report diagnostic warnings are invalid in {resolved_path}")
+    if not isinstance(summary.get("promotion_tier"), str):
+        raise ValueError(f"ML report promotion tier is invalid in {resolved_path}")
+    if not isinstance(summary.get("promotion_tiers"), dict):
+        raise ValueError(f"ML report promotion tiers payload is invalid in {resolved_path}")
     for index, fold in enumerate(summary.get("folds") or [], start=1):
         if not isinstance(fold, dict):
             raise ValueError(f"ML report fold {index} is invalid in {resolved_path}")
@@ -165,6 +171,8 @@ def summarize_latest_ml_walk_forward_report(
         "edge_prediction_accuracy": metrics.get("edge_prediction_accuracy"),
         "directional_accuracy": metrics.get("directional_accuracy"),
         "precision_long": metrics.get("precision_long"),
+        "promotion_tier": summary.get("promotion_tier"),
+        "promotion_tiers": dict(summary.get("promotion_tiers") or {}),
         "promotable": summary.get("promotable"),
         "promotable_reasons": list(summary.get("promotable_reasons") or []),
         "coverage_status": summary.get("coverage_status"),

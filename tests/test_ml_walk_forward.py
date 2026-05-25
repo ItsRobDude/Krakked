@@ -12,6 +12,11 @@ from krakked.backtest.ml_walk_forward import (
     MLWalkForwardFold,
     MLWalkForwardPrediction,
     MLWalkForwardSummary,
+    PROMOTION_TIER_BLOCKED,
+    PROMOTION_TIER_RESEARCH,
+    PROMOTION_TIER_RISK_OVERLAY,
+    PROMOTION_TIER_SELF_STANDING,
+    _assess_promotability,
     _build_feature_diagnostics,
     _build_diagnostic_warnings,
     _build_prediction_metrics,
@@ -167,7 +172,7 @@ def test_run_ml_walk_forward_scores_out_of_sample_predictions(tmp_path: Path) ->
     report = result.to_report_dict()
     summary = report["summary"]
 
-    assert report["report_version"] == 6
+    assert report["report_version"] == 7
     assert report["provenance"]["generated_by"] == "krakked ml-walk-forward"
     assert summary["strategy_id"] == "ai_regression"
     assert summary["timeframe"] == "1h"
@@ -667,7 +672,33 @@ def test_regression_calibration_reports_threshold_lift_and_deciles() -> None:
     assert fixed_0p005["recall"] == pytest.approx(1.0)
     assert fixed_0p005["lift_over_base_rate"] == pytest.approx(2.0)
     assert calibration["predicted_delta_deciles"]
-    assert calibration["monotonicity"]["upper_half_improves"] is True
+    # Six predictions is below the monotonicity sample-size guard, so the
+    # value should be the sentinel string instead of a boolean.
+    assert calibration["monotonicity"]["upper_half_improves"] == "insufficient_data"
+    assert "insufficient_data_reasons" in calibration["monotonicity"]
+
+
+def test_regression_calibration_monotonicity_with_sufficient_samples() -> None:
+    # Build 80 monotonic predictions so each decile half clears the row guard.
+    predictions = []
+    for index in range(80):
+        predicted_delta = -0.02 + (0.06 * index / 79)
+        realized_return = predicted_delta + (0.001 if index % 2 == 0 else -0.001)
+        predictions.append(
+            _regression_prediction(
+                predicted_delta=predicted_delta,
+                realized_return=realized_return,
+            )
+        )
+
+    calibration = _build_regression_calibration(predictions)
+    monotonicity = calibration["monotonicity"]
+
+    assert monotonicity["upper_half_improves"] is True
+    assert monotonicity["total_decile_rows"] == 80
+    assert monotonicity["lower_half_decile_rows"] >= 30
+    assert monotonicity["upper_half_decile_rows"] >= 30
+    assert "insufficient_data_reasons" not in monotonicity
 
 
 def test_feature_diagnostics_handles_unavailable_scaler() -> None:
@@ -970,6 +1001,56 @@ def test_diagnostic_warnings_surface_non_monotonic_regression_calibration() -> N
 
 
 def test_summary_warns_when_aggregate_regression_calibration_is_non_monotonic() -> None:
+    # Need at least 60 rows split 30/30 across the deciles for monotonicity to
+    # produce a real True/False signal, so build a clearly anti-monotonic set.
+    predictions = []
+    for index in range(80):
+        predicted_delta = -0.02 + (0.06 * index / 79)
+        realized_return = -predicted_delta  # anti-monotonic by construction
+        predictions.append(
+            _regression_prediction(
+                predicted_delta=predicted_delta,
+                realized_return=realized_return,
+            )
+        )
+    now = datetime.fromtimestamp(1_700_000_000, tz=UTC)
+    summary = MLWalkForwardSummary(
+        start=now,
+        end=now,
+        strategy_id="ai_regression",
+        timeframe="1h",
+        train_bars=3,
+        test_bars=3,
+        folds=[
+            MLWalkForwardFold(
+                fold_index=1,
+                train_start=now,
+                train_end=now,
+                test_start=now,
+                test_end=now,
+                train_cycles=3,
+                test_cycles=3,
+                predictions=predictions,
+            )
+        ],
+        fee_bps=10.0,
+        slippage_bps=20.0,
+        pairs=["BTC/USD"],
+        coverage_status="ready",
+        warnings=[],
+    )
+
+    payload = summary.to_dict()
+
+    assert (
+        "Higher predicted-delta buckets did not improve realized returns overall."
+        in payload["diagnostic_warnings"]
+    )
+
+
+def test_summary_skips_monotonicity_warning_for_insufficient_data() -> None:
+    # Six predictions is below the monotonicity sample-size guard, so we should
+    # see the "skipped" warning rather than the "did not improve" warning.
     predictions = [
         _regression_prediction(predicted_delta=-0.004, realized_return=0.010),
         _regression_prediction(predicted_delta=0.001, realized_return=0.008),
@@ -1007,9 +1088,13 @@ def test_summary_warns_when_aggregate_regression_calibration_is_non_monotonic() 
 
     payload = summary.to_dict()
 
-    assert (
-        "Higher predicted-delta buckets did not improve realized returns overall."
-        in payload["diagnostic_warnings"]
+    assert not any(
+        "did not improve realized returns" in warning
+        for warning in payload["diagnostic_warnings"]
+    )
+    assert any(
+        "monotonicity check skipped for insufficient data" in warning
+        for warning in payload["diagnostic_warnings"]
     )
 
 
@@ -1055,6 +1140,170 @@ def test_diagnostic_warnings_surface_collapsed_model_and_constant_predictions() 
     assert any("No positive labels" in warning for warning in warnings)
     assert any("evaluation hurdle" in warning for warning in warnings)
     assert any("feature health warnings" in warning for warning in warnings)
+
+
+def _full_research_metrics(
+    *,
+    prediction_count: int = 30,
+    positive_edge_prediction_count: int = 10,
+    edge_prediction_accuracy: float = 0.7,
+    directional_accuracy: float = 0.6,
+    directional_prediction_count: int = 0,
+    precision_long: float = 0.3,
+) -> dict[str, Any]:
+    return {
+        "prediction_count": prediction_count,
+        "positive_edge_prediction_count": positive_edge_prediction_count,
+        "directional_prediction_count": directional_prediction_count,
+        "directional_accuracy": directional_accuracy,
+        "edge_prediction_accuracy": edge_prediction_accuracy,
+        "precision_long": precision_long,
+    }
+
+
+def _calibration_with_lift(
+    *,
+    base_hit_rate: float = 0.18,
+    p95_lift: float = 1.5,
+    selected_avg: float = 0.001,
+) -> dict[str, Any]:
+    return {
+        "threshold_sweeps": [
+            {
+                "name": "evaluation_hurdle",
+                "realized_hit_rate": base_hit_rate,
+                "avg_realized_return_selected": selected_avg,
+            },
+            {
+                "name": "predicted_delta_p95",
+                "lift_over_base_rate": p95_lift,
+                "avg_realized_return_selected": selected_avg,
+            },
+        ],
+        "monotonicity": {"upper_half_improves": True},
+    }
+
+
+def test_assess_promotability_blocks_when_research_fails() -> None:
+    metrics = _full_research_metrics(positive_edge_prediction_count=0)
+
+    assessment = _assess_promotability(
+        metrics=metrics,
+        regression_calibration={},
+        fold_dicts=[],
+        round_trip_cost_pct=0.015,
+    )
+
+    assert assessment.tier == PROMOTION_TIER_BLOCKED
+    assert assessment.is_operational is False
+    research = assessment.tier_results[0]
+    assert research.tier == PROMOTION_TIER_RESEARCH
+    assert research.clears is False
+    assert any("positive-edge" in reason for reason in research.reasons)
+
+
+def test_assess_promotability_research_only_when_risk_overlay_fails() -> None:
+    # Clears research promising but precision lift is too low → risk_overlay blocks
+    metrics = _full_research_metrics(precision_long=0.18)  # equal to base, lift = 1.0
+    calibration = _calibration_with_lift(p95_lift=1.5)
+
+    assessment = _assess_promotability(
+        metrics=metrics,
+        regression_calibration=calibration,
+        fold_dicts=[],
+        round_trip_cost_pct=0.015,
+    )
+
+    assert assessment.tier == PROMOTION_TIER_RESEARCH
+    assert assessment.is_operational is False
+    risk_overlay = assessment.tier_results[1]
+    assert risk_overlay.clears is False
+    assert any("Precision lift" in reason for reason in risk_overlay.reasons)
+
+
+def test_assess_promotability_reaches_risk_overlay_with_lift_and_positive_return() -> None:
+    metrics = _full_research_metrics(precision_long=0.30)  # 0.30 / 0.18 ≈ 1.67x lift
+    calibration = _calibration_with_lift(
+        base_hit_rate=0.18,
+        p95_lift=1.5,
+        selected_avg=0.001,
+    )
+
+    assessment = _assess_promotability(
+        metrics=metrics,
+        regression_calibration=calibration,
+        fold_dicts=[],
+        round_trip_cost_pct=0.015,
+    )
+
+    assert assessment.tier == PROMOTION_TIER_RISK_OVERLAY
+    assert assessment.is_operational is True
+    self_standing = assessment.tier_results[2]
+    assert self_standing.clears is False
+    assert any(
+        "below 50% after estimated costs" in reason
+        for reason in self_standing.reasons
+    )
+
+
+def test_assess_promotability_reaches_self_standing_with_strict_metrics() -> None:
+    metrics = _full_research_metrics(precision_long=0.55)
+    # selected_avg must exceed 2x round_trip_cost (0.015) = 0.030
+    calibration = _calibration_with_lift(
+        base_hit_rate=0.18,
+        p95_lift=2.0,
+        selected_avg=0.05,
+    )
+    fold_dicts = [
+        {
+            "fold_index": 1,
+            "metrics": {
+                "positive_edge_prediction_count": 5,
+                "edge_prediction_accuracy": 0.6,
+            },
+            "regression_calibration": {
+                "monotonicity": {"upper_half_improves": True}
+            },
+        },
+    ]
+
+    assessment = _assess_promotability(
+        metrics=metrics,
+        regression_calibration=calibration,
+        fold_dicts=fold_dicts,
+        round_trip_cost_pct=0.015,
+    )
+
+    assert assessment.tier == PROMOTION_TIER_SELF_STANDING
+    assert all(result.clears for result in assessment.tier_results)
+
+
+def test_assess_promotability_holds_at_risk_overlay_on_per_fold_failure() -> None:
+    metrics = _full_research_metrics(precision_long=0.55)
+    calibration = _calibration_with_lift(p95_lift=2.0, selected_avg=0.05)
+    fold_dicts = [
+        {
+            "fold_index": 2,
+            "metrics": {
+                "positive_edge_prediction_count": 0,  # per-fold strict failure
+                "edge_prediction_accuracy": 0.6,
+            },
+            "regression_calibration": {
+                "monotonicity": {"upper_half_improves": True}
+            },
+        },
+    ]
+
+    assessment = _assess_promotability(
+        metrics=metrics,
+        regression_calibration=calibration,
+        fold_dicts=fold_dicts,
+        round_trip_cost_pct=0.015,
+    )
+
+    assert assessment.tier == PROMOTION_TIER_RISK_OVERLAY
+    self_standing = assessment.tier_results[2]
+    assert any("Per-fold strict checks" in reason for reason in self_standing.reasons)
 
 
 def test_run_ml_walk_forward_rejects_non_ml_strategy(tmp_path: Path) -> None:

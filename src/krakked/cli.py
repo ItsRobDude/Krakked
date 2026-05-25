@@ -401,7 +401,10 @@ def _print_ml_walk_forward_summary(
     )
     print(f"Long precision: {_pct(metrics.get('precision_long'))}")
     print(f"Cost hurdle: {summary['round_trip_cost_bps']:.2f} bps estimated round trip")
-    print("Promotion check: " + ("pass" if summary["promotable"] else "blocked"))
+    print(
+        f"Promotion tier: {summary.get('promotion_tier', 'unknown')} "
+        + ("(operational)" if summary.get("promotable") else "(blocked)")
+    )
     for reason in summary["promotable_reasons"]:
         print(f"- {reason}")
     if report_path:

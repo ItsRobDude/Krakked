@@ -20,7 +20,7 @@ from krakked.backtest.ml_reporting import (
 def _sample_report() -> dict[str, Any]:
     generated_at = datetime(2026, 5, 23, tzinfo=UTC).isoformat()
     return {
-        "report_version": 6,
+        "report_version": 7,
         "generated_at": generated_at,
         "summary": {
             "start": generated_at,
@@ -60,6 +60,24 @@ def _sample_report() -> dict[str, Any]:
                 "monotonicity": {"available": False},
             },
             "diagnostic_warnings": [],
+            "promotion_tier": "blocked",
+            "promotion_tiers": {
+                "research_promising": {
+                    "tier": "research_promising",
+                    "clears": False,
+                    "reasons": ["Fewer than 20 scored out-of-sample predictions."],
+                },
+                "risk_overlay_candidate": {
+                    "tier": "risk_overlay_candidate",
+                    "clears": False,
+                    "reasons": ["Earlier tier research promising did not clear."],
+                },
+                "self_standing": {
+                    "tier": "self_standing",
+                    "clears": False,
+                    "reasons": ["Earlier tier research promising did not clear."],
+                },
+            },
             "promotable": False,
             "promotable_reasons": ["Fewer than 20 scored out-of-sample predictions."],
             "folds": [],
@@ -85,6 +103,8 @@ def test_ml_report_write_load_and_summarize(tmp_path: Path) -> None:
     assert summary["diagnostic_warnings"] == []
     assert summary["confidence_buckets"][0]["bucket"] == "0.70-0.80"
     assert summary["regression_calibration"]["prediction_count"] == 0
+    assert summary["promotion_tier"] == "blocked"
+    assert summary["promotion_tiers"]["research_promising"]["clears"] is False
 
 
 def test_ml_report_publish_latest_uses_ml_specific_path(tmp_path: Path) -> None:

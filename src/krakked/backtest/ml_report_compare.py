@@ -10,7 +10,7 @@ from typing import Any, Iterable, Literal, Optional
 
 from krakked.backtest.ml_reporting import ML_WALK_FORWARD_REPORT_VERSION
 
-SUPPORTED_ML_COMPARE_REPORT_VERSIONS = {5, ML_WALK_FORWARD_REPORT_VERSION}
+SUPPORTED_ML_COMPARE_REPORT_VERSIONS = {5, 6, ML_WALK_FORWARD_REPORT_VERSION}
 CompareFormat = Literal["markdown", "tsv", "json"]
 CompareSort = Literal["name", "precision-long", "p95-lift", "positive-calls"]
 
@@ -39,6 +39,7 @@ class MLReportComparisonRow:
     p95_lift: Optional[float] = None
     selected_avg_realized_return: Optional[float] = None
     upper_half_monotonicity: Optional[bool] = None
+    promotion_tier: Optional[str] = None
     diagnostic_warnings: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
@@ -130,6 +131,7 @@ def render_ml_report_comparison(
         "p95_lift",
         "selected_avg_ret",
         "upper_half",
+        "tier",
         "warnings",
     ]
     rows = [[_format_cell(row, header) for header in headers] for row in comparison.rows]
@@ -226,6 +228,7 @@ def _load_comparison_row(path: Path) -> MLReportComparisonRow:
         p95_lift=_sweep_value(calibration, "predicted_delta_p95", "lift_over_base_rate"),
         selected_avg_realized_return=_selected_avg_realized_return(calibration),
         upper_half_monotonicity=_upper_half_monotonicity(calibration),
+        promotion_tier=_optional_str(summary.get("promotion_tier")),
         diagnostic_warnings=[
             str(warning) for warning in summary.get("diagnostic_warnings") or []
         ],
@@ -373,6 +376,7 @@ def _format_cell(row: MLReportComparisonRow, header: str) -> str:
         "p95_lift": row.p95_lift,
         "selected_avg_ret": row.selected_avg_realized_return,
         "upper_half": row.upper_half_monotonicity,
+        "tier": row.promotion_tier,
         "warnings": "; ".join(row.diagnostic_warnings),
     }[header]
     if value is None:
