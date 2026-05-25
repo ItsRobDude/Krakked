@@ -13,8 +13,12 @@ from krakked.portfolio.store import MLArtifactGroup
 from krakked.strategy.features import ML_FEATURE_SCHEMA_VERSION
 from krakked.strategy.ml_labels import label_config_from_context
 from krakked.strategy.ml_models import (
+    DEFAULT_REGRESSION_MODEL_BACKEND,
     DEFAULT_REGRESSION_EPSILON_PCT,
+    DEFAULT_SGD_L2_ALPHA,
+    DEFAULT_SGD_LEARNING_RATE_INITIAL,
     classifier_model_config_key,
+    regression_model_backend,
     regression_model_config_key,
 )
 
@@ -80,13 +84,31 @@ def _nonnegative_float(value: object, default: float) -> float:
     return max(parsed, 0.0)
 
 
+def _positive_float(value: object, default: float) -> float:
+    parsed = _nonnegative_float(value, default)
+    return parsed if parsed > 0 else default
+
+
 def _regression_model_suffix(strat_cfg: StrategyConfig) -> str:
     params = strat_cfg.params or {}
     epsilon_pct = _nonnegative_float(
         params.get("regression_epsilon_pct"),
         DEFAULT_REGRESSION_EPSILON_PCT,
     )
-    return regression_model_config_key(epsilon_pct)
+    return regression_model_config_key(
+        epsilon_pct,
+        model_backend=regression_model_backend(
+            params.get("model_backend", DEFAULT_REGRESSION_MODEL_BACKEND)
+        ),
+        sgd_l2_alpha=_nonnegative_float(
+            params.get("sgd_l2_alpha"),
+            DEFAULT_SGD_L2_ALPHA,
+        ),
+        sgd_learning_rate_initial=_positive_float(
+            params.get("sgd_learning_rate_initial"),
+            DEFAULT_SGD_LEARNING_RATE_INITIAL,
+        ),
+    )
 
 
 def _classifier_keys(config: AppConfig, strat_cfg: StrategyConfig) -> set[str]:

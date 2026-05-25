@@ -9,20 +9,27 @@ import pytest
 
 from krakked.config import StrategyConfig
 from krakked.strategy.base import StrategyContext
-from krakked.strategy.features import ML_FEATURE_SCHEMA_VERSION
+from krakked.strategy.features import ML_FEATURE_NAMES, ML_FEATURE_SCHEMA_VERSION
 from krakked.strategy.ml_labels import (
     FEE_ADJUSTED_EDGE_PREDICTION_TARGET,
     NO_POSITIVE_EDGE_PREDICTION,
     POSITIVE_EDGE_PREDICTION,
 )
 from krakked.strategy.ml_models import (
+    DEFAULT_REGRESSION_MODEL_BACKEND,
     DEFAULT_REGRESSION_EPSILON_PCT,
+    DEFAULT_SGD_L2_ALPHA,
+    DEFAULT_SGD_LEARNING_RATE_INITIAL,
     MLOnlineModelBundle,
     PassiveAggressiveClassifier,
     PassiveAggressiveRegressor,
     StandardScaler,
     classifier_model_config_key,
+    create_regression_model_bundle,
+    is_regression_model_for_backend,
+    regression_model_backend,
     regression_model_config_key,
+    regression_model_framework,
     supports_partial_fit_sample_weight,
 )
 from krakked.strategy.strategies.ml_alt_strategy import AIPredictorAltStrategy
@@ -134,7 +141,7 @@ def test_extract_training_example(strategy, mock_ctx):
     features, label = strategy._extract_training_example(mock_ctx, "XBT/USD", "1h")
 
     assert label == 1.0
-    assert len(features) == 3
+    assert len(features) == len(ML_FEATURE_NAMES)
     mock_ctx.market_data.get_ohlc.assert_called()
 
 
@@ -147,7 +154,7 @@ def test_extract_training_example_filters_micro_move_after_costs(strategy, mock_
     features, label = strategy._extract_training_example(mock_ctx, "XBT/USD", "1h")
 
     assert label == 0.0
-    assert len(features) == 3
+    assert len(features) == len(ML_FEATURE_NAMES)
 
 
 def test_extract_training_example_down(strategy, mock_ctx):
@@ -237,7 +244,7 @@ def test_regression_extract_training_example(regression_strategy, mock_ctx):
     )
 
     assert label == pytest.approx(0.1)
-    assert len(features) == 3
+    assert len(features) == len(ML_FEATURE_NAMES)
 
 
 def test_regression_min_edge_pct(regression_strategy, mock_ctx):
@@ -325,7 +332,7 @@ def test_classifier_model_key_versions_fee_adjusted_labels(strategy, mock_ctx):
 
     assert (
         strategy._model_key("1h", label_config)
-        == "global|1h|features_ohlc_v1|fee_adj_fee25_slip50_x2|"
+        == "global|1h|features_ohlc_v2|fee_adj_fee25_slip50_x2|"
         "pa_cls_scalerstdv1"
     )
 
@@ -333,7 +340,7 @@ def test_classifier_model_key_versions_fee_adjusted_labels(strategy, mock_ctx):
 def test_regression_model_key_versions_feature_schema(regression_strategy):
     assert (
         regression_strategy._model_key("1h")
-        == "global|1h|features_ohlc_v1|pa_reg_eps0p001_scalerstdv1"
+        == "global|1h|features_ohlc_v2|pa_reg_eps0p001_scalerstdv1"
     )
 
 
@@ -356,7 +363,7 @@ def test_regression_epsilon_changes_model_key():
 
     assert (
         strategy._model_key("1h")
-        == "global|1h|features_ohlc_v1|pa_reg_eps0p0025_scalerstdv1"
+        == "global|1h|features_ohlc_v2|pa_reg_eps0p0025_scalerstdv1"
     )
 
 
@@ -389,10 +396,38 @@ def test_ml_feature_values_are_shared_across_strategies(
     assert classifier_vector is not None
     assert alt_vector is not None
     assert regression_vector is not None
-    assert classifier_vector.names == ["pct_change", "trend_diff", "volatility"]
+    assert classifier_vector.names == list(ML_FEATURE_NAMES)
     assert classifier_vector.schema_version == ML_FEATURE_SCHEMA_VERSION
     assert classifier_vector.values == pytest.approx(alt_vector.values)
     assert classifier_vector.values == pytest.approx(regression_vector.values)
+
+
+def test_ohlc_v2_feature_values_include_candle_and_volume_fields(
+    strategy, mock_ctx
+):
+    bars = [
+        MockBar(1000000, open=100.0, high=101.0, low=99.0, close=100.0, volume=100.0),
+        MockBar(1003600, open=101.0, high=103.0, low=100.0, close=102.0, volume=110.0),
+        MockBar(1007200, open=102.0, high=103.0, low=100.0, close=101.0, volume=90.0),
+        MockBar(1010800, open=101.0, high=104.0, low=100.0, close=103.0, volume=130.0),
+        MockBar(1014400, open=103.0, high=108.0, low=100.0, close=105.0, volume=170.0),
+    ]
+    mock_ctx.market_data.get_ohlc.return_value = bars
+
+    vector = strategy._extract_feature_vector(mock_ctx, "XBT/USD", "1h")
+
+    assert vector is not None
+    features = dict(zip(vector.names, vector.values))
+    assert vector.schema_version == "ohlc_v2"
+    assert features["return_3"] == pytest.approx((105.0 - 102.0) / 102.0)
+    assert features["return_6"] == 0.0
+    assert features["close_vs_short_ma"] == pytest.approx((105.0 - 104.0) / 104.0)
+    assert features["close_vs_long_ma"] == pytest.approx((105.0 - 102.2) / 102.2)
+    assert features["range_pct"] == pytest.approx((108.0 - 100.0) / 105.0)
+    assert features["body_pct"] == pytest.approx(abs(105.0 - 103.0) / 105.0)
+    assert features["upper_wick_pct"] == pytest.approx((108.0 - 105.0) / 105.0)
+    assert features["lower_wick_pct"] == pytest.approx((103.0 - 100.0) / 105.0)
+    assert features["volume_zscore"] > 0.0
 
 
 def test_passive_aggressive_models_do_not_support_sample_weight_guard():
@@ -434,6 +469,137 @@ def test_model_config_key_helpers_are_stable():
         regression_model_config_key(DEFAULT_REGRESSION_EPSILON_PCT)
         == "pa_reg_eps0p001_scalerstdv1"
     )
+    assert regression_model_backend("unknown") == DEFAULT_REGRESSION_MODEL_BACKEND
+    assert regression_model_framework("pa") == "sklearn_passive_aggressive_regressor"
+    assert (
+        regression_model_config_key(
+            DEFAULT_REGRESSION_EPSILON_PCT,
+            model_backend="sgd_huber",
+            sgd_l2_alpha=DEFAULT_SGD_L2_ALPHA,
+            sgd_learning_rate_initial=DEFAULT_SGD_LEARNING_RATE_INITIAL,
+        )
+        == "sgd_huber_alpha0p0001_eta0p001_eps0p001_scalerstdv1"
+    )
+    assert (
+        regression_model_config_key(
+            DEFAULT_REGRESSION_EPSILON_PCT,
+            model_backend="sgd_squared_error",
+            sgd_l2_alpha=DEFAULT_SGD_L2_ALPHA,
+            sgd_learning_rate_initial=DEFAULT_SGD_LEARNING_RATE_INITIAL,
+        )
+        == "sgd_squared_error_alpha0p0001_eta0p001_scalerstdv1"
+    )
+    assert (
+        regression_model_config_key(
+            DEFAULT_REGRESSION_EPSILON_PCT,
+            model_backend="sgd_huber",
+            sgd_l2_alpha=DEFAULT_SGD_L2_ALPHA,
+            sgd_learning_rate_initial=0.0,
+        )
+        == "sgd_huber_alpha0p0001_eta0p001_eps0p001_scalerstdv1"
+    )
+
+
+def test_regression_backend_factory_and_keys_are_backend_specific():
+    cfg = StrategyConfig(
+        name="reg_sgd_test",
+        type="ai_regression",
+        enabled=True,
+        params={
+            "pairs": ["XBT/USD"],
+            "timeframe": "1h",
+            "lookback_bars": 5,
+            "short_window": 2,
+            "long_window": 5,
+            "continuous_learning": True,
+            "model_backend": "sgd_huber",
+            "regression_epsilon_pct": 0.0025,
+            "sgd_l2_alpha": 0.0002,
+            "sgd_learning_rate_initial": 0.002,
+        },
+    )
+    strategy = AIRegressionStrategy(cfg)
+
+    assert strategy.params.model_backend == "sgd_huber"
+    assert strategy._model_framework() == "sklearn_sgd_regressor_huber"
+    assert (
+        strategy._model_key("1h")
+        == "global|1h|features_ohlc_v2|"
+        "sgd_huber_alpha0p0002_eta0p002_eps0p0025_scalerstdv1"
+    )
+    assert is_regression_model_for_backend(strategy.model, "sgd_huber") is True
+    assert is_regression_model_for_backend(strategy.model, "pa") is False
+    metadata = strategy._checkpoint_metadata()
+    assert metadata["model_backend"] == "sgd_huber"
+    assert metadata["model_framework"] == "sklearn_sgd_regressor_huber"
+    assert metadata["sgd_l2_alpha"] == pytest.approx(0.0002)
+    assert metadata["sgd_learning_rate_initial"] == pytest.approx(0.002)
+
+
+def test_regression_restore_accepts_matching_backend_checkpoint(mock_ctx):
+    cfg = StrategyConfig(
+        name="reg_sgd_test",
+        type="ai_regression",
+        enabled=True,
+        params={
+            "pairs": ["XBT/USD"],
+            "timeframe": "1h",
+            "lookback_bars": 5,
+            "short_window": 2,
+            "long_window": 5,
+            "continuous_learning": True,
+            "model_backend": "sgd_huber",
+        },
+    )
+    strategy = AIRegressionStrategy(cfg)
+    store = FakeCheckpointStore()
+    checkpoint_model = create_regression_model_bundle(model_backend="sgd_huber")
+    checkpoint_model.partial_fit([[0.0] * len(ML_FEATURE_NAMES)], [0.01])
+    model_key = strategy._model_key("1h")
+    store.training_checkpoints[(strategy.id, model_key, "training")] = (
+        checkpoint_model,
+        datetime.now(timezone.utc),
+        "ready",
+        {"model_initialized": True},
+    )
+
+    mock_ctx.portfolio.store = store
+    strategy._maybe_bootstrap_from_history(mock_ctx, "1h")
+
+    assert strategy.model_initialized is True
+    assert strategy.model is checkpoint_model
+
+
+def test_regression_restore_rejects_mismatched_backend_checkpoint(mock_ctx):
+    strategy = AIRegressionStrategy(
+        StrategyConfig(
+            name="reg_pa_test",
+            type="ai_regression",
+            enabled=True,
+            params={
+                "pairs": ["XBT/USD"],
+                "timeframe": "1h",
+                "lookback_bars": 5,
+                "short_window": 2,
+                "long_window": 5,
+                "continuous_learning": True,
+            },
+        )
+    )
+    store = FakeCheckpointStore()
+    checkpoint_model = create_regression_model_bundle(model_backend="sgd_huber")
+    checkpoint_model.partial_fit([[0.0] * len(ML_FEATURE_NAMES)], [0.01])
+    store.training_checkpoints[(strategy.id, strategy._model_key("1h"), "training")] = (
+        checkpoint_model,
+        datetime.now(timezone.utc),
+        "ready",
+        {"model_initialized": True},
+    )
+
+    mock_ctx.portfolio.store = store
+    strategy._maybe_bootstrap_from_history(mock_ctx, "1h")
+
+    assert strategy.model_initialized is False
 
 
 def test_alt_strategy_restores_last_observation_from_checkpoint(mock_ctx):

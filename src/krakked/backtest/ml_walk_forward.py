@@ -898,6 +898,17 @@ def _model_diagnostic(
     }
     if checkpoint_state is not None:
         diagnostic["checkpoint_state"] = checkpoint_state
+    for metadata_field in (
+        "feature_schema_version",
+        "model_backend",
+        "model_framework",
+        "model_config_key",
+        "regression_epsilon_pct",
+        "sgd_l2_alpha",
+        "sgd_learning_rate_initial",
+    ):
+        if metadata_field in metadata:
+            diagnostic[metadata_field] = metadata[metadata_field]
 
     try:
         # Trust boundary: model blobs are written by this bot into the

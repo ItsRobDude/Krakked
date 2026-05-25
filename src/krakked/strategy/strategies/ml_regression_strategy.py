@@ -20,13 +20,17 @@ from krakked.strategy.ml_labels import (
     edge_cost_config_from_context,
 )
 from krakked.strategy.ml_models import (
+    DEFAULT_REGRESSION_MODEL_BACKEND,
     DEFAULT_REGRESSION_EPSILON_PCT,
-    MLOnlineModelBundle,
     ML_STANDARD_SCALER_SCHEMA_VERSION,
-    PassiveAggressiveRegressor,
-    StandardScaler,
-    is_passive_aggressive_regressor_model,
+    DEFAULT_SGD_L2_ALPHA,
+    DEFAULT_SGD_LEARNING_RATE_INITIAL,
+    MLOnlineModelBundle,
+    create_regression_model_bundle,
+    is_regression_model_for_backend,
+    regression_model_backend,
     regression_model_config_key,
+    regression_model_framework,
 )
 from krakked.strategy.ml_persistence import (
     load_model,
@@ -41,7 +45,6 @@ from krakked.strategy.models import StrategyIntent
 logger = logging.getLogger(__name__)
 
 TRAINING_WINDOW_EXAMPLES = 5000
-MODEL_FRAMEWORK = "sklearn_passive_aggressive_regressor"
 
 
 def _nonnegative_float(value: object, default: float) -> float:
@@ -54,6 +57,11 @@ def _nonnegative_float(value: object, default: float) -> float:
     if not math.isfinite(parsed):
         return default
     return max(parsed, 0.0)
+
+
+def _positive_float(value: object, default: float) -> float:
+    parsed = _nonnegative_float(value, default)
+    return parsed if parsed > 0 else default
 
 
 @dataclass
@@ -71,6 +79,9 @@ class AIRegressionConfig:
     edge_slippage_bps: float = 50.0
     edge_cost_multiplier: float = 1.0
     regression_epsilon_pct: float = DEFAULT_REGRESSION_EPSILON_PCT
+    model_backend: str = DEFAULT_REGRESSION_MODEL_BACKEND
+    sgd_l2_alpha: float = DEFAULT_SGD_L2_ALPHA
+    sgd_learning_rate_initial: float = DEFAULT_SGD_LEARNING_RATE_INITIAL
 
 
 class AIRegressionStrategy(Strategy):
@@ -105,22 +116,37 @@ class AIRegressionStrategy(Strategy):
                 params.get("regression_epsilon_pct"),
                 DEFAULT_REGRESSION_EPSILON_PCT,
             ),
+            model_backend=regression_model_backend(params.get("model_backend")),
+            sgd_l2_alpha=_nonnegative_float(
+                params.get("sgd_l2_alpha"),
+                DEFAULT_SGD_L2_ALPHA,
+            ),
+            sgd_learning_rate_initial=_positive_float(
+                params.get("sgd_learning_rate_initial"),
+                DEFAULT_SGD_LEARNING_RATE_INITIAL,
+            ),
         )
 
         self.model = self._new_model()
         self.model_initialized = False
 
     def _model_config_key(self) -> str:
-        return regression_model_config_key(self.params.regression_epsilon_pct)
+        return regression_model_config_key(
+            self.params.regression_epsilon_pct,
+            model_backend=self.params.model_backend,
+            sgd_l2_alpha=self.params.sgd_l2_alpha,
+            sgd_learning_rate_initial=self.params.sgd_learning_rate_initial,
+        )
+
+    def _model_framework(self) -> str:
+        return regression_model_framework(self.params.model_backend)
 
     def _new_model(self) -> MLOnlineModelBundle:
-        return MLOnlineModelBundle(
-            model=PassiveAggressiveRegressor(
-                max_iter=1000,
-                tol=1e-3,
-                epsilon=self.params.regression_epsilon_pct,
-            ),
-            scaler=StandardScaler(),
+        return create_regression_model_bundle(
+            model_backend=self.params.model_backend,
+            epsilon_pct=self.params.regression_epsilon_pct,
+            sgd_l2_alpha=self.params.sgd_l2_alpha,
+            sgd_learning_rate_initial=self.params.sgd_learning_rate_initial,
         )
 
     def warmup(self, market_data: MarketDataAPI, portfolio: PortfolioService) -> None:
@@ -143,8 +169,12 @@ class AIRegressionStrategy(Strategy):
             "model_initialized": self.model_initialized,
             "continuous_learning": self._learning_enabled(),
             "feature_schema_version": ML_FEATURE_SCHEMA_VERSION,
+            "model_backend": self.params.model_backend,
+            "model_framework": self._model_framework(),
             "model_config_key": self._model_config_key(),
             "regression_epsilon_pct": self.params.regression_epsilon_pct,
+            "sgd_l2_alpha": self.params.sgd_l2_alpha,
+            "sgd_learning_rate_initial": self.params.sgd_learning_rate_initial,
             "scaler_schema_version": ML_STANDARD_SCALER_SCHEMA_VERSION,
             "scaler_initialized": bool(
                 getattr(self.model, "scaler_initialized", False)
@@ -167,7 +197,7 @@ class AIRegressionStrategy(Strategy):
             strategy_id=self.id,
             model_key=self._model_key(timeframe),
             label_type="regression",
-            framework=MODEL_FRAMEWORK,
+            framework=self._model_framework(),
             model=self.model,
             checkpoint_state=checkpoint_state,
             metadata=metadata,
@@ -188,7 +218,9 @@ class AIRegressionStrategy(Strategy):
         checkpoint_candidate = None
         if checkpoint is not None:
             restored_model, checkpoint_updated_at, _state, metadata = checkpoint
-            if is_passive_aggressive_regressor_model(restored_model):
+            if is_regression_model_for_backend(
+                restored_model, self.params.model_backend
+            ):
                 checkpoint_candidate = (
                     restored_model,
                     checkpoint_updated_at,
@@ -199,7 +231,9 @@ class AIRegressionStrategy(Strategy):
         live_candidate = None
         if live_model is not None:
             restored_model, updated_at = live_model
-            if is_passive_aggressive_regressor_model(restored_model):
+            if is_regression_model_for_backend(
+                restored_model, self.params.model_backend
+            ):
                 live_candidate = (restored_model, updated_at)
 
         if checkpoint_candidate and checkpoint_candidate[2]:
@@ -330,7 +364,7 @@ class AIRegressionStrategy(Strategy):
                 strategy_id=self.id,
                 model_key=self._model_key(timeframe),
                 label_type="regression",
-                framework=MODEL_FRAMEWORK,
+                framework=self._model_framework(),
                 model=self.model,
             )
 
@@ -542,7 +576,7 @@ class AIRegressionStrategy(Strategy):
                 strategy_id=self.id,
                 model_key=model_key,
                 label_type="regression",
-                framework=MODEL_FRAMEWORK,
+                framework=self._model_framework(),
                 model=self.model,
             )
 
