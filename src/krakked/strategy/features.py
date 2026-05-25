@@ -6,8 +6,9 @@ from datetime import UTC, datetime, tzinfo
 from typing import Any, List, Optional, Sequence
 
 FEATURE_TIME_TZ: tzinfo = UTC
-ML_FEATURE_SCHEMA_VERSION = "ohlc_v4"
+ML_FEATURE_SCHEMA_VERSION = "ohlc_v5"
 ML_FEATURE_CLIPPING_VERSION = "clip_v1"
+ML_FEATURE_PROFILE_ALL = "all"
 ML_FEATURE_NAMES = (
     "pct_change",
     "trend_diff",
@@ -15,9 +16,7 @@ ML_FEATURE_NAMES = (
     "return_atr_1",
     "return_atr_3",
     "range_atr",
-    "body_atr",
     "upper_wick_atr",
-    "lower_wick_atr",
     "return_zscore",
     "volatility_ratio",
     "volume_change",
@@ -27,14 +26,32 @@ ML_FEATURE_NAMES = (
     "weekday_sin",
     "weekday_cos",
 )
+ML_FEATURE_PROFILES: dict[str, tuple[str, ...]] = {
+    ML_FEATURE_PROFILE_ALL: ML_FEATURE_NAMES,
+    "drop_weakest": tuple(
+        name
+        for name in ML_FEATURE_NAMES
+        if name
+        not in {"pct_change", "return_atr_3", "volatility_ratio"}
+    ),
+    "volume_change_only": tuple(
+        name for name in ML_FEATURE_NAMES if name != "volume_log_ratio"
+    ),
+    "volume_log_ratio_only": tuple(
+        name for name in ML_FEATURE_NAMES if name != "volume_change"
+    ),
+    "drop_time": tuple(
+        name
+        for name in ML_FEATURE_NAMES
+        if name not in {"hour_sin", "hour_cos", "weekday_sin", "weekday_cos"}
+    ),
+}
 ML_FEATURE_CLIP_RANGES: dict[str, tuple[float, float]] = {
     "pct_change": (-0.15, 0.15),
     "return_atr_1": (-5.0, 5.0),
     "return_atr_3": (-5.0, 5.0),
     "range_atr": (0.0, 5.0),
-    "body_atr": (0.0, 5.0),
     "upper_wick_atr": (0.0, 5.0),
-    "lower_wick_atr": (0.0, 5.0),
     "return_zscore": (-3.0, 3.0),
     "volatility_ratio": (0.0, 10.0),
     "volume_change": (-5.0, 5.0),
@@ -47,6 +64,7 @@ class MLFeatureVector:
     values: List[float]
     names: List[str]
     schema_version: str
+    profile: str = ML_FEATURE_PROFILE_ALL
     clipping_version: str = ML_FEATURE_CLIPPING_VERSION
     clipping: dict[str, dict[str, float | bool]] = field(default_factory=dict)
 
@@ -55,6 +73,11 @@ class MLFeatureVector:
             name: value for name, value in zip(self.names, self.values)
         }
         metadata["feature_schema_version"] = self.schema_version
+        metadata["feature_profile"] = self.profile
+        metadata["feature_names"] = list(self.names)
+        excluded = [name for name in ML_FEATURE_NAMES if name not in set(self.names)]
+        if excluded:
+            metadata["feature_profile_excluded_features"] = excluded
         metadata["feature_clipping_version"] = self.clipping_version
         if self.clipping:
             metadata["feature_clipping"] = {
@@ -143,6 +166,28 @@ def _time_features(timestamp: int | None) -> tuple[float, float, float, float]:
     return hour_sin, hour_cos, weekday_sin, weekday_cos
 
 
+def normalize_feature_profile(value: object = None) -> str:
+    if value is None or value == "":
+        return ML_FEATURE_PROFILE_ALL
+    profile = str(value)
+    if profile not in ML_FEATURE_PROFILES:
+        choices = ", ".join(sorted(ML_FEATURE_PROFILES))
+        raise ValueError(f"Unknown ML feature profile {profile!r}; expected one of: {choices}")
+    return profile
+
+
+def feature_names_for_profile(value: object = None) -> tuple[str, ...]:
+    return ML_FEATURE_PROFILES[normalize_feature_profile(value)]
+
+
+def feature_model_key_suffix(value: object = None) -> str:
+    profile = normalize_feature_profile(value)
+    suffix = f"features_{ML_FEATURE_SCHEMA_VERSION}"
+    if profile == ML_FEATURE_PROFILE_ALL:
+        return suffix
+    return f"{suffix}_profile_{profile}"
+
+
 def _clip_feature(
     name: str,
     raw_value: float,
@@ -172,6 +217,7 @@ def _feature_vector(
     lookback_bars: int,
     volumes: Sequence[float],
     timestamps: Sequence[int],
+    feature_profile: object = None,
 ) -> Optional[MLFeatureVector]:
     if not closes or len(closes) < 3:
         return None
@@ -205,9 +251,7 @@ def _feature_vector(
     atr = _mean(atr_window)
     atr_pct = _safe_ratio(atr, last_close)
     latest_range = max(latest_high - latest_low, 0.0)
-    latest_body = abs(last_close - latest_open)
     latest_upper_wick = max(latest_high - max(latest_open, last_close), 0.0)
-    latest_lower_wick = max(min(latest_open, last_close) - latest_low, 0.0)
 
     return_values = _returns(closes)
     return_window = return_values[-lookback_bars:]
@@ -238,9 +282,7 @@ def _feature_vector(
         "return_atr_1": _safe_ratio(pct_change, atr_pct),
         "return_atr_3": _safe_ratio(_window_return(closes, 3), atr_pct),
         "range_atr": _safe_ratio(latest_range, atr),
-        "body_atr": _safe_ratio(latest_body, atr),
         "upper_wick_atr": _safe_ratio(latest_upper_wick, atr),
-        "lower_wick_atr": _safe_ratio(latest_lower_wick, atr),
         "return_zscore": return_zscore,
         "volatility_ratio": volatility_ratio,
         "volume_change": volume_change,
@@ -250,9 +292,11 @@ def _feature_vector(
         "weekday_sin": weekday_sin,
         "weekday_cos": weekday_cos,
     }
+    profile = normalize_feature_profile(feature_profile)
+    feature_names = feature_names_for_profile(profile)
     values: list[float] = []
     clipping: dict[str, dict[str, float | bool]] = {}
-    for name in ML_FEATURE_NAMES:
+    for name in feature_names:
         clipped_value, clipping_metadata = _clip_feature(name, raw_values[name])
         values.append(clipped_value)
         if clipping_metadata is not None:
@@ -260,14 +304,19 @@ def _feature_vector(
 
     return MLFeatureVector(
         values=values,
-        names=list(ML_FEATURE_NAMES),
+        names=list(feature_names),
         schema_version=ML_FEATURE_SCHEMA_VERSION,
+        profile=profile,
         clipping=clipping,
     )
 
 
 def compute_feature_vector_from_closes(
-    closes: Sequence[float], short_window: int, long_window: int, lookback_bars: int
+    closes: Sequence[float],
+    short_window: int,
+    long_window: int,
+    lookback_bars: int,
+    feature_profile: object = None,
 ) -> Optional[MLFeatureVector]:
     """
     Compute shared ML features from close prices.
@@ -287,6 +336,7 @@ def compute_feature_vector_from_closes(
         lookback_bars=lookback_bars,
         volumes=[0.0 for _ in closes],
         timestamps=[],
+        feature_profile=feature_profile,
     )
 
 
@@ -295,6 +345,7 @@ def compute_feature_vector_from_ohlc(
     short_window: int,
     long_window: int,
     lookback_bars: int,
+    feature_profile: object = None,
 ) -> Optional[MLFeatureVector]:
     closes = [float(getattr(bar, "close")) for bar in ohlc_window]
     if not closes:
@@ -312,6 +363,7 @@ def compute_feature_vector_from_ohlc(
         lookback_bars=lookback_bars,
         volumes=[float(getattr(bar, "volume", 0.0)) for bar in ohlc_window],
         timestamps=[int(getattr(bar, "timestamp", 0)) for bar in ohlc_window],
+        feature_profile=feature_profile,
     )
 
 
@@ -332,9 +384,14 @@ __all__ = [
     "ML_FEATURE_SCHEMA_VERSION",
     "ML_FEATURE_CLIPPING_VERSION",
     "ML_FEATURE_CLIP_RANGES",
+    "ML_FEATURE_PROFILE_ALL",
+    "ML_FEATURE_PROFILES",
     "FEATURE_TIME_TZ",
     "MLFeatureVector",
     "compute_feature_vector_from_closes",
     "compute_feature_vector_from_ohlc",
     "compute_features_from_window",
+    "feature_model_key_suffix",
+    "feature_names_for_profile",
+    "normalize_feature_profile",
 ]

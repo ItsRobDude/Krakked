@@ -245,9 +245,6 @@ def _iter_model_diagnostics(summary: dict[str, Any]) -> Iterable[dict[str, Any]]
 
 
 def _feature_schema(summary: dict[str, Any], model: dict[str, Any]) -> Optional[str]:
-    schema = _optional_str(model.get("feature_schema_version"))
-    if schema:
-        return schema
     for fold in summary.get("folds") or []:
         if not isinstance(fold, dict):
             continue
@@ -258,7 +255,16 @@ def _feature_schema(summary: dict[str, Any], model: dict[str, Any]) -> Optional[
         if isinstance(features, dict):
             schema = _optional_str(features.get("schema_version"))
             if schema:
+                profile = _optional_str(features.get("feature_profile"))
+                if profile and profile != "all":
+                    return f"{schema}/{profile}"
                 return schema
+    schema = _optional_str(model.get("feature_schema_version"))
+    if schema:
+        profile = _optional_str(model.get("feature_profile"))
+        if profile and profile != "all":
+            return f"{schema}/{profile}"
+        return schema
     return _feature_schema_from_key(_optional_str(model.get("model_key")))
 
 

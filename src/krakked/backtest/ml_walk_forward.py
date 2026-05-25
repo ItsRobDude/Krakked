@@ -56,9 +56,7 @@ HIGH_RISK_SCALED_FEATURES = frozenset(
         "volume_change",
         "volume_log_ratio",
         "range_atr",
-        "body_atr",
         "upper_wick_atr",
-        "lower_wick_atr",
     }
 )
 
@@ -1100,13 +1098,25 @@ def _features_from_prediction(prediction: MLWalkForwardPrediction) -> Optional[l
     features = prediction.metadata.get("features")
     if not isinstance(features, dict):
         return None
+    feature_names = _feature_names_from_prediction(prediction)
     values: list[float] = []
-    for name in ML_FEATURE_NAMES:
+    for name in feature_names:
         value = _finite_float(features.get(name))
         if value is None:
             return None
         values.append(value)
     return values
+
+
+def _feature_names_from_prediction(prediction: MLWalkForwardPrediction) -> list[str]:
+    features = prediction.metadata.get("features")
+    if isinstance(features, dict):
+        raw_names = features.get("feature_names")
+        if isinstance(raw_names, list) and raw_names:
+            names = [str(name) for name in raw_names if isinstance(name, str) and name]
+            if names:
+                return names
+    return list(ML_FEATURE_NAMES)
 
 
 def _model_matches_prediction(
@@ -1230,10 +1240,48 @@ def _feature_schema_from_predictions(
     return str(schema_versions[0]) if schema_versions else None
 
 
-def _feature_quantiles(rows: list[list[float]]) -> dict[str, Any]:
+def _feature_profile_from_predictions(
+    predictions: list[MLWalkForwardPrediction],
+) -> Optional[str]:
+    profiles = [
+        str(profile)
+        for prediction in predictions
+        if isinstance((features := prediction.metadata.get("features")), dict)
+        and (profile := features.get("feature_profile"))
+    ]
+    return profiles[0] if profiles else None
+
+
+def _feature_names_from_predictions(
+    predictions: list[MLWalkForwardPrediction],
+) -> list[str]:
+    for prediction in predictions:
+        names = _feature_names_from_prediction(prediction)
+        if names:
+            return names
+    return list(ML_FEATURE_NAMES)
+
+
+def _feature_exclusions_from_predictions(
+    predictions: list[MLWalkForwardPrediction],
+) -> list[str]:
+    for prediction in predictions:
+        features = prediction.metadata.get("features")
+        if not isinstance(features, dict):
+            continue
+        excluded = features.get("feature_profile_excluded_features")
+        if isinstance(excluded, list):
+            return [str(name) for name in excluded if isinstance(name, str) and name]
+    return []
+
+
+def _feature_quantiles(
+    rows: list[list[float]],
+    feature_names: list[str],
+) -> dict[str, Any]:
     return {
         name: _quantiles(row[index] for row in rows if index < len(row))
-        for index, name in enumerate(ML_FEATURE_NAMES)
+        for index, name in enumerate(feature_names)
     }
 
 
@@ -1262,9 +1310,10 @@ def _feature_tail_abs(quantiles: dict[str, Any]) -> Optional[float]:
 
 def _build_feature_health_warnings(
     scaled_feature_quantiles: dict[str, Any],
+    feature_names: list[str],
 ) -> list[str]:
     warnings: list[str] = []
-    for name in ML_FEATURE_NAMES:
+    for name in feature_names:
         quantiles = scaled_feature_quantiles.get(name)
         if not isinstance(quantiles, dict):
             continue
@@ -1431,11 +1480,14 @@ def _transform_scaled_features(
     return scaled_rows
 
 
-def _model_coefficients(model: object) -> Optional[list[float]]:
+def _model_coefficients(
+    model: object,
+    feature_names: list[str],
+) -> Optional[list[float]]:
     coefficients = _flatten_numbers(getattr(model, "coef_", None))
-    if len(coefficients) < len(ML_FEATURE_NAMES):
+    if len(coefficients) < len(feature_names):
         return None
-    return coefficients[: len(ML_FEATURE_NAMES)]
+    return coefficients[: len(feature_names)]
 
 
 def _p95_abs_contribution(values: list[float]) -> Optional[float]:
@@ -1448,12 +1500,13 @@ def _build_feature_contribution_diagnostics(
     *,
     scaled_rows: list[list[float]],
     coefficient_rows: list[list[float]],
+    feature_names: list[str],
 ) -> list[dict[str, Any]]:
     if not scaled_rows or len(scaled_rows) != len(coefficient_rows):
         return []
 
     diagnostics: list[dict[str, Any]] = []
-    for index, name in enumerate(ML_FEATURE_NAMES):
+    for index, name in enumerate(feature_names):
         coefficients = [
             row[index] for row in coefficient_rows if index < len(row)
         ]
@@ -1505,11 +1558,15 @@ def _build_feature_diagnostics(
         if features is not None:
             feature_rows.append((prediction, features))
     rows = [features for _prediction, features in feature_rows]
+    feature_names = _feature_names_from_predictions(predictions)
 
     diagnostics: dict[str, Any] = {
         "schema_version": _feature_schema_from_predictions(predictions),
+        "feature_profile": _feature_profile_from_predictions(predictions),
+        "feature_names": list(feature_names),
+        "excluded_features": _feature_exclusions_from_predictions(predictions),
         "prediction_count": len(rows),
-        "raw_feature_quantiles": _feature_quantiles(rows),
+        "raw_feature_quantiles": _feature_quantiles(rows, feature_names),
         "scaled_available": False,
     }
     clipping_diagnostics = _build_feature_clipping_diagnostics(predictions)
@@ -1538,7 +1595,7 @@ def _build_feature_diagnostics(
                 diagnostics["health_warnings"] = clipping_warnings
             return diagnostics
         scaled_rows.append(scaled_row[0])
-        coefficients = _model_coefficients(model)
+        coefficients = _model_coefficients(model, feature_names)
         if coefficients is not None:
             coefficient_rows.append(coefficients)
         source_values.add(str(entry.get("source") or "unknown"))
@@ -1547,7 +1604,10 @@ def _build_feature_diagnostics(
     diagnostics.update(
         {
             "scaled_available": True,
-            "scaled_feature_quantiles": _feature_quantiles(scaled_rows),
+            "scaled_feature_quantiles": _feature_quantiles(
+                scaled_rows,
+                feature_names,
+            ),
             "scaled_feature_source": (
                 next(iter(source_values)) if len(source_values) == 1 else "mixed"
             ),
@@ -1560,12 +1620,16 @@ def _build_feature_diagnostics(
         diagnostics["scaled_feature_source_model_keys"] = sorted(model_key_values)
     diagnostics["health_thresholds"] = _feature_health_thresholds()
     diagnostics["health_warnings"] = (
-        _build_feature_health_warnings(diagnostics["scaled_feature_quantiles"])
+        _build_feature_health_warnings(
+            diagnostics["scaled_feature_quantiles"],
+            feature_names,
+        )
         + clipping_warnings
     )
     contributions = _build_feature_contribution_diagnostics(
         scaled_rows=scaled_rows,
         coefficient_rows=coefficient_rows,
+        feature_names=feature_names,
     )
     if contributions:
         diagnostics["linear_contributions"] = contributions

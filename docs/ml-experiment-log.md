@@ -87,3 +87,90 @@ Decision:
 
 - Do not declare an ablation result from this summary alone.
 - Use these rankings to define a small `ohlc_v5` trimmed-feature experiment rather than adding more OHLC-derived features.
+
+## 2026-05-24: `ohlc_v4` Controlled Ablation Matrix
+
+Tooling:
+
+- Added `--feature-profile` to `krakked ml-walk-forward` for controlled, keyed feature-subset experiments.
+- Default profile `all` preserves the existing `features_ohlc_v4` model key.
+- Non-default profiles are encoded in model keys and report comparison output, for example `features_ohlc_v4_profile_drop_lower_wick_body`.
+
+Matrix:
+
+- Baseline: all `ohlc_v4` features.
+- `drop_weakest`: removes `pct_change`, `body_atr`, `return_atr_3`, and `volatility_ratio`.
+- `volume_change_only`: removes `volume_log_ratio`.
+- `volume_log_ratio_only`: removes `volume_change`.
+- `drop_lower_wick`: removes `lower_wick_atr`.
+- `drop_lower_wick_body`: removes `lower_wick_atr` and `body_atr`.
+- `drop_time`: removes `hour_sin`, `hour_cos`, `weekday_sin`, and `weekday_cos`.
+
+Primary comparison:
+
+| profile | positive calls | long precision | base hit rate | p90 lift | p95 lift | selected avg return | readout |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| `drop_lower_wick_body` | 124 | 23.39% | 17.86% | 1.153x | 1.318x | 0.0602% | strongest research candidate |
+| `drop_lower_wick` | 119 | 21.85% | 17.86% | 1.153x | 1.318x | 0.0255% | useful supporting signal |
+| `drop_time` | 90 | 21.11% | 17.86% | 0.659x | 0.988x | 0.1439% | better precision/return, weak tail lift |
+| `volume_change_only` | 125 | 19.20% | 17.86% | 1.318x | 1.318x | 0.0894% | lift improved, precision barely moved |
+| `all` | 126 | 19.05% | 17.86% | 0.988x | 0.988x | -0.0454% | clipped baseline |
+| `drop_weakest` | 118 | 18.64% | 17.86% | 1.318x | 0.988x | -0.0048% | did not help |
+| `volume_log_ratio_only` | 122 | 16.39% | 17.86% | 0.988x | 0.988x | -0.0322% | worse than baseline |
+
+Fold checks:
+
+- `drop_lower_wick_body` produced positive-edge calls in every fold: `8`, `59`, `25`, `32`.
+- The highest clipping rate remained `return_zscore` at `3.57%`, below the `5%` research gate.
+- Scaled feature-health warnings still appeared in every fold.
+- Predicted-delta monotonicity still failed in fold 1 for the strongest profiles.
+
+Decision:
+
+- Do not promote a model or expose UI controls.
+- Treat `drop_lower_wick_body` as the best next research seed because it improved long precision, p95 lift, and selected average return without increasing clipping risk.
+- Treat `lower_wick_atr` and `body_atr` as the first removal candidates for a formal `ohlc_v5` schema.
+- Do not remove all weak-summary features mechanically: `drop_weakest` was worse than targeted wick/body removal.
+- Keep both volume features out of the next removal batch until the duplicate-volume behavior is better isolated; `volume_log_ratio_only` underperformed while `volume_change_only` mostly improved lift rather than precision.
+
+## 2026-05-24: `ohlc_v5` Trimmed Feature Baseline
+
+Change:
+
+- Bumped the active ML feature schema from `ohlc_v4` to `ohlc_v5`.
+- Removed `body_atr` and `lower_wick_atr` from the default shared ML feature vector.
+- Kept clipping, scaling, diagnostics, and the Passive-Aggressive regression backend unchanged.
+- Kept the `--feature-profile` experiment hook for future controlled subsets; default `all` now maps to the trimmed `ohlc_v5` feature set.
+
+Configuration matched the `ohlc_v4` primary lane:
+
+- Strategy: `ai_regression`
+- Backend: Passive-Aggressive regressor
+- Feature schema: `ohlc_v5`
+- Primary lane: `4h`, BTC/USD and ETH/USD
+- Window: 2026-03-21 through 2026-05-24
+- Costs: 10 bps fee, 20 bps slippage
+
+Observed summary:
+
+- Positive-edge predictions: `124`
+- Long precision: `23.39%`
+- Base realized hit rate: `17.86%`
+- Edge prediction accuracy: `62.50%`
+- p90/p95 lift: `1.153x` / `1.318x`
+- p95 selected average realized return: `0.0602%`
+- Upper-half predicted-delta realized return improved over lower half: yes
+- Positive-edge calls appeared in every fold: `8`, `59`, `25`, `32`
+- Highest clipping rate remained `return_zscore` at `3.57%`, below the `5%` research gate
+
+Comparison:
+
+- `ohlc_v5` exactly matched the prior `ohlc_v4/drop_lower_wick_body` profile run.
+- `ohlc_v5` improved over the clipped `ohlc_v4` baseline on long precision, p90/p95 lift, and selected average realized return.
+- Promotion remains blocked because long precision is still below the current 50% promotion threshold, scaled feature-health warnings remain present in every fold, and fold 1 remains non-monotonic.
+
+Decision:
+
+- Do not promote a model or expose UI controls.
+- Treat `ohlc_v5` as the current cleaned research baseline for 4h PA regression.
+- Next useful research should address the remaining feature-health warnings and fold-1 monotonicity, rather than adding back candle-body or lower-wick features.

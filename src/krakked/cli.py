@@ -59,6 +59,7 @@ from krakked.portfolio.store import (
 )
 from krakked.scripts import run_strategy_once
 from krakked.strategy.ml_pruning import find_stale_ml_artifact_groups
+from krakked.strategy.features import ML_FEATURE_PROFILES
 from krakked.utils.io import backup_file
 
 DEFAULT_DB_PATH = "portfolio.db"
@@ -720,6 +721,13 @@ def _ml_walk_forward_command(args: argparse.Namespace) -> int:
 
     try:
         config = _load_backtest_config(args)
+        if args.feature_profile:
+            strat_cfg = config.strategies.configs.get(args.strategy)
+            if strat_cfg is None:
+                return _print_error(f"Unknown strategy: {args.strategy}")
+            params = dict(strat_cfg.params or {})
+            params["feature_profile"] = args.feature_profile
+            strat_cfg.params = params
         result = run_ml_walk_forward(
             config,
             start=start,
@@ -1508,6 +1516,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "--json",
         action="store_true",
         help="Print the ML walk-forward report as JSON",
+    )
+    ml_walk_forward_parser.add_argument(
+        "--feature-profile",
+        choices=tuple(sorted(ML_FEATURE_PROFILES)),
+        help="Experimental ML feature subset profile for this walk-forward run",
     )
     ml_walk_forward_parser.set_defaults(func=_ml_walk_forward_command)
 

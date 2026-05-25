@@ -14,6 +14,9 @@ from krakked.strategy.features import (
     ML_FEATURE_SCHEMA_VERSION,
     MLFeatureVector,
     compute_feature_vector_from_ohlc,
+    feature_model_key_suffix,
+    feature_names_for_profile,
+    normalize_feature_profile,
 )
 from krakked.strategy.ml_labels import (
     FEE_ADJUSTED_CLASSIFICATION_LABEL_TYPE,
@@ -77,6 +80,7 @@ class AIPredictorAltStrategy(Strategy):
             label_fee_bps=label_defaults.fee_bps,
             label_slippage_bps=label_defaults.slippage_bps,
             label_cost_multiplier=label_defaults.cost_multiplier,
+            feature_profile=normalize_feature_profile(params.get("feature_profile")),
         )
 
         self.classes = [0, 1]
@@ -123,7 +127,7 @@ class AIPredictorAltStrategy(Strategy):
                 cost_multiplier=self.params.label_cost_multiplier,
             )
         return (
-            f"{pair}|{timeframe}|features_{ML_FEATURE_SCHEMA_VERSION}|"
+            f"{pair}|{timeframe}|{feature_model_key_suffix(self.params.feature_profile)}|"
             f"{label_config.model_key_suffix()}|{self._model_config_key()}"
         )
 
@@ -142,6 +146,8 @@ class AIPredictorAltStrategy(Strategy):
             "model_initialized": self.model_initialized.get(key, False),
             "continuous_learning": self._learning_enabled(),
             "feature_schema_version": ML_FEATURE_SCHEMA_VERSION,
+            "feature_profile": self.params.feature_profile,
+            "feature_names": list(feature_names_for_profile(self.params.feature_profile)),
             "model_config_key": self._model_config_key(),
             "scaler_schema_version": ML_STANDARD_SCALER_SCHEMA_VERSION,
             "scaler_initialized": bool(
@@ -280,6 +286,7 @@ class AIPredictorAltStrategy(Strategy):
             self.params.short_window,
             self.params.long_window,
             self.params.lookback_bars,
+            feature_profile=self.params.feature_profile,
         )
 
     def _extract_features(

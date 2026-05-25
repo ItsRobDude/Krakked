@@ -388,6 +388,9 @@ def _feature_schema(summary: dict[str, Any]) -> Optional[str]:
         if isinstance(features, dict):
             schema = _optional_str(features.get("schema_version"))
             if schema:
+                profile = _optional_str(features.get("feature_profile"))
+                if profile and profile != "all":
+                    return f"{schema}/{profile}"
                 return schema
     return None
 

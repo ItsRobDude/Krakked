@@ -14,6 +14,9 @@ from krakked.strategy.features import (
     ML_FEATURE_SCHEMA_VERSION,
     MLFeatureVector,
     compute_feature_vector_from_ohlc,
+    feature_model_key_suffix,
+    feature_names_for_profile,
+    normalize_feature_profile,
 )
 from krakked.strategy.ml_labels import (
     MLEdgeCostConfig,
@@ -82,6 +85,7 @@ class AIRegressionConfig:
     model_backend: str = DEFAULT_REGRESSION_MODEL_BACKEND
     sgd_l2_alpha: float = DEFAULT_SGD_L2_ALPHA
     sgd_learning_rate_initial: float = DEFAULT_SGD_LEARNING_RATE_INITIAL
+    feature_profile: str = "all"
 
 
 class AIRegressionStrategy(Strategy):
@@ -125,6 +129,7 @@ class AIRegressionStrategy(Strategy):
                 params.get("sgd_learning_rate_initial"),
                 DEFAULT_SGD_LEARNING_RATE_INITIAL,
             ),
+            feature_profile=normalize_feature_profile(params.get("feature_profile")),
         )
 
         self.model = self._new_model()
@@ -157,7 +162,7 @@ class AIRegressionStrategy(Strategy):
 
     def _model_key(self, timeframe: str) -> str:
         return (
-            f"global|{timeframe}|features_{ML_FEATURE_SCHEMA_VERSION}|"
+            f"global|{timeframe}|{feature_model_key_suffix(self.params.feature_profile)}|"
             f"{self._model_config_key()}"
         )
 
@@ -169,6 +174,8 @@ class AIRegressionStrategy(Strategy):
             "model_initialized": self.model_initialized,
             "continuous_learning": self._learning_enabled(),
             "feature_schema_version": ML_FEATURE_SCHEMA_VERSION,
+            "feature_profile": self.params.feature_profile,
+            "feature_names": list(feature_names_for_profile(self.params.feature_profile)),
             "model_backend": self.params.model_backend,
             "model_framework": self._model_framework(),
             "model_config_key": self._model_config_key(),
@@ -376,6 +383,7 @@ class AIRegressionStrategy(Strategy):
             self.params.short_window,
             self.params.long_window,
             self.params.lookback_bars,
+            feature_profile=self.params.feature_profile,
         )
 
     def _compute_features_from_window(self, ohlc_window: list) -> Optional[List[float]]:

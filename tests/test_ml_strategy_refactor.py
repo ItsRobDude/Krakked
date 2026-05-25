@@ -16,6 +16,8 @@ from krakked.strategy.features import (
     ML_FEATURE_NAMES,
     ML_FEATURE_SCHEMA_VERSION,
     _clip_feature,
+    feature_model_key_suffix,
+    feature_names_for_profile,
 )
 from krakked.strategy.ml_labels import (
     FEE_ADJUSTED_EDGE_PREDICTION_TARGET,
@@ -339,7 +341,7 @@ def test_classifier_model_key_versions_fee_adjusted_labels(strategy, mock_ctx):
 
     assert (
         strategy._model_key("1h", label_config)
-        == "global|1h|features_ohlc_v4|fee_adj_fee25_slip50_x2|"
+        == "global|1h|features_ohlc_v5|fee_adj_fee25_slip50_x2|"
         "pa_cls_scalerstdv1"
     )
 
@@ -347,7 +349,7 @@ def test_classifier_model_key_versions_fee_adjusted_labels(strategy, mock_ctx):
 def test_regression_model_key_versions_feature_schema(regression_strategy):
     assert (
         regression_strategy._model_key("1h")
-        == "global|1h|features_ohlc_v4|pa_reg_eps0p001_scalerstdv1"
+        == "global|1h|features_ohlc_v5|pa_reg_eps0p001_scalerstdv1"
     )
 
 
@@ -370,8 +372,37 @@ def test_regression_epsilon_changes_model_key():
 
     assert (
         strategy._model_key("1h")
-        == "global|1h|features_ohlc_v4|pa_reg_eps0p0025_scalerstdv1"
+        == "global|1h|features_ohlc_v5|pa_reg_eps0p0025_scalerstdv1"
     )
+
+
+def test_feature_profile_changes_feature_names_metadata_and_model_key():
+    cfg = StrategyConfig(
+        name="reg_profile_test",
+        type="ai_regression",
+        enabled=True,
+        params={
+            "pairs": ["XBT/USD"],
+            "timeframe": "1h",
+            "lookback_bars": 5,
+            "short_window": 2,
+            "long_window": 5,
+            "continuous_learning": True,
+            "feature_profile": "drop_weakest",
+        },
+    )
+    strategy = AIRegressionStrategy(cfg)
+
+    assert strategy.params.feature_profile == "drop_weakest"
+    assert strategy._model_key("1h") == (
+        "global|1h|features_ohlc_v5_profile_drop_weakest|"
+        "pa_reg_eps0p001_scalerstdv1"
+    )
+    assert feature_model_key_suffix("drop_weakest") == (
+        "features_ohlc_v5_profile_drop_weakest"
+    )
+    assert "pct_change" not in feature_names_for_profile("drop_weakest")
+    assert "trend_diff" in feature_names_for_profile("drop_weakest")
 
 
 def test_ml_feature_values_are_shared_across_strategies(
@@ -409,7 +440,35 @@ def test_ml_feature_values_are_shared_across_strategies(
     assert classifier_vector.values == pytest.approx(regression_vector.values)
 
 
-def test_ohlc_v4_feature_values_include_normalized_context_fields(
+def test_feature_profile_vectors_use_configured_subset(
+    strategy, regression_strategy, mock_ctx
+):
+    strategy.config.params["feature_profile"] = "drop_time"
+    strategy.params.feature_profile = "drop_time"
+    regression_strategy.config.params["feature_profile"] = "drop_time"
+    regression_strategy.params.feature_profile = "drop_time"
+    bars = _make_bars(1000000, [100.0, 102.0, 101.0, 103.0, 105.0])
+    mock_ctx.market_data.get_ohlc.return_value = bars
+
+    classifier_vector = strategy._extract_feature_vector(mock_ctx, "XBT/USD", "1h")
+    regression_vector = regression_strategy._extract_feature_vector(
+        mock_ctx, "XBT/USD", "1h"
+    )
+
+    assert classifier_vector is not None
+    assert regression_vector is not None
+    assert classifier_vector.names == list(feature_names_for_profile("drop_time"))
+    assert classifier_vector.schema_version == ML_FEATURE_SCHEMA_VERSION
+    assert classifier_vector.profile == "drop_time"
+    assert "hour_sin" not in classifier_vector.names
+    metadata = classifier_vector.to_metadata()
+    assert metadata["feature_profile"] == "drop_time"
+    assert metadata["feature_names"] == list(feature_names_for_profile("drop_time"))
+    assert "hour_sin" in metadata["feature_profile_excluded_features"]
+    assert classifier_vector.values == pytest.approx(regression_vector.values)
+
+
+def test_ohlc_v5_feature_values_include_normalized_context_fields(
     strategy, mock_ctx
 ):
     bars = [
@@ -425,15 +484,15 @@ def test_ohlc_v4_feature_values_include_normalized_context_fields(
 
     assert vector is not None
     features = dict(zip(vector.names, vector.values))
-    assert vector.schema_version == "ohlc_v4"
+    assert vector.schema_version == "ohlc_v5"
     atr = 4.0
     atr_pct = atr / 105.0
     assert features["return_atr_1"] == pytest.approx(((105.0 - 103.0) / 103.0) / atr_pct)
     assert features["return_atr_3"] == pytest.approx(((105.0 - 102.0) / 102.0) / atr_pct)
     assert features["range_atr"] == pytest.approx((108.0 - 100.0) / atr)
-    assert features["body_atr"] == pytest.approx(abs(105.0 - 103.0) / atr)
     assert features["upper_wick_atr"] == pytest.approx((108.0 - 105.0) / atr)
-    assert features["lower_wick_atr"] == pytest.approx((103.0 - 100.0) / atr)
+    assert "body_atr" not in features
+    assert "lower_wick_atr" not in features
     assert features["return_zscore"] > 0.0
     assert features["volatility_ratio"] > 0.0
     assert features["volume_change"] == pytest.approx(math.log(170.0 / 130.0))
@@ -454,7 +513,7 @@ def test_ohlc_v4_feature_values_include_normalized_context_fields(
     )
 
 
-def test_ohlc_v4_clipping_caps_apply_exactly_per_feature():
+def test_ohlc_v5_clipping_caps_apply_exactly_per_feature():
     for name, (cap_min, cap_max) in ML_FEATURE_CLIP_RANGES.items():
         clipped_low, low_metadata = _clip_feature(name, cap_min - 1.0)
         clipped_high, high_metadata = _clip_feature(name, cap_max + 1.0)
@@ -467,7 +526,7 @@ def test_ohlc_v4_clipping_caps_apply_exactly_per_feature():
         assert high_metadata["was_clipped"] is True
 
 
-def test_ohlc_v4_unclipped_features_remain_unchanged():
+def test_ohlc_v5_unclipped_features_remain_unchanged():
     for name in set(ML_FEATURE_NAMES) - set(ML_FEATURE_CLIP_RANGES):
         value, metadata = _clip_feature(name, 42.0)
 
@@ -475,7 +534,7 @@ def test_ohlc_v4_unclipped_features_remain_unchanged():
         assert metadata is None
 
 
-def test_ohlc_v4_metadata_records_raw_and_clipped_values(strategy, mock_ctx):
+def test_ohlc_v5_metadata_records_raw_and_clipped_values(strategy, mock_ctx):
     bars = _make_bars(1000000, [100.0, 100.0, 100.0, 100.0, 200.0])
     mock_ctx.market_data.get_ohlc.return_value = bars
 
@@ -588,7 +647,7 @@ def test_regression_backend_factory_and_keys_are_backend_specific():
     assert strategy._model_framework() == "sklearn_sgd_regressor_huber"
     assert (
         strategy._model_key("1h")
-        == "global|1h|features_ohlc_v4|"
+        == "global|1h|features_ohlc_v5|"
         "sgd_huber_alpha0p0002_eta0p002_eps0p0025_scalerstdv1"
     )
     assert is_regression_model_for_backend(strategy.model, "sgd_huber") is True

@@ -29,6 +29,7 @@ from krakked.strategy.features import (
     ML_FEATURE_CLIPPING_VERSION,
     ML_FEATURE_NAMES,
     ML_FEATURE_SCHEMA_VERSION,
+    feature_names_for_profile,
 )
 from krakked.strategy.strategies.ml_alt_strategy import AIPredictorAltStrategy
 from krakked.strategy.strategies.ml_regression_strategy import AIRegressionStrategy
@@ -685,7 +686,7 @@ def test_feature_diagnostics_handles_unavailable_scaler() -> None:
             (
                 {
                     "source": "live_model",
-                    "model_key": "global|1h|features_ohlc_v4|dummy",
+                    "model_key": "global|1h|features_ohlc_v5|dummy",
                 },
                 object(),
             )
@@ -735,7 +736,7 @@ def test_feature_diagnostics_reports_no_health_warnings_for_sane_scaled_features
             (
                 {
                     "source": "live_model",
-                    "model_key": "global|1h|features_ohlc_v4|dummy",
+                    "model_key": "global|1h|features_ohlc_v5|dummy",
                 },
                 _PassthroughScaledModel(),
             )
@@ -752,10 +753,10 @@ def test_feature_diagnostics_reports_no_health_warnings_for_sane_scaled_features
 def test_feature_diagnostics_warns_for_tail_heavy_scaled_features() -> None:
     feature_count = len(ML_FEATURE_NAMES)
     volume_index = list(ML_FEATURE_NAMES).index("volume_log_ratio")
-    lower_wick_index = list(ML_FEATURE_NAMES).index("lower_wick_atr")
+    upper_wick_index = list(ML_FEATURE_NAMES).index("upper_wick_atr")
     rows = [[0.0] * feature_count for _ in range(4)]
     rows[-1][volume_index] = 4.0
-    rows[-1][lower_wick_index] = 4.5
+    rows[-1][upper_wick_index] = 4.5
     predictions = [_feature_prediction_row(row) for row in rows]
 
     diagnostics = _build_feature_diagnostics(
@@ -764,7 +765,7 @@ def test_feature_diagnostics_warns_for_tail_heavy_scaled_features() -> None:
             (
                 {
                     "source": "live_model",
-                    "model_key": "global|1h|features_ohlc_v4|dummy",
+                    "model_key": "global|1h|features_ohlc_v5|dummy",
                 },
                 _PassthroughScaledModel(),
             )
@@ -777,7 +778,7 @@ def test_feature_diagnostics_warns_for_tail_heavy_scaled_features() -> None:
         for warning in warnings
     )
     assert any(
-        "High-risk scaled feature lower_wick_atr" in warning
+        "High-risk scaled feature upper_wick_atr" in warning
         for warning in warnings
     )
 
@@ -799,7 +800,7 @@ def test_feature_diagnostics_reports_linear_feature_contributions() -> None:
             (
                 {
                     "source": "live_model",
-                    "model_key": "global|1h|features_ohlc_v4|dummy",
+                    "model_key": "global|1h|features_ohlc_v5|dummy",
                 },
                 _PassthroughScaledModel(coefficients),
             )
@@ -815,6 +816,47 @@ def test_feature_diagnostics_reports_linear_feature_contributions() -> None:
     assert contributions[0]["p95_abs_row_contribution"] == pytest.approx(5.8)
     second = next(row for row in contributions if row["feature"] == second_feature)
     assert second["avg_abs_row_contribution"] == pytest.approx(2.0)
+
+
+def test_feature_diagnostics_uses_profile_feature_names() -> None:
+    names = list(feature_names_for_profile("drop_weakest"))
+    coefficients = [0.0] * len(names)
+    coefficients[0] = 1.0
+    prediction = _regression_prediction(
+        predicted_delta=0.01,
+        realized_return=0.01,
+    )
+    prediction.metadata["feature_schema_version"] = ML_FEATURE_SCHEMA_VERSION
+    prediction.metadata["features"] = {
+        "feature_schema_version": ML_FEATURE_SCHEMA_VERSION,
+        "feature_profile": "drop_weakest",
+        "feature_names": names,
+        "feature_profile_excluded_features": [
+            name for name in ML_FEATURE_NAMES if name not in names
+        ],
+        **{name: float(index) for index, name in enumerate(names, start=1)},
+    }
+
+    diagnostics = _build_feature_diagnostics(
+        [prediction],
+        [
+            (
+                {
+                    "source": "live_model",
+                    "model_key": (
+                        "global|1h|features_ohlc_v5_profile_drop_weakest|dummy"
+                    ),
+                },
+                _PassthroughScaledModel(coefficients),
+            )
+        ],
+    )
+
+    assert diagnostics["feature_profile"] == "drop_weakest"
+    assert diagnostics["feature_names"] == names
+    assert "pct_change" not in diagnostics["raw_feature_quantiles"]
+    assert set(diagnostics["raw_feature_quantiles"]) == set(names)
+    assert diagnostics["linear_contributions"][0]["feature"] == names[0]
 
 
 def test_feature_diagnostics_reports_clipping_stats_and_warnings() -> None:
@@ -843,7 +885,7 @@ def test_feature_diagnostics_reports_clipping_stats_and_warnings() -> None:
             (
                 {
                     "source": "live_model",
-                    "model_key": "global|1h|features_ohlc_v4|dummy",
+                    "model_key": "global|1h|features_ohlc_v5|dummy",
                 },
                 _PassthroughScaledModel(),
             )
@@ -889,7 +931,7 @@ def test_feature_diagnostics_omits_clipping_warning_at_two_percent() -> None:
             (
                 {
                     "source": "live_model",
-                    "model_key": "global|1h|features_ohlc_v4|dummy",
+                    "model_key": "global|1h|features_ohlc_v5|dummy",
                 },
                 _PassthroughScaledModel(),
             )

@@ -10,7 +10,7 @@ from typing import Iterable, Optional
 
 from krakked.config import AppConfig, StrategyConfig
 from krakked.portfolio.store import MLArtifactGroup
-from krakked.strategy.features import ML_FEATURE_SCHEMA_VERSION
+from krakked.strategy.features import feature_model_key_suffix
 from krakked.strategy.ml_labels import label_config_from_context
 from krakked.strategy.ml_models import (
     DEFAULT_REGRESSION_MODEL_BACKEND,
@@ -61,8 +61,8 @@ def _strategy_timeframes(strat_cfg: StrategyConfig) -> list[str]:
     return list(dict.fromkeys(timeframes))
 
 
-def _feature_key() -> str:
-    return f"features_{ML_FEATURE_SCHEMA_VERSION}"
+def _feature_key(strat_cfg: StrategyConfig) -> str:
+    return feature_model_key_suffix((strat_cfg.params or {}).get("feature_profile"))
 
 
 def _label_suffix(config: AppConfig, strat_cfg: StrategyConfig) -> str:
@@ -113,7 +113,8 @@ def _regression_model_suffix(strat_cfg: StrategyConfig) -> str:
 
 def _classifier_keys(config: AppConfig, strat_cfg: StrategyConfig) -> set[str]:
     return {
-        f"global|{timeframe}|{_feature_key()}|{_label_suffix(config, strat_cfg)}|"
+        f"global|{timeframe}|{_feature_key(strat_cfg)}|"
+        f"{_label_suffix(config, strat_cfg)}|"
         f"{classifier_model_config_key()}"
         for timeframe in _strategy_timeframes(strat_cfg)
     }
@@ -121,7 +122,8 @@ def _classifier_keys(config: AppConfig, strat_cfg: StrategyConfig) -> set[str]:
 
 def _regression_keys(strat_cfg: StrategyConfig) -> set[str]:
     return {
-        f"global|{timeframe}|{_feature_key()}|{_regression_model_suffix(strat_cfg)}"
+        f"global|{timeframe}|{_feature_key(strat_cfg)}|"
+        f"{_regression_model_suffix(strat_cfg)}"
         for timeframe in _strategy_timeframes(strat_cfg)
     }
 
@@ -131,6 +133,7 @@ def _classify_global_key(
     *,
     expected_keys: set[str],
     expected_timeframes: set[str],
+    expected_feature_key: str,
     expected_label_suffix: Optional[str] = None,
     expected_model_suffix: Optional[str] = None,
 ) -> Optional[str]:
@@ -145,7 +148,7 @@ def _classify_global_key(
         return "model_scope_mismatch"
     if parts[1] not in expected_timeframes:
         return "timeframe_mismatch"
-    if parts[2] != _feature_key():
+    if parts[2] != expected_feature_key:
         return "feature_schema_mismatch"
     if expected_label_suffix is not None and parts[3] != expected_label_suffix:
         return "label_config_mismatch"
@@ -174,7 +177,7 @@ def _classify_alt_key(
     pair, timeframe, feature_key, label_suffix, model_suffix = parts
     if timeframe not in set(_strategy_timeframes(strat_cfg)):
         return "timeframe_mismatch"
-    if feature_key != _feature_key():
+    if feature_key != _feature_key(strat_cfg):
         return "feature_schema_mismatch"
     if label_suffix != _label_suffix(config, strat_cfg):
         return "label_config_mismatch"
@@ -202,6 +205,7 @@ def _stale_reason(
             group,
             expected_keys=_classifier_keys(config, strat_cfg),
             expected_timeframes=set(_strategy_timeframes(strat_cfg)),
+            expected_feature_key=_feature_key(strat_cfg),
             expected_label_suffix=_label_suffix(config, strat_cfg),
             expected_model_suffix=classifier_model_config_key(),
         )
@@ -210,6 +214,7 @@ def _stale_reason(
             group,
             expected_keys=_regression_keys(strat_cfg),
             expected_timeframes=set(_strategy_timeframes(strat_cfg)),
+            expected_feature_key=_feature_key(strat_cfg),
             expected_model_suffix=_regression_model_suffix(strat_cfg),
         )
     return _classify_alt_key(config, group, strat_cfg)

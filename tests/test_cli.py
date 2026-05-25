@@ -801,6 +801,8 @@ def test_ml_walk_forward_subcommand_writes_report(
             "6",
             "--slippage-bps",
             "20",
+            "--feature-profile",
+            "drop_weakest",
             "--save-report",
             str(report_path),
             "--json",
@@ -813,6 +815,12 @@ def test_ml_walk_forward_subcommand_writes_report(
     assert captured["kwargs"]["train_bars"] == 12
     assert captured["kwargs"]["test_bars"] == 6
     assert captured["kwargs"]["slippage_bps"] == pytest.approx(20.0)
+    assert (
+        captured["args"][0].strategies.configs["ai_regression"].params[
+            "feature_profile"
+        ]
+        == "drop_weakest"
+    )
     payload = json.loads(report_path.read_text(encoding="utf-8"))
     assert payload["summary"]["metrics"]["prediction_count"] == 3
     assert payload["summary"]["config_path"] is None
@@ -823,8 +831,8 @@ def _seed_ml_prune_artifacts(db_path: Path) -> None:
     try:
         now = datetime(2026, 4, 1, tzinfo=UTC)
         for model_key in (
+            "global|1h|features_ohlc_v5|pa_reg_eps0p001_scalerstdv1",
             "global|1h|features_ohlc_v4|pa_reg_eps0p001_scalerstdv1",
-            "global|1h|features_ohlc_v3|pa_reg_eps0p001_scalerstdv1",
         ):
             store.record_ml_example(
                 strategy_id="ai_regression",
@@ -837,14 +845,14 @@ def _seed_ml_prune_artifacts(db_path: Path) -> None:
             )
         store.save_ml_model(
             strategy_id="ai_regression",
-            model_key="global|1h|features_ohlc_v3|pa_reg_eps0p001_scalerstdv1",
+            model_key="global|1h|features_ohlc_v4|pa_reg_eps0p001_scalerstdv1",
             label_type="regression",
             framework="dummy",
             model=SimpleNamespace(value=1),
         )
         store.save_ml_model_checkpoint(
             strategy_id="ai_regression",
-            model_key="global|1h|features_ohlc_v3|pa_reg_eps0p001_scalerstdv1",
+            model_key="global|1h|features_ohlc_v4|pa_reg_eps0p001_scalerstdv1",
             checkpoint_kind="training",
             label_type="regression",
             framework="dummy",
@@ -862,7 +870,7 @@ def _ml_artifact_counts(db_path: Path) -> dict[str, int]:
                 SELECT COUNT(*)
                 FROM ml_training_examples
                 WHERE strategy_id = 'ai_regression'
-                    AND model_key = 'global|1h|features_ohlc_v4|pa_reg_eps0p001_scalerstdv1'
+                    AND model_key = 'global|1h|features_ohlc_v5|pa_reg_eps0p001_scalerstdv1'
                 """
             ).fetchone()[0],
             "stale_examples": conn.execute(
@@ -870,7 +878,7 @@ def _ml_artifact_counts(db_path: Path) -> dict[str, int]:
                 SELECT COUNT(*)
                 FROM ml_training_examples
                 WHERE strategy_id = 'ai_regression'
-                    AND model_key = 'global|1h|features_ohlc_v3|pa_reg_eps0p001_scalerstdv1'
+                    AND model_key = 'global|1h|features_ohlc_v4|pa_reg_eps0p001_scalerstdv1'
                 """
             ).fetchone()[0],
             "stale_models": conn.execute(
@@ -878,7 +886,7 @@ def _ml_artifact_counts(db_path: Path) -> dict[str, int]:
                 SELECT COUNT(*)
                 FROM ml_models
                 WHERE strategy_id = 'ai_regression'
-                    AND model_key = 'global|1h|features_ohlc_v3|pa_reg_eps0p001_scalerstdv1'
+                    AND model_key = 'global|1h|features_ohlc_v4|pa_reg_eps0p001_scalerstdv1'
                 """
             ).fetchone()[0],
             "stale_checkpoints": conn.execute(
@@ -886,7 +894,7 @@ def _ml_artifact_counts(db_path: Path) -> dict[str, int]:
                 SELECT COUNT(*)
                 FROM ml_model_checkpoints
                 WHERE strategy_id = 'ai_regression'
-                    AND model_key = 'global|1h|features_ohlc_v3|pa_reg_eps0p001_scalerstdv1'
+                    AND model_key = 'global|1h|features_ohlc_v4|pa_reg_eps0p001_scalerstdv1'
                 """
             ).fetchone()[0],
         }
@@ -911,7 +919,7 @@ def test_ml_prune_stale_dry_run_reports_without_deleting(
     output = capsys.readouterr().out
     assert exit_code == 0
     assert "ML stale artifact prune dry run." in output
-    assert "global|1h|features_ohlc_v3|pa_reg_eps0p001_scalerstdv1" in output
+    assert "global|1h|features_ohlc_v4|pa_reg_eps0p001_scalerstdv1" in output
     assert "feature_schema_mismatch" in output
     assert _ml_artifact_counts(db_path) == {
         "current_examples": 1,
@@ -932,14 +940,14 @@ def test_ml_prune_stale_retains_plural_timeframe_artifacts() -> None:
     groups = [
         MLArtifactGroup(
             strategy_id="ai_regression",
-            model_key="global|4h|features_ohlc_v4|pa_reg_eps0p001_scalerstdv1",
+            model_key="global|4h|features_ohlc_v5|pa_reg_eps0p001_scalerstdv1",
             example_count=1,
             live_model_count=0,
             checkpoint_count=0,
         ),
         MLArtifactGroup(
             strategy_id="ai_regression",
-            model_key="global|1d|features_ohlc_v4|pa_reg_eps0p001_scalerstdv1",
+            model_key="global|1d|features_ohlc_v5|pa_reg_eps0p001_scalerstdv1",
             example_count=1,
             live_model_count=0,
             checkpoint_count=0,
@@ -949,7 +957,7 @@ def test_ml_prune_stale_retains_plural_timeframe_artifacts() -> None:
     candidates = find_stale_ml_artifact_groups(config, groups)
 
     assert [candidate.group.model_key for candidate in candidates] == [
-        "global|1d|features_ohlc_v4|pa_reg_eps0p001_scalerstdv1"
+        "global|1d|features_ohlc_v5|pa_reg_eps0p001_scalerstdv1"
     ]
     assert candidates[0].stale_reason == "timeframe_mismatch"
 
@@ -964,7 +972,7 @@ def test_ml_prune_stale_uses_regression_backend_suffix() -> None:
     groups = [
         MLArtifactGroup(
             strategy_id="ai_regression",
-            model_key="global|1h|features_ohlc_v4|pa_reg_eps0p001_scalerstdv1",
+            model_key="global|1h|features_ohlc_v5|pa_reg_eps0p001_scalerstdv1",
             example_count=1,
             live_model_count=0,
             checkpoint_count=0,
@@ -972,7 +980,7 @@ def test_ml_prune_stale_uses_regression_backend_suffix() -> None:
         MLArtifactGroup(
             strategy_id="ai_regression",
             model_key=(
-                "global|1h|features_ohlc_v4|"
+                "global|1h|features_ohlc_v5|"
                 "sgd_huber_alpha0p0001_eta0p001_eps0p001_scalerstdv1"
             ),
             example_count=1,
@@ -984,9 +992,44 @@ def test_ml_prune_stale_uses_regression_backend_suffix() -> None:
     candidates = find_stale_ml_artifact_groups(config, groups)
 
     assert [candidate.group.model_key for candidate in candidates] == [
-        "global|1h|features_ohlc_v4|pa_reg_eps0p001_scalerstdv1"
+        "global|1h|features_ohlc_v5|pa_reg_eps0p001_scalerstdv1"
     ]
     assert candidates[0].stale_reason == "model_config_mismatch"
+
+
+def test_ml_prune_stale_uses_feature_profile_suffix() -> None:
+    config = load_config(config_path=Path("config_examples/config.yaml"), env="paper")
+    strat_cfg = config.strategies.configs["ai_regression"]
+    params = dict(strat_cfg.params or {})
+    params["feature_profile"] = "drop_weakest"
+    strat_cfg.params = params
+
+    groups = [
+        MLArtifactGroup(
+            strategy_id="ai_regression",
+            model_key="global|1h|features_ohlc_v5|pa_reg_eps0p001_scalerstdv1",
+            example_count=1,
+            live_model_count=0,
+            checkpoint_count=0,
+        ),
+        MLArtifactGroup(
+            strategy_id="ai_regression",
+            model_key=(
+                "global|1h|features_ohlc_v5_profile_drop_weakest|"
+                "pa_reg_eps0p001_scalerstdv1"
+            ),
+            example_count=1,
+            live_model_count=0,
+            checkpoint_count=0,
+        ),
+    ]
+
+    candidates = find_stale_ml_artifact_groups(config, groups)
+
+    assert [candidate.group.model_key for candidate in candidates] == [
+        "global|1h|features_ohlc_v5|pa_reg_eps0p001_scalerstdv1"
+    ]
+    assert candidates[0].stale_reason == "feature_schema_mismatch"
 
 
 def test_ml_prune_stale_apply_deletes_stale_artifacts_only(
@@ -1402,7 +1445,7 @@ def _write_ml_ablation_report(
     path: Path,
     *,
     version: int = 6,
-    feature_schema: str = "ohlc_v4",
+    feature_schema: str = "ohlc_v5",
     backend: str = "pa",
 ) -> None:
     generated_at = datetime(2026, 5, 24, tzinfo=UTC).isoformat()

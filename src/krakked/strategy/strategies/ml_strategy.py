@@ -14,6 +14,9 @@ from krakked.strategy.features import (
     ML_FEATURE_SCHEMA_VERSION,
     MLFeatureVector,
     compute_feature_vector_from_ohlc,
+    feature_model_key_suffix,
+    feature_names_for_profile,
+    normalize_feature_profile,
 )
 from krakked.strategy.ml_labels import (
     FEE_ADJUSTED_CLASSIFICATION_LABEL_TYPE,
@@ -61,6 +64,7 @@ class AIPredictorConfig:
     label_fee_bps: float
     label_slippage_bps: float
     label_cost_multiplier: float
+    feature_profile: str
 
 
 class AIPredictorStrategy(Strategy):
@@ -90,6 +94,7 @@ class AIPredictorStrategy(Strategy):
             label_fee_bps=label_defaults.fee_bps,
             label_slippage_bps=label_defaults.slippage_bps,
             label_cost_multiplier=label_defaults.cost_multiplier,
+            feature_profile=normalize_feature_profile(params.get("feature_profile")),
         )
 
         self.model = self._new_model()
@@ -126,7 +131,7 @@ class AIPredictorStrategy(Strategy):
                 cost_multiplier=self.params.label_cost_multiplier,
             )
         return (
-            f"global|{timeframe}|features_{ML_FEATURE_SCHEMA_VERSION}|"
+            f"global|{timeframe}|{feature_model_key_suffix(self.params.feature_profile)}|"
             f"{label_config.model_key_suffix()}|{self._model_config_key()}"
         )
 
@@ -144,6 +149,8 @@ class AIPredictorStrategy(Strategy):
             "model_initialized": self.model_initialized,
             "continuous_learning": self._learning_enabled(),
             "feature_schema_version": ML_FEATURE_SCHEMA_VERSION,
+            "feature_profile": self.params.feature_profile,
+            "feature_names": list(feature_names_for_profile(self.params.feature_profile)),
             "model_config_key": self._model_config_key(),
             "scaler_schema_version": ML_STANDARD_SCALER_SCHEMA_VERSION,
             "scaler_initialized": bool(
@@ -381,6 +388,7 @@ class AIPredictorStrategy(Strategy):
             self.params.short_window,
             self.params.long_window,
             self.params.lookback_bars,
+            feature_profile=self.params.feature_profile,
         )
 
     def _compute_features_from_window(self, ohlc_window: list) -> Optional[List[float]]:
