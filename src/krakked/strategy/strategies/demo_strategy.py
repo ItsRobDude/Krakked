@@ -143,7 +143,13 @@ class TrendFollowingStrategy(Strategy):
                 )
 
             existing_position = next(
-                (pos for pos in positions if getattr(pos, "pair", None) == pair), None
+                (
+                    pos
+                    for pos in positions
+                    if getattr(pos, "pair", None) == pair
+                    and getattr(pos, "strategy_tag", None) == self.id
+                ),
+                None,
             )
             has_position = (
                 existing_position is not None
@@ -153,7 +159,9 @@ class TrendFollowingStrategy(Strategy):
             if side == "long":
                 intent_type = "increase" if has_position else "enter"
             else:
-                intent_type = "reduce" if has_position else "exit"
+                if not has_position:
+                    continue
+                intent_type = "reduce"
 
             intents.append(
                 StrategyIntent(

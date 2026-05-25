@@ -468,6 +468,114 @@ def test_trend_following_ignores_missing_liquidity_metadata():
     assert intents[0].pair == "XBTUSD"
 
 
+def test_trend_following_does_not_exit_without_owned_position():
+    strat_config = StrategyConfig(
+        name="trend_core",
+        type="trend_following",
+        enabled=True,
+        params={"timeframes": ["1h"], "ma_fast": 5, "ma_slow": 10},
+    )
+    strategy = TrendFollowingStrategy(strat_config)
+
+    market = MagicMock(spec=MarketDataAPI)
+    market.get_pair_metadata.return_value = MagicMock(liquidity_24h_usd=1_000_000.0)
+
+    from dataclasses import dataclass
+
+    @dataclass
+    class MockBar:
+        close: float
+
+    prices = [100.0 for _ in range(20)]
+    market.get_ohlc.side_effect = [
+        [MockBar(close=p) for p in prices],
+        [MockBar(close=p) for p in prices],
+    ]
+
+    portfolio = make_portfolio_service_mock()
+    portfolio.app_config = MagicMock()
+    portfolio.app_config.risk = RiskConfig(min_liquidity_24h_usd=100000.0)
+    portfolio.get_positions.return_value = [
+        SpotPosition(
+            pair="XBTUSD",
+            base_asset="XBT",
+            quote_asset="USD",
+            base_size=1.0,
+            avg_entry_price=100.0,
+            realized_pnl_base=0.0,
+            fees_paid_base=0.0,
+            strategy_tag="other_strategy",
+        )
+    ]
+
+    ctx = SimpleNamespace(
+        timeframe="1h",
+        universe=["XBTUSD"],
+        market_data=market,
+        portfolio=portfolio,
+        regime=None,
+        now=datetime.now(timezone.utc),
+    )
+
+    assert strategy.generate_intents(ctx) == []
+
+
+def test_trend_following_reduces_owned_position_when_trend_is_flat():
+    strat_config = StrategyConfig(
+        name="trend_core",
+        type="trend_following",
+        enabled=True,
+        params={"timeframes": ["1h"], "ma_fast": 5, "ma_slow": 10},
+    )
+    strategy = TrendFollowingStrategy(strat_config)
+
+    market = MagicMock(spec=MarketDataAPI)
+    market.get_pair_metadata.return_value = MagicMock(liquidity_24h_usd=1_000_000.0)
+
+    from dataclasses import dataclass
+
+    @dataclass
+    class MockBar:
+        close: float
+
+    prices = [100.0 for _ in range(20)]
+    market.get_ohlc.side_effect = [
+        [MockBar(close=p) for p in prices],
+        [MockBar(close=p) for p in prices],
+    ]
+
+    portfolio = make_portfolio_service_mock()
+    portfolio.app_config = MagicMock()
+    portfolio.app_config.risk = RiskConfig(min_liquidity_24h_usd=100000.0)
+    portfolio.get_positions.return_value = [
+        SpotPosition(
+            pair="XBTUSD",
+            base_asset="XBT",
+            quote_asset="USD",
+            base_size=1.0,
+            avg_entry_price=100.0,
+            realized_pnl_base=0.0,
+            fees_paid_base=0.0,
+            strategy_tag="trend_core",
+        )
+    ]
+
+    ctx = SimpleNamespace(
+        timeframe="1h",
+        universe=["XBTUSD"],
+        market_data=market,
+        portfolio=portfolio,
+        regime=None,
+        now=datetime.now(timezone.utc),
+    )
+
+    intents = strategy.generate_intents(ctx)
+
+    assert len(intents) == 1
+    assert intents[0].side == "flat"
+    assert intents[0].intent_type == "reduce"
+
+
 def test_actions_inherit_userref_and_persist_in_execution_plan():
     class FakeStrategy(Strategy):
         def warmup(self, market_data, portfolio):

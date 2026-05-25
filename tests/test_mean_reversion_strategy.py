@@ -90,6 +90,7 @@ def test_mean_reversion_exits_on_reversion_to_ma():
         avg_entry_price=100.0,
         realized_pnl_base=0.0,
         fees_paid_base=0.0,
+        strategy_tag="majors_mean_rev",
     )
     portfolio.get_positions.return_value = [position]
 
@@ -103,3 +104,38 @@ def test_mean_reversion_exits_on_reversion_to_ma():
     assert intent.side == "flat"
     assert intent.intent_type == "exit"
     assert intent.desired_exposure_usd == 0.0
+
+
+def test_mean_reversion_does_not_exit_other_strategy_position():
+    cfg = StrategyConfig(
+        name="majors_mean_rev",
+        type="mean_reversion",
+        enabled=True,
+        params={
+            "pairs": ["BTC/USD"],
+            "timeframe": "1h",
+            "lookback_bars": 5,
+            "band_width_bps": 150.0,
+            "max_positions": 2,
+        },
+        userref=1004,
+    )
+    strat = MeanReversionStrategy(cfg)
+
+    ctx, market, portfolio = _build_context()
+    position = SpotPosition(
+        pair="BTC/USD",
+        base_asset="BTC",
+        quote_asset="USD",
+        base_size=0.5,
+        avg_entry_price=100.0,
+        realized_pnl_base=0.0,
+        fees_paid_base=0.0,
+        strategy_tag="rs_rotation",
+    )
+    portfolio.get_positions.return_value = [position]
+
+    bars = [_make_bar(ts, 100.0) for ts in range(5)]
+    market.get_ohlc.return_value = bars
+
+    assert strat.generate_intents(ctx) == []

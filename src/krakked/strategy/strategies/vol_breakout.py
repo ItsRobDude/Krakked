@@ -42,6 +42,13 @@ class VolBreakoutStrategy(Strategy):
 
         tf = ctx.timeframe or "1h"
         pairs = self.params.pairs or ctx.universe
+        positions = ctx.portfolio.get_positions() or []
+        positions_by_pair = {
+            pos.pair: pos
+            for pos in positions
+            if getattr(pos, "base_size", 0) > 0
+            and getattr(pos, "strategy_tag", None) == self.id
+        }
 
         for pair in pairs:
             ohlc = ctx.market_data.get_ohlc(
@@ -75,9 +82,11 @@ class VolBreakoutStrategy(Strategy):
             breakout = last_close > prev_high + self.params.breakout_multiple * atr
             if breakout:
                 side = "long"
-                intent_type = "enter"
+                intent_type = "increase" if pair in positions_by_pair else "enter"
                 confidence = 0.8
             else:
+                if pair not in positions_by_pair:
+                    continue
                 side = "flat"
                 intent_type = "exit"
                 confidence = 0.5

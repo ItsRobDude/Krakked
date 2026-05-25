@@ -52,7 +52,10 @@ class MeanReversionStrategy(Strategy):
 
         positions = ctx.portfolio.get_positions() or []
         positions_by_pair = {
-            pos.pair: pos for pos in positions if getattr(pos, "base_size", 0) > 0
+            pos.pair: pos
+            for pos in positions
+            if getattr(pos, "base_size", 0) > 0
+            and getattr(pos, "strategy_tag", None) == self.id
         }
         open_positions_count = self._count_open_positions(positions_by_pair.values())
 
