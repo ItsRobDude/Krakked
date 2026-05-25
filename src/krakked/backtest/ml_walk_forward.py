@@ -45,6 +45,19 @@ DIAGNOSTIC_RETURN_THRESHOLDS = (0.003, 0.005, 0.01, 0.015)
 PREDICTED_DELTA_QUANTILE_THRESHOLDS = (0.75, 0.90, 0.95)
 NEAR_ZERO_THRESHOLD = 1e-12
 RARE_POSITIVE_LABEL_RATE = 0.01
+SCALED_FEATURE_MEDIAN_ABS_WARNING_THRESHOLD = 0.75
+SCALED_FEATURE_STD_MIN_WARNING_THRESHOLD = 0.5
+SCALED_FEATURE_STD_MAX_WARNING_THRESHOLD = 2.0
+SCALED_FEATURE_TAIL_ABS_WARNING_THRESHOLD = 3.0
+HIGH_RISK_SCALED_FEATURES = frozenset(
+    {
+        "volume_zscore",
+        "range_pct",
+        "body_pct",
+        "upper_wick_pct",
+        "lower_wick_pct",
+    }
+)
 
 
 @dataclass
@@ -1221,6 +1234,69 @@ def _feature_quantiles(rows: list[list[float]]) -> dict[str, Any]:
     }
 
 
+def _feature_health_thresholds() -> dict[str, Any]:
+    return {
+        "scaled_p50_abs_warn": SCALED_FEATURE_MEDIAN_ABS_WARNING_THRESHOLD,
+        "scaled_std_min_warn": SCALED_FEATURE_STD_MIN_WARNING_THRESHOLD,
+        "scaled_std_max_warn": SCALED_FEATURE_STD_MAX_WARNING_THRESHOLD,
+        "scaled_tail_abs_warn": SCALED_FEATURE_TAIL_ABS_WARNING_THRESHOLD,
+        "high_risk_features": sorted(HIGH_RISK_SCALED_FEATURES),
+    }
+
+
+def _feature_tail_abs(quantiles: dict[str, Any]) -> Optional[float]:
+    values = [
+        _finite_float(quantiles.get(key))
+        for key in ("p1", "p95", "p99")
+    ]
+    collected = [abs(value) for value in values if value is not None]
+    return max(collected) if collected else None
+
+
+def _build_feature_health_warnings(
+    scaled_feature_quantiles: dict[str, Any],
+) -> list[str]:
+    warnings: list[str] = []
+    for name in ML_FEATURE_NAMES:
+        quantiles = scaled_feature_quantiles.get(name)
+        if not isinstance(quantiles, dict):
+            continue
+        p50 = _finite_float(quantiles.get("p50"))
+        if (
+            p50 is not None
+            and abs(p50) > SCALED_FEATURE_MEDIAN_ABS_WARNING_THRESHOLD
+        ):
+            warnings.append(
+                f"Scaled feature {name} median is shifted from 0 "
+                f"(p50={p50:.4g})."
+            )
+        std = _finite_float(quantiles.get("std"))
+        if std is not None and (
+            std < SCALED_FEATURE_STD_MIN_WARNING_THRESHOLD
+            or std > SCALED_FEATURE_STD_MAX_WARNING_THRESHOLD
+        ):
+            warnings.append(
+                f"Scaled feature {name} std is outside the expected range "
+                f"(std={std:.4g})."
+            )
+        tail_abs = _feature_tail_abs(quantiles)
+        if (
+            tail_abs is not None
+            and tail_abs > SCALED_FEATURE_TAIL_ABS_WARNING_THRESHOLD
+        ):
+            prefix = (
+                "High-risk scaled feature"
+                if name in HIGH_RISK_SCALED_FEATURES
+                else "Scaled feature"
+            )
+            warnings.append(
+                f"{prefix} {name} has tail values above "
+                f"{SCALED_FEATURE_TAIL_ABS_WARNING_THRESHOLD:.1f} "
+                f"(abs_tail={tail_abs:.4g})."
+            )
+    return warnings
+
+
 def _transform_scaled_features(
     model: object, rows: list[list[float]]
 ) -> Optional[list[list[float]]]:
@@ -1294,6 +1370,10 @@ def _build_feature_diagnostics(
     )
     if len(model_key_values) > 1:
         diagnostics["scaled_feature_source_model_keys"] = sorted(model_key_values)
+    diagnostics["health_thresholds"] = _feature_health_thresholds()
+    diagnostics["health_warnings"] = _build_feature_health_warnings(
+        diagnostics["scaled_feature_quantiles"]
+    )
     return diagnostics
 
 
@@ -1376,6 +1456,21 @@ def _build_diagnostic_warnings(fold_dicts: list[dict[str, Any]]) -> list[str]:
     if zero_coef_count:
         warnings.append(
             f"Linear model coefficients are all zero or near-zero in {zero_coef_count} model snapshot(s)."
+        )
+
+    feature_health_warning_folds = _fold_indexes_with(
+        fold_dicts,
+        lambda fold: bool(
+            ((fold.get("diagnostics") or {}).get("features") or {}).get(
+                "health_warnings"
+            )
+        ),
+    )
+    if feature_health_warning_folds:
+        warnings.append(
+            "Scaled feature health warnings were reported in folds: "
+            + _format_fold_list(feature_health_warning_folds)
+            + "."
         )
 
     no_prediction_folds = _fold_indexes_with(

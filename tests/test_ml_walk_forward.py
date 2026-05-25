@@ -695,6 +695,79 @@ def test_feature_diagnostics_handles_unavailable_scaler() -> None:
     assert "scaled_feature_quantiles" not in diagnostics
 
 
+class _PassthroughScaledModel:
+    scaler_initialized = True
+
+    def _scaled(self, rows: list[list[float]]) -> list[list[float]]:
+        return rows
+
+
+def _feature_prediction_row(
+    values: list[float], *, fold_index: int = 1
+) -> MLWalkForwardPrediction:
+    prediction = _regression_prediction(
+        predicted_delta=0.01,
+        realized_return=0.01,
+        fold_index=fold_index,
+    )
+    prediction.metadata["feature_schema_version"] = "ohlc_v2"
+    prediction.metadata["features"] = dict(zip(ML_FEATURE_NAMES, values))
+    return prediction
+
+
+def test_feature_diagnostics_reports_no_health_warnings_for_sane_scaled_features() -> None:
+    predictions = [
+        _feature_prediction_row([value] * len(ML_FEATURE_NAMES))
+        for value in (-1.0, 0.0, 0.0, 1.0)
+    ]
+
+    diagnostics = _build_feature_diagnostics(
+        predictions,
+        [
+            (
+                {
+                    "source": "live_model",
+                    "model_key": "global|1h|features_ohlc_v2|dummy",
+                },
+                _PassthroughScaledModel(),
+            )
+        ],
+    )
+
+    assert diagnostics["scaled_available"] is True
+    assert diagnostics["health_warnings"] == []
+    assert diagnostics["health_thresholds"]["scaled_tail_abs_warn"] == pytest.approx(
+        3.0
+    )
+
+
+def test_feature_diagnostics_warns_for_tail_heavy_scaled_features() -> None:
+    feature_count = len(ML_FEATURE_NAMES)
+    volume_index = list(ML_FEATURE_NAMES).index("volume_zscore")
+    lower_wick_index = list(ML_FEATURE_NAMES).index("lower_wick_pct")
+    rows = [[0.0] * feature_count for _ in range(4)]
+    rows[-1][volume_index] = 4.0
+    rows[-1][lower_wick_index] = 4.5
+    predictions = [_feature_prediction_row(row) for row in rows]
+
+    diagnostics = _build_feature_diagnostics(
+        predictions,
+        [
+            (
+                {
+                    "source": "live_model",
+                    "model_key": "global|1h|features_ohlc_v2|dummy",
+                },
+                _PassthroughScaledModel(),
+            )
+        ],
+    )
+
+    warnings = diagnostics["health_warnings"]
+    assert any("High-risk scaled feature volume_zscore" in warning for warning in warnings)
+    assert any("High-risk scaled feature lower_wick_pct" in warning for warning in warnings)
+
+
 def test_diagnostic_warnings_surface_non_monotonic_regression_calibration() -> None:
     warnings = _build_diagnostic_warnings(
         [
@@ -791,6 +864,11 @@ def test_diagnostic_warnings_surface_collapsed_model_and_constant_predictions() 
                     "outcomes": {
                         "above_evaluation_hurdle": {"count": 0, "rate": 0.0}
                     },
+                    "features": {
+                        "health_warnings": [
+                            "High-risk scaled feature volume_zscore has tail values."
+                        ]
+                    },
                 },
             }
         ]
@@ -801,6 +879,7 @@ def test_diagnostic_warnings_surface_collapsed_model_and_constant_predictions() 
     assert any("No positive-edge predictions" in warning for warning in warnings)
     assert any("No positive labels" in warning for warning in warnings)
     assert any("evaluation hurdle" in warning for warning in warnings)
+    assert any("feature health warnings" in warning for warning in warnings)
 
 
 def test_run_ml_walk_forward_rejects_non_ml_strategy(tmp_path: Path) -> None:
