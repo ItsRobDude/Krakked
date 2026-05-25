@@ -333,6 +333,17 @@ def test_run_backtest_marks_partial_series_and_strict_data_fails(
     assert strategy_summary["max_score"] is None
     assert result.preflight is not None
     assert result.preflight.partial_series == ["BTC/USD@1h"]
+    expected_strategy_gaps = [
+        {
+            "strategy_id": "majors_mean_rev",
+            "pair": "BTC/USD",
+            "timeframe": "1h",
+            "series_key": "BTC/USD@1h",
+            "coverage_status": "partial_window",
+        }
+    ]
+    assert result.preflight.strategy_coverage_gaps == expected_strategy_gaps
+    assert result.summary.strategy_coverage_gaps == expected_strategy_gaps
     assert result.preflight.status == "limited"
     assert "partially cover" in result.preflight.warnings[0]
 
@@ -397,6 +408,8 @@ def test_run_backtest_cost_model_reduces_end_equity_and_report_shape(
         "cycles_evaluated"
     ] == len(timestamps)
     assert "filtered_by_score" in report["summary"]["per_strategy"]["majors_mean_rev"]
+    assert "strategy_coverage_gaps" in report["summary"]
+    assert "strategy_coverage_gaps" in report["preflight"]
     assert report["summary"]["replay_inputs"]["fee_bps"] == pytest.approx(25.0)
     assert "enabled_strategies" in report["summary"]["replay_inputs"]
     assert "strategy_inputs" in report["summary"]["replay_inputs"]
@@ -520,6 +533,15 @@ def test_build_backtest_preflight_warns_on_strategy_timeframe_gap(
     assert result.timeframes == ["15m", "1h"]
     assert result.preflight.status == "limited"
     assert result.preflight.missing_series == ["BTC/USD@15m"]
+    assert result.preflight.strategy_coverage_gaps == [
+        {
+            "strategy_id": "vol_breakout",
+            "pair": "BTC/USD",
+            "timeframe": "15m",
+            "series_key": "BTC/USD@15m",
+            "coverage_status": "missing",
+        }
+    ]
     assert result.to_dict()["strategy_inputs"]["strategies"]["vol_breakout"][
         "requested_ohlc_series"
     ] == [
@@ -530,6 +552,45 @@ def test_build_backtest_preflight_warns_on_strategy_timeframe_gap(
         "Strategy vol_breakout requested incomplete OHLC series: BTC/USD@15m."
         in result.preflight.warnings
     )
+
+
+def test_build_backtest_preflight_reports_strategy_series_not_checked_when_limited_by_cli(
+    tmp_path: Path,
+) -> None:
+    config = _build_backtest_config(tmp_path)
+    config.strategies.enabled = ["vol_breakout"]
+    config.strategies.configs["vol_breakout"].enabled = True
+    config.strategies.configs["vol_breakout"].params = {
+        "pairs": ["BTC/USD"],
+        "timeframes": ["15m", "1h"],
+        "lookback_bars": 20,
+    }
+    _seed_pair_metadata(config)
+    timestamps = [1_700_000_000 + (idx * 3600) for idx in range(6)]
+    closes = [100.0] * len(timestamps)
+    _write_ohlc_series(tmp_path, timestamps=timestamps, closes=closes)
+
+    start = datetime.fromtimestamp(timestamps[0], tz=UTC)
+    end = datetime.fromtimestamp(timestamps[-1], tz=UTC)
+
+    result = runner.build_backtest_preflight(
+        config,
+        start=start,
+        end=end,
+        timeframes=["1h"],
+    )
+
+    assert result.preflight.status == "ready"
+    assert result.preflight.missing_series == []
+    assert result.preflight.strategy_coverage_gaps == [
+        {
+            "strategy_id": "vol_breakout",
+            "pair": "BTC/USD",
+            "timeframe": "15m",
+            "series_key": "BTC/USD@15m",
+            "coverage_status": "not_checked",
+        }
+    ]
 
 
 def test_build_backtest_preflight_accepts_closed_daily_boundary(

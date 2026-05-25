@@ -72,6 +72,7 @@ class BacktestPreflight:
     usable_series_count: int = 0
     missing_series: List[str] = field(default_factory=list)
     partial_series: List[str] = field(default_factory=list)
+    strategy_coverage_gaps: List[Dict[str, Any]] = field(default_factory=list)
     status: str = "ready"
     summary_note: str = ""
     warnings: List[str] = field(default_factory=list)
@@ -82,6 +83,7 @@ class BacktestPreflight:
             "usable_series_count": self.usable_series_count,
             "missing_series": list(self.missing_series),
             "partial_series": list(self.partial_series),
+            "strategy_coverage_gaps": copy.deepcopy(self.strategy_coverage_gaps),
             "status": self.status,
             "summary_note": self.summary_note,
             "warnings": list(self.warnings),
@@ -115,6 +117,7 @@ class BacktestSummary:
     missing_series: List[str] = field(default_factory=list)
     partial_series: List[str] = field(default_factory=list)
     coverage: List[BacktestCoverageItem] = field(default_factory=list)
+    strategy_coverage_gaps: List[Dict[str, Any]] = field(default_factory=list)
     blocked_reason_counts: Dict[str, int] = field(default_factory=dict)
     per_strategy: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     trust_level: str = ""
@@ -150,6 +153,7 @@ class BacktestSummary:
             "missing_series": list(self.missing_series),
             "partial_series": list(self.partial_series),
             "coverage": [item.to_dict() for item in self.coverage],
+            "strategy_coverage_gaps": copy.deepcopy(self.strategy_coverage_gaps),
             "blocked_reason_counts": dict(self.blocked_reason_counts),
             "per_strategy": copy.deepcopy(self.per_strategy),
             "trust_level": self.trust_level,
@@ -553,6 +557,9 @@ class BacktestMarketData(MarketDataAPI):
             usable_series_count=self._preflight.usable_series_count,
             missing_series=list(self._preflight.missing_series),
             partial_series=list(self._preflight.partial_series),
+            strategy_coverage_gaps=copy.deepcopy(
+                self._preflight.strategy_coverage_gaps
+            ),
             status=self._preflight.status,
             summary_note=self._preflight.summary_note,
             warnings=list(self._preflight.warnings),
@@ -703,6 +710,7 @@ def _assess_preflight(preflight: BacktestPreflight) -> BacktestPreflight:
         usable_series_count=preflight.usable_series_count,
         missing_series=missing_series,
         partial_series=partial_series,
+        strategy_coverage_gaps=copy.deepcopy(preflight.strategy_coverage_gaps),
         status=status,
         summary_note=summary_note,
         warnings=warnings,
@@ -787,6 +795,41 @@ def _build_strategy_inputs(
     }
 
 
+def _build_strategy_coverage_gaps(
+    strategy_inputs: Dict[str, Any],
+    preflight: BacktestPreflight,
+) -> List[Dict[str, str]]:
+    coverage_status = {item.series_key: item.status for item in preflight.coverage}
+    strategies = strategy_inputs.get("strategies") or {}
+    gaps: List[Dict[str, str]] = []
+
+    for strategy_id, strategy_input in strategies.items():
+        if not isinstance(strategy_input, dict):
+            continue
+        for series in strategy_input.get("requested_ohlc_series") or []:
+            if not isinstance(series, dict):
+                continue
+            pair = series.get("pair")
+            timeframe = series.get("timeframe")
+            if not pair or not timeframe:
+                continue
+            series_key = f"{pair}@{timeframe}"
+            status = coverage_status.get(series_key, "not_checked")
+            if status not in {"missing", "partial_window", "not_checked"}:
+                continue
+            gaps.append(
+                {
+                    "strategy_id": str(strategy_id),
+                    "pair": str(pair),
+                    "timeframe": str(timeframe),
+                    "series_key": series_key,
+                    "coverage_status": status,
+                }
+            )
+
+    return gaps
+
+
 def _build_strategy_coverage_warnings(
     config: AppConfig,
     preflight: BacktestPreflight,
@@ -822,17 +865,22 @@ def _build_strategy_coverage_warnings(
 def _with_strategy_coverage_warnings(
     config: AppConfig,
     preflight: BacktestPreflight,
+    strategy_inputs: Dict[str, Any],
 ) -> BacktestPreflight:
     warnings = list(preflight.warnings)
     for warning in _build_strategy_coverage_warnings(config, preflight):
         if warning not in warnings:
             warnings.append(warning)
+    strategy_coverage_gaps = _build_strategy_coverage_gaps(
+        strategy_inputs, preflight
+    )
 
     return BacktestPreflight(
         coverage=list(preflight.coverage),
         usable_series_count=preflight.usable_series_count,
         missing_series=list(preflight.missing_series),
         partial_series=list(preflight.partial_series),
+        strategy_coverage_gaps=strategy_coverage_gaps,
         status=preflight.status,
         summary_note=preflight.summary_note,
         warnings=warnings,
@@ -859,8 +907,14 @@ def build_backtest_preflight(
     pairs = _configured_backtest_pairs(config_copy)
     market_data = BacktestMarketData(config_copy, pairs, frames, start, end)
     try:
+        strategy_inputs = _build_strategy_inputs(
+            config_copy,
+            config_source=config_source,
+            resolved_config_path=resolved_config_path,
+            config_arg_supplied=config_arg_supplied,
+        )
         preflight = _with_strategy_coverage_warnings(
-            config_copy, _get_preflight(market_data)
+            config_copy, _get_preflight(market_data), strategy_inputs
         )
         summary_pairs = _summary_pairs(market_data, pairs)
         return BacktestPreflightResult(
@@ -869,12 +923,7 @@ def build_backtest_preflight(
             pairs=summary_pairs,
             timeframes=list(frames),
             preflight=preflight,
-            strategy_inputs=_build_strategy_inputs(
-                config_copy,
-                config_source=config_source,
-                resolved_config_path=resolved_config_path,
-                config_arg_supplied=config_arg_supplied,
-            ),
+            strategy_inputs=strategy_inputs,
         )
     finally:
         shutdown = getattr(market_data, "shutdown", None)
@@ -917,8 +966,14 @@ def run_backtest(
     pairs = _configured_backtest_pairs(config_copy)
 
     market_data = BacktestMarketData(config_copy, pairs, frames, start, end)
+    strategy_inputs = _build_strategy_inputs(
+        config_copy,
+        config_source=config_source,
+        resolved_config_path=resolved_config_path,
+        config_arg_supplied=config_arg_supplied,
+    )
     preflight = _with_strategy_coverage_warnings(
-        config_copy, _get_preflight(market_data)
+        config_copy, _get_preflight(market_data), strategy_inputs
     )
     if preflight.usable_series_count == 0:
         requested = ", ".join(
@@ -1015,9 +1070,7 @@ def run_backtest(
             fee_bps=fee_bps,
             strict_data=strict_data,
             preflight=preflight,
-            config_source=config_source,
-            resolved_config_path=resolved_config_path,
-            config_arg_supplied=config_arg_supplied,
+            strategy_inputs=strategy_inputs,
         )
         return BacktestResult(
             plans=plans,
@@ -1086,9 +1139,7 @@ def _build_backtest_summary(
     fee_bps: float,
     strict_data: bool,
     preflight: BacktestPreflight,
-    config_source: str,
-    resolved_config_path: Optional[str],
-    config_arg_supplied: bool,
+    strategy_inputs: Dict[str, Any],
 ) -> BacktestSummary:
     total_actions = sum(len(plan.actions) for plan in plans)
     blocked_actions = sum(
@@ -1135,12 +1186,7 @@ def _build_backtest_summary(
         "fee_bps": float(fee_bps),
         "slippage_bps": slippage_bps,
         "strict_data": strict_data,
-        "strategy_inputs": _build_strategy_inputs(
-            portfolio.app_config,
-            config_source=config_source,
-            resolved_config_path=resolved_config_path,
-            config_arg_supplied=config_arg_supplied,
-        ),
+        "strategy_inputs": copy.deepcopy(strategy_inputs),
     }
     warmup_warnings = _build_trend_core_warmup_warnings(portfolio.app_config, preflight)
     trust_level, trust_note, notable_warnings = _build_replay_diagnostics(
@@ -1180,6 +1226,7 @@ def _build_backtest_summary(
         missing_series=list(preflight.missing_series),
         partial_series=list(preflight.partial_series),
         coverage=list(preflight.coverage),
+        strategy_coverage_gaps=copy.deepcopy(preflight.strategy_coverage_gaps),
         blocked_reason_counts=blocked_reason_counts,
         per_strategy=per_strategy,
         trust_level=trust_level,

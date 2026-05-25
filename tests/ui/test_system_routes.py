@@ -442,6 +442,15 @@ def test_latest_replay_endpoint_returns_compact_summary(
                     "usable_series_count": 1,
                     "missing_series": [],
                     "partial_series": ["BTC/USD@1h"],
+                    "strategy_coverage_gaps": [
+                        {
+                            "strategy_id": "majors_mean_rev",
+                            "pair": "BTC/USD",
+                            "timeframe": "1h",
+                            "series_key": "BTC/USD@1h",
+                            "coverage_status": "partial_window",
+                        }
+                    ],
                     "per_strategy": {"majors_mean_rev": {"realized_pnl_usd": 60.0}},
                     "replay_inputs": {
                         "start": "2026-04-01T00:00:00Z",
@@ -456,6 +465,15 @@ def test_latest_replay_endpoint_returns_compact_summary(
                     "usable_series_count": 1,
                     "missing_series": [],
                     "partial_series": ["BTC/USD@1h"],
+                    "strategy_coverage_gaps": [
+                        {
+                            "strategy_id": "majors_mean_rev",
+                            "pair": "BTC/USD",
+                            "timeframe": "1h",
+                            "series_key": "BTC/USD@1h",
+                            "coverage_status": "partial_window",
+                        }
+                    ],
                 },
             }
         ),
@@ -473,6 +491,10 @@ def test_latest_replay_endpoint_returns_compact_summary(
     assert payload["pnl_usd"] == 120.0
     assert payload["fills"] == 3
     assert payload["coverage_status"] == "limited"
+    assert payload["strategy_coverage_gaps"][0]["strategy_id"] == "majors_mean_rev"
+    assert (
+        payload["strategy_coverage_gaps"][0]["coverage_status"] == "partial_window"
+    )
     assert payload["blocked_reason_counts"]["Max open positions reached (1)"] == 1
     assert payload["replay_inputs"]["enabled_strategies"] == ["majors_mean_rev"]
     assert payload["report_path"].endswith("reports\\backtests\\latest.json")

@@ -111,6 +111,11 @@ def summarize_latest_backtest_report(
     partial_series = list(
         preflight.get("partial_series") or summary.get("partial_series") or []
     )
+    strategy_coverage_gaps = list(
+        preflight.get("strategy_coverage_gaps")
+        or summary.get("strategy_coverage_gaps")
+        or []
+    )
     usable_series_count = int(
         preflight.get(
             "usable_series_count",
@@ -138,6 +143,7 @@ def summarize_latest_backtest_report(
         "usable_series_count": usable_series_count,
         "missing_series": missing_series,
         "partial_series": partial_series,
+        "strategy_coverage_gaps": strategy_coverage_gaps,
         "blocked_reason_counts": blocked_reason_counts,
         "cost_model": summary.get("cost_model"),
         "replay_inputs": replay_inputs,

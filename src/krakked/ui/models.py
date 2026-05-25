@@ -329,6 +329,7 @@ class ReplayLatestPayload(BaseModel):
     usable_series_count: Optional[int] = None
     missing_series: List[str] = Field(default_factory=list)
     partial_series: List[str] = Field(default_factory=list)
+    strategy_coverage_gaps: List[Dict[str, Any]] = Field(default_factory=list)
     blocked_reason_counts: Dict[str, int] = Field(default_factory=dict)
     cost_model: Optional[str] = None
     replay_inputs: Dict[str, Any] = Field(default_factory=dict)
