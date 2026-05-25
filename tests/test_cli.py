@@ -1463,6 +1463,72 @@ def test_ml_report_compare_skips_invalid_json_with_warning(
     assert "Warning: Skipping non-JSON report" in captured.err
 
 
+def test_ml_report_compare_preserves_insufficient_data_monotonicity(
+    tmp_path: Path, capsys: Any
+) -> None:
+    # A v7 report whose monotonicity is the new sentinel string must surface
+    # that string in the compare table, not a blank cell.
+    insufficient = tmp_path / "insufficient.json"
+    payload = {
+        "report_version": 7,
+        "generated_at": datetime(2026, 5, 24, tzinfo=UTC).isoformat(),
+        "summary": {
+            "start": datetime(2026, 5, 24, tzinfo=UTC).isoformat(),
+            "end": datetime(2026, 5, 24, tzinfo=UTC).isoformat(),
+            "strategy_id": "ai_regression",
+            "timeframe": "4h",
+            "train_bars": 12,
+            "test_bars": 6,
+            "evaluation_mode": "rolling_window_isolated",
+            "edge_scoring_mode": "intent_hurdle_aligned",
+            "model_state_reused_across_folds": False,
+            "fold_count": 1,
+            "pairs": ["BTC/USD"],
+            "fee_bps": 10.0,
+            "slippage_bps": 20.0,
+            "round_trip_cost_bps": 60.0,
+            "coverage_status": "ready",
+            "warnings": [],
+            "metrics": {"prediction_count": 6, "positive_edge_prediction_count": 2},
+            "confidence_buckets": [],
+            "regression_calibration": {
+                "threshold_sweeps": [],
+                "monotonicity": {"upper_half_improves": "insufficient_data"},
+            },
+            "diagnostic_warnings": [],
+            "promotion_tier": "blocked",
+            "promotion_tiers": {
+                "research_promising": {
+                    "tier": "research_promising",
+                    "clears": False,
+                    "reasons": ["Fewer than 20 scored out-of-sample predictions."],
+                }
+            },
+            "promotable": False,
+            "promotable_reasons": ["Fewer than 20 scored out-of-sample predictions."],
+            "folds": [
+                {
+                    "diagnostics": {"models": [], "features": {}},
+                    "regression_calibration": {
+                        "threshold_sweeps": [],
+                        "monotonicity": {"upper_half_improves": "insufficient_data"},
+                    },
+                }
+            ],
+        },
+        "provenance": {"generated_by": "krakked ml-walk-forward"},
+    }
+    insufficient.write_text(json.dumps(payload), encoding="utf-8")
+
+    exit_code = cli.main(
+        ["ml-report-compare", str(insufficient), "--format", "markdown"]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "insufficient_data" in captured.out
+
+
 def _write_ml_ablation_report(
     path: Path,
     *,

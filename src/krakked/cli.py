@@ -401,12 +401,37 @@ def _print_ml_walk_forward_summary(
     )
     print(f"Long precision: {_pct(metrics.get('precision_long'))}")
     print(f"Cost hurdle: {summary['round_trip_cost_bps']:.2f} bps estimated round trip")
+    current_tier = summary.get("promotion_tier", "unknown")
     print(
-        f"Promotion tier: {summary.get('promotion_tier', 'unknown')} "
+        f"Promotion tier: {current_tier} "
         + ("(operational)" if summary.get("promotable") else "(blocked)")
     )
     for reason in summary["promotable_reasons"]:
         print(f"- {reason}")
+
+    # For operational tiers, surface the next-tier blockers explicitly so the
+    # plain-bullet failure reasons aren't misread as current-tier problems.
+    next_tier_map = {
+        "research_promising": "risk_overlay_candidate",
+        "risk_overlay_candidate": "self_standing",
+    }
+    next_tier = next_tier_map.get(current_tier)
+    promotion_tiers = summary.get("promotion_tiers") or {}
+    if (
+        summary.get("promotable")
+        and next_tier is not None
+        and isinstance(promotion_tiers, dict)
+    ):
+        next_tier_payload = promotion_tiers.get(next_tier) or {}
+        next_reasons = (
+            next_tier_payload.get("reasons")
+            if isinstance(next_tier_payload, dict)
+            else None
+        )
+        if next_reasons:
+            print(f"Next tier blockers ({next_tier}):")
+            for reason in next_reasons:
+                print(f"- {reason}")
     if report_path:
         print(f"Saved report: {report_path}")
 

@@ -29,9 +29,15 @@ running the experiment.
 
 | label | start | end | rationale |
 | --- | --- | --- | --- |
-| `early_2026` | 2025-12-01 | 2026-02-01 | Late 2025 / early 2026 regime |
-| `mid_2026` | 2026-01-15 | 2026-03-15 | Transition slice |
-| `recent_2026` | 2026-03-21 | 2026-05-24 | Most recent (matches existing baseline) |
+| `early_2026` | 2025-12-01 | 2026-01-31 | Late 2025 / early 2026 regime |
+| `mid_2026` | 2026-02-01 | 2026-03-31 | Transition slice |
+| `recent_2026` | 2026-04-01 | 2026-05-24 | Most recent (~54 days; shorter than the others but matches available data) |
+
+The windows above are intentionally non-overlapping so a single regime cannot
+appear in two folds at once and inflate apparent stability. If you need to
+revisit the existing `2026-03-21 → 2026-05-24` baseline directly, run it as a
+fourth window labeled `recent_baseline_2026` rather than expanding the recent
+window.
 
 If a window has insufficient OHLC coverage, `ml-walk-forward` will say so via
 the `coverage_status` field. Drop or replace that window rather than running on
@@ -48,7 +54,7 @@ is being validated for; the example below tracks the 4h PA `ohlc_v5` baseline.
 krakked ml-walk-forward `
   --strategy ai_regression `
   --timeframe 4h `
-  --start 2025-12-01 --end 2026-02-01 `
+  --start 2025-12-01 --end 2026-01-31 `
   --pair BTC/USD --pair ETH/USD `
   --train-bars 180 --test-bars 42 `
   --fee-bps 10 --slippage-bps 20 `
@@ -60,7 +66,7 @@ krakked ml-walk-forward `
 krakked ml-walk-forward `
   --strategy ai_regression `
   --timeframe 4h `
-  --start 2026-01-15 --end 2026-03-15 `
+  --start 2026-02-01 --end 2026-03-31 `
   --pair BTC/USD --pair ETH/USD `
   --train-bars 180 --test-bars 42 `
   --fee-bps 10 --slippage-bps 20 `
@@ -68,11 +74,11 @@ krakked ml-walk-forward `
   --save-report reports/ml/cross-window/ai-regression-mid_2026.json `
   --strict-data
 
-# Window 3: recent 2026 (matches the baseline)
+# Window 3: recent 2026
 krakked ml-walk-forward `
   --strategy ai_regression `
   --timeframe 4h `
-  --start 2026-03-21 --end 2026-05-24 `
+  --start 2026-04-01 --end 2026-05-24 `
   --pair BTC/USD --pair ETH/USD `
   --train-bars 180 --test-bars 42 `
   --fee-bps 10 --slippage-bps 20 `

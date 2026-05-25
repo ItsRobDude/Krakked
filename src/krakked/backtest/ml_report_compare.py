@@ -38,7 +38,7 @@ class MLReportComparisonRow:
     p90_lift: Optional[float] = None
     p95_lift: Optional[float] = None
     selected_avg_realized_return: Optional[float] = None
-    upper_half_monotonicity: Optional[bool] = None
+    upper_half_monotonicity: Optional[bool | str] = None
     promotion_tier: Optional[str] = None
     diagnostic_warnings: list[str] = field(default_factory=list)
 
@@ -319,12 +319,18 @@ def _selected_avg_realized_return(calibration: dict[str, Any]) -> Optional[float
     )
 
 
-def _upper_half_monotonicity(calibration: dict[str, Any]) -> Optional[bool]:
+def _upper_half_monotonicity(calibration: dict[str, Any]) -> Optional[bool | str]:
     monotonicity = calibration.get("monotonicity") or {}
     if not isinstance(monotonicity, dict):
         return None
     value = monotonicity.get("upper_half_improves")
-    return value if isinstance(value, bool) else None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str) and value:
+        # Preserve sentinel strings like "insufficient_data" so the compare
+        # table can distinguish them from a true/false monotonicity result.
+        return value
+    return None
 
 
 def _sweep_value(

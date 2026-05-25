@@ -207,12 +207,14 @@ class MLWalkForwardSummary:
             round_trip_cost_pct=round_trip_cost_pct,
         )
         promotable = assessment.is_operational
+        # promotable_reasons mirrors `promotable`: pass messages when operational,
+        # the failure reasons of the lowest unmet tier when blocked. Next-tier
+        # blockers for operational runs live in promotion_tiers so operator
+        # tooling can render them with a clear "next tier" label.
         if assessment.tier == PROMOTION_TIER_SELF_STANDING:
             promotable_reasons = [_tier_pass_message(PROMOTION_TIER_SELF_STANDING)]
         elif assessment.tier == PROMOTION_TIER_RISK_OVERLAY:
-            promotable_reasons = assessment.reasons_for_tier(
-                PROMOTION_TIER_SELF_STANDING
-            )
+            promotable_reasons = [_tier_pass_message(PROMOTION_TIER_RISK_OVERLAY)]
         elif assessment.tier == PROMOTION_TIER_RESEARCH:
             promotable_reasons = assessment.reasons_for_tier(
                 PROMOTION_TIER_RISK_OVERLAY

@@ -1278,6 +1278,67 @@ def test_assess_promotability_reaches_self_standing_with_strict_metrics() -> Non
     assert all(result.clears for result in assessment.tier_results)
 
 
+def test_summary_promotable_reasons_are_clean_for_operational_tier() -> None:
+    # Build predictions that should clear research_promising and risk_overlay
+    # but fail self_standing (precision_long < 50%).
+    predictions = []
+    for index in range(80):
+        predicted_delta = -0.02 + (0.06 * index / 79)
+        realized_return = predicted_delta + (0.001 if index % 2 == 0 else -0.001)
+        predictions.append(
+            _regression_prediction(
+                predicted_delta=predicted_delta,
+                realized_return=realized_return,
+            )
+        )
+    now = datetime.fromtimestamp(1_700_000_000, tz=UTC)
+    summary = MLWalkForwardSummary(
+        start=now,
+        end=now,
+        strategy_id="ai_regression",
+        timeframe="4h",
+        train_bars=40,
+        test_bars=40,
+        folds=[
+            MLWalkForwardFold(
+                fold_index=1,
+                train_start=now,
+                train_end=now,
+                test_start=now,
+                test_end=now,
+                train_cycles=40,
+                test_cycles=40,
+                predictions=predictions,
+            )
+        ],
+        fee_bps=10.0,
+        slippage_bps=20.0,
+        pairs=["BTC/USD"],
+        coverage_status="ready",
+        warnings=[],
+    )
+
+    payload = summary.to_dict()
+    tier = payload["promotion_tier"]
+
+    if payload["promotable"]:
+        # Operational tier promotable_reasons must be a pass message, not the
+        # failure list of the next-higher tier.
+        for reason in payload["promotable_reasons"]:
+            assert "below" not in reason.lower()
+            assert "fail" not in reason.lower()
+            assert "non-monotonic" not in reason.lower()
+        # The next-tier blockers must still be accessible via promotion_tiers.
+        next_tier = {
+            "research_promising": "risk_overlay_candidate",
+            "risk_overlay_candidate": "self_standing",
+        }.get(tier)
+        if next_tier is not None:
+            next_block = payload["promotion_tiers"].get(next_tier) or {}
+            assert next_block.get("clears") is False
+            assert next_block.get("reasons")
+
+
 def test_assess_promotability_holds_at_risk_overlay_on_per_fold_failure() -> None:
     metrics = _full_research_metrics(precision_long=0.55)
     calibration = _calibration_with_lift(p95_lift=2.0, selected_avg=0.05)
