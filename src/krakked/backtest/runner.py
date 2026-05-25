@@ -1131,6 +1131,9 @@ def _new_strategy_summary_entry() -> Dict[str, Any]:
         "intents_emitted": 0,
         "actions_after_scoring": 0,
         "filtered_by_score": 0,
+        "filtered_no_position_exits": 0,
+        "filtered_position_exits": 0,
+        "filtered_low_score_entries": 0,
         "min_score": None,
         "max_score": None,
         "blocked_actions": 0,
@@ -1180,6 +1183,9 @@ def _build_strategy_summary(
         "intents_emitted",
         "actions_after_scoring",
         "filtered_by_score",
+        "filtered_no_position_exits",
+        "filtered_position_exits",
+        "filtered_low_score_entries",
         "blocked_actions",
         "data_stale_contexts",
         "skipped_no_pairs",
@@ -1301,14 +1307,56 @@ def _build_replay_diagnostics(
     all_intents_filtered_by_score = (
         total_intents_emitted > 0 and total_actions_after_scoring == 0
     )
+    filtered_no_position_exits = sum(
+        int(entry.get("filtered_no_position_exits", 0) or 0)
+        for entry in per_strategy.values()
+    )
+    filtered_position_exits = sum(
+        int(entry.get("filtered_position_exits", 0) or 0)
+        for entry in per_strategy.values()
+    )
+    filtered_low_score_entries = sum(
+        int(entry.get("filtered_low_score_entries", 0) or 0)
+        for entry in per_strategy.values()
+    )
     strategies_evaluated_without_intents = (
         total_contexts_evaluated > 0 and total_intents_emitted == 0
     )
 
     if total_actions == 0:
         if all_intents_filtered_by_score:
+            def _count_label(count: int, singular: str, plural: str) -> str:
+                return f"{count} {singular if count == 1 else plural}"
+
+            details = []
+            if filtered_no_position_exits:
+                details.append(
+                    _count_label(
+                        filtered_no_position_exits,
+                        "no-position exit",
+                        "no-position exits",
+                    )
+                )
+            if filtered_position_exits:
+                details.append(
+                    _count_label(
+                        filtered_position_exits,
+                        "position exit",
+                        "position exits",
+                    )
+                )
+            if filtered_low_score_entries:
+                details.append(
+                    _count_label(
+                        filtered_low_score_entries,
+                        "low-score entry",
+                        "low-score entries",
+                    )
+                )
+            detail_text = f" ({', '.join(details)})" if details else ""
             warnings.append(
-                "Strategy intents were emitted but all were filtered before risk checks."
+                "Strategy intents were emitted but all were filtered before risk checks"
+                f"{detail_text}."
             )
         elif strategies_evaluated_without_intents:
             warnings.append(
@@ -1338,9 +1386,23 @@ def _build_replay_diagnostics(
         trust_note = "Weak signal: execution errors occurred during the replay."
     elif total_actions == 0 and all_intents_filtered_by_score:
         trust_level = "weak_signal"
-        trust_note = (
-            "Weak signal: strategy intents were emitted but all were filtered before risk checks."
-        )
+        if filtered_low_score_entries and filtered_no_position_exits:
+            trust_note = (
+                "Weak signal: only no-position exits and low-score entries "
+                "reached the score gate."
+            )
+        elif filtered_low_score_entries:
+            trust_note = (
+                "Weak signal: strategy entries were emitted but all were below the score gate."
+            )
+        elif filtered_no_position_exits and not filtered_position_exits:
+            trust_note = (
+                "Weak signal: only no-position exits reached the score gate."
+            )
+        else:
+            trust_note = (
+                "Weak signal: strategy intents were emitted but all were filtered before risk checks."
+            )
     elif total_actions == 0 and strategies_evaluated_without_intents:
         trust_level = "weak_signal"
         trust_note = (

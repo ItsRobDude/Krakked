@@ -221,6 +221,9 @@ def test_run_backtest_replays_cached_ohlc_with_starting_cash(tmp_path: Path) -> 
     assert strategy_summary["intents_emitted"] >= 1
     assert strategy_summary["actions_after_scoring"] >= 1
     assert "filtered_by_score" in strategy_summary
+    assert "filtered_no_position_exits" in strategy_summary
+    assert "filtered_position_exits" in strategy_summary
+    assert "filtered_low_score_entries" in strategy_summary
     assert strategy_summary["min_score"] is not None
     assert strategy_summary["max_score"] >= strategy_summary["min_score"]
 
@@ -497,6 +500,8 @@ def test_replay_diagnostics_reports_score_filtered_intents() -> None:
             "intents_emitted": 3,
             "actions_after_scoring": 0,
             "filtered_by_score": 3,
+            "filtered_no_position_exits": 2,
+            "filtered_low_score_entries": 1,
             "min_score": 0.0,
             "max_score": 0.02,
         }
@@ -514,10 +519,11 @@ def test_replay_diagnostics_reports_score_filtered_intents() -> None:
 
     assert trust_level == "weak_signal"
     assert trust_note == (
-        "Weak signal: strategy intents were emitted but all were filtered before risk checks."
+        "Weak signal: only no-position exits and low-score entries reached the score gate."
     )
     assert (
-        "Strategy intents were emitted but all were filtered before risk checks."
+        "Strategy intents were emitted but all were filtered before risk checks "
+        "(2 no-position exits, 1 low-score entry)."
         in warnings
     )
 

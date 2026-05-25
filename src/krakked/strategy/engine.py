@@ -431,6 +431,9 @@ class StrategyEngine:
             "intents_emitted": 0,
             "actions_after_scoring": 0,
             "filtered_by_score": 0,
+            "filtered_no_position_exits": 0,
+            "filtered_position_exits": 0,
+            "filtered_low_score_entries": 0,
             "min_score": None,
             "max_score": None,
             "blocked_actions": 0,
@@ -476,12 +479,41 @@ class StrategyEngine:
         return counts
 
     @staticmethod
+    def _is_exit_intent(intent: StrategyIntent) -> bool:
+        return intent.side == "flat" or intent.intent_type in {
+            "exit",
+            "close",
+            "reduce",
+        }
+
+    @staticmethod
+    def _position_base_by_strategy_pair(
+        positions: Sequence[SpotPosition],
+    ) -> Dict[tuple[str, str], float]:
+        totals: Dict[tuple[str, str], float] = {}
+        for position in positions:
+            strategy_id = getattr(position, "strategy_tag", None)
+            pair = getattr(position, "pair", None)
+            if not strategy_id or not pair:
+                continue
+            try:
+                base_size = float(getattr(position, "base_size", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                continue
+            if base_size <= 0:
+                continue
+            key = (str(strategy_id), str(pair))
+            totals[key] = totals.get(key, 0.0) + base_size
+        return totals
+
+    @staticmethod
     def _record_intent_score(
         evaluation_summary: Dict[str, Dict[str, Any]],
         intent: StrategyIntent,
         score: float,
         *,
         min_score: float,
+        positions_by_strategy_pair: Optional[Dict[tuple[str, str], float]] = None,
     ) -> None:
         evaluation = evaluation_summary.setdefault(
             intent.strategy_id, StrategyEngine._new_strategy_evaluation()
@@ -496,6 +528,16 @@ class StrategyEngine:
         )
         if score < min_score:
             evaluation["filtered_by_score"] += 1
+            if StrategyEngine._is_exit_intent(intent):
+                position_base = (positions_by_strategy_pair or {}).get(
+                    (intent.strategy_id, intent.pair), 0.0
+                )
+                if position_base > 0:
+                    evaluation["filtered_position_exits"] += 1
+                else:
+                    evaluation["filtered_no_position_exits"] += 1
+            else:
+                evaluation["filtered_low_score_entries"] += 1
 
     def _collect_intents(
         self,
@@ -672,9 +714,16 @@ class StrategyEngine:
             scored.append((intent, score))
 
         MIN_SCORE = 0.05
+        positions_by_strategy_pair = self._position_base_by_strategy_pair(
+            self.portfolio.get_positions() or []
+        )
         for intent, score in scored:
             self._record_intent_score(
-                evaluation_summary, intent, score, min_score=MIN_SCORE
+                evaluation_summary,
+                intent,
+                score,
+                min_score=MIN_SCORE,
+                positions_by_strategy_pair=positions_by_strategy_pair,
             )
         filtered_scored = [
             (intent, score) for intent, score in scored if score >= MIN_SCORE
