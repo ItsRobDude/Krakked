@@ -399,6 +399,7 @@ def test_run_backtest_cost_model_reduces_end_equity_and_report_shape(
     assert "filtered_by_score" in report["summary"]["per_strategy"]["majors_mean_rev"]
     assert report["summary"]["replay_inputs"]["fee_bps"] == pytest.approx(25.0)
     assert "enabled_strategies" in report["summary"]["replay_inputs"]
+    assert "strategy_inputs" in report["summary"]["replay_inputs"]
     assert json.loads(json.dumps(report))["summary"]["usable_series_count"] == 1
 
 
@@ -422,6 +423,76 @@ def test_build_backtest_preflight_reports_readiness(tmp_path: Path) -> None:
     assert result.preflight.status == "ready"
     assert "complete" in result.preflight.summary_note
     assert result.pairs == ["BTC/USD"]
+
+
+def test_backtest_reports_resolved_strategy_inputs_for_mixed_params(
+    tmp_path: Path,
+) -> None:
+    config = _build_backtest_config(tmp_path)
+    config.strategies.enabled = ["majors_mean_rev", "rs_rotation"]
+    config.strategies.configs["majors_mean_rev"].enabled = True
+    config.strategies.configs["majors_mean_rev"].params = {
+        "pairs": ["BTC/USD"],
+        "timeframe": "1h",
+        "lookback_bars": 20,
+        "band_width_bps": 150.0,
+    }
+    config.strategies.configs["rs_rotation"].enabled = True
+    config.strategies.configs["rs_rotation"].params = {}
+    _seed_pair_metadata(config)
+    timestamps = [1_700_000_000 + (idx * 3600) for idx in range(6)]
+    closes = [100.0] * len(timestamps)
+    _write_ohlc_series(tmp_path, timestamps=timestamps, closes=closes)
+
+    start = datetime.fromtimestamp(timestamps[0], tz=UTC)
+    end = datetime.fromtimestamp(timestamps[-1], tz=UTC)
+
+    preflight = runner.build_backtest_preflight(
+        config,
+        start=start,
+        end=end,
+        config_source="provided_config",
+    )
+    preflight_payload = preflight.to_dict()
+    strategy_inputs = preflight_payload["strategy_inputs"]
+
+    assert strategy_inputs["config_source"] == "provided_config"
+    assert strategy_inputs["resolved_config_path"] is None
+    assert strategy_inputs["config_arg_supplied"] is False
+    assert strategy_inputs["enabled_strategies"] == [
+        "majors_mean_rev",
+        "rs_rotation",
+    ]
+    assert (
+        strategy_inputs["strategies"]["majors_mean_rev"]["params_source"]
+        == "config_params"
+    )
+    assert (
+        strategy_inputs["strategies"]["rs_rotation"]["params_source"]
+        == "strategy_constructor_defaults"
+    )
+    assert strategy_inputs["strategies"]["rs_rotation"]["params"] == {}
+    assert strategy_inputs["strategies"]["rs_rotation"]["resolved_pairs"] == [
+        "BTC/USD"
+    ]
+    assert strategy_inputs["strategies"]["rs_rotation"]["resolved_timeframes"] == [
+        "1h"
+    ]
+    assert strategy_inputs["strategies"]["rs_rotation"][
+        "requested_ohlc_series"
+    ] == [{"pair": "BTC/USD", "timeframe": "1h"}]
+
+    result = runner.run_backtest(
+        config,
+        start=start,
+        end=end,
+        starting_cash_usd=10_000.0,
+    )
+    assert result.summary is not None
+    report_strategy_inputs = result.to_report_dict()["summary"]["replay_inputs"][
+        "strategy_inputs"
+    ]
+    assert report_strategy_inputs == strategy_inputs
 
 
 def test_build_backtest_preflight_warns_on_strategy_timeframe_gap(
@@ -449,6 +520,12 @@ def test_build_backtest_preflight_warns_on_strategy_timeframe_gap(
     assert result.timeframes == ["15m", "1h"]
     assert result.preflight.status == "limited"
     assert result.preflight.missing_series == ["BTC/USD@15m"]
+    assert result.to_dict()["strategy_inputs"]["strategies"]["vol_breakout"][
+        "requested_ohlc_series"
+    ] == [
+        {"pair": "BTC/USD", "timeframe": "15m"},
+        {"pair": "BTC/USD", "timeframe": "1h"},
+    ]
     assert (
         "Strategy vol_breakout requested incomplete OHLC series: BTC/USD@15m."
         in result.preflight.warnings

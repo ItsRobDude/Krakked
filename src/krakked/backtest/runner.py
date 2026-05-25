@@ -167,6 +167,7 @@ class BacktestPreflightResult:
     pairs: List[str]
     timeframes: List[str]
     preflight: BacktestPreflight
+    strategy_inputs: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -174,6 +175,7 @@ class BacktestPreflightResult:
             "end": self.end.astimezone(UTC).isoformat(),
             "pairs": list(self.pairs),
             "timeframes": list(self.timeframes),
+            "strategy_inputs": copy.deepcopy(self.strategy_inputs),
             "preflight": self.preflight.to_dict(),
         }
 
@@ -725,6 +727,66 @@ def _strategy_pairs_from_config(config: AppConfig, params: Dict[str, Any]) -> Li
     return [str(pair) for pair in config.universe.include_pairs or [] if pair]
 
 
+def _build_requested_ohlc_series(
+    pairs: List[str], timeframes: List[str]
+) -> List[Dict[str, str]]:
+    return [
+        {"pair": str(pair), "timeframe": str(timeframe)}
+        for pair in pairs
+        for timeframe in timeframes
+    ]
+
+
+def _build_strategy_inputs(
+    config: AppConfig,
+    *,
+    config_source: str = "provided_config",
+    resolved_config_path: Optional[str] = None,
+    config_arg_supplied: bool = False,
+) -> Dict[str, Any]:
+    enabled_strategies = list(getattr(config.strategies, "enabled", []))
+    strategies: Dict[str, Dict[str, Any]] = {}
+
+    for strategy_id in enabled_strategies:
+        strat_cfg = config.strategies.configs.get(strategy_id)
+        if strat_cfg is None:
+            strategies[strategy_id] = {
+                "type": None,
+                "enabled": False,
+                "params_source": "missing_config",
+                "params": {},
+                "resolved_pairs": [],
+                "resolved_timeframes": [],
+                "requested_ohlc_series": [],
+            }
+            continue
+
+        params = copy.deepcopy(strat_cfg.params or {})
+        resolved_pairs = _strategy_pairs_from_config(config, params)
+        resolved_timeframes = _strategy_timeframes_from_params(params)
+        strategies[strategy_id] = {
+            "type": strat_cfg.type,
+            "enabled": bool(strat_cfg.enabled),
+            "params_source": (
+                "config_params" if params else "strategy_constructor_defaults"
+            ),
+            "params": params,
+            "resolved_pairs": resolved_pairs,
+            "resolved_timeframes": resolved_timeframes,
+            "requested_ohlc_series": _build_requested_ohlc_series(
+                resolved_pairs, resolved_timeframes
+            ),
+        }
+
+    return {
+        "config_source": config_source,
+        "resolved_config_path": resolved_config_path,
+        "config_arg_supplied": bool(config_arg_supplied),
+        "enabled_strategies": enabled_strategies,
+        "strategies": strategies,
+    }
+
+
 def _build_strategy_coverage_warnings(
     config: AppConfig,
     preflight: BacktestPreflight,
@@ -782,6 +844,10 @@ def build_backtest_preflight(
     start: datetime,
     end: datetime,
     timeframes: Optional[Iterable[str]] = None,
+    *,
+    config_source: str = "provided_config",
+    resolved_config_path: Optional[str] = None,
+    config_arg_supplied: bool = False,
 ) -> BacktestPreflightResult:
     if end <= start:
         raise ValueError("Backtest end must be after start")
@@ -803,6 +869,12 @@ def build_backtest_preflight(
             pairs=summary_pairs,
             timeframes=list(frames),
             preflight=preflight,
+            strategy_inputs=_build_strategy_inputs(
+                config_copy,
+                config_source=config_source,
+                resolved_config_path=resolved_config_path,
+                config_arg_supplied=config_arg_supplied,
+            ),
         )
     finally:
         shutdown = getattr(market_data, "shutdown", None)
@@ -820,6 +892,9 @@ def run_backtest(
     fee_bps: float = 25.0,
     db_path: Optional[str] = None,
     strict_data: bool = False,
+    config_source: str = "provided_config",
+    resolved_config_path: Optional[str] = None,
+    config_arg_supplied: bool = False,
 ) -> BacktestResult:
     """Run the configured strategies across stored OHLC bars for the window."""
 
@@ -940,6 +1015,9 @@ def run_backtest(
             fee_bps=fee_bps,
             strict_data=strict_data,
             preflight=preflight,
+            config_source=config_source,
+            resolved_config_path=resolved_config_path,
+            config_arg_supplied=config_arg_supplied,
         )
         return BacktestResult(
             plans=plans,
@@ -1008,6 +1086,9 @@ def _build_backtest_summary(
     fee_bps: float,
     strict_data: bool,
     preflight: BacktestPreflight,
+    config_source: str,
+    resolved_config_path: Optional[str],
+    config_arg_supplied: bool,
 ) -> BacktestSummary:
     total_actions = sum(len(plan.actions) for plan in plans)
     blocked_actions = sum(
@@ -1054,6 +1135,12 @@ def _build_backtest_summary(
         "fee_bps": float(fee_bps),
         "slippage_bps": slippage_bps,
         "strict_data": strict_data,
+        "strategy_inputs": _build_strategy_inputs(
+            portfolio.app_config,
+            config_source=config_source,
+            resolved_config_path=resolved_config_path,
+            config_arg_supplied=config_arg_supplied,
+        ),
     }
     warmup_warnings = _build_trend_core_warmup_warnings(portfolio.app_config, preflight)
     trust_level, trust_note, notable_warnings = _build_replay_diagnostics(

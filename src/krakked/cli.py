@@ -300,6 +300,20 @@ def _load_backtest_config(args: argparse.Namespace) -> AppConfig:
     return config
 
 
+def _backtest_config_provenance(args: argparse.Namespace) -> dict[str, Any]:
+    config_arg = getattr(args, "config", None)
+    resolved_config_path = (
+        Path(config_arg).expanduser().resolve()
+        if config_arg
+        else (get_config_dir() / "config.yaml").expanduser().resolve()
+    )
+    return {
+        "config_source": "config_file" if config_arg else "default_paper_config",
+        "resolved_config_path": str(resolved_config_path),
+        "config_arg_supplied": bool(config_arg),
+    }
+
+
 def _print_backtest_summary(
     result: BacktestResult,
     *,
@@ -626,11 +640,13 @@ def _backtest_preflight_command(args: argparse.Namespace) -> int:
 
     try:
         config = _load_backtest_config(args)
+        config_provenance = _backtest_config_provenance(args)
         result = build_backtest_preflight(
             config,
             start=start,
             end=end,
             timeframes=args.timeframe,
+            **config_provenance,
         )
     except Exception as exc:  # noqa: BLE001
         return _print_error(f"Backtest preflight failed: {exc}")
@@ -677,6 +693,7 @@ def _backtest_command(args: argparse.Namespace) -> int:
 
     try:
         config = _load_backtest_config(args)
+        config_provenance = _backtest_config_provenance(args)
         result = run_backtest(
             config,
             start=start,
@@ -686,6 +703,7 @@ def _backtest_command(args: argparse.Namespace) -> int:
             fee_bps=float(args.fee_bps),
             db_path=args.db_path,
             strict_data=bool(args.strict_data),
+            **config_provenance,
         )
     except Exception as exc:  # noqa: BLE001
         return _print_error(f"Backtest failed: {exc}")

@@ -372,6 +372,9 @@ def test_backtest_subcommand_prints_summary(
         fee_bps: float,
         db_path: str | None = None,
         strict_data: bool = False,
+        config_source: str = "provided_config",
+        resolved_config_path: str | None = None,
+        config_arg_supplied: bool = False,
     ) -> BacktestResult:
         captured["config"] = config
         captured["start"] = start
@@ -381,6 +384,9 @@ def test_backtest_subcommand_prints_summary(
         captured["fee_bps"] = fee_bps
         captured["db_path"] = db_path
         captured["strict_data"] = strict_data
+        captured["config_source"] = config_source
+        captured["resolved_config_path"] = resolved_config_path
+        captured["config_arg_supplied"] = config_arg_supplied
         return BacktestResult(
             plans=[],
             executions=[],
@@ -501,6 +507,9 @@ def test_backtest_subcommand_prints_summary(
     assert "Cost model: 50 bps slippage + 25.00 bps taker fee" in output
     assert "Missing OHLC series:" in output
     assert "Top blocked reason: Max open positions reached (1) (1)" in output
+    assert captured["config_source"] == "default_paper_config"
+    assert captured["config_arg_supplied"] is False
+    assert captured["resolved_config_path"].endswith("config.yaml")
 
 
 def test_backtest_subcommand_save_report_writes_json(
