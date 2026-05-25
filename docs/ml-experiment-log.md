@@ -66,3 +66,24 @@ Decision:
 - Do not promote a model or expose UI controls.
 - Keep `ohlc_v4` as robustness infrastructure because clipping is bounded and auditable, but do not treat it as a performance win.
 - Next research should use the contribution and feature-health diagnostics to trim or replace weak/tail-heavy features before adding another model family.
+
+## 2026-05-24: `ohlc_v4` Feature Ablation Summary
+
+Tool:
+
+- `krakked ml-feature-ablation-summary`
+- Input: `reports/ml/ai-regression-4h-v6-realistic-pa-ohlc-v4.json`
+- Local ignored output: `reports/ml/pa-ohlc-v4-feature-ablation-summary.md`
+
+Readout:
+
+- Drop candidates: `body_atr`, `pct_change`
+- Review candidates with low/unstable contribution: `return_atr_3`, `volume_change`, `hour_cos`, `upper_wick_atr`
+- Keep but health-risk candidates: `return_zscore`, `range_atr`, `volatility`, `return_atr_1`
+- Keep candidates by the current mechanical rules: `volatility_ratio`, `hour_sin`
+- Stronger contributors still need review because fold-to-fold coefficient signs are unstable: `weekday_sin`, `trend_diff`, `weekday_cos`, `volume_log_ratio`
+
+Decision:
+
+- Do not declare an ablation result from this summary alone.
+- Use these rankings to define a small `ohlc_v5` trimmed-feature experiment rather than adding more OHLC-derived features.

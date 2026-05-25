@@ -30,6 +30,10 @@ from krakked.backtest.ml_report_compare import (
     compare_ml_reports,
     render_ml_report_comparison,
 )
+from krakked.backtest.ml_feature_ablation_summary import (
+    render_ml_feature_ablation_summary,
+    summarize_ml_feature_ablation,
+)
 from krakked.config import (
     AppConfig,
     get_config_dir,
@@ -554,6 +558,32 @@ def _ml_report_compare_command(args: argparse.Namespace) -> int:
         print(rendered)
 
     for warning in comparison.warnings:
+        print(f"Warning: {warning}", file=sys.stderr)
+    return 0
+
+
+def _ml_feature_ablation_summary_command(args: argparse.Namespace) -> int:
+    """Summarize feature-level ablation candidates from ML reports."""
+
+    summary = summarize_ml_feature_ablation(
+        args.reports,
+        glob_pattern=args.glob_pattern,
+        sort_by=args.sort,
+    )
+    rendered = render_ml_feature_ablation_summary(
+        summary,
+        output_format=args.format,
+    )
+
+    if args.output:
+        output_path = Path(args.output).expanduser().resolve()
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(rendered + "\n", encoding="utf-8")
+        print(f"ML feature ablation summary written: {output_path}")
+    else:
+        print(rendered)
+
+    for warning in summary.warnings:
         print(f"Warning: {warning}", file=sys.stderr)
     return 0
 
@@ -1512,6 +1542,40 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Optional path to write the rendered comparison",
     )
     ml_report_compare_parser.set_defaults(func=_ml_report_compare_command)
+
+    ml_feature_ablation_parser = subparsers.add_parser(
+        "ml-feature-ablation-summary",
+        help="Summarize feature ablation candidates from ML walk-forward reports",
+    )
+    ml_feature_ablation_parser.add_argument(
+        "reports",
+        nargs="*",
+        help="Saved ML walk-forward report JSON paths",
+    )
+    ml_feature_ablation_parser.add_argument(
+        "--glob",
+        dest="glob_pattern",
+        help="Glob pattern for report JSON paths, for example reports/ml/*.json",
+    )
+    ml_feature_ablation_parser.add_argument(
+        "--format",
+        choices=("markdown", "tsv", "json"),
+        default="markdown",
+        help="Output format for the feature ablation table",
+    )
+    ml_feature_ablation_parser.add_argument(
+        "--sort",
+        choices=("drop-score", "contribution", "rank", "health", "name"),
+        default="drop-score",
+        help="Sort order for feature rows",
+    )
+    ml_feature_ablation_parser.add_argument(
+        "--output",
+        help="Optional path to write the rendered feature ablation table",
+    )
+    ml_feature_ablation_parser.set_defaults(
+        func=_ml_feature_ablation_summary_command
+    )
 
     ml_prune_stale_parser = subparsers.add_parser(
         "ml-prune-stale",

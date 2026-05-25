@@ -1398,6 +1398,224 @@ def test_ml_report_compare_skips_invalid_json_with_warning(
     assert "Warning: Skipping non-JSON report" in captured.err
 
 
+def _write_ml_ablation_report(
+    path: Path,
+    *,
+    version: int = 6,
+    feature_schema: str = "ohlc_v4",
+    backend: str = "pa",
+) -> None:
+    generated_at = datetime(2026, 5, 24, tzinfo=UTC).isoformat()
+    feature_rows = [
+        ("keep_top", [0.6, 0.55], [0.9, 0.8], [0.5, 0.4]),
+        ("risky_keep", [0.2, 0.22], [0.4, 0.42], [0.3, 0.35]),
+        ("review_flip", [0.12, 0.11], [0.2, 0.18], [0.2, -0.2]),
+        ("drop_low", [0.01, 0.01], [0.02, 0.02], [0.01, 0.01]),
+    ]
+
+    def _fold(index: int) -> dict[str, Any]:
+        contributions = [
+            {
+                "feature": name,
+                "coefficient": coefficients[index - 1],
+                "avg_abs_row_contribution": avg_values[index - 1],
+                "p95_abs_row_contribution": p95_values[index - 1],
+            }
+            for name, avg_values, p95_values, coefficients in feature_rows
+        ]
+        return {
+            "fold_index": index,
+            "diagnostics": {
+                "models": [
+                    {
+                        "model_key": f"global|4h|features_{feature_schema}|pa_reg",
+                        "feature_schema_version": feature_schema,
+                        "model_backend": backend,
+                        "framework": "sklearn_dummy",
+                    }
+                ],
+                "features": {
+                    "schema_version": feature_schema,
+                    "health_warnings": [
+                        "Scaled feature risky_keep has tail values above 3.0."
+                    ],
+                    "clipping": {
+                        "features": {
+                            "risky_keep": {
+                                "clipped_rate": 0.06 if index == 2 else 0.01
+                            }
+                        }
+                    },
+                    "linear_contributions": contributions,
+                },
+            },
+            "regression_calibration": {
+                "threshold_sweeps": [],
+                "monotonicity": {"available": False},
+            },
+        }
+
+    path.write_text(
+        json.dumps(
+            {
+                "report_version": version,
+                "generated_at": generated_at,
+                "summary": {
+                    "start": generated_at,
+                    "end": generated_at,
+                    "strategy_id": "ai_regression",
+                    "timeframe": "4h",
+                    "folds": [_fold(1), _fold(2)],
+                },
+                "provenance": {"generated_by": "krakked ml-walk-forward"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_ml_feature_ablation_summary_outputs_markdown_candidates(
+    tmp_path: Path, capsys: Any
+) -> None:
+    report_path = tmp_path / "ablation.json"
+    _write_ml_ablation_report(report_path)
+
+    exit_code = cli.main(["ml-feature-ablation-summary", str(report_path)])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "| report | tf | features | backend | feature |" in captured.out
+    assert "drop_low" in captured.out
+    assert "drop_candidate" in captured.out
+    assert "risky_keep" in captured.out
+    assert "keep_but_health_risk" in captured.out
+    assert captured.err == ""
+
+
+def test_ml_feature_ablation_summary_json_contains_metrics_and_recommendations(
+    tmp_path: Path, capsys: Any
+) -> None:
+    report_path = tmp_path / "ablation.json"
+    _write_ml_ablation_report(report_path)
+
+    exit_code = cli.main(
+        [
+            "ml-feature-ablation-summary",
+            str(report_path),
+            "--format",
+            "json",
+            "--sort",
+            "name",
+        ]
+    )
+
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out)
+    rows = {row["feature"]: row for row in payload["features"]}
+    assert rows["keep_top"]["recommendation"] == "keep_candidate"
+    assert rows["risky_keep"]["recommendation"] == "keep_but_health_risk"
+    assert rows["risky_keep"]["health_warning_count"] == 2
+    assert rows["risky_keep"]["max_clipped_rate"] == pytest.approx(0.06)
+    assert rows["risky_keep"]["clipped_rate_gate_failed"] is True
+    assert rows["review_flip"]["recommendation"] == "review_candidate"
+    assert rows["review_flip"]["sign_stable"] is False
+    assert rows["review_flip"]["coefficient_positive_count"] == 1
+    assert rows["review_flip"]["coefficient_negative_count"] == 1
+    assert rows["drop_low"]["recommendation"] == "drop_candidate"
+    assert rows["drop_low"]["contribution_share"] < 0.05
+
+
+def test_ml_feature_ablation_summary_supports_glob_tsv_and_output(
+    tmp_path: Path, capsys: Any
+) -> None:
+    _write_ml_ablation_report(tmp_path / "one.json")
+    _write_ml_ablation_report(tmp_path / "two.json")
+    output_path = tmp_path / "ablation.tsv"
+
+    exit_code = cli.main(
+        [
+            "ml-feature-ablation-summary",
+            "--glob",
+            str(tmp_path / "*.json"),
+            "--format",
+            "tsv",
+            "--output",
+            str(output_path),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "written" in captured.out
+    output = output_path.read_text(encoding="utf-8")
+    assert output.startswith("report\ttf\tfeatures")
+    assert "drop_low" in output
+    assert output.count("drop_candidate") == 2
+
+
+@pytest.mark.parametrize(
+    ("sort_by", "expected_first"),
+    [
+        ("drop-score", "drop_low"),
+        ("contribution", "keep_top"),
+        ("rank", "keep_top"),
+        ("health", "risky_keep"),
+        ("name", "drop_low"),
+    ],
+)
+def test_ml_feature_ablation_summary_sort_modes(
+    tmp_path: Path,
+    capsys: Any,
+    sort_by: str,
+    expected_first: str,
+) -> None:
+    report_path = tmp_path / "ablation.json"
+    _write_ml_ablation_report(report_path)
+
+    exit_code = cli.main(
+        [
+            "ml-feature-ablation-summary",
+            str(report_path),
+            "--format",
+            "json",
+            "--sort",
+            sort_by,
+        ]
+    )
+
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["features"][0]["feature"] == expected_first
+
+
+def test_ml_feature_ablation_summary_skips_invalid_and_no_contribution_reports(
+    tmp_path: Path, capsys: Any
+) -> None:
+    valid = tmp_path / "valid.json"
+    no_contrib = tmp_path / "no-contrib.json"
+    invalid = tmp_path / "invalid.json"
+    _write_ml_ablation_report(valid)
+    _write_ml_compare_report(no_contrib)
+    invalid.write_text("{not-json", encoding="utf-8")
+
+    exit_code = cli.main(
+        [
+            "ml-feature-ablation-summary",
+            "--glob",
+            str(tmp_path / "*.json"),
+            "--format",
+            "markdown",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "valid" in captured.out
+    assert "drop_low" in captured.out
+    assert "Warning: Skipping non-JSON report" in captured.err
+    assert "Warning: Skipping ML report without feature contributions" in captured.err
+
+
 def test_compare_backtests_prints_deltas(tmp_path: Path, capsys: Any) -> None:
     baseline_path = tmp_path / "baseline.json"
     candidate_path = tmp_path / "candidate.json"
