@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, tzinfo
-from typing import List, Optional, Sequence
+from typing import Any, List, Optional, Sequence
 
 FEATURE_TIME_TZ: tzinfo = UTC
-ML_FEATURE_SCHEMA_VERSION = "ohlc_v3"
+ML_FEATURE_SCHEMA_VERSION = "ohlc_v4"
+ML_FEATURE_CLIPPING_VERSION = "clip_v1"
 ML_FEATURE_NAMES = (
     "pct_change",
     "trend_diff",
@@ -26,6 +27,19 @@ ML_FEATURE_NAMES = (
     "weekday_sin",
     "weekday_cos",
 )
+ML_FEATURE_CLIP_RANGES: dict[str, tuple[float, float]] = {
+    "pct_change": (-0.15, 0.15),
+    "return_atr_1": (-5.0, 5.0),
+    "return_atr_3": (-5.0, 5.0),
+    "range_atr": (0.0, 5.0),
+    "body_atr": (0.0, 5.0),
+    "upper_wick_atr": (0.0, 5.0),
+    "lower_wick_atr": (0.0, 5.0),
+    "return_zscore": (-3.0, 3.0),
+    "volatility_ratio": (0.0, 10.0),
+    "volume_change": (-5.0, 5.0),
+    "volume_log_ratio": (-5.0, 5.0),
+}
 
 
 @dataclass(frozen=True)
@@ -33,12 +47,19 @@ class MLFeatureVector:
     values: List[float]
     names: List[str]
     schema_version: str
+    clipping_version: str = ML_FEATURE_CLIPPING_VERSION
+    clipping: dict[str, dict[str, float | bool]] = field(default_factory=dict)
 
-    def to_metadata(self) -> dict[str, float | str]:
-        metadata: dict[str, float | str] = {
+    def to_metadata(self) -> dict[str, Any]:
+        metadata: dict[str, Any] = {
             name: value for name, value in zip(self.names, self.values)
         }
         metadata["feature_schema_version"] = self.schema_version
+        metadata["feature_clipping_version"] = self.clipping_version
+        if self.clipping:
+            metadata["feature_clipping"] = {
+                name: dict(details) for name, details in self.clipping.items()
+            }
         return metadata
 
 
@@ -122,6 +143,24 @@ def _time_features(timestamp: int | None) -> tuple[float, float, float, float]:
     return hour_sin, hour_cos, weekday_sin, weekday_cos
 
 
+def _clip_feature(
+    name: str,
+    raw_value: float,
+) -> tuple[float, Optional[dict[str, float | bool]]]:
+    clip_range = ML_FEATURE_CLIP_RANGES.get(name)
+    if clip_range is None:
+        return raw_value, None
+    cap_min, cap_max = clip_range
+    clipped_value = min(max(raw_value, cap_min), cap_max)
+    return clipped_value, {
+        "cap_min": cap_min,
+        "cap_max": cap_max,
+        "raw_value": raw_value,
+        "clipped_value": clipped_value,
+        "was_clipped": clipped_value != raw_value,
+    }
+
+
 def _feature_vector(
     *,
     closes: Sequence[float],
@@ -192,28 +231,38 @@ def _feature_vector(
         latest_timestamp
     )
 
+    raw_values = {
+        "pct_change": pct_change,
+        "trend_diff": trend_diff,
+        "volatility": volatility,
+        "return_atr_1": _safe_ratio(pct_change, atr_pct),
+        "return_atr_3": _safe_ratio(_window_return(closes, 3), atr_pct),
+        "range_atr": _safe_ratio(latest_range, atr),
+        "body_atr": _safe_ratio(latest_body, atr),
+        "upper_wick_atr": _safe_ratio(latest_upper_wick, atr),
+        "lower_wick_atr": _safe_ratio(latest_lower_wick, atr),
+        "return_zscore": return_zscore,
+        "volatility_ratio": volatility_ratio,
+        "volume_change": volume_change,
+        "volume_log_ratio": volume_log_ratio,
+        "hour_sin": hour_sin,
+        "hour_cos": hour_cos,
+        "weekday_sin": weekday_sin,
+        "weekday_cos": weekday_cos,
+    }
+    values: list[float] = []
+    clipping: dict[str, dict[str, float | bool]] = {}
+    for name in ML_FEATURE_NAMES:
+        clipped_value, clipping_metadata = _clip_feature(name, raw_values[name])
+        values.append(clipped_value)
+        if clipping_metadata is not None:
+            clipping[name] = clipping_metadata
+
     return MLFeatureVector(
-        values=[
-            pct_change,
-            trend_diff,
-            volatility,
-            _safe_ratio(pct_change, atr_pct),
-            _safe_ratio(_window_return(closes, 3), atr_pct),
-            _safe_ratio(latest_range, atr),
-            _safe_ratio(latest_body, atr),
-            _safe_ratio(latest_upper_wick, atr),
-            _safe_ratio(latest_lower_wick, atr),
-            return_zscore,
-            volatility_ratio,
-            volume_change,
-            volume_log_ratio,
-            hour_sin,
-            hour_cos,
-            weekday_sin,
-            weekday_cos,
-        ],
+        values=values,
         names=list(ML_FEATURE_NAMES),
         schema_version=ML_FEATURE_SCHEMA_VERSION,
+        clipping=clipping,
     )
 
 
@@ -281,6 +330,8 @@ def compute_features_from_window(
 __all__ = [
     "ML_FEATURE_NAMES",
     "ML_FEATURE_SCHEMA_VERSION",
+    "ML_FEATURE_CLIPPING_VERSION",
+    "ML_FEATURE_CLIP_RANGES",
     "FEATURE_TIME_TZ",
     "MLFeatureVector",
     "compute_feature_vector_from_closes",

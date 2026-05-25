@@ -25,7 +25,7 @@ from krakked.config import AppConfig, StrategyConfig, load_config
 from krakked.market_data.metadata_store import PairMetadataStore
 from krakked.market_data.models import PairMetadata
 from krakked.strategy.models import StrategyIntent
-from krakked.strategy.features import ML_FEATURE_NAMES
+from krakked.strategy.features import ML_FEATURE_NAMES, ML_FEATURE_SCHEMA_VERSION
 from krakked.strategy.strategies.ml_alt_strategy import AIPredictorAltStrategy
 from krakked.strategy.strategies.ml_regression_strategy import AIRegressionStrategy
 from krakked.strategy.strategies.ml_strategy import AIPredictorStrategy
@@ -191,7 +191,7 @@ def test_run_ml_walk_forward_scores_out_of_sample_predictions(tmp_path: Path) ->
     assert fold_diagnostics["models"][0]["scaler_schema_version"] == "standard_v1"
     assert fold_diagnostics["models"][0]["scaler_initialized"] is True
     assert "predicted_delta_quantiles" in fold_diagnostics["predictions"]
-    assert fold_diagnostics["features"]["schema_version"] == "ohlc_v3"
+    assert fold_diagnostics["features"]["schema_version"] == ML_FEATURE_SCHEMA_VERSION
     assert fold_diagnostics["features"]["prediction_count"] > 0
     assert set(fold_diagnostics["features"]["raw_feature_quantiles"]) == set(
         ML_FEATURE_NAMES
@@ -670,7 +670,7 @@ def test_feature_diagnostics_handles_unavailable_scaler() -> None:
         predicted_delta=0.01,
         realized_return=0.01,
     )
-    prediction.metadata["feature_schema_version"] = "ohlc_v3"
+    prediction.metadata["feature_schema_version"] = ML_FEATURE_SCHEMA_VERSION
     prediction.metadata["features"] = {
         name: float(index) for index, name in enumerate(ML_FEATURE_NAMES, start=1)
     }
@@ -681,14 +681,14 @@ def test_feature_diagnostics_handles_unavailable_scaler() -> None:
             (
                 {
                     "source": "live_model",
-                    "model_key": "global|1h|features_ohlc_v3|dummy",
+                    "model_key": "global|1h|features_ohlc_v4|dummy",
                 },
                 object(),
             )
         ],
     )
 
-    assert diagnostics["schema_version"] == "ohlc_v3"
+    assert diagnostics["schema_version"] == ML_FEATURE_SCHEMA_VERSION
     assert diagnostics["prediction_count"] == 1
     assert set(diagnostics["raw_feature_quantiles"]) == set(ML_FEATURE_NAMES)
     assert diagnostics["scaled_available"] is False
@@ -714,7 +714,7 @@ def _feature_prediction_row(
         realized_return=0.01,
         fold_index=fold_index,
     )
-    prediction.metadata["feature_schema_version"] = "ohlc_v3"
+    prediction.metadata["feature_schema_version"] = ML_FEATURE_SCHEMA_VERSION
     prediction.metadata["features"] = dict(zip(ML_FEATURE_NAMES, values))
     return prediction
 
@@ -731,7 +731,7 @@ def test_feature_diagnostics_reports_no_health_warnings_for_sane_scaled_features
             (
                 {
                     "source": "live_model",
-                    "model_key": "global|1h|features_ohlc_v3|dummy",
+                    "model_key": "global|1h|features_ohlc_v4|dummy",
                 },
                 _PassthroughScaledModel(),
             )
@@ -760,7 +760,7 @@ def test_feature_diagnostics_warns_for_tail_heavy_scaled_features() -> None:
             (
                 {
                     "source": "live_model",
-                    "model_key": "global|1h|features_ohlc_v3|dummy",
+                    "model_key": "global|1h|features_ohlc_v4|dummy",
                 },
                 _PassthroughScaledModel(),
             )
@@ -795,7 +795,7 @@ def test_feature_diagnostics_reports_linear_feature_contributions() -> None:
             (
                 {
                     "source": "live_model",
-                    "model_key": "global|1h|features_ohlc_v3|dummy",
+                    "model_key": "global|1h|features_ohlc_v4|dummy",
                 },
                 _PassthroughScaledModel(coefficients),
             )

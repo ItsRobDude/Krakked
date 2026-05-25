@@ -10,7 +10,13 @@ import pytest
 
 from krakked.config import StrategyConfig
 from krakked.strategy.base import StrategyContext
-from krakked.strategy.features import ML_FEATURE_NAMES, ML_FEATURE_SCHEMA_VERSION
+from krakked.strategy.features import (
+    ML_FEATURE_CLIP_RANGES,
+    ML_FEATURE_CLIPPING_VERSION,
+    ML_FEATURE_NAMES,
+    ML_FEATURE_SCHEMA_VERSION,
+    _clip_feature,
+)
 from krakked.strategy.ml_labels import (
     FEE_ADJUSTED_EDGE_PREDICTION_TARGET,
     NO_POSITIVE_EDGE_PREDICTION,
@@ -333,7 +339,7 @@ def test_classifier_model_key_versions_fee_adjusted_labels(strategy, mock_ctx):
 
     assert (
         strategy._model_key("1h", label_config)
-        == "global|1h|features_ohlc_v3|fee_adj_fee25_slip50_x2|"
+        == "global|1h|features_ohlc_v4|fee_adj_fee25_slip50_x2|"
         "pa_cls_scalerstdv1"
     )
 
@@ -341,7 +347,7 @@ def test_classifier_model_key_versions_fee_adjusted_labels(strategy, mock_ctx):
 def test_regression_model_key_versions_feature_schema(regression_strategy):
     assert (
         regression_strategy._model_key("1h")
-        == "global|1h|features_ohlc_v3|pa_reg_eps0p001_scalerstdv1"
+        == "global|1h|features_ohlc_v4|pa_reg_eps0p001_scalerstdv1"
     )
 
 
@@ -364,7 +370,7 @@ def test_regression_epsilon_changes_model_key():
 
     assert (
         strategy._model_key("1h")
-        == "global|1h|features_ohlc_v3|pa_reg_eps0p0025_scalerstdv1"
+        == "global|1h|features_ohlc_v4|pa_reg_eps0p0025_scalerstdv1"
     )
 
 
@@ -403,7 +409,7 @@ def test_ml_feature_values_are_shared_across_strategies(
     assert classifier_vector.values == pytest.approx(regression_vector.values)
 
 
-def test_ohlc_v3_feature_values_include_normalized_context_fields(
+def test_ohlc_v4_feature_values_include_normalized_context_fields(
     strategy, mock_ctx
 ):
     bars = [
@@ -419,7 +425,7 @@ def test_ohlc_v3_feature_values_include_normalized_context_fields(
 
     assert vector is not None
     features = dict(zip(vector.names, vector.values))
-    assert vector.schema_version == "ohlc_v3"
+    assert vector.schema_version == "ohlc_v4"
     atr = 4.0
     atr_pct = atr / 105.0
     assert features["return_atr_1"] == pytest.approx(((105.0 - 103.0) / 103.0) / atr_pct)
@@ -446,6 +452,46 @@ def test_ohlc_v3_feature_values_include_normalized_context_fields(
     assert features["weekday_cos"] == pytest.approx(
         math.cos(2.0 * math.pi * observed_at.weekday() / 7.0)
     )
+
+
+def test_ohlc_v4_clipping_caps_apply_exactly_per_feature():
+    for name, (cap_min, cap_max) in ML_FEATURE_CLIP_RANGES.items():
+        clipped_low, low_metadata = _clip_feature(name, cap_min - 1.0)
+        clipped_high, high_metadata = _clip_feature(name, cap_max + 1.0)
+
+        assert clipped_low == pytest.approx(cap_min)
+        assert clipped_high == pytest.approx(cap_max)
+        assert low_metadata is not None
+        assert high_metadata is not None
+        assert low_metadata["was_clipped"] is True
+        assert high_metadata["was_clipped"] is True
+
+
+def test_ohlc_v4_unclipped_features_remain_unchanged():
+    for name in set(ML_FEATURE_NAMES) - set(ML_FEATURE_CLIP_RANGES):
+        value, metadata = _clip_feature(name, 42.0)
+
+        assert value == pytest.approx(42.0)
+        assert metadata is None
+
+
+def test_ohlc_v4_metadata_records_raw_and_clipped_values(strategy, mock_ctx):
+    bars = _make_bars(1000000, [100.0, 100.0, 100.0, 100.0, 200.0])
+    mock_ctx.market_data.get_ohlc.return_value = bars
+
+    vector = strategy._extract_feature_vector(mock_ctx, "XBT/USD", "1h")
+
+    assert vector is not None
+    metadata = vector.to_metadata()
+    clipping = metadata["feature_clipping"]
+    assert metadata["feature_clipping_version"] == ML_FEATURE_CLIPPING_VERSION
+    assert metadata["pct_change"] == pytest.approx(0.15)
+    assert clipping["pct_change"]["raw_value"] == pytest.approx(1.0)
+    assert clipping["pct_change"]["clipped_value"] == pytest.approx(0.15)
+    assert clipping["pct_change"]["cap_min"] == pytest.approx(-0.15)
+    assert clipping["pct_change"]["cap_max"] == pytest.approx(0.15)
+    assert clipping["pct_change"]["was_clipped"] is True
+    assert "trend_diff" not in clipping
 
 
 def test_passive_aggressive_models_do_not_support_sample_weight_guard():
@@ -542,7 +588,7 @@ def test_regression_backend_factory_and_keys_are_backend_specific():
     assert strategy._model_framework() == "sklearn_sgd_regressor_huber"
     assert (
         strategy._model_key("1h")
-        == "global|1h|features_ohlc_v3|"
+        == "global|1h|features_ohlc_v4|"
         "sgd_huber_alpha0p0002_eta0p002_eps0p0025_scalerstdv1"
     )
     assert is_regression_model_for_backend(strategy.model, "sgd_huber") is True
