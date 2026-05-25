@@ -1321,6 +1321,70 @@ def _transform_scaled_features(
     return scaled_rows
 
 
+def _model_coefficients(model: object) -> Optional[list[float]]:
+    coefficients = _flatten_numbers(getattr(model, "coef_", None))
+    if len(coefficients) < len(ML_FEATURE_NAMES):
+        return None
+    return coefficients[: len(ML_FEATURE_NAMES)]
+
+
+def _p95_abs_contribution(values: list[float]) -> Optional[float]:
+    if not values:
+        return None
+    return _percentile_sorted(sorted(values), 0.95)
+
+
+def _build_feature_contribution_diagnostics(
+    *,
+    scaled_rows: list[list[float]],
+    coefficient_rows: list[list[float]],
+) -> list[dict[str, Any]]:
+    if not scaled_rows or len(scaled_rows) != len(coefficient_rows):
+        return []
+
+    diagnostics: list[dict[str, Any]] = []
+    for index, name in enumerate(ML_FEATURE_NAMES):
+        coefficients = [
+            row[index] for row in coefficient_rows if index < len(row)
+        ]
+        scaled_values = [row[index] for row in scaled_rows if index < len(row)]
+        if not coefficients or len(coefficients) != len(scaled_values):
+            continue
+        coefficient = _average(coefficients)
+        scaled_std = (_quantiles(scaled_values) or {}).get("std")
+        scaled_std_value = _finite_float(scaled_std)
+        contributions = [
+            coefficient_value * scaled_value
+            for coefficient_value, scaled_value in zip(coefficients, scaled_values)
+        ]
+        abs_contributions = [abs(value) for value in contributions]
+        diagnostics.append(
+            {
+                "feature": name,
+                "coefficient": coefficient,
+                "coefficient_source": (
+                    "single"
+                    if len({round(value, 12) for value in coefficients}) == 1
+                    else "mixed"
+                ),
+                "scaled_feature_std": scaled_std_value,
+                "coef_times_scaled_std": (
+                    coefficient * scaled_std_value
+                    if coefficient is not None and scaled_std_value is not None
+                    else None
+                ),
+                "avg_abs_row_contribution": _average(abs_contributions),
+                "p95_abs_row_contribution": _p95_abs_contribution(abs_contributions),
+                "row_count": len(abs_contributions),
+            }
+        )
+    return sorted(
+        diagnostics,
+        key=lambda row: float(row.get("avg_abs_row_contribution") or 0.0),
+        reverse=True,
+    )
+
+
 def _build_feature_diagnostics(
     predictions: list[MLWalkForwardPrediction],
     model_entries: list[tuple[dict[str, Any], Optional[object]]],
@@ -1342,6 +1406,7 @@ def _build_feature_diagnostics(
         return diagnostics
 
     scaled_rows: list[list[float]] = []
+    coefficient_rows: list[list[float]] = []
     source_values: set[str] = set()
     model_key_values: set[str] = set()
     for prediction, features in feature_rows:
@@ -1353,6 +1418,9 @@ def _build_feature_diagnostics(
         if scaled_row is None or len(scaled_row) != 1:
             return diagnostics
         scaled_rows.append(scaled_row[0])
+        coefficients = _model_coefficients(model)
+        if coefficients is not None:
+            coefficient_rows.append(coefficients)
         source_values.add(str(entry.get("source") or "unknown"))
         model_key_values.add(str(entry.get("model_key") or "unknown"))
 
@@ -1374,6 +1442,12 @@ def _build_feature_diagnostics(
     diagnostics["health_warnings"] = _build_feature_health_warnings(
         diagnostics["scaled_feature_quantiles"]
     )
+    contributions = _build_feature_contribution_diagnostics(
+        scaled_rows=scaled_rows,
+        coefficient_rows=coefficient_rows,
+    )
+    if contributions:
+        diagnostics["linear_contributions"] = contributions
     return diagnostics
 
 

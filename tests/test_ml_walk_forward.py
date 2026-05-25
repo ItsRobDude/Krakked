@@ -698,6 +698,10 @@ def test_feature_diagnostics_handles_unavailable_scaler() -> None:
 class _PassthroughScaledModel:
     scaler_initialized = True
 
+    def __init__(self, coefficients: list[float] | None = None) -> None:
+        if coefficients is not None:
+            self.coef_ = coefficients
+
     def _scaled(self, rows: list[list[float]]) -> list[list[float]]:
         return rows
 
@@ -766,6 +770,41 @@ def test_feature_diagnostics_warns_for_tail_heavy_scaled_features() -> None:
     warnings = diagnostics["health_warnings"]
     assert any("High-risk scaled feature volume_zscore" in warning for warning in warnings)
     assert any("High-risk scaled feature lower_wick_pct" in warning for warning in warnings)
+
+
+def test_feature_diagnostics_reports_linear_feature_contributions() -> None:
+    feature_count = len(ML_FEATURE_NAMES)
+    first_feature = ML_FEATURE_NAMES[0]
+    second_feature = ML_FEATURE_NAMES[1]
+    coefficients = [0.0] * feature_count
+    coefficients[0] = 2.0
+    coefficients[1] = -1.0
+    rows = [[1.0, 2.0] + [0.0] * (feature_count - 2)]
+    rows.append([3.0, -2.0] + [0.0] * (feature_count - 2))
+    predictions = [_feature_prediction_row(row) for row in rows]
+
+    diagnostics = _build_feature_diagnostics(
+        predictions,
+        [
+            (
+                {
+                    "source": "live_model",
+                    "model_key": "global|1h|features_ohlc_v2|dummy",
+                },
+                _PassthroughScaledModel(coefficients),
+            )
+        ],
+    )
+
+    contributions = diagnostics["linear_contributions"]
+    assert contributions[0]["feature"] == first_feature
+    assert contributions[0]["coefficient"] == pytest.approx(2.0)
+    assert contributions[0]["scaled_feature_std"] == pytest.approx(1.0)
+    assert contributions[0]["coef_times_scaled_std"] == pytest.approx(2.0)
+    assert contributions[0]["avg_abs_row_contribution"] == pytest.approx(4.0)
+    assert contributions[0]["p95_abs_row_contribution"] == pytest.approx(5.8)
+    second = next(row for row in contributions if row["feature"] == second_feature)
+    assert second["avg_abs_row_contribution"] == pytest.approx(2.0)
 
 
 def test_diagnostic_warnings_surface_non_monotonic_regression_calibration() -> None:
