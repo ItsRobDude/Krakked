@@ -220,6 +220,9 @@ def test_run_backtest_replays_cached_ohlc_with_starting_cash(tmp_path: Path) -> 
     assert strategy_summary["timeframes_evaluated"] == ["1h"]
     assert strategy_summary["intents_emitted"] >= 1
     assert strategy_summary["actions_after_scoring"] >= 1
+    assert "filtered_by_score" in strategy_summary
+    assert strategy_summary["min_score"] is not None
+    assert strategy_summary["max_score"] >= strategy_summary["min_score"]
 
 
 def test_resolve_simulated_fill_price_applies_slippage_by_side() -> None:
@@ -322,6 +325,9 @@ def test_run_backtest_marks_partial_series_and_strict_data_fails(
     assert strategy_summary["timeframes_evaluated"] == ["1h"]
     assert strategy_summary["intents_emitted"] == 0
     assert strategy_summary["actions_after_scoring"] == 0
+    assert strategy_summary["filtered_by_score"] == 0
+    assert strategy_summary["min_score"] is None
+    assert strategy_summary["max_score"] is None
     assert result.preflight is not None
     assert result.preflight.partial_series == ["BTC/USD@1h"]
     assert result.preflight.status == "limited"
@@ -387,6 +393,7 @@ def test_run_backtest_cost_model_reduces_end_equity_and_report_shape(
     assert report["summary"]["per_strategy"]["majors_mean_rev"][
         "cycles_evaluated"
     ] == len(timestamps)
+    assert "filtered_by_score" in report["summary"]["per_strategy"]["majors_mean_rev"]
     assert report["summary"]["replay_inputs"]["fee_bps"] == pytest.approx(25.0)
     assert "enabled_strategies" in report["summary"]["replay_inputs"]
     assert json.loads(json.dumps(report))["summary"]["usable_series_count"] == 1
@@ -472,6 +479,47 @@ def test_build_backtest_preflight_accepts_closed_daily_boundary(
     assert result.preflight.status == "ready"
     assert result.preflight.partial_series == []
     assert result.preflight.coverage[0].status == "ok"
+
+
+def test_replay_diagnostics_reports_score_filtered_intents() -> None:
+    preflight = runner.BacktestPreflight(
+        coverage=[],
+        usable_series_count=1,
+        missing_series=[],
+        partial_series=[],
+        status="ready",
+        summary_note="Coverage looks complete for the requested replay window.",
+        warnings=[],
+    )
+    per_strategy = {
+        "trend_core": {
+            "contexts_evaluated": 10,
+            "intents_emitted": 3,
+            "actions_after_scoring": 0,
+            "filtered_by_score": 3,
+            "min_score": 0.0,
+            "max_score": 0.02,
+        }
+    }
+
+    trust_level, trust_note, warnings = runner._build_replay_diagnostics(  # noqa: SLF001
+        total_actions=0,
+        blocked_actions=0,
+        total_orders=0,
+        filled_orders=0,
+        execution_errors=0,
+        preflight=preflight,
+        per_strategy=per_strategy,
+    )
+
+    assert trust_level == "weak_signal"
+    assert trust_note == (
+        "Weak signal: strategy intents were emitted but all were filtered before risk checks."
+    )
+    assert (
+        "Strategy intents were emitted but all were filtered before risk checks."
+        in warnings
+    )
 
 
 def test_build_trend_core_warmup_warnings_for_short_daily_window(

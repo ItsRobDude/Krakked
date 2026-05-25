@@ -430,6 +430,9 @@ class StrategyEngine:
             "timeframes_evaluated": [],
             "intents_emitted": 0,
             "actions_after_scoring": 0,
+            "filtered_by_score": 0,
+            "min_score": None,
+            "max_score": None,
             "blocked_actions": 0,
             "data_stale_contexts": 0,
             "skipped_no_pairs": 0,
@@ -471,6 +474,28 @@ class StrategyEngine:
                 continue
             counts[action.strategy_id] = counts.get(action.strategy_id, 0) + 1
         return counts
+
+    @staticmethod
+    def _record_intent_score(
+        evaluation_summary: Dict[str, Dict[str, Any]],
+        intent: StrategyIntent,
+        score: float,
+        *,
+        min_score: float,
+    ) -> None:
+        evaluation = evaluation_summary.setdefault(
+            intent.strategy_id, StrategyEngine._new_strategy_evaluation()
+        )
+        current_min = evaluation.get("min_score")
+        current_max = evaluation.get("max_score")
+        evaluation["min_score"] = (
+            score if current_min is None else min(float(current_min), score)
+        )
+        evaluation["max_score"] = (
+            score if current_max is None else max(float(current_max), score)
+        )
+        if score < min_score:
+            evaluation["filtered_by_score"] += 1
 
     def _collect_intents(
         self,
@@ -647,6 +672,10 @@ class StrategyEngine:
             scored.append((intent, score))
 
         MIN_SCORE = 0.05
+        for intent, score in scored:
+            self._record_intent_score(
+                evaluation_summary, intent, score, min_score=MIN_SCORE
+            )
         filtered_scored = [
             (intent, score) for intent, score in scored if score >= MIN_SCORE
         ]

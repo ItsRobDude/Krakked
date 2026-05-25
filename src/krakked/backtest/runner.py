@@ -1130,6 +1130,9 @@ def _new_strategy_summary_entry() -> Dict[str, Any]:
         "timeframes_evaluated": [],
         "intents_emitted": 0,
         "actions_after_scoring": 0,
+        "filtered_by_score": 0,
+        "min_score": None,
+        "max_score": None,
         "blocked_actions": 0,
         "data_stale_contexts": 0,
         "skipped_no_pairs": 0,
@@ -1176,6 +1179,7 @@ def _build_strategy_summary(
         "contexts_evaluated",
         "intents_emitted",
         "actions_after_scoring",
+        "filtered_by_score",
         "blocked_actions",
         "data_stale_contexts",
         "skipped_no_pairs",
@@ -1194,6 +1198,20 @@ def _build_strategy_summary(
                     payload.get(field_name, 0) or 0
                 )
             _append_unique_timeframes(entry, payload.get("timeframes_evaluated"))
+            min_score = payload.get("min_score")
+            if min_score is not None:
+                existing_min = entry.get("min_score")
+                score = float(min_score)
+                entry["min_score"] = (
+                    score if existing_min is None else min(float(existing_min), score)
+                )
+            max_score = payload.get("max_score")
+            if max_score is not None:
+                existing_max = entry.get("max_score")
+                score = float(max_score)
+                entry["max_score"] = (
+                    score if existing_max is None else max(float(existing_max), score)
+                )
 
     return summary
 
@@ -1276,12 +1294,23 @@ def _build_replay_diagnostics(
     total_intents_emitted = sum(
         int(entry.get("intents_emitted", 0) or 0) for entry in per_strategy.values()
     )
+    total_actions_after_scoring = sum(
+        int(entry.get("actions_after_scoring", 0) or 0)
+        for entry in per_strategy.values()
+    )
+    all_intents_filtered_by_score = (
+        total_intents_emitted > 0 and total_actions_after_scoring == 0
+    )
     strategies_evaluated_without_intents = (
         total_contexts_evaluated > 0 and total_intents_emitted == 0
     )
 
     if total_actions == 0:
-        if strategies_evaluated_without_intents:
+        if all_intents_filtered_by_score:
+            warnings.append(
+                "Strategy intents were emitted but all were filtered before risk checks."
+            )
+        elif strategies_evaluated_without_intents:
             warnings.append(
                 "Strategies were evaluated but emitted no intents in this window."
             )
@@ -1307,6 +1336,11 @@ def _build_replay_diagnostics(
     if execution_errors > 0:
         trust_level = "weak_signal"
         trust_note = "Weak signal: execution errors occurred during the replay."
+    elif total_actions == 0 and all_intents_filtered_by_score:
+        trust_level = "weak_signal"
+        trust_note = (
+            "Weak signal: strategy intents were emitted but all were filtered before risk checks."
+        )
     elif total_actions == 0 and strategies_evaluated_without_intents:
         trust_level = "weak_signal"
         trust_note = (
