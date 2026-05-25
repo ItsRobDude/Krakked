@@ -214,6 +214,12 @@ def test_run_backtest_replays_cached_ohlc_with_starting_cash(tmp_path: Path) -> 
     assert "filled trades" in result.summary.trust_note
     assert result.summary.notable_warnings == []
     assert "config_path" not in result.summary.replay_inputs
+    strategy_summary = result.summary.per_strategy["majors_mean_rev"]
+    assert strategy_summary["cycles_evaluated"] == len(timestamps)
+    assert strategy_summary["contexts_evaluated"] == len(timestamps)
+    assert strategy_summary["timeframes_evaluated"] == ["1h"]
+    assert strategy_summary["intents_emitted"] >= 1
+    assert strategy_summary["actions_after_scoring"] >= 1
 
 
 def test_resolve_simulated_fill_price_applies_slippage_by_side() -> None:
@@ -310,6 +316,12 @@ def test_run_backtest_marks_partial_series_and_strict_data_fails(
     assert result.summary.partial_series == ["BTC/USD@1h"]
     assert result.summary.trust_level == "weak_signal"
     assert "no strategy actions" in result.summary.trust_note
+    strategy_summary = result.summary.per_strategy["majors_mean_rev"]
+    assert strategy_summary["cycles_evaluated"] == len(timestamps)
+    assert strategy_summary["contexts_evaluated"] == len(timestamps)
+    assert strategy_summary["timeframes_evaluated"] == ["1h"]
+    assert strategy_summary["intents_emitted"] == 0
+    assert strategy_summary["actions_after_scoring"] == 0
     assert result.preflight is not None
     assert result.preflight.partial_series == ["BTC/USD@1h"]
     assert result.preflight.status == "limited"
@@ -372,6 +384,9 @@ def test_run_backtest_cost_model_reduces_end_equity_and_report_shape(
     assert "generated_at" in report
     assert report["summary"]["coverage"][0]["status"] == "ok"
     assert "per_strategy" in report["summary"]
+    assert report["summary"]["per_strategy"]["majors_mean_rev"][
+        "cycles_evaluated"
+    ] == len(timestamps)
     assert report["summary"]["replay_inputs"]["fee_bps"] == pytest.approx(25.0)
     assert "enabled_strategies" in report["summary"]["replay_inputs"]
     assert json.loads(json.dumps(report))["summary"]["usable_series_count"] == 1

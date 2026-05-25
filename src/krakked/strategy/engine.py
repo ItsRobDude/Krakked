@@ -422,23 +422,85 @@ class StrategyEngine:
 
         return summaries_by_strategy
 
+    @staticmethod
+    def _new_strategy_evaluation() -> Dict[str, Any]:
+        return {
+            "cycles_evaluated": 0,
+            "contexts_evaluated": 0,
+            "timeframes_evaluated": [],
+            "intents_emitted": 0,
+            "actions_after_scoring": 0,
+            "blocked_actions": 0,
+            "data_stale_contexts": 0,
+            "skipped_no_pairs": 0,
+        }
+
+    @staticmethod
+    def _add_evaluated_timeframe(entry: Dict[str, Any], timeframe: str) -> None:
+        timeframes = entry.setdefault("timeframes_evaluated", [])
+        if timeframe not in timeframes:
+            timeframes.append(timeframe)
+
+    @staticmethod
+    def _configured_strategy_timeframes(strategy: Strategy) -> List[str]:
+        configured_timeframes = strategy.config.params.get("timeframes")
+        if isinstance(configured_timeframes, (list, tuple)):
+            return [str(timeframe) for timeframe in configured_timeframes]
+        if configured_timeframes is not None:
+            return [str(configured_timeframes)]
+
+        single_timeframe = strategy.config.params.get("timeframe")
+        return [str(single_timeframe)] if single_timeframe else ["1h"]
+
+    @staticmethod
+    def _count_intents_by_strategy(
+        intents: List[StrategyIntent],
+    ) -> Dict[str, int]:
+        counts: Dict[str, int] = {}
+        for intent in intents:
+            counts[intent.strategy_id] = counts.get(intent.strategy_id, 0) + 1
+        return counts
+
+    @staticmethod
+    def _count_blocked_actions_by_strategy(
+        actions: List[RiskAdjustedAction],
+    ) -> Dict[str, int]:
+        counts: Dict[str, int] = {}
+        for action in actions:
+            if not action.blocked:
+                continue
+            counts[action.strategy_id] = counts.get(action.strategy_id, 0) + 1
+        return counts
+
     def _collect_intents(
         self,
         now: datetime,
         regime: RegimeSnapshot,
         plan_id: str,
         weights: Optional[StrategyWeights],
-    ) -> tuple[List[StrategyIntent], Dict[str, List[Dict[str, Any]]]]:
+    ) -> tuple[
+        List[StrategyIntent],
+        Dict[str, List[Dict[str, Any]]],
+        Dict[str, Dict[str, Any]],
+    ]:
         """Collect intents from all active strategies across configured timeframes."""
         all_intents: List[StrategyIntent] = []
         intent_summaries: Dict[str, List[Dict[str, Any]]] = {}
+        evaluation_summary = {
+            name: self._new_strategy_evaluation() for name in self.strategies
+        }
 
         for name, strategy in self.strategies.items():
             state = self.strategy_states.get(name)
             if state is not None and not state.enabled:
                 continue
+            evaluation = evaluation_summary.setdefault(
+                name, self._new_strategy_evaluation()
+            )
+            evaluation["cycles_evaluated"] += 1
             strategy_pairs = self._get_strategy_pairs(name)
             if not strategy_pairs:
+                evaluation["skipped_no_pairs"] += 1
                 logger.info(
                     "No eligible pairs for strategy %s; skipping this cycle",
                     name,
@@ -448,21 +510,17 @@ class StrategyEngine:
                 )
                 continue
 
-            configured_timeframes = strategy.config.params.get("timeframes")
-            if isinstance(configured_timeframes, (list, tuple)):
-                timeframes = list(configured_timeframes)
-            elif configured_timeframes is not None:
-                timeframes = [configured_timeframes]
-            else:
-                single_timeframe = strategy.config.params.get("timeframe")
-                timeframes = [single_timeframe] if single_timeframe else ["1h"]
+            timeframes = self._configured_strategy_timeframes(strategy)
 
             for timeframe in timeframes:
+                evaluation["contexts_evaluated"] += 1
+                self._add_evaluated_timeframe(evaluation, timeframe)
                 context = self._build_context(
                     now, strategy.config, timeframe, regime, strategy_pairs
                 )
                 try:
                     intents = strategy.generate_intents(context)
+                    evaluation["intents_emitted"] += len(intents)
                     for intent in intents:
                         intent.strategy_id = name
                         intent.metadata = intent.metadata or {}
@@ -496,6 +554,7 @@ class StrategyEngine:
                     self.strategy_states[name].last_evaluated_at = now
                     self.strategy_states[name].last_intents_at = now
                 except DataStaleError as exc:
+                    evaluation["data_stale_contexts"] += 1
                     logger.warning(
                         (
                             "Stale market data for %s on timeframe %s (pair %s); "
@@ -527,7 +586,7 @@ class StrategyEngine:
                         ),
                     )
 
-        return all_intents, intent_summaries
+        return all_intents, intent_summaries, evaluation_summary
 
     def _score_intent(
         self,
@@ -577,7 +636,7 @@ class StrategyEngine:
 
         weights = self._compute_strategy_weights(regime)
         self.refresh_strategy_weight_state(weights)
-        all_intents, intent_summaries = self._collect_intents(
+        all_intents, intent_summaries, evaluation_summary = self._collect_intents(
             now, regime, plan_id, weights
         )
         self.last_cycle_intents = list(all_intents)
@@ -602,6 +661,12 @@ class StrategyEngine:
                 )[:MAX_INTENTS_PER_CYCLE]
             ]
 
+        for strategy_id, count in self._count_intents_by_strategy(filtered).items():
+            evaluation = evaluation_summary.setdefault(
+                strategy_id, self._new_strategy_evaluation()
+            )
+            evaluation["actions_after_scoring"] += count
+
         # Fetch pending orders from the store to prevent double-spending in risk checks
         pending_orders = []
         if self.portfolio.store and hasattr(self.portfolio.store, "get_open_orders"):
@@ -618,6 +683,13 @@ class StrategyEngine:
             filtered, weights=weights, pending_orders=pending_orders
         )
         conflict_summaries = self._build_conflict_summaries(filtered, risk_actions)
+        for strategy_id, count in self._count_blocked_actions_by_strategy(
+            risk_actions
+        ).items():
+            evaluation = evaluation_summary.setdefault(
+                strategy_id, self._new_strategy_evaluation()
+            )
+            evaluation["blocked_actions"] += count
 
         for action in risk_actions:
             strat_cfg = self.config.strategies.configs.get(action.strategy_id)
@@ -658,7 +730,10 @@ class StrategyEngine:
             plan_id=plan_id,
             generated_at=now,
             actions=risk_actions,
-            metadata={"risk_status": asdict(self.risk_engine.get_status())},
+            metadata={
+                "risk_status": asdict(self.risk_engine.get_status()),
+                "strategy_evaluation": evaluation_summary,
+            },
         )
 
         self._persist_plan(plan)

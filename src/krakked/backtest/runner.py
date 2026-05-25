@@ -116,7 +116,7 @@ class BacktestSummary:
     partial_series: List[str] = field(default_factory=list)
     coverage: List[BacktestCoverageItem] = field(default_factory=list)
     blocked_reason_counts: Dict[str, int] = field(default_factory=dict)
-    per_strategy: Dict[str, Dict[str, float | int]] = field(default_factory=dict)
+    per_strategy: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     trust_level: str = ""
     trust_note: str = ""
     notable_warnings: List[str] = field(default_factory=list)
@@ -960,7 +960,7 @@ def _build_backtest_summary(
     )
     snapshots = portfolio.get_snapshots()
     max_drawdown_pct = _compute_max_drawdown_pct(snapshots)
-    per_strategy = _build_strategy_summary(portfolio)
+    per_strategy = _build_strategy_summary(portfolio, plans)
     slippage_bps = float(getattr(portfolio.app_config.execution, "max_slippage_bps", 0))
     cost_model = (
         "Immediate candle-close fills using configured slippage and flat taker fees."
@@ -1049,39 +1049,81 @@ def _compute_max_drawdown_pct(snapshots: List[Any]) -> float:
     return max_drawdown
 
 
+def _new_strategy_summary_entry() -> Dict[str, Any]:
+    return {
+        "realized_pnl_usd": 0.0,
+        "trade_count": 0,
+        "winning_trades": 0,
+        "losing_trades": 0,
+        "cycles_evaluated": 0,
+        "contexts_evaluated": 0,
+        "timeframes_evaluated": [],
+        "intents_emitted": 0,
+        "actions_after_scoring": 0,
+        "blocked_actions": 0,
+        "data_stale_contexts": 0,
+        "skipped_no_pairs": 0,
+    }
+
+
+def _append_unique_timeframes(entry: Dict[str, Any], values: Any) -> None:
+    if not isinstance(values, list):
+        return
+    timeframes = entry.setdefault("timeframes_evaluated", [])
+    for value in values:
+        timeframe = str(value)
+        if timeframe not in timeframes:
+            timeframes.append(timeframe)
+
+
 def _build_strategy_summary(
     portfolio: BacktestPortfolioService,
-) -> Dict[str, Dict[str, float | int]]:
+    plans: List[ExecutionPlan],
+) -> Dict[str, Dict[str, Any]]:
+    enabled = list(getattr(portfolio.app_config.strategies, "enabled", []))
     realized = portfolio.get_realized_pnl_by_strategy(include_manual=False)
-    summary: Dict[str, Dict[str, float | int]] = {
-        strategy_id: {
-            "realized_pnl_usd": float(pnl),
-            "trade_count": 0,
-            "winning_trades": 0,
-            "losing_trades": 0,
-        }
-        for strategy_id, pnl in realized.items()
+    summary: Dict[str, Dict[str, Any]] = {
+        strategy_id: _new_strategy_summary_entry() for strategy_id in enabled
     }
+    for strategy_id, pnl in realized.items():
+        entry = summary.setdefault(strategy_id, _new_strategy_summary_entry())
+        entry["realized_pnl_usd"] = float(pnl)
 
     for record in getattr(portfolio, "realized_pnl_history", []):
         strategy_id = getattr(record, "strategy_tag", None)
         if not strategy_id or strategy_id == "manual":
             continue
-        entry = summary.setdefault(
-            strategy_id,
-            {
-                "realized_pnl_usd": 0.0,
-                "trade_count": 0,
-                "winning_trades": 0,
-                "losing_trades": 0,
-            },
-        )
+        entry = summary.setdefault(strategy_id, _new_strategy_summary_entry())
         entry["trade_count"] = int(entry["trade_count"]) + 1
         pnl_quote = float(getattr(record, "pnl_quote", 0.0))
         if pnl_quote > 0:
             entry["winning_trades"] = int(entry["winning_trades"]) + 1
         elif pnl_quote < 0:
             entry["losing_trades"] = int(entry["losing_trades"]) + 1
+
+    int_fields = [
+        "cycles_evaluated",
+        "contexts_evaluated",
+        "intents_emitted",
+        "actions_after_scoring",
+        "blocked_actions",
+        "data_stale_contexts",
+        "skipped_no_pairs",
+    ]
+    for plan in plans:
+        metadata = getattr(plan, "metadata", {}) or {}
+        evaluation = metadata.get("strategy_evaluation") or {}
+        if not isinstance(evaluation, dict):
+            continue
+        for strategy_id, payload in evaluation.items():
+            if not isinstance(payload, dict):
+                continue
+            entry = summary.setdefault(str(strategy_id), _new_strategy_summary_entry())
+            for field_name in int_fields:
+                entry[field_name] = int(entry[field_name]) + int(
+                    payload.get(field_name, 0) or 0
+                )
+            _append_unique_timeframes(entry, payload.get("timeframes_evaluated"))
 
     return summary
 
