@@ -76,7 +76,7 @@ class MeanReversionStrategy(Strategy):
 
             pair_regime = None
             if ctx.regime:
-                pair_regime = ctx.regime.per_pair.get(pair)
+                pair_regime = ctx.regime.regime_for(pair)
 
             band = ma * (self.params.band_width_bps / 10_000)
             upper_band = ma + band

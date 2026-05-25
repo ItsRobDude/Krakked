@@ -5,6 +5,7 @@ from krakked.config import OHLCBar, StrategyConfig
 from krakked.market_data.api import MarketDataAPI
 from krakked.portfolio.models import SpotPosition
 from krakked.strategy.base import StrategyContext
+from krakked.strategy.regime import MarketRegime, RegimeSnapshot
 from krakked.strategy.strategies.mean_reversion import MeanReversionStrategy
 from tests.runtime_mocks import make_portfolio_service_mock
 
@@ -63,6 +64,36 @@ def test_mean_reversion_enters_on_lower_band_break():
     assert intent.side == "long"
     assert intent.intent_type == "enter"
     assert intent.desired_exposure_usd is None
+
+
+def test_mean_reversion_display_pair_respects_trending_regime_alias():
+    cfg = StrategyConfig(
+        name="majors_mean_rev",
+        type="mean_reversion",
+        enabled=True,
+        params={
+            "pairs": ["BTC/USD"],
+            "timeframe": "1h",
+            "lookback_bars": 5,
+            "band_width_bps": 150.0,
+            "max_positions": 2,
+        },
+        userref=1004,
+    )
+    strat = MeanReversionStrategy(cfg)
+
+    ctx, market, portfolio = _build_context()
+    ctx.regime = RegimeSnapshot(
+        per_pair={"XBTUSD": MarketRegime.TRENDING},
+        as_of="now",
+    )
+    portfolio.get_positions.return_value = []
+
+    bars = [_make_bar(ts, 100.0) for ts in range(4)]
+    bars.append(_make_bar(4, 97.0))
+    market.get_ohlc.return_value = bars
+
+    assert strat.generate_intents(ctx) == []
 
 
 def test_mean_reversion_exits_on_reversion_to_ma():

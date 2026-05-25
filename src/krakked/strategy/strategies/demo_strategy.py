@@ -119,7 +119,7 @@ class TrendFollowingStrategy(Strategy):
 
             regime_type = None
             if ctx.regime:
-                regime_type = ctx.regime.per_pair.get(pair)
+                regime_type = ctx.regime.regime_for(pair)
 
             threshold = self.params.min_trend_strength_bps
             if regime_type == MarketRegime.CHOPPY:

@@ -2,7 +2,7 @@ from unittest.mock import MagicMock
 
 from krakked.config import OHLCBar
 from krakked.market_data.api import MarketDataAPI
-from krakked.strategy.regime import MarketRegime, infer_regime
+from krakked.strategy.regime import MarketRegime, RegimeSnapshot, infer_regime
 
 
 def _bars_from_closes(closes: list[float]):
@@ -36,3 +36,13 @@ def test_infer_regime_classifies_pairs():
     assert snapshot.per_pair["TREND"] == MarketRegime.TRENDING
     assert snapshot.per_pair["MEAN"] == MarketRegime.MEAN_REVERTING
     assert snapshot.per_pair["CHOP"] == MarketRegime.CHOPPY
+
+
+def test_regime_snapshot_resolves_display_and_kraken_btc_aliases():
+    snapshot = RegimeSnapshot(
+        per_pair={"XBTUSD": MarketRegime.TRENDING},
+        as_of="now",
+    )
+
+    assert snapshot.regime_for("BTC/USD") == MarketRegime.TRENDING
+    assert snapshot.regime_for("XBTUSD") == MarketRegime.TRENDING
