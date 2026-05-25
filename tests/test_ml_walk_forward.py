@@ -25,7 +25,11 @@ from krakked.config import AppConfig, StrategyConfig, load_config
 from krakked.market_data.metadata_store import PairMetadataStore
 from krakked.market_data.models import PairMetadata
 from krakked.strategy.models import StrategyIntent
-from krakked.strategy.features import ML_FEATURE_NAMES, ML_FEATURE_SCHEMA_VERSION
+from krakked.strategy.features import (
+    ML_FEATURE_CLIPPING_VERSION,
+    ML_FEATURE_NAMES,
+    ML_FEATURE_SCHEMA_VERSION,
+)
 from krakked.strategy.strategies.ml_alt_strategy import AIPredictorAltStrategy
 from krakked.strategy.strategies.ml_regression_strategy import AIRegressionStrategy
 from krakked.strategy.strategies.ml_strategy import AIPredictorStrategy
@@ -811,6 +815,90 @@ def test_feature_diagnostics_reports_linear_feature_contributions() -> None:
     assert contributions[0]["p95_abs_row_contribution"] == pytest.approx(5.8)
     second = next(row for row in contributions if row["feature"] == second_feature)
     assert second["avg_abs_row_contribution"] == pytest.approx(2.0)
+
+
+def test_feature_diagnostics_reports_clipping_stats_and_warnings() -> None:
+    rows = [[0.0] * len(ML_FEATURE_NAMES) for _ in range(10)]
+    predictions = [_feature_prediction_row(row) for row in rows]
+    for index, prediction in enumerate(predictions):
+        was_clipped = index < 3
+        raw_value = 0.25 if was_clipped else 0.01
+        clipped_value = 0.15 if was_clipped else raw_value
+        prediction.metadata["features"]["feature_clipping_version"] = (
+            ML_FEATURE_CLIPPING_VERSION
+        )
+        prediction.metadata["features"]["feature_clipping"] = {
+            "pct_change": {
+                "cap_min": -0.15,
+                "cap_max": 0.15,
+                "raw_value": raw_value,
+                "clipped_value": clipped_value,
+                "was_clipped": was_clipped,
+            }
+        }
+
+    diagnostics = _build_feature_diagnostics(
+        predictions,
+        [
+            (
+                {
+                    "source": "live_model",
+                    "model_key": "global|1h|features_ohlc_v4|dummy",
+                },
+                _PassthroughScaledModel(),
+            )
+        ],
+    )
+
+    clipping = diagnostics["clipping"]["features"]["pct_change"]
+    assert diagnostics["clipping"]["version"] == ML_FEATURE_CLIPPING_VERSION
+    assert clipping["observed_count"] == 10
+    assert clipping["clipped_count"] == 3
+    assert clipping["clipped_rate"] == pytest.approx(0.3)
+    assert clipping["cap_min"] == pytest.approx(-0.15)
+    assert clipping["cap_max"] == pytest.approx(0.15)
+    assert clipping["raw_min"] == pytest.approx(0.01)
+    assert clipping["raw_max"] == pytest.approx(0.25)
+    assert clipping["research_gate_failed"] is True
+    assert any("pct_change clipped on 30.0%" in warning for warning in diagnostics["health_warnings"])
+
+
+def test_feature_diagnostics_omits_clipping_warning_at_two_percent() -> None:
+    rows = [[0.0] * len(ML_FEATURE_NAMES) for _ in range(50)]
+    predictions = [_feature_prediction_row(row) for row in rows]
+    for index, prediction in enumerate(predictions):
+        was_clipped = index == 0
+        raw_value = 0.25 if was_clipped else 0.01
+        clipped_value = 0.15 if was_clipped else raw_value
+        prediction.metadata["features"]["feature_clipping_version"] = (
+            ML_FEATURE_CLIPPING_VERSION
+        )
+        prediction.metadata["features"]["feature_clipping"] = {
+            "pct_change": {
+                "cap_min": -0.15,
+                "cap_max": 0.15,
+                "raw_value": raw_value,
+                "clipped_value": clipped_value,
+                "was_clipped": was_clipped,
+            }
+        }
+
+    diagnostics = _build_feature_diagnostics(
+        predictions,
+        [
+            (
+                {
+                    "source": "live_model",
+                    "model_key": "global|1h|features_ohlc_v4|dummy",
+                },
+                _PassthroughScaledModel(),
+            )
+        ],
+    )
+
+    clipping = diagnostics["clipping"]["features"]["pct_change"]
+    assert clipping["clipped_rate"] == pytest.approx(0.02)
+    assert not any("pct_change clipped" in warning for warning in diagnostics["health_warnings"])
 
 
 def test_diagnostic_warnings_surface_non_monotonic_regression_calibration() -> None:

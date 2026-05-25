@@ -29,7 +29,7 @@ from krakked.strategy.ml_labels import (
     NO_POSITIVE_EDGE_PREDICTION,
     POSITIVE_EDGE_PREDICTION,
 )
-from krakked.strategy.features import ML_FEATURE_NAMES
+from krakked.strategy.features import ML_FEATURE_CLIP_RANGES, ML_FEATURE_NAMES
 from krakked.strategy.models import StrategyIntent
 
 logger = logging.getLogger(__name__)
@@ -49,6 +49,8 @@ SCALED_FEATURE_MEDIAN_ABS_WARNING_THRESHOLD = 0.75
 SCALED_FEATURE_STD_MIN_WARNING_THRESHOLD = 0.5
 SCALED_FEATURE_STD_MAX_WARNING_THRESHOLD = 2.0
 SCALED_FEATURE_TAIL_ABS_WARNING_THRESHOLD = 3.0
+FEATURE_CLIPPED_RATE_WARNING_THRESHOLD = 0.02
+FEATURE_CLIPPED_RATE_RESEARCH_GATE_THRESHOLD = 0.05
 HIGH_RISK_SCALED_FEATURES = frozenset(
     {
         "volume_change",
@@ -1241,6 +1243,10 @@ def _feature_health_thresholds() -> dict[str, Any]:
         "scaled_std_min_warn": SCALED_FEATURE_STD_MIN_WARNING_THRESHOLD,
         "scaled_std_max_warn": SCALED_FEATURE_STD_MAX_WARNING_THRESHOLD,
         "scaled_tail_abs_warn": SCALED_FEATURE_TAIL_ABS_WARNING_THRESHOLD,
+        "clipped_rate_warn": FEATURE_CLIPPED_RATE_WARNING_THRESHOLD,
+        "clipped_rate_research_gate_fail": (
+            FEATURE_CLIPPED_RATE_RESEARCH_GATE_THRESHOLD
+        ),
         "high_risk_features": sorted(HIGH_RISK_SCALED_FEATURES),
     }
 
@@ -1294,6 +1300,109 @@ def _build_feature_health_warnings(
                 f"{prefix} {name} has tail values above "
                 f"{SCALED_FEATURE_TAIL_ABS_WARNING_THRESHOLD:.1f} "
                 f"(abs_tail={tail_abs:.4g})."
+            )
+    return warnings
+
+
+def _feature_clipping_metadata(
+    prediction: MLWalkForwardPrediction,
+) -> Optional[dict[str, Any]]:
+    features = prediction.metadata.get("features")
+    if not isinstance(features, dict):
+        return None
+    clipping = features.get("feature_clipping")
+    return clipping if isinstance(clipping, dict) else None
+
+
+def _build_feature_clipping_diagnostics(
+    predictions: list[MLWalkForwardPrediction],
+) -> dict[str, Any]:
+    versions = {
+        str(features.get("feature_clipping_version"))
+        for prediction in predictions
+        if isinstance((features := prediction.metadata.get("features")), dict)
+        and features.get("feature_clipping_version")
+    }
+    feature_stats: dict[str, Any] = {}
+    for name, (default_cap_min, default_cap_max) in ML_FEATURE_CLIP_RANGES.items():
+        entries: list[dict[str, Any]] = []
+        for prediction in predictions:
+            clipping = _feature_clipping_metadata(prediction)
+            if clipping is None:
+                continue
+            details = clipping.get(name)
+            if isinstance(details, dict):
+                entries.append(details)
+        if not entries:
+            continue
+        raw_values = [
+            value
+            for entry in entries
+            if (value := _finite_float(entry.get("raw_value"))) is not None
+        ]
+        clipped_values = [
+            value
+            for entry in entries
+            if (value := _finite_float(entry.get("clipped_value"))) is not None
+        ]
+        clipped_count = sum(1 for entry in entries if bool(entry.get("was_clipped")))
+        observed_count = len(entries)
+        cap_min = _finite_float(entries[0].get("cap_min"))
+        cap_max = _finite_float(entries[0].get("cap_max"))
+        clipped_rate = _rate(clipped_count, observed_count)
+        feature_stats[name] = {
+            "observed_count": observed_count,
+            "clipped_count": clipped_count,
+            "clipped_rate": clipped_rate,
+            "research_gate_failed": (
+                clipped_rate is not None
+                and clipped_rate > FEATURE_CLIPPED_RATE_RESEARCH_GATE_THRESHOLD
+            ),
+            "cap_min": cap_min if cap_min is not None else default_cap_min,
+            "cap_max": cap_max if cap_max is not None else default_cap_max,
+            "raw_min": min(raw_values) if raw_values else None,
+            "raw_max": max(raw_values) if raw_values else None,
+            "clipped_min": min(clipped_values) if clipped_values else None,
+            "clipped_max": max(clipped_values) if clipped_values else None,
+        }
+    return {
+        "version": next(iter(versions)) if len(versions) == 1 else "mixed",
+        "feature_count": len(feature_stats),
+        "features": feature_stats,
+        "thresholds": {
+            "clipped_rate_warn": FEATURE_CLIPPED_RATE_WARNING_THRESHOLD,
+            "clipped_rate_research_gate_fail": (
+                FEATURE_CLIPPED_RATE_RESEARCH_GATE_THRESHOLD
+            ),
+        },
+    }
+
+
+def _build_feature_clipping_warnings(
+    clipping_diagnostics: dict[str, Any],
+) -> list[str]:
+    warnings: list[str] = []
+    features = clipping_diagnostics.get("features")
+    if not isinstance(features, dict):
+        return warnings
+    for name, stats in features.items():
+        if not isinstance(stats, dict):
+            continue
+        clipped_rate = _finite_float(stats.get("clipped_rate"))
+        clipped_count = int(stats.get("clipped_count") or 0)
+        observed_count = int(stats.get("observed_count") or 0)
+        if (
+            clipped_rate is not None
+            and clipped_rate > FEATURE_CLIPPED_RATE_WARNING_THRESHOLD
+        ):
+            gate_note = (
+                " Research gate fails for this feature."
+                if clipped_rate > FEATURE_CLIPPED_RATE_RESEARCH_GATE_THRESHOLD
+                else ""
+            )
+            warnings.append(
+                f"Feature {name} clipped on {clipped_rate:.1%} of predictions "
+                f"({clipped_count}/{observed_count}).{gate_note}"
             )
     return warnings
 
@@ -1403,7 +1512,13 @@ def _build_feature_diagnostics(
         "raw_feature_quantiles": _feature_quantiles(rows),
         "scaled_available": False,
     }
+    clipping_diagnostics = _build_feature_clipping_diagnostics(predictions)
+    clipping_warnings = _build_feature_clipping_warnings(clipping_diagnostics)
+    if clipping_diagnostics["feature_count"]:
+        diagnostics["clipping"] = clipping_diagnostics
     if not feature_rows:
+        if clipping_warnings:
+            diagnostics["health_warnings"] = clipping_warnings
         return diagnostics
 
     scaled_rows: list[list[float]] = []
@@ -1413,10 +1528,14 @@ def _build_feature_diagnostics(
     for prediction, features in feature_rows:
         selected = _select_model_entry_for_prediction(model_entries, prediction)
         if selected is None:
+            if clipping_warnings:
+                diagnostics["health_warnings"] = clipping_warnings
             return diagnostics
         entry, model = selected
         scaled_row = _transform_scaled_features(model, [features])
         if scaled_row is None or len(scaled_row) != 1:
+            if clipping_warnings:
+                diagnostics["health_warnings"] = clipping_warnings
             return diagnostics
         scaled_rows.append(scaled_row[0])
         coefficients = _model_coefficients(model)
@@ -1440,8 +1559,9 @@ def _build_feature_diagnostics(
     if len(model_key_values) > 1:
         diagnostics["scaled_feature_source_model_keys"] = sorted(model_key_values)
     diagnostics["health_thresholds"] = _feature_health_thresholds()
-    diagnostics["health_warnings"] = _build_feature_health_warnings(
-        diagnostics["scaled_feature_quantiles"]
+    diagnostics["health_warnings"] = (
+        _build_feature_health_warnings(diagnostics["scaled_feature_quantiles"])
+        + clipping_warnings
     )
     contributions = _build_feature_contribution_diagnostics(
         scaled_rows=scaled_rows,
