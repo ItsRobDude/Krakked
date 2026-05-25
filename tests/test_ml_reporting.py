@@ -20,7 +20,7 @@ from krakked.backtest.ml_reporting import (
 def _sample_report() -> dict[str, Any]:
     generated_at = datetime(2026, 5, 23, tzinfo=UTC).isoformat()
     return {
-        "report_version": 5,
+        "report_version": 6,
         "generated_at": generated_at,
         "summary": {
             "start": generated_at,

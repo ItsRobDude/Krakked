@@ -1104,10 +1104,10 @@ def _model_matches_prediction(
     return parts[0] == prediction.pair and parts[1] == prediction.timeframe
 
 
-def _select_model_for_prediction(
+def _select_model_entry_for_prediction(
     model_entries: list[tuple[dict[str, Any], Optional[object]]],
     prediction: MLWalkForwardPrediction,
-) -> Optional[object]:
+) -> Optional[tuple[dict[str, Any], object]]:
     candidates = [
         (entry, model)
         for entry, model in model_entries
@@ -1123,15 +1123,25 @@ def _select_model_for_prediction(
             and _model_matches_prediction(str(entry.get("model_key") or ""), prediction)
         ]
     if not candidates:
-        live_models = [
-            model
+        live_model_entries = [
+            (entry, model)
             for entry, model in model_entries
             if model is not None and entry.get("source") == "live_model"
         ]
-        if len(live_models) == 1:
-            return live_models[0]
+        if len(live_model_entries) == 1:
+            return live_model_entries[0]
         return None
-    return candidates[0][1]
+    return candidates[0]
+
+
+def _select_model_for_prediction(
+    model_entries: list[tuple[dict[str, Any], Optional[object]]],
+    prediction: MLWalkForwardPrediction,
+) -> Optional[object]:
+    selected = _select_model_entry_for_prediction(model_entries, prediction)
+    if selected is None:
+        return None
+    return selected[1]
 
 
 def _decision_scores(
@@ -1193,6 +1203,100 @@ def _build_prediction_diagnostics(
     return diagnostics
 
 
+def _feature_schema_from_predictions(
+    predictions: list[MLWalkForwardPrediction],
+) -> Optional[str]:
+    schema_versions = [
+        prediction.metadata.get("feature_schema_version")
+        for prediction in predictions
+        if isinstance(prediction.metadata.get("feature_schema_version"), str)
+    ]
+    return str(schema_versions[0]) if schema_versions else None
+
+
+def _feature_quantiles(rows: list[list[float]]) -> dict[str, Any]:
+    return {
+        name: _quantiles(row[index] for row in rows if index < len(row))
+        for index, name in enumerate(ML_FEATURE_NAMES)
+    }
+
+
+def _transform_scaled_features(
+    model: object, rows: list[list[float]]
+) -> Optional[list[list[float]]]:
+    if not rows:
+        return None
+    if not bool(getattr(model, "scaler_initialized", False)):
+        return None
+    scaled = getattr(model, "_scaled", None)
+    if not callable(scaled):
+        return None
+    try:
+        transformed: Any = scaled(rows)
+    except Exception:
+        logger.warning("Failed to transform ML feature diagnostics", exc_info=True)
+        return None
+    scaled_rows: list[list[float]] = []
+    try:
+        for row in transformed:
+            scaled_rows.append([float(value) for value in row])
+    except (TypeError, ValueError):
+        return None
+    return scaled_rows
+
+
+def _build_feature_diagnostics(
+    predictions: list[MLWalkForwardPrediction],
+    model_entries: list[tuple[dict[str, Any], Optional[object]]],
+) -> dict[str, Any]:
+    feature_rows: list[tuple[MLWalkForwardPrediction, list[float]]] = []
+    for prediction in predictions:
+        features = _features_from_prediction(prediction)
+        if features is not None:
+            feature_rows.append((prediction, features))
+    rows = [features for _prediction, features in feature_rows]
+
+    diagnostics: dict[str, Any] = {
+        "schema_version": _feature_schema_from_predictions(predictions),
+        "prediction_count": len(rows),
+        "raw_feature_quantiles": _feature_quantiles(rows),
+        "scaled_available": False,
+    }
+    if not feature_rows:
+        return diagnostics
+
+    scaled_rows: list[list[float]] = []
+    source_values: set[str] = set()
+    model_key_values: set[str] = set()
+    for prediction, features in feature_rows:
+        selected = _select_model_entry_for_prediction(model_entries, prediction)
+        if selected is None:
+            return diagnostics
+        entry, model = selected
+        scaled_row = _transform_scaled_features(model, [features])
+        if scaled_row is None or len(scaled_row) != 1:
+            return diagnostics
+        scaled_rows.append(scaled_row[0])
+        source_values.add(str(entry.get("source") or "unknown"))
+        model_key_values.add(str(entry.get("model_key") or "unknown"))
+
+    diagnostics.update(
+        {
+            "scaled_available": True,
+            "scaled_feature_quantiles": _feature_quantiles(scaled_rows),
+            "scaled_feature_source": (
+                next(iter(source_values)) if len(source_values) == 1 else "mixed"
+            ),
+            "scaled_feature_source_model_key": (
+                next(iter(model_key_values)) if len(model_key_values) == 1 else "mixed"
+            ),
+        }
+    )
+    if len(model_key_values) > 1:
+        diagnostics["scaled_feature_source_model_keys"] = sorted(model_key_values)
+    return diagnostics
+
+
 def _build_outcome_diagnostics(
     predictions: list[MLWalkForwardPrediction],
 ) -> dict[str, Any]:
@@ -1229,6 +1333,7 @@ def _build_fold_diagnostics(
         "models": [copy.deepcopy(entry) for entry, _model in model_entries],
         "training": _collect_training_diagnostics(store, strategy_id),
         "predictions": _build_prediction_diagnostics(predictions, model_entries),
+        "features": _build_feature_diagnostics(predictions, model_entries),
         "outcomes": _build_outcome_diagnostics(predictions),
     }
 

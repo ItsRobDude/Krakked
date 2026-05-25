@@ -26,6 +26,10 @@ from krakked.backtest import (
     write_backtest_report,
     write_ml_walk_forward_report,
 )
+from krakked.backtest.ml_report_compare import (
+    compare_ml_reports,
+    render_ml_report_comparison,
+)
 from krakked.config import (
     AppConfig,
     get_config_dir,
@@ -528,6 +532,29 @@ def _compare_backtests_command(args: argparse.Namespace) -> int:
                 f"{candidate_pnl:,.2f} ({delta:+,.2f})"
             )
 
+    return 0
+
+
+def _ml_report_compare_command(args: argparse.Namespace) -> int:
+    """Compare saved ML walk-forward report artifacts."""
+
+    comparison = compare_ml_reports(
+        args.reports,
+        glob_pattern=args.glob_pattern,
+        sort_by=args.sort,
+    )
+    rendered = render_ml_report_comparison(comparison, output_format=args.format)
+
+    if args.output:
+        output_path = Path(args.output).expanduser().resolve()
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(rendered + "\n", encoding="utf-8")
+        print(f"ML report comparison written: {output_path}")
+    else:
+        print(rendered)
+
+    for warning in comparison.warnings:
+        print(f"Warning: {warning}", file=sys.stderr)
     return 0
 
 
@@ -1453,6 +1480,38 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Print the ML walk-forward report as JSON",
     )
     ml_walk_forward_parser.set_defaults(func=_ml_walk_forward_command)
+
+    ml_report_compare_parser = subparsers.add_parser(
+        "ml-report-compare",
+        help="Compare saved ML walk-forward JSON reports",
+    )
+    ml_report_compare_parser.add_argument(
+        "reports",
+        nargs="*",
+        help="Saved ML walk-forward report JSON paths",
+    )
+    ml_report_compare_parser.add_argument(
+        "--glob",
+        dest="glob_pattern",
+        help="Glob pattern for report JSON paths, for example reports/ml/*.json",
+    )
+    ml_report_compare_parser.add_argument(
+        "--format",
+        choices=("markdown", "tsv", "json"),
+        default="markdown",
+        help="Output format for the comparison table",
+    )
+    ml_report_compare_parser.add_argument(
+        "--sort",
+        choices=("name", "precision-long", "p95-lift", "positive-calls"),
+        default="name",
+        help="Sort order for report rows",
+    )
+    ml_report_compare_parser.add_argument(
+        "--output",
+        help="Optional path to write the rendered comparison",
+    )
+    ml_report_compare_parser.set_defaults(func=_ml_report_compare_command)
 
     ml_prune_stale_parser = subparsers.add_parser(
         "ml-prune-stale",

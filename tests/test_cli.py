@@ -725,7 +725,7 @@ def test_ml_walk_forward_subcommand_writes_report(
     class _FakeWalkForwardResult:
         def to_report_dict(self) -> dict[str, Any]:
             return {
-                "report_version": 5,
+                "report_version": 6,
                 "generated_at": start.isoformat(),
                 "summary": {
                     "start": start.isoformat(),
@@ -1161,6 +1161,241 @@ def test_backtest_preflight_command_prints_summary(
     assert "Backtest preflight" in output
     assert "Coverage status: ready" in output
     assert "Replay readiness: Coverage looks complete" in output
+
+
+def _write_ml_compare_report(
+    path: Path,
+    *,
+    version: int = 6,
+    precision_long: float = 0.5,
+    p95_lift: float = 1.0,
+    positive_edge_count: int = 5,
+    feature_schema: str = "ohlc_v2",
+    backend: str = "pa",
+    warning: str | None = None,
+) -> None:
+    generated_at = datetime(2026, 5, 24, tzinfo=UTC).isoformat()
+    path.write_text(
+        json.dumps(
+            {
+                "report_version": version,
+                "generated_at": generated_at,
+                "summary": {
+                    "start": generated_at,
+                    "end": generated_at,
+                    "strategy_id": "ai_regression",
+                    "timeframe": "4h",
+                    "train_bars": 180,
+                    "test_bars": 42,
+                    "evaluation_mode": "rolling_window_isolated",
+                    "edge_scoring_mode": "intent_hurdle_aligned",
+                    "model_state_reused_across_folds": False,
+                    "fold_count": 1,
+                    "pairs": ["BTC/USD", "ETH/USD"],
+                    "fee_bps": 10.0,
+                    "slippage_bps": 20.0,
+                    "round_trip_cost_bps": 60.0,
+                    "coverage_status": "ready",
+                    "warnings": [],
+                    "metrics": {
+                        "prediction_count": 20,
+                        "positive_edge_prediction_count": positive_edge_count,
+                        "edge_prediction_accuracy": 0.6,
+                        "directional_accuracy": 0.55,
+                        "precision_long": precision_long,
+                    },
+                    "confidence_buckets": [],
+                    "regression_calibration": {
+                        "prediction_count": 20,
+                        "threshold_sweeps": [
+                            {
+                                "name": "evaluation_hurdle",
+                                "realized_hit_rate": 0.2,
+                                "avg_realized_return_selected": 0.001,
+                            },
+                            {
+                                "name": "predicted_delta_p75",
+                                "lift_over_base_rate": 1.1,
+                                "avg_realized_return_selected": 0.002,
+                            },
+                            {
+                                "name": "predicted_delta_p90",
+                                "lift_over_base_rate": 1.2,
+                                "avg_realized_return_selected": 0.003,
+                            },
+                            {
+                                "name": "predicted_delta_p95",
+                                "lift_over_base_rate": p95_lift,
+                                "avg_realized_return_selected": 0.004,
+                            },
+                        ],
+                        "predicted_delta_deciles": [],
+                        "monotonicity": {"upper_half_improves": True},
+                    },
+                    "diagnostic_warnings": [warning] if warning else [],
+                    "promotable": False,
+                    "promotable_reasons": [],
+                    "folds": [
+                        {
+                            "diagnostics": {
+                                "models": [
+                                    {
+                                        "model_key": (
+                                            "global|4h|features_"
+                                            f"{feature_schema}|pa_reg"
+                                        ),
+                                        "feature_schema_version": feature_schema,
+                                        "model_backend": backend,
+                                        "framework": "sklearn_dummy",
+                                    }
+                                ],
+                                "features": {"schema_version": feature_schema},
+                            },
+                            "regression_calibration": {
+                                "threshold_sweeps": [],
+                                "monotonicity": {"available": False},
+                            },
+                        }
+                    ],
+                },
+                "provenance": {"generated_by": "krakked ml-walk-forward"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_ml_report_compare_accepts_v5_v6_and_markdown(
+    tmp_path: Path, capsys: Any
+) -> None:
+    low = tmp_path / "low.json"
+    high = tmp_path / "high.json"
+    _write_ml_compare_report(low, version=5, precision_long=0.1)
+    _write_ml_compare_report(high, version=6, precision_long=0.9)
+
+    exit_code = cli.main(
+        [
+            "ml-report-compare",
+            str(low),
+            str(high),
+            "--sort",
+            "precision-long",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    rows = [
+        line
+        for line in captured.out.splitlines()
+        if line.startswith("| ") and not line.startswith("| ---")
+    ]
+    assert "high" in rows[1]
+    assert "low" in rows[2]
+    assert "ohlc_v2" in captured.out
+    assert captured.err == ""
+
+
+def test_ml_report_compare_supports_glob_tsv_and_output(
+    tmp_path: Path, capsys: Any
+) -> None:
+    _write_ml_compare_report(tmp_path / "one.json")
+    _write_ml_compare_report(tmp_path / "two.json")
+    output_path = tmp_path / "comparison.tsv"
+
+    exit_code = cli.main(
+        [
+            "ml-report-compare",
+            "--glob",
+            str(tmp_path / "*.json"),
+            "--format",
+            "tsv",
+            "--output",
+            str(output_path),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "written" in captured.out
+    output = output_path.read_text(encoding="utf-8")
+    assert output.startswith("name\tver\ttf")
+    assert "one" in output
+    assert "two" in output
+
+
+@pytest.mark.parametrize(
+    ("sort_by", "expected_first"),
+    [
+        ("name", "alpha"),
+        ("precision-long", "zulu"),
+        ("p95-lift", "middle"),
+        ("positive-calls", "zulu"),
+    ],
+)
+def test_ml_report_compare_sorts_json_output(
+    tmp_path: Path,
+    capsys: Any,
+    sort_by: str,
+    expected_first: str,
+) -> None:
+    _write_ml_compare_report(
+        tmp_path / "alpha.json",
+        precision_long=0.1,
+        p95_lift=1.0,
+        positive_edge_count=1,
+    )
+    _write_ml_compare_report(
+        tmp_path / "middle.json",
+        precision_long=0.2,
+        p95_lift=2.0,
+        positive_edge_count=2,
+    )
+    _write_ml_compare_report(
+        tmp_path / "zulu.json",
+        precision_long=0.9,
+        p95_lift=0.5,
+        positive_edge_count=9,
+    )
+
+    exit_code = cli.main(
+        [
+            "ml-report-compare",
+            "--glob",
+            str(tmp_path / "*.json"),
+            "--format",
+            "json",
+            "--sort",
+            sort_by,
+        ]
+    )
+
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["reports"][0]["name"] == expected_first
+
+
+def test_ml_report_compare_skips_invalid_json_with_warning(
+    tmp_path: Path, capsys: Any
+) -> None:
+    _write_ml_compare_report(tmp_path / "valid.json", warning="no positive calls")
+    (tmp_path / "invalid.json").write_text("{not-json", encoding="utf-8")
+
+    exit_code = cli.main(
+        [
+            "ml-report-compare",
+            "--glob",
+            str(tmp_path / "*.json"),
+            "--format",
+            "markdown",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "valid" in captured.out
+    assert "no positive calls" in captured.out
+    assert "Warning: Skipping non-JSON report" in captured.err
 
 
 def test_compare_backtests_prints_deltas(tmp_path: Path, capsys: Any) -> None:

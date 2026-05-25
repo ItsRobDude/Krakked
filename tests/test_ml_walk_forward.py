@@ -12,6 +12,7 @@ from krakked.backtest.ml_walk_forward import (
     MLWalkForwardFold,
     MLWalkForwardPrediction,
     MLWalkForwardSummary,
+    _build_feature_diagnostics,
     _build_diagnostic_warnings,
     _build_prediction_metrics,
     _build_regression_calibration,
@@ -24,6 +25,7 @@ from krakked.config import AppConfig, StrategyConfig, load_config
 from krakked.market_data.metadata_store import PairMetadataStore
 from krakked.market_data.models import PairMetadata
 from krakked.strategy.models import StrategyIntent
+from krakked.strategy.features import ML_FEATURE_NAMES
 from krakked.strategy.strategies.ml_alt_strategy import AIPredictorAltStrategy
 from krakked.strategy.strategies.ml_regression_strategy import AIRegressionStrategy
 from krakked.strategy.strategies.ml_strategy import AIPredictorStrategy
@@ -160,7 +162,7 @@ def test_run_ml_walk_forward_scores_out_of_sample_predictions(tmp_path: Path) ->
     report = result.to_report_dict()
     summary = report["summary"]
 
-    assert report["report_version"] == 5
+    assert report["report_version"] == 6
     assert report["provenance"]["generated_by"] == "krakked ml-walk-forward"
     assert summary["strategy_id"] == "ai_regression"
     assert summary["timeframe"] == "1h"
@@ -189,6 +191,15 @@ def test_run_ml_walk_forward_scores_out_of_sample_predictions(tmp_path: Path) ->
     assert fold_diagnostics["models"][0]["scaler_schema_version"] == "standard_v1"
     assert fold_diagnostics["models"][0]["scaler_initialized"] is True
     assert "predicted_delta_quantiles" in fold_diagnostics["predictions"]
+    assert fold_diagnostics["features"]["schema_version"] == "ohlc_v2"
+    assert fold_diagnostics["features"]["prediction_count"] > 0
+    assert set(fold_diagnostics["features"]["raw_feature_quantiles"]) == set(
+        ML_FEATURE_NAMES
+    )
+    assert fold_diagnostics["features"]["scaled_available"] is True
+    assert set(fold_diagnostics["features"]["scaled_feature_quantiles"]) == set(
+        ML_FEATURE_NAMES
+    )
     assert "realized_return_quantiles" in fold_diagnostics["outcomes"]
     assert "above_evaluation_hurdle" in fold_diagnostics["outcomes"]
     scored_learning_flags = [
@@ -652,6 +663,36 @@ def test_regression_calibration_reports_threshold_lift_and_deciles() -> None:
     assert fixed_0p005["lift_over_base_rate"] == pytest.approx(2.0)
     assert calibration["predicted_delta_deciles"]
     assert calibration["monotonicity"]["upper_half_improves"] is True
+
+
+def test_feature_diagnostics_handles_unavailable_scaler() -> None:
+    prediction = _regression_prediction(
+        predicted_delta=0.01,
+        realized_return=0.01,
+    )
+    prediction.metadata["feature_schema_version"] = "ohlc_v2"
+    prediction.metadata["features"] = {
+        name: float(index) for index, name in enumerate(ML_FEATURE_NAMES, start=1)
+    }
+
+    diagnostics = _build_feature_diagnostics(
+        [prediction],
+        [
+            (
+                {
+                    "source": "live_model",
+                    "model_key": "global|1h|features_ohlc_v2|dummy",
+                },
+                object(),
+            )
+        ],
+    )
+
+    assert diagnostics["schema_version"] == "ohlc_v2"
+    assert diagnostics["prediction_count"] == 1
+    assert set(diagnostics["raw_feature_quantiles"]) == set(ML_FEATURE_NAMES)
+    assert diagnostics["scaled_available"] is False
+    assert "scaled_feature_quantiles" not in diagnostics
 
 
 def test_diagnostic_warnings_surface_non_monotonic_regression_calibration() -> None:
