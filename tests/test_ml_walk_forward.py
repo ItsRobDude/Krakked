@@ -191,7 +191,7 @@ def test_run_ml_walk_forward_scores_out_of_sample_predictions(tmp_path: Path) ->
     assert fold_diagnostics["models"][0]["scaler_schema_version"] == "standard_v1"
     assert fold_diagnostics["models"][0]["scaler_initialized"] is True
     assert "predicted_delta_quantiles" in fold_diagnostics["predictions"]
-    assert fold_diagnostics["features"]["schema_version"] == "ohlc_v2"
+    assert fold_diagnostics["features"]["schema_version"] == "ohlc_v3"
     assert fold_diagnostics["features"]["prediction_count"] > 0
     assert set(fold_diagnostics["features"]["raw_feature_quantiles"]) == set(
         ML_FEATURE_NAMES
@@ -670,7 +670,7 @@ def test_feature_diagnostics_handles_unavailable_scaler() -> None:
         predicted_delta=0.01,
         realized_return=0.01,
     )
-    prediction.metadata["feature_schema_version"] = "ohlc_v2"
+    prediction.metadata["feature_schema_version"] = "ohlc_v3"
     prediction.metadata["features"] = {
         name: float(index) for index, name in enumerate(ML_FEATURE_NAMES, start=1)
     }
@@ -681,14 +681,14 @@ def test_feature_diagnostics_handles_unavailable_scaler() -> None:
             (
                 {
                     "source": "live_model",
-                    "model_key": "global|1h|features_ohlc_v2|dummy",
+                    "model_key": "global|1h|features_ohlc_v3|dummy",
                 },
                 object(),
             )
         ],
     )
 
-    assert diagnostics["schema_version"] == "ohlc_v2"
+    assert diagnostics["schema_version"] == "ohlc_v3"
     assert diagnostics["prediction_count"] == 1
     assert set(diagnostics["raw_feature_quantiles"]) == set(ML_FEATURE_NAMES)
     assert diagnostics["scaled_available"] is False
@@ -714,7 +714,7 @@ def _feature_prediction_row(
         realized_return=0.01,
         fold_index=fold_index,
     )
-    prediction.metadata["feature_schema_version"] = "ohlc_v2"
+    prediction.metadata["feature_schema_version"] = "ohlc_v3"
     prediction.metadata["features"] = dict(zip(ML_FEATURE_NAMES, values))
     return prediction
 
@@ -731,7 +731,7 @@ def test_feature_diagnostics_reports_no_health_warnings_for_sane_scaled_features
             (
                 {
                     "source": "live_model",
-                    "model_key": "global|1h|features_ohlc_v2|dummy",
+                    "model_key": "global|1h|features_ohlc_v3|dummy",
                 },
                 _PassthroughScaledModel(),
             )
@@ -747,8 +747,8 @@ def test_feature_diagnostics_reports_no_health_warnings_for_sane_scaled_features
 
 def test_feature_diagnostics_warns_for_tail_heavy_scaled_features() -> None:
     feature_count = len(ML_FEATURE_NAMES)
-    volume_index = list(ML_FEATURE_NAMES).index("volume_zscore")
-    lower_wick_index = list(ML_FEATURE_NAMES).index("lower_wick_pct")
+    volume_index = list(ML_FEATURE_NAMES).index("volume_log_ratio")
+    lower_wick_index = list(ML_FEATURE_NAMES).index("lower_wick_atr")
     rows = [[0.0] * feature_count for _ in range(4)]
     rows[-1][volume_index] = 4.0
     rows[-1][lower_wick_index] = 4.5
@@ -760,7 +760,7 @@ def test_feature_diagnostics_warns_for_tail_heavy_scaled_features() -> None:
             (
                 {
                     "source": "live_model",
-                    "model_key": "global|1h|features_ohlc_v2|dummy",
+                    "model_key": "global|1h|features_ohlc_v3|dummy",
                 },
                 _PassthroughScaledModel(),
             )
@@ -768,8 +768,14 @@ def test_feature_diagnostics_warns_for_tail_heavy_scaled_features() -> None:
     )
 
     warnings = diagnostics["health_warnings"]
-    assert any("High-risk scaled feature volume_zscore" in warning for warning in warnings)
-    assert any("High-risk scaled feature lower_wick_pct" in warning for warning in warnings)
+    assert any(
+        "High-risk scaled feature volume_log_ratio" in warning
+        for warning in warnings
+    )
+    assert any(
+        "High-risk scaled feature lower_wick_atr" in warning
+        for warning in warnings
+    )
 
 
 def test_feature_diagnostics_reports_linear_feature_contributions() -> None:
@@ -789,7 +795,7 @@ def test_feature_diagnostics_reports_linear_feature_contributions() -> None:
             (
                 {
                     "source": "live_model",
-                    "model_key": "global|1h|features_ohlc_v2|dummy",
+                    "model_key": "global|1h|features_ohlc_v3|dummy",
                 },
                 _PassthroughScaledModel(coefficients),
             )
@@ -905,7 +911,7 @@ def test_diagnostic_warnings_surface_collapsed_model_and_constant_predictions() 
                     },
                     "features": {
                         "health_warnings": [
-                            "High-risk scaled feature volume_zscore has tail values."
+                            "High-risk scaled feature volume_log_ratio has tail values."
                         ]
                     },
                 },

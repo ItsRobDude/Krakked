@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+import math
 import pickle
 from types import SimpleNamespace
 from typing import Any
@@ -332,7 +333,7 @@ def test_classifier_model_key_versions_fee_adjusted_labels(strategy, mock_ctx):
 
     assert (
         strategy._model_key("1h", label_config)
-        == "global|1h|features_ohlc_v2|fee_adj_fee25_slip50_x2|"
+        == "global|1h|features_ohlc_v3|fee_adj_fee25_slip50_x2|"
         "pa_cls_scalerstdv1"
     )
 
@@ -340,7 +341,7 @@ def test_classifier_model_key_versions_fee_adjusted_labels(strategy, mock_ctx):
 def test_regression_model_key_versions_feature_schema(regression_strategy):
     assert (
         regression_strategy._model_key("1h")
-        == "global|1h|features_ohlc_v2|pa_reg_eps0p001_scalerstdv1"
+        == "global|1h|features_ohlc_v3|pa_reg_eps0p001_scalerstdv1"
     )
 
 
@@ -363,7 +364,7 @@ def test_regression_epsilon_changes_model_key():
 
     assert (
         strategy._model_key("1h")
-        == "global|1h|features_ohlc_v2|pa_reg_eps0p0025_scalerstdv1"
+        == "global|1h|features_ohlc_v3|pa_reg_eps0p0025_scalerstdv1"
     )
 
 
@@ -402,7 +403,7 @@ def test_ml_feature_values_are_shared_across_strategies(
     assert classifier_vector.values == pytest.approx(regression_vector.values)
 
 
-def test_ohlc_v2_feature_values_include_candle_and_volume_fields(
+def test_ohlc_v3_feature_values_include_normalized_context_fields(
     strategy, mock_ctx
 ):
     bars = [
@@ -418,16 +419,33 @@ def test_ohlc_v2_feature_values_include_candle_and_volume_fields(
 
     assert vector is not None
     features = dict(zip(vector.names, vector.values))
-    assert vector.schema_version == "ohlc_v2"
-    assert features["return_3"] == pytest.approx((105.0 - 102.0) / 102.0)
-    assert features["return_6"] == 0.0
-    assert features["close_vs_short_ma"] == pytest.approx((105.0 - 104.0) / 104.0)
-    assert features["close_vs_long_ma"] == pytest.approx((105.0 - 102.2) / 102.2)
-    assert features["range_pct"] == pytest.approx((108.0 - 100.0) / 105.0)
-    assert features["body_pct"] == pytest.approx(abs(105.0 - 103.0) / 105.0)
-    assert features["upper_wick_pct"] == pytest.approx((108.0 - 105.0) / 105.0)
-    assert features["lower_wick_pct"] == pytest.approx((103.0 - 100.0) / 105.0)
-    assert features["volume_zscore"] > 0.0
+    assert vector.schema_version == "ohlc_v3"
+    atr = 4.0
+    atr_pct = atr / 105.0
+    assert features["return_atr_1"] == pytest.approx(((105.0 - 103.0) / 103.0) / atr_pct)
+    assert features["return_atr_3"] == pytest.approx(((105.0 - 102.0) / 102.0) / atr_pct)
+    assert features["range_atr"] == pytest.approx((108.0 - 100.0) / atr)
+    assert features["body_atr"] == pytest.approx(abs(105.0 - 103.0) / atr)
+    assert features["upper_wick_atr"] == pytest.approx((108.0 - 105.0) / atr)
+    assert features["lower_wick_atr"] == pytest.approx((103.0 - 100.0) / atr)
+    assert features["return_zscore"] > 0.0
+    assert features["volatility_ratio"] > 0.0
+    assert features["volume_change"] == pytest.approx(math.log(170.0 / 130.0))
+    assert features["volume_log_ratio"] == pytest.approx(math.log(170.0 / 120.0))
+    observed_at = datetime.fromtimestamp(1014400, tz=timezone.utc)
+    hour_value = observed_at.hour + observed_at.minute / 60.0 + observed_at.second / 3600.0
+    assert features["hour_sin"] == pytest.approx(
+        math.sin(2.0 * math.pi * hour_value / 24.0)
+    )
+    assert features["hour_cos"] == pytest.approx(
+        math.cos(2.0 * math.pi * hour_value / 24.0)
+    )
+    assert features["weekday_sin"] == pytest.approx(
+        math.sin(2.0 * math.pi * observed_at.weekday() / 7.0)
+    )
+    assert features["weekday_cos"] == pytest.approx(
+        math.cos(2.0 * math.pi * observed_at.weekday() / 7.0)
+    )
 
 
 def test_passive_aggressive_models_do_not_support_sample_weight_guard():
@@ -524,7 +542,7 @@ def test_regression_backend_factory_and_keys_are_backend_specific():
     assert strategy._model_framework() == "sklearn_sgd_regressor_huber"
     assert (
         strategy._model_key("1h")
-        == "global|1h|features_ohlc_v2|"
+        == "global|1h|features_ohlc_v3|"
         "sgd_huber_alpha0p0002_eta0p002_eps0p0025_scalerstdv1"
     )
     assert is_regression_model_for_backend(strategy.model, "sgd_huber") is True

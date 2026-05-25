@@ -2,22 +2,29 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from datetime import UTC, datetime, tzinfo
 from typing import List, Optional, Sequence
 
-ML_FEATURE_SCHEMA_VERSION = "ohlc_v2"
+FEATURE_TIME_TZ: tzinfo = UTC
+ML_FEATURE_SCHEMA_VERSION = "ohlc_v3"
 ML_FEATURE_NAMES = (
     "pct_change",
     "trend_diff",
     "volatility",
-    "return_3",
-    "return_6",
-    "close_vs_short_ma",
-    "close_vs_long_ma",
-    "range_pct",
-    "body_pct",
-    "upper_wick_pct",
-    "lower_wick_pct",
-    "volume_zscore",
+    "return_atr_1",
+    "return_atr_3",
+    "range_atr",
+    "body_atr",
+    "upper_wick_atr",
+    "lower_wick_atr",
+    "return_zscore",
+    "volatility_ratio",
+    "volume_change",
+    "volume_log_ratio",
+    "hour_sin",
+    "hour_cos",
+    "weekday_sin",
+    "weekday_cos",
 )
 
 
@@ -60,17 +67,72 @@ def _safe_ratio(numerator: float, denominator: float) -> float:
     return numerator / denominator if denominator > 0 else 0.0
 
 
+def _safe_log_ratio(numerator: float, denominator: float) -> float:
+    if numerator <= 0 or denominator <= 0:
+        return 0.0
+    return math.log(numerator / denominator)
+
+
+def _returns(closes: Sequence[float]) -> list[float]:
+    values: list[float] = []
+    for previous, current in zip(closes, closes[1:]):
+        values.append((current - previous) / previous if previous > 0 else 0.0)
+    return values
+
+
+def _true_ranges(
+    *,
+    closes: Sequence[float],
+    highs: Sequence[float],
+    lows: Sequence[float],
+) -> list[float]:
+    ranges: list[float] = []
+    for index, (high, low) in enumerate(zip(highs, lows)):
+        base_range = max(high - low, 0.0)
+        if index == 0:
+            ranges.append(base_range)
+            continue
+        previous_close = closes[index - 1]
+        ranges.append(
+            max(
+                base_range,
+                abs(high - previous_close),
+                abs(low - previous_close),
+            )
+        )
+    return ranges
+
+
+def _cyclical(value: float, period: float) -> tuple[float, float]:
+    angle = 2.0 * math.pi * value / period
+    return math.sin(angle), math.cos(angle)
+
+
+def _time_features(timestamp: int | None) -> tuple[float, float, float, float]:
+    if timestamp is None:
+        return 0.0, 0.0, 0.0, 0.0
+    observed_at = datetime.fromtimestamp(int(timestamp), tz=FEATURE_TIME_TZ)
+    hour_value = (
+        observed_at.hour
+        + observed_at.minute / 60.0
+        + observed_at.second / 3600.0
+    )
+    hour_sin, hour_cos = _cyclical(hour_value, 24.0)
+    weekday_sin, weekday_cos = _cyclical(float(observed_at.weekday()), 7.0)
+    return hour_sin, hour_cos, weekday_sin, weekday_cos
+
+
 def _feature_vector(
     *,
     closes: Sequence[float],
+    opens: Sequence[float],
+    highs: Sequence[float],
+    lows: Sequence[float],
     short_window: int,
     long_window: int,
     lookback_bars: int,
-    latest_open: float,
-    latest_high: float,
-    latest_low: float,
-    latest_volume: float,
     volumes: Sequence[float],
+    timestamps: Sequence[int],
 ) -> Optional[MLFeatureVector]:
     if not closes or len(closes) < 3:
         return None
@@ -93,38 +155,62 @@ def _feature_vector(
     if mean_close > 0 and len(window) > 1:
         volatility = _std(window) / mean_close
 
-    range_pct = _safe_ratio(max(latest_high - latest_low, 0.0), last_close)
-    body_pct = _safe_ratio(abs(last_close - latest_open), last_close)
-    upper_wick_pct = _safe_ratio(
-        max(latest_high - max(latest_open, last_close), 0.0),
-        last_close,
-    )
-    lower_wick_pct = _safe_ratio(
-        max(min(latest_open, last_close) - latest_low, 0.0),
-        last_close,
-    )
+    latest_open = opens[-1] if opens else last_close
+    latest_high = highs[-1] if highs else last_close
+    latest_low = lows[-1] if lows else last_close
+    latest_volume = volumes[-1] if volumes else 0.0
+    latest_timestamp = timestamps[-1] if timestamps else None
 
+    true_ranges = _true_ranges(closes=closes, highs=highs, lows=lows)
+    atr_window = true_ranges[-lookback_bars:]
+    atr = _mean(atr_window)
+    atr_pct = _safe_ratio(atr, last_close)
+    latest_range = max(latest_high - latest_low, 0.0)
+    latest_body = abs(last_close - latest_open)
+    latest_upper_wick = max(latest_high - max(latest_open, last_close), 0.0)
+    latest_lower_wick = max(min(latest_open, last_close) - latest_low, 0.0)
+
+    return_values = _returns(closes)
+    return_window = return_values[-lookback_bars:]
+    return_std = _std(return_window)
+    return_zscore = (
+        (pct_change - _mean(return_window)) / return_std
+        if return_window and return_std > 0
+        else 0.0
+    )
+    short_return_std = _std(return_values[-short_window:])
+    long_return_std = _std(return_values[-long_window:])
+    volatility_ratio = _safe_ratio(short_return_std, long_return_std)
+
+    previous_volume = volumes[-2] if len(volumes) >= 2 else 0.0
     volume_window = list(volumes[-lookback_bars:])
-    volume_zscore = 0.0
-    if len(volume_window) > 1:
-        volume_std = _std(volume_window)
-        if volume_std > 0:
-            volume_zscore = (latest_volume - _mean(volume_window)) / volume_std
+    mean_volume = _mean(volume_window)
+    volume_change = _safe_log_ratio(latest_volume, previous_volume)
+    volume_log_ratio = _safe_log_ratio(latest_volume, mean_volume)
+
+    hour_sin, hour_cos, weekday_sin, weekday_cos = _time_features(
+        latest_timestamp
+    )
 
     return MLFeatureVector(
         values=[
             pct_change,
             trend_diff,
             volatility,
-            _window_return(closes, 3),
-            _window_return(closes, 6),
-            _safe_ratio(last_close - short_ma, short_ma),
-            _safe_ratio(last_close - long_ma, long_ma),
-            range_pct,
-            body_pct,
-            upper_wick_pct,
-            lower_wick_pct,
-            volume_zscore,
+            _safe_ratio(pct_change, atr_pct),
+            _safe_ratio(_window_return(closes, 3), atr_pct),
+            _safe_ratio(latest_range, atr),
+            _safe_ratio(latest_body, atr),
+            _safe_ratio(latest_upper_wick, atr),
+            _safe_ratio(latest_lower_wick, atr),
+            return_zscore,
+            volatility_ratio,
+            volume_change,
+            volume_log_ratio,
+            hour_sin,
+            hour_cos,
+            weekday_sin,
+            weekday_cos,
         ],
         names=list(ML_FEATURE_NAMES),
         schema_version=ML_FEATURE_SCHEMA_VERSION,
@@ -144,14 +230,14 @@ def compute_feature_vector_from_closes(
         return None
     return _feature_vector(
         closes=closes,
+        opens=closes,
+        highs=closes,
+        lows=closes,
         short_window=short_window,
         long_window=long_window,
         lookback_bars=lookback_bars,
-        latest_open=float(closes[-1]),
-        latest_high=float(closes[-1]),
-        latest_low=float(closes[-1]),
-        latest_volume=0.0,
         volumes=[0.0 for _ in closes],
+        timestamps=[],
     )
 
 
@@ -164,17 +250,19 @@ def compute_feature_vector_from_ohlc(
     closes = [float(getattr(bar, "close")) for bar in ohlc_window]
     if not closes:
         return None
-    latest = ohlc_window[-1]
+    opens = [float(getattr(bar, "open", getattr(bar, "close"))) for bar in ohlc_window]
+    highs = [float(getattr(bar, "high", getattr(bar, "close"))) for bar in ohlc_window]
+    lows = [float(getattr(bar, "low", getattr(bar, "close"))) for bar in ohlc_window]
     return _feature_vector(
         closes=closes,
+        opens=opens,
+        highs=highs,
+        lows=lows,
         short_window=short_window,
         long_window=long_window,
         lookback_bars=lookback_bars,
-        latest_open=float(getattr(latest, "open", closes[-1])),
-        latest_high=float(getattr(latest, "high", closes[-1])),
-        latest_low=float(getattr(latest, "low", closes[-1])),
-        latest_volume=float(getattr(latest, "volume", 0.0)),
         volumes=[float(getattr(bar, "volume", 0.0)) for bar in ohlc_window],
+        timestamps=[int(getattr(bar, "timestamp", 0)) for bar in ohlc_window],
     )
 
 
@@ -193,6 +281,7 @@ def compute_features_from_window(
 __all__ = [
     "ML_FEATURE_NAMES",
     "ML_FEATURE_SCHEMA_VERSION",
+    "FEATURE_TIME_TZ",
     "MLFeatureVector",
     "compute_feature_vector_from_closes",
     "compute_feature_vector_from_ohlc",

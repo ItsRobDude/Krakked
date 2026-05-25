@@ -51,11 +51,12 @@ SCALED_FEATURE_STD_MAX_WARNING_THRESHOLD = 2.0
 SCALED_FEATURE_TAIL_ABS_WARNING_THRESHOLD = 3.0
 HIGH_RISK_SCALED_FEATURES = frozenset(
     {
-        "volume_zscore",
-        "range_pct",
-        "body_pct",
-        "upper_wick_pct",
-        "lower_wick_pct",
+        "volume_change",
+        "volume_log_ratio",
+        "range_atr",
+        "body_atr",
+        "upper_wick_atr",
+        "lower_wick_atr",
     }
 )
 
