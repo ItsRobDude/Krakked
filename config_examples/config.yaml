@@ -135,6 +135,7 @@ strategies:
         rebalance_interval_hours: 24
         top_n: 2
         total_allocation_pct: 20.0
+        confidence_return_bps: 250.0
       userref: 1004
 
     ai_predictor_alt:

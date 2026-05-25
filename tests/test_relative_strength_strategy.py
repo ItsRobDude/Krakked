@@ -1,6 +1,8 @@
 from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
+import pytest
+
 from krakked.config import OHLCBar, StrategyConfig
 from krakked.market_data.api import MarketDataAPI
 from krakked.portfolio.models import EquityView, SpotPosition
@@ -106,3 +108,51 @@ def test_relative_strength_prefers_top_return():
     assert eth_intent.desired_exposure_usd == 0.0
     assert btc_intent.intent_type in ["enter", "increase"]
     assert eth_intent.intent_type == "exit"
+    assert btc_intent.confidence == 1.0
+
+
+def test_relative_strength_scales_entry_confidence_by_configured_bps():
+    cfg = StrategyConfig(
+        name="rs_rotation",
+        type="relative_strength",
+        enabled=True,
+        params={
+            "pairs": ["BTC/USD", "ETH/USD"],
+            "lookback_bars": 2,
+            "timeframe": "4h",
+            "rebalance_interval_hours": 1,
+            "top_n": 1,
+            "total_allocation_pct": 20.0,
+            "confidence_return_bps": 250.0,
+        },
+        userref=1005,
+    )
+    strat = RelativeStrengthStrategy(cfg)
+
+    ctx, market, portfolio = _build_context()
+    portfolio.get_equity.return_value = EquityView(
+        equity_base=1000.0,
+        cash_base=1000.0,
+        realized_pnl_base_total=0.0,
+        unrealized_pnl_base_total=0.0,
+        drift_flag=False,
+    )
+    portfolio.get_positions.return_value = []
+
+    btc_bars = [_make_bar(0, 100.0), _make_bar(1, 102.0)]
+    eth_bars = [_make_bar(0, 100.0), _make_bar(1, 100.0)]
+
+    def _get_ohlc(pair: str, timeframe: str, lookback: int):
+        return btc_bars if pair == "BTC/USD" else eth_bars
+
+    market.get_ohlc.side_effect = _get_ohlc
+
+    intents = strat.generate_intents(ctx)
+
+    assert len(intents) == 1
+    intent = intents[0]
+    assert intent.pair == "BTC/USD"
+    assert intent.intent_type == "enter"
+    assert intent.confidence == pytest.approx(0.8)
+    assert intent.metadata["relative_return"] == pytest.approx(0.02)
+    assert intent.metadata["confidence_return_bps"] == 250.0

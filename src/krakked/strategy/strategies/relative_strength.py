@@ -18,6 +18,7 @@ class RelativeStrengthConfig:
     rebalance_interval_hours: int
     top_n: int
     total_allocation_pct: float
+    confidence_return_bps: float
 
 
 class RelativeStrengthStrategy(Strategy):
@@ -39,6 +40,9 @@ class RelativeStrengthStrategy(Strategy):
             top_n=max(int(params.get("top_n", 2)), 1),
             total_allocation_pct=max(
                 float(params.get("total_allocation_pct", 10.0)), 0.0
+            ),
+            confidence_return_bps=max(
+                float(params.get("confidence_return_bps", 250.0)), 1.0
             ),
         )
         self._last_rebalance: Optional[datetime] = None
@@ -76,6 +80,10 @@ class RelativeStrengthStrategy(Strategy):
 
             returns[pair] = (last_close - first_close) / first_close
         return returns
+
+    def _confidence_from_return(self, ret: float) -> float:
+        confidence = (ret * 10_000.0) / self.params.confidence_return_bps
+        return min(1.0, max(0.0, confidence))
 
     def _current_exposure_usd(
         self, pair: str, positions_by_pair: Dict[str, Any], ctx: StrategyContext
@@ -161,11 +169,14 @@ class RelativeStrengthStrategy(Strategy):
                             side="long",
                             intent_type="increase" if position else "enter",
                             desired_exposure_usd=target_per_asset,
-                            confidence=min(1.0, max(0.0, ret)),
+                            confidence=self._confidence_from_return(ret),
                             timeframe=timeframe,
                             generated_at=ctx.now,
                             metadata={
                                 "relative_return": ret,
+                                "confidence_return_bps": (
+                                    self.params.confidence_return_bps
+                                ),
                                 "target_exposure_usd": target_per_asset,
                                 "current_exposure_usd": current_usd,
                             },
