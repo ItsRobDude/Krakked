@@ -1463,6 +1463,137 @@ def test_ml_report_compare_skips_invalid_json_with_warning(
     assert "Warning: Skipping non-JSON report" in captured.err
 
 
+def test_ml_walk_forward_summary_prints_next_tier_blockers_for_risk_overlay(
+    capsys: Any,
+) -> None:
+    # Construct a synthetic payload pinned to risk_overlay_candidate so the
+    # CLI print path exercises the "Next tier blockers" labeling that the
+    # operational-tier fix introduced. We do not rely on
+    # _assess_promotability here because forcing risk_overlay via real
+    # predictions is brittle; this test is specifically about the renderer.
+    payload = {
+        "summary": {
+            "strategy_id": "ai_regression",
+            "timeframe": "4h",
+            "evaluation_mode": "rolling_window_isolated",
+            "edge_scoring_mode": "intent_hurdle_aligned",
+            "model_state_reused_across_folds": False,
+            "fold_count": 1,
+            "train_bars": 180,
+            "test_bars": 42,
+            "pairs": ["BTC/USD"],
+            "round_trip_cost_bps": 60.0,
+            "start": "2026-04-01T00:00:00+00:00",
+            "end": "2026-05-24T00:00:00+00:00",
+            "metrics": {
+                "prediction_count": 168,
+                "directional_accuracy": 0.55,
+                "edge_prediction_accuracy": 0.62,
+                "precision_long": 0.30,
+            },
+            "promotion_tier": "risk_overlay_candidate",
+            "promotion_tiers": {
+                "research_promising": {
+                    "tier": "research_promising",
+                    "clears": True,
+                    "reasons": [
+                        "Walk-forward metrics clear the research promising"
+                        " thresholds."
+                    ],
+                },
+                "risk_overlay_candidate": {
+                    "tier": "risk_overlay_candidate",
+                    "clears": True,
+                    "reasons": [
+                        "Walk-forward metrics clear the risk overlay"
+                        " candidate thresholds."
+                    ],
+                },
+                "self_standing": {
+                    "tier": "self_standing",
+                    "clears": False,
+                    "reasons": [
+                        "Long precision is below 50% after estimated costs.",
+                        "Per-fold strict checks failed: fold 2: non-monotonic",
+                    ],
+                },
+            },
+            "promotable": True,
+            "promotable_reasons": [
+                "Walk-forward metrics clear the risk overlay candidate"
+                " thresholds."
+            ],
+        }
+    }
+
+    cli._print_ml_walk_forward_summary(payload, report_path=None)
+
+    captured = capsys.readouterr().out
+    assert "Promotion tier: risk_overlay_candidate (operational)" in captured
+    # The pass message under the current tier — no failure bullets here.
+    assert "clear the risk overlay candidate thresholds" in captured
+    # The next-tier blockers must be labeled, not dumped as plain bullets.
+    assert "Next tier blockers (self_standing):" in captured
+    assert "Long precision is below 50%" in captured
+    assert "Per-fold strict checks failed" in captured
+
+
+def test_ml_walk_forward_summary_skips_next_tier_blockers_for_self_standing(
+    capsys: Any,
+) -> None:
+    payload = {
+        "summary": {
+            "strategy_id": "ai_regression",
+            "timeframe": "4h",
+            "evaluation_mode": "rolling_window_isolated",
+            "edge_scoring_mode": "intent_hurdle_aligned",
+            "model_state_reused_across_folds": False,
+            "fold_count": 1,
+            "train_bars": 180,
+            "test_bars": 42,
+            "pairs": ["BTC/USD"],
+            "round_trip_cost_bps": 60.0,
+            "start": "2026-04-01T00:00:00+00:00",
+            "end": "2026-05-24T00:00:00+00:00",
+            "metrics": {
+                "prediction_count": 168,
+                "directional_accuracy": 0.55,
+                "edge_prediction_accuracy": 0.62,
+                "precision_long": 0.60,
+            },
+            "promotion_tier": "self_standing",
+            "promotion_tiers": {
+                "research_promising": {
+                    "tier": "research_promising",
+                    "clears": True,
+                    "reasons": ["clear"],
+                },
+                "risk_overlay_candidate": {
+                    "tier": "risk_overlay_candidate",
+                    "clears": True,
+                    "reasons": ["clear"],
+                },
+                "self_standing": {
+                    "tier": "self_standing",
+                    "clears": True,
+                    "reasons": ["clear"],
+                },
+            },
+            "promotable": True,
+            "promotable_reasons": [
+                "Walk-forward metrics clear the self standing thresholds."
+            ],
+        }
+    }
+
+    cli._print_ml_walk_forward_summary(payload, report_path=None)
+
+    captured = capsys.readouterr().out
+    assert "Promotion tier: self_standing (operational)" in captured
+    # There is no tier above self_standing, so no "Next tier blockers" header.
+    assert "Next tier blockers" not in captured
+
+
 def test_ml_report_compare_preserves_insufficient_data_monotonicity(
     tmp_path: Path, capsys: Any
 ) -> None:

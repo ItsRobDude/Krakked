@@ -1279,8 +1279,12 @@ def test_assess_promotability_reaches_self_standing_with_strict_metrics() -> Non
 
 
 def test_summary_promotable_reasons_are_clean_for_operational_tier() -> None:
-    # Build predictions that should clear research_promising and risk_overlay
-    # but fail self_standing (precision_long < 50%).
+    # Build predictions whose realized returns mirror predicted deltas. The
+    # resulting metrics clear an operational tier (precision_long is high and
+    # the top decile beats the hurdle), so promotable_reasons must read as a
+    # pass message rather than a list of failure bullets. The dedicated
+    # `test_assess_promotability_reaches_risk_overlay_*` tests cover the
+    # risk-overlay vs self-standing tier boundary directly.
     predictions = []
     for index in range(80):
         predicted_delta = -0.02 + (0.06 * index / 79)
