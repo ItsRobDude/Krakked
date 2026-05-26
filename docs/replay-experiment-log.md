@@ -177,3 +177,54 @@ Readout:
   useful slice is not a threshold change; it is explaining why higher
   thresholds generate many risk-blocked actions and whether the strategy's
   desired exposure should be constrained before any threshold decision.
+
+## 2026-05-25: `vol_breakout` Risk-Block Investigation
+
+Context:
+
+- Follow-up to the ready-window threshold sweep above.
+- Local artifact:
+  `C:\Users\Rob\AppData\Local\krakked\krakked\reports\backtests\vol-breakout-action-details-20260525.json`
+- Scope: inspection only. No threshold, sizing, risk-limit, or enablement
+  changes were made.
+
+Findings:
+
+- `vol_breakout` emits entry intents with `desired_exposure_usd=None` and
+  `confidence=0.8`, so the risk engine auto-sizes using ATR and
+  `max_risk_per_trade_pct`.
+- The auto-sized projected notionals are far above the current 5% strategy cap.
+  Example first entries were clamped from projected strategy exposure such as
+  `$14297.02`, `$20317.97`, `$30487.41`, and `$31631.31` down to about `$500`.
+- After the first clamped open, later entries are mostly blocked by
+  `Strategy vol_breakout budget exceeded`, `Max per asset limit`, and sometimes
+  `Max portfolio exposure limit`.
+- The action trace shows a pair-identity mismatch: simulated trades are ingested
+  into portfolio positions using canonical pairs like `XBTUSD`, while
+  `vol_breakout` and risk actions use configured display pairs like `BTC/USD`.
+  Subsequent same-pair actions can therefore show `current_base_size=0.0` even
+  after an earlier fill, while total portfolio exposure still reflects the
+  canonical stored position.
+- Because `vol_breakout` checks ownership with raw `pos.pair == pair`, the same
+  mismatch can also prevent it from recognizing held positions for `increase`
+  vs `enter` decisions and for exit generation.
+
+Aggregate blocked-reason prefixes from the action-details probe:
+
+| `min_compression_bps` | `Strategy vol_breakout budget exceeded` | `Max per asset limit` | `Max portfolio exposure limit` |
+| ---: | ---: | ---: | ---: |
+| `100` | `11` | `11` | `4` |
+| `150` | `29` | `29` | `14` |
+| `250` | `52` | `52` | `26` |
+| `500` | `71` | `71` | `35` |
+
+Readout:
+
+- Do not tune `min_compression_bps` yet. Higher thresholds merely expose a
+  sizing and pair-normalization problem sooner.
+- The next fix should normalize pair matching for existing positions before
+  strategies and risk compare positions to intents. This should cover
+  `vol_breakout` first, but the same raw pair-map pattern appears in other
+  strategies and in the risk engine.
+- After the normalization fix, rerun the same ready-window sweep before making
+  any threshold or enablement decision.
