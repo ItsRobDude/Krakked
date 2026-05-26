@@ -132,3 +132,48 @@ Readout:
 - Threshold changes should remain a separate validation slice; this pass only
   proves the deferred strategy is data-limited on the rolling window and
   threshold-sensitive on a ready short window.
+
+## 2026-05-25: `vol_breakout` Ready-Window Threshold Sweep
+
+Context:
+
+- Purpose: evaluate `vol_breakout` on multiple short windows where the current
+  `15m` cache is ready, without changing thresholds or re-enabling it in the
+  published rolling baseline.
+- Active strategy in the sweep: `vol_breakout` only.
+- Replay timeframes: `15m`, `1h`.
+- Starter pairs: `BTC/USD`, `ETH/USD`, `SOL/USD`, `ADA/USD`.
+- Local artifact:
+  `C:\Users\Rob\AppData\Local\krakked\krakked\reports\backtests\vol-breakout-threshold-sweep-20260525.json`
+
+Ready windows:
+
+- `2026-05-19T00:00:00+00:00 -> 2026-05-22T00:00:00+00:00`
+- `2026-05-20T00:00:00+00:00 -> 2026-05-23T00:00:00+00:00`
+- `2026-05-21T00:00:00+00:00 -> 2026-05-24T00:00:00+00:00`
+- `2026-05-22T00:00:00+00:00 -> 2026-05-25T00:00:00+00:00`
+
+Aggregate readout:
+
+| `min_compression_bps` | Windows with intents | Intents | Actions | Blocked | Fills | Realized PnL | Return range |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| `10` | `0/4` | `0` | `0` | `0` | `0` | `$0.0000` | `0.0000%..0.0000%` |
+| `25` | `0/4` | `0` | `0` | `0` | `0` | `$0.0000` | `0.0000%..0.0000%` |
+| `50` | `1/4` | `1` | `1` | `0` | `1` | `-$1.2563` | `-0.0244%..0.0000%` |
+| `100` | `4/4` | `20` | `20` | `11` | `9` | `-$7.6721` | `-0.1529%..0.2742%` |
+| `150` | `4/4` | `42` | `42` | `29` | `12` | `-$11.4408` | `-0.5870%..0.2742%` |
+| `250` | `4/4` | `67` | `67` | `52` | `14` | `-$12.7418` | `-0.5870%..0.3897%` |
+| `500` | `4/4` | `102` | `102` | `71` | `14` | `-$12.7418` | `-0.5870%..0.3897%` |
+
+Readout:
+
+- The configured `10 bps` threshold is silent across all four ready windows.
+- `25 bps` is also silent across all four ready windows.
+- `50 bps` is barely active: one intent and one fill across four windows.
+- `100 bps` and above consistently exercise the strategy, but most actions are
+  blocked by risk and total realized PnL remains negative under the current
+  replay cost model.
+- Keep `vol_breakout` disabled in the published rolling baseline. The next
+  useful slice is not a threshold change; it is explaining why higher
+  thresholds generate many risk-blocked actions and whether the strategy's
+  desired exposure should be constrained before any threshold decision.
