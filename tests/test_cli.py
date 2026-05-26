@@ -724,6 +724,103 @@ def test_backtest_subcommand_publish_latest_is_opt_in(
     assert payload["summary"]["ending_equity_usd"] == pytest.approx(10_100.0)
 
 
+def test_backtest_subcommand_publish_latest_requires_ready_preflight(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: Any
+) -> None:
+    start = datetime(2026, 4, 1, tzinfo=UTC)
+    end = datetime(2026, 4, 2, tzinfo=UTC)
+
+    def _fake_run_backtest(*args: Any, **kwargs: Any) -> BacktestResult:  # noqa: ARG001
+        return BacktestResult(
+            plans=[],
+            executions=[],
+            preflight=BacktestPreflight(
+                coverage=[],
+                usable_series_count=1,
+                missing_series=[],
+                partial_series=["BTC/USD@15m"],
+                status="limited",
+                summary_note="Coverage is limited.",
+                warnings=[
+                    "1 requested series only partially cover the requested window."
+                ],
+            ),
+            summary=BacktestSummary(
+                start=start,
+                end=end,
+                starting_cash_usd=10_000.0,
+                ending_equity_usd=10_000.0,
+                absolute_pnl_usd=0.0,
+                return_pct=0.0,
+                max_drawdown_pct=0.0,
+                realized_pnl_usd=0.0,
+                unrealized_pnl_usd=0.0,
+                pairs=["BTC/USD"],
+                timeframes=["15m"],
+                total_cycles=24,
+                total_actions=0,
+                blocked_actions=0,
+                total_orders=0,
+                filled_orders=0,
+                rejected_orders=0,
+                execution_errors=0,
+                fee_bps=25.0,
+                slippage_bps=50.0,
+                cost_model="Immediate candle-close fills using configured slippage and flat taker fees.",
+                usable_series_count=1,
+                missing_series=[],
+                partial_series=["BTC/USD@15m"],
+                coverage=[],
+                per_strategy={},
+                replay_inputs={
+                    "start": start.isoformat(),
+                    "end": end.isoformat(),
+                    "pairs": ["BTC/USD"],
+                    "timeframes": ["15m"],
+                    "enabled_strategies": ["vol_breakout"],
+                    "starting_cash_usd": 10_000.0,
+                    "fee_bps": 25.0,
+                    "slippage_bps": 50.0,
+                    "strict_data": False,
+                },
+                trust_level="limited",
+                trust_note="Limited signal: historical coverage is incomplete for part of the requested window.",
+                notable_warnings=[
+                    "1 requested series only partially cover the requested window."
+                ],
+                blocked_reason_counts={},
+                assumptions=["Synthetic fills only."],
+            ),
+        )
+
+    monkeypatch.setattr(cli, "run_backtest", _fake_run_backtest)
+    monkeypatch.setattr(cli, "get_config_dir", lambda: tmp_path)
+
+    latest_path = tmp_path / "reports" / "backtests" / "latest.json"
+    base_args = [
+        "backtest",
+        "--start",
+        "2026-04-01T00:00:00Z",
+        "--end",
+        "2026-04-02T00:00:00Z",
+        "--publish-latest",
+    ]
+
+    exit_code = cli.main(base_args)
+
+    output = capsys.readouterr().out
+    assert exit_code == 1
+    assert "preflight status is 'limited'" in output
+    assert "--allow-non-ready-publish" in output
+    assert not latest_path.exists()
+
+    exit_code = cli.main([*base_args, "--allow-non-ready-publish", "--json"])
+
+    assert exit_code == 0
+    payload = json.loads(latest_path.read_text(encoding="utf-8"))
+    assert payload["preflight"]["status"] == "limited"
+
+
 def test_ml_walk_forward_subcommand_writes_report(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

@@ -732,6 +732,19 @@ def _backtest_command(args: argparse.Namespace) -> int:
 
     published_report_path: str | None = None
     if args.publish_latest:
+        preflight_payload = payload.get("preflight") or {}
+        preflight_status = (
+            preflight_payload.get("status")
+            if isinstance(preflight_payload, dict)
+            else None
+        )
+        if preflight_status != "ready" and not args.allow_non_ready_publish:
+            status_text = str(preflight_status or "unknown")
+            return _print_error(
+                "Backtest latest-report publish refused: preflight status is "
+                f"{status_text!r}. Repair replay coverage or pass "
+                "--allow-non-ready-publish to publish intentionally."
+            )
         try:
             published_report_path = str(
                 publish_latest_backtest_report(payload, config_dir=get_config_dir())
@@ -1470,6 +1483,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "--publish-latest",
         action="store_true",
         help="Publish the validated replay summary to the canonical latest-report path for the operator UI",
+    )
+    backtest_parser.add_argument(
+        "--allow-non-ready-publish",
+        action="store_true",
+        help="Allow --publish-latest even when replay preflight status is not ready",
     )
     backtest_parser.add_argument(
         "--strict-data",
