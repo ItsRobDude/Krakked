@@ -69,3 +69,66 @@ Readout:
   window.
 - Do not change thresholds from this single short-window probe; use it only to
   justify a later dedicated threshold-validation slice.
+
+## 2026-05-25: Explicit Local Config And `vol_breakout` Deferral
+
+Context:
+
+- Local replay config was repaired to use explicit params for `trend_core`,
+  `majors_mean_rev`, and `rs_rotation`.
+- `vol_breakout` keeps explicit params in the local config but remains disabled
+  because its `15m` cache does not cover the current rolling replay window.
+- Requested rolling replay window:
+  `2026-05-05T00:00:00+00:00 -> 2026-05-25T00:00:00+00:00`
+
+15m backfill attempt:
+
+- A repo-local `backfill_ohlc` pass was run for `BTC/USD`, `ETH/USD`,
+  `SOL/USD`, and `ADA/USD` with `timeframe=15m` and `since=2026-05-04T23:45:00+00:00`.
+- Kraken returned `721` bars per pair and the local cache now runs
+  `2026-05-18T11:30:00+00:00 -> 2026-05-26T00:30:00+00:00`.
+- Enabling `vol_breakout` for the rolling window still produces
+  `partial_window` coverage for `BTC/USD@15m`, `ETH/USD@15m`, `SOL/USD@15m`,
+  and `ADA/USD@15m`.
+
+Published explicit 3-strategy baseline:
+
+- Window: `2026-05-05T00:00:00+00:00 -> 2026-05-25T00:00:00+00:00`
+- Preflight: `ready`, `missing=0`, `partial=0`, `strategy_coverage_gaps=0`
+- Trust: `limited`
+- Actions: `7` total, `5` blocked, `2` filled, `0` execution errors
+- Equity: `$10000.00 -> $9861.44`, return `-1.3856%`
+- Interpretation: this is the current truthful explicit-config baseline for
+  the covered starter strategies, not a promotion signal.
+
+Ready short-window `vol_breakout` probe:
+
+- Window: `2026-05-19T00:00:00+00:00 -> 2026-05-25T00:00:00+00:00`
+- Active strategies in probe: `trend_core`, `vol_breakout`,
+  `majors_mean_rev`, `rs_rotation`
+- Preflight: `ready`, `missing=0`, `partial=0`, `strategy_coverage_gaps=0`
+- Configured `vol_breakout` threshold `min_compression_bps=10.0` emitted
+  `0` intents, `0` actions, and `0` fills.
+
+Same-window `vol_breakout` threshold sweep:
+
+| `min_compression_bps` | Trust | Intents | Actions | Blocked | Filled orders | Realized PnL |
+| ---: | --- | ---: | ---: | ---: | ---: | ---: |
+| `10` | `weak_signal` | `0` | `0` | `0` | `0` | `$0.0000` |
+| `25` | `weak_signal` | `0` | `0` | `0` | `0` | `$0.0000` |
+| `50` | `decision_helpful` | `1` | `1` | `0` | `1` | `-$1.2563` |
+| `100` | `limited` | `11` | `11` | `7` | `4` | `-$1.3944` |
+| `150` | `limited` | `22` | `22` | `18` | `4` | `-$1.3944` |
+| `250` | `limited` | `35` | `35` | `30` | `5` | `-$1.4404` |
+| `500` | `limited` | `52` | `52` | `39` | `5` | `-$1.4404` |
+
+Readout:
+
+- Do not re-enable `vol_breakout` in the current rolling baseline until the
+  `15m` cache covers `2026-05-05T00:00:00+00:00 -> 2026-05-25T00:00:00+00:00`
+  or the rolling replay window is shortened intentionally.
+- The configured `10 bps` threshold remains silent even when the short-window
+  data is ready.
+- Threshold changes should remain a separate validation slice; this pass only
+  proves the deferred strategy is data-limited on the rolling window and
+  threshold-sensitive on a ready short window.
