@@ -228,3 +228,61 @@ Readout:
   strategies and in the risk engine.
 - After the normalization fix, rerun the same ready-window sweep before making
   any threshold or enablement decision.
+
+## 2026-05-25: Post Pair-Normalized Position Probe
+
+Context:
+
+- Follow-up to the risk-block investigation above after normalizing internal
+  strategy/risk position comparisons through market-data pair keys.
+- Local artifacts:
+  `C:\Users\Rob\AppData\Local\krakked\krakked\reports\backtests\vol-breakout-threshold-sweep-post-pair-key-20260525.json`
+  and
+  `C:\Users\Rob\AppData\Local\krakked\krakked\reports\backtests\vol-breakout-action-details-post-pair-key-20260525.json`
+- Scope: probe only. No threshold, sizing, risk-limit, enablement, or published
+  latest-report changes were made.
+
+Ready windows rerun:
+
+- `2026-05-19T00:00:00+00:00 -> 2026-05-22T00:00:00+00:00`
+- `2026-05-20T00:00:00+00:00 -> 2026-05-23T00:00:00+00:00`
+- `2026-05-21T00:00:00+00:00 -> 2026-05-24T00:00:00+00:00`
+- `2026-05-22T00:00:00+00:00 -> 2026-05-25T00:00:00+00:00`
+
+Aggregate readout versus the prior action-details probe:
+
+| `min_compression_bps` | Old actions / blocked / fills | New actions / blocked / fills | New nonzero `current_base_size` actions |
+| ---: | --- | --- | ---: |
+| `10` | `0 / 0 / 0` | `0 / 0 / 0` | `0` |
+| `25` | `0 / 0 / 0` | `0 / 0 / 0` | `0` |
+| `50` | `1 / 0 / 1` | `2 / 0 / 2` | `1` |
+| `100` | `20 / 11 / 9` | `190 / 169 / 18` | `177` |
+| `150` | `42 / 29 / 12` | `1436 / 1415 / 20` | `1416` |
+| `250` | `67 / 52 / 14` | `2240 / 2213 / 26` | `2217` |
+| `500` | `102 / 71 / 14` | `3004 / 2984 / 19` | `2980` |
+
+Action mix after the fix:
+
+| `min_compression_bps` | `open` | `close` | `none` |
+| ---: | ---: | ---: | ---: |
+| `50` | `1` | `1` | `0` |
+| `100` | `12` | `174` | `4` |
+| `150` | `17` | `1415` | `4` |
+| `250` | `21` | `2216` | `3` |
+| `500` | `17` | `2979` | `8` |
+
+Readout:
+
+- Pair-normalized matching is now visible in the replay: post-fix action traces
+  include nonzero `current_base_size` for held positions instead of repeatedly
+  treating canonical `XBTUSD` positions as unrelated to `BTC/USD` intents.
+- The fix exposes a separate risk-handling issue: once positions are recognized,
+  `vol_breakout` emits many `close` actions when breakout conditions fail, but
+  most close actions are blocked by strategy, asset, and portfolio exposure
+  limits.
+- The default `10 bps` and `25 bps` thresholds remain silent on these ready
+  windows. Higher thresholds are still not a promotion signal; they mostly
+  expose de-risking and sizing/guardrail behavior under the current cost model.
+- Next focused fix: make risk limits allow genuine close/reduce de-risking
+  actions for existing positions instead of blocking them because the portfolio
+  is already over an exposure cap.

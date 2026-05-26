@@ -178,3 +178,93 @@ def test_vol_breakout_exits_owned_position_when_breakout_fails():
     assert len(intents) == 1
     assert intents[0].side == "flat"
     assert intents[0].intent_type == "exit"
+
+
+def test_vol_breakout_matches_display_pair_to_canonical_owned_position_for_exit():
+    cfg = StrategyConfig(
+        name="vol_breakout",
+        type="vol_breakout",
+        enabled=True,
+        params={
+            "pairs": ["BTC/USD"],
+            "timeframes": ["1h"],
+            "lookback_bars": 10,
+            "min_compression_bps": 5.0,
+            "breakout_multiple": 1.5,
+        },
+        userref=999,
+    )
+    strat = VolBreakoutStrategy(cfg)
+
+    ctx, market, portfolio = _build_context()
+    market.normalize_pair.side_effect = lambda pair: {
+        "BTC/USD": "XBTUSD",
+        "XBTUSD": "XBTUSD",
+    }.get(pair, str(pair).replace("/", "").upper())
+    portfolio.get_positions.return_value = [
+        SpotPosition(
+            pair="XBTUSD",
+            base_asset="XBT",
+            quote_asset="USD",
+            base_size=1.0,
+            avg_entry_price=100.0,
+            realized_pnl_base=0.0,
+            fees_paid_base=0.0,
+            strategy_tag="vol_breakout",
+        )
+    ]
+    market.get_ohlc.return_value = [
+        _make_bar(ts, 100.001, 0.0005, 0.0005) for ts in range(12)
+    ]
+
+    intents = strat.generate_intents(ctx)
+
+    assert len(intents) == 1
+    assert intents[0].pair == "BTC/USD"
+    assert intents[0].side == "flat"
+    assert intents[0].intent_type == "exit"
+
+
+def test_vol_breakout_matches_display_pair_to_canonical_owned_position_for_increase():
+    cfg = StrategyConfig(
+        name="vol_breakout",
+        type="vol_breakout",
+        enabled=True,
+        params={
+            "pairs": ["BTC/USD"],
+            "timeframes": ["1h"],
+            "lookback_bars": 10,
+            "min_compression_bps": 5.0,
+            "breakout_multiple": 1.5,
+        },
+        userref=999,
+    )
+    strat = VolBreakoutStrategy(cfg)
+
+    ctx, market, portfolio = _build_context()
+    market.normalize_pair.side_effect = lambda pair: {
+        "BTC/USD": "XBTUSD",
+        "XBTUSD": "XBTUSD",
+    }.get(pair, str(pair).replace("/", "").upper())
+    portfolio.get_positions.return_value = [
+        SpotPosition(
+            pair="XBTUSD",
+            base_asset="XBT",
+            quote_asset="USD",
+            base_size=1.0,
+            avg_entry_price=100.0,
+            realized_pnl_base=0.0,
+            fees_paid_base=0.0,
+            strategy_tag="vol_breakout",
+        )
+    ]
+    breakout_bars = [_make_bar(ts, 100.001, 0.0005, 0.0005) for ts in range(11)]
+    breakout_bars.append(_make_bar(11, 100.0035, 0.0002, 0.0006))
+    market.get_ohlc.return_value = breakout_bars
+
+    intents = strat.generate_intents(ctx)
+
+    assert len(intents) == 1
+    assert intents[0].pair == "BTC/USD"
+    assert intents[0].side == "long"
+    assert intents[0].intent_type == "increase"

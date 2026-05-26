@@ -32,6 +32,7 @@ from .models import (
     StrategyIntent,
     StrategyState,
 )
+from .pair_keys import pair_key
 from .risk import RiskEngine
 from .strategies.dca_rebalance import DcaRebalanceStrategy
 from .strategies.demo_strategy import TrendFollowingStrategy
@@ -486,8 +487,8 @@ class StrategyEngine:
             "reduce",
         }
 
-    @staticmethod
     def _position_base_by_strategy_pair(
+        self,
         positions: Sequence[SpotPosition],
     ) -> Dict[tuple[str, str], float]:
         totals: Dict[tuple[str, str], float] = {}
@@ -502,12 +503,12 @@ class StrategyEngine:
                 continue
             if base_size <= 0:
                 continue
-            key = (str(strategy_id), str(pair))
+            key = (str(strategy_id), pair_key(self.market_data, pair))
             totals[key] = totals.get(key, 0.0) + base_size
         return totals
 
-    @staticmethod
     def _record_intent_score(
+        self,
         evaluation_summary: Dict[str, Dict[str, Any]],
         intent: StrategyIntent,
         score: float,
@@ -530,7 +531,7 @@ class StrategyEngine:
             evaluation["filtered_by_score"] += 1
             if StrategyEngine._is_exit_intent(intent):
                 position_base = (positions_by_strategy_pair or {}).get(
-                    (intent.strategy_id, intent.pair), 0.0
+                    (intent.strategy_id, pair_key(self.market_data, intent.pair)), 0.0
                 )
                 if position_base > 0:
                     evaluation["filtered_position_exits"] += 1

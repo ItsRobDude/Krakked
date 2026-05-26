@@ -88,7 +88,7 @@ class RelativeStrengthStrategy(Strategy):
     def _current_exposure_usd(
         self, pair: str, positions_by_pair: Dict[str, Any], ctx: StrategyContext
     ) -> float:
-        position = positions_by_pair.get(pair)
+        position = positions_by_pair.get(self._pair_key(ctx, pair))
         if not position or position.base_size <= 0:
             return 0.0
 
@@ -129,19 +129,13 @@ class RelativeStrengthStrategy(Strategy):
 
         target_per_asset = total_target_allocation / len(top_pairs)
 
-        positions = ctx.portfolio.get_positions() or []
-        positions_by_pair = {
-            pos.pair: pos
-            for pos in positions
-            if getattr(pos, "strategy_tag", None) == self.id
-            and getattr(pos, "base_size", 0) > 0
-        }
+        positions_by_pair = self._owned_positions_by_pair_key(ctx)
 
         intents: List[StrategyIntent] = []
 
         for pair, ret in ranked_pairs:
             is_top = pair in top_pairs
-            position = positions_by_pair.get(pair)
+            position = positions_by_pair.get(self._pair_key(ctx, pair))
 
             if not is_top and position:
                 intents.append(

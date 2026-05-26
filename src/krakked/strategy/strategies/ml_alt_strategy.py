@@ -326,13 +326,7 @@ class AIPredictorAltStrategy(Strategy):
         if not pairs:
             return []
 
-        positions = ctx.portfolio.get_positions() or []
-        positions_by_pair = {
-            pos.pair: pos
-            for pos in positions
-            if getattr(pos, "base_size", 0) > 0
-            and getattr(pos, "strategy_tag", None) == self.id
-        }
+        positions_by_pair = self._owned_positions_by_pair_key(ctx)
         open_positions_count = len(positions_by_pair)
 
         for pair in pairs:
@@ -412,7 +406,7 @@ class AIPredictorAltStrategy(Strategy):
 
             confidence = self._confidence(model, features)
             predicted_positive_edge = prediction == 1
-            position = positions_by_pair.get(pair)
+            position = positions_by_pair.get(self._pair_key(ctx, pair))
             has_long = bool(position and getattr(position, "base_size", 0) > 0)
 
             if predicted_positive_edge:

@@ -21,6 +21,7 @@ from krakked.portfolio.models import DriftStatus, SpotPosition
 
 from .allocator import StrategyWeights
 from .models import RiskAdjustedAction, RiskStatus, StrategyIntent
+from .pair_keys import pair_key
 
 Series = Any
 
@@ -571,7 +572,12 @@ class RiskEngine:
             target_usd_by_strategy[intent.strategy_id] = exposure
 
         current_by_strategy: Dict[str, float] = {}
-        pair_positions = [p for p in ctx.open_positions if p.pair == pair]
+        current_pair_key = pair_key(self.market_data, pair)
+        pair_positions = [
+            p
+            for p in ctx.open_positions
+            if pair_key(self.market_data, getattr(p, "pair", "")) == current_pair_key
+        ]
         for pos in pair_positions:
             strategy_key = pos.strategy_tag or "manual"
             current_by_strategy[strategy_key] = current_by_strategy.get(

@@ -50,16 +50,11 @@ class MeanReversionStrategy(Strategy):
         timeframe = ctx.timeframe or self.params.timeframe
         pairs = self.params.pairs or ctx.universe
 
-        positions = ctx.portfolio.get_positions() or []
-        positions_by_pair = {
-            pos.pair: pos
-            for pos in positions
-            if getattr(pos, "base_size", 0) > 0
-            and getattr(pos, "strategy_tag", None) == self.id
-        }
+        positions_by_pair = self._owned_positions_by_pair_key(ctx)
         open_positions_count = self._count_open_positions(positions_by_pair.values())
 
         for pair in pairs:
+            pair_key = self._pair_key(ctx, pair)
             ohlc = ctx.market_data.get_ohlc(
                 pair, timeframe, lookback=self.params.lookback_bars
             )
@@ -83,7 +78,7 @@ class MeanReversionStrategy(Strategy):
             lower_band = ma - band
 
             last_close = float(close_series.iloc[-1])
-            position = positions_by_pair.get(pair)
+            position = positions_by_pair.get(pair_key)
             has_long = bool(position and position.base_size > 0)
 
             if not has_long and open_positions_count >= self.params.max_positions:

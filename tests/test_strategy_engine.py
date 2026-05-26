@@ -424,6 +424,108 @@ def test_strategy_evaluation_classifies_score_filtered_intents():
     assert evaluation["filtered_low_score_entries"] == 1
 
 
+def test_strategy_evaluation_classifies_display_pair_exit_against_canonical_position():
+    class DisplayExitStrategy(Strategy):
+        def warmup(self, market_data, portfolio):
+            return None
+
+        def generate_intents(self, ctx):
+            return [
+                StrategyIntent(
+                    strategy_id=self.id,
+                    pair="BTC/USD",
+                    side="flat",
+                    intent_type="exit",
+                    desired_exposure_usd=0.0,
+                    confidence=0.0,
+                    timeframe=ctx.timeframe,
+                    generated_at=ctx.now,
+                )
+            ]
+
+    strat_config = StrategyConfig(
+        name="fake", type="fake", enabled=True, params={"timeframes": ["1h"]}
+    )
+    strategies_cfg = StrategiesConfig(enabled=["fake"], configs={"fake": strat_config})
+
+    app_config = MagicMock(spec=AppConfig)
+    app_config.strategies = strategies_cfg
+    app_config.risk = RiskConfig()
+    app_config.universe = MagicMock()
+    app_config.universe.include_pairs = ["BTC/USD"]
+
+    market = MagicMock(spec=MarketDataAPI)
+    market.normalize_pair.side_effect = lambda pair: {
+        "BTC/USD": "XBTUSD",
+        "XBTUSD": "XBTUSD",
+    }.get(pair, str(pair).replace("/", "").upper())
+    market.get_data_status.return_value = MagicMock(
+        rest_api_reachable=True,
+        websocket_connected=True,
+        stale_pairs=0,
+    )
+    market.get_universe.return_value = ["XBTUSD"]
+    market.get_display_pair.side_effect = lambda pair: {
+        "XBTUSD": "BTC/USD",
+    }.get(pair, pair)
+
+    portfolio = make_portfolio_service_mock()
+    portfolio.get_positions.return_value = [
+        SpotPosition(
+            pair="XBTUSD",
+            base_asset="XBT",
+            quote_asset="USD",
+            base_size=1.0,
+            avg_entry_price=100.0,
+            realized_pnl_base=0.0,
+            fees_paid_base=0.0,
+            strategy_tag="fake",
+        )
+    ]
+    portfolio.get_realized_pnl_by_strategy.return_value = {}
+
+    engine = StrategyRiskEngine(app_config, market, portfolio)
+    engine._data_ready = MagicMock(return_value=True)
+    engine.risk_engine = MagicMock()
+    engine.risk_engine.process_intents.return_value = []
+    engine.risk_engine.get_status.return_value = RiskStatus(
+        kill_switch_active=False,
+        daily_drawdown_pct=0.0,
+        drift_flag=False,
+        total_exposure_pct=0.0,
+        manual_exposure_pct=0.0,
+        per_asset_exposure_pct={},
+        per_strategy_exposure_pct={},
+    )
+    engine.risk_engine.build_risk_context.return_value = SimpleNamespace(
+        per_strategy_exposure_pct={}
+    )
+    engine.strategies = {"fake": DisplayExitStrategy(strat_config)}
+    engine.strategy_states = {
+        "fake": StrategyState(
+            strategy_id="fake",
+            enabled=True,
+            last_intents_at=None,
+            last_actions_at=None,
+            current_positions=[],
+            pnl_summary={},
+        )
+    }
+
+    plan = engine.run_cycle(datetime.now(timezone.utc))
+
+    assert plan.actions == []
+    engine.risk_engine.process_intents.assert_called_once()
+    assert engine.risk_engine.process_intents.call_args.args[0] == []
+    evaluation = plan.metadata["strategy_evaluation"]["fake"]
+    assert evaluation["intents_emitted"] == 1
+    assert evaluation["actions_after_scoring"] == 0
+    assert evaluation["filtered_by_score"] == 1
+    assert evaluation["filtered_position_exits"] == 1
+    assert evaluation["filtered_no_position_exits"] == 0
+    assert evaluation["filtered_low_score_entries"] == 0
+
+
 def test_trend_following_ignores_missing_liquidity_metadata():
     strat_config = StrategyConfig(
         name="trend_core",
