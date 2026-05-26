@@ -970,13 +970,41 @@ def _build_strategy_coverage_warnings(
     return warnings
 
 
+def _build_strategy_constructor_default_warnings(
+    strategy_inputs: Dict[str, Any],
+) -> List[str]:
+    defaulted_strategies = [
+        str(strategy_id)
+        for strategy_id, strategy_input in (
+            strategy_inputs.get("strategies") or {}
+        ).items()
+        if isinstance(strategy_input, dict)
+        and strategy_input.get("enabled")
+        and strategy_input.get("params_source") == "strategy_constructor_defaults"
+    ]
+    if not defaulted_strategies:
+        return []
+
+    return [
+        "Enabled strategies using constructor defaults instead of explicit config "
+        "params: "
+        + ", ".join(defaulted_strategies)
+        + ". Review strategy_inputs before treating replay inputs as configured "
+        "operator intent."
+    ]
+
+
 def _with_strategy_coverage_warnings(
     config: AppConfig,
     preflight: BacktestPreflight,
     strategy_inputs: Dict[str, Any],
 ) -> BacktestPreflight:
     warnings = list(preflight.warnings)
-    for warning in _build_strategy_coverage_warnings(strategy_inputs, preflight):
+    strategy_warnings = [
+        *_build_strategy_coverage_warnings(strategy_inputs, preflight),
+        *_build_strategy_constructor_default_warnings(strategy_inputs),
+    ]
+    for warning in strategy_warnings:
         if warning not in warnings:
             warnings.append(warning)
     strategy_coverage_gaps = _build_strategy_coverage_gaps(

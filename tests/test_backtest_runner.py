@@ -491,6 +491,11 @@ def test_backtest_reports_resolved_strategy_inputs_for_mixed_params(
     )
     preflight_payload = preflight.to_dict()
     strategy_inputs = preflight_payload["strategy_inputs"]
+    constructor_default_warning = (
+        "Enabled strategies using constructor defaults instead of explicit config "
+        "params: rs_rotation. Review strategy_inputs before treating replay inputs "
+        "as configured operator intent."
+    )
 
     assert strategy_inputs["config_source"] == "provided_config"
     assert strategy_inputs["resolved_config_path"] is None
@@ -539,6 +544,8 @@ def test_backtest_reports_resolved_strategy_inputs_for_mixed_params(
         {"pair": "BTC/USD", "timeframe": "1h"},
         {"pair": "ETH/USD", "timeframe": "1h"},
     ]
+    assert preflight.preflight.status == "ready"
+    assert constructor_default_warning in preflight.preflight.warnings
 
     result = runner.run_backtest(
         config,
@@ -551,6 +558,10 @@ def test_backtest_reports_resolved_strategy_inputs_for_mixed_params(
         "strategy_inputs"
     ]
     assert report_strategy_inputs == strategy_inputs
+    report = result.to_report_dict()
+    assert constructor_default_warning in report["preflight"]["warnings"]
+    assert constructor_default_warning in report["summary"]["notable_warnings"]
+    assert report["summary"]["trust_level"] == "weak_signal"
 
 
 def test_backtest_strategy_inputs_exposes_constructor_default_pair_gap(
