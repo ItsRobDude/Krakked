@@ -97,6 +97,10 @@ def _write_ohlc_series(
     frame.to_parquet(bars_path / f"{canonical}.parquet")
 
 
+def _mean_reverting_breakdown_closes() -> list[float]:
+    return [101.0 if idx % 2 == 0 else 99.0 for idx in range(39)] + [85.0]
+
+
 def test_run_backtest_wires_risk_provider(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, Any] = {}
 
@@ -196,7 +200,7 @@ def test_run_backtest_replays_cached_ohlc_with_starting_cash(tmp_path: Path) -> 
     config = _build_backtest_config(tmp_path)
     _seed_pair_metadata(config)
     timestamps = [1_700_000_000 + (idx * 3600) for idx in range(40)]
-    closes = [100.0] * 39 + [80.0]
+    closes = _mean_reverting_breakdown_closes()
     _write_ohlc_series(tmp_path, timestamps=timestamps, closes=closes)
 
     start = datetime.fromtimestamp(timestamps[0], tz=UTC)
@@ -380,7 +384,7 @@ def test_run_backtest_cost_model_reduces_end_equity_and_report_shape(
     config.execution.max_slippage_bps = 0
     _seed_pair_metadata(config)
     timestamps = [1_700_000_000 + (idx * 3600) for idx in range(40)]
-    closes = [100.0] * 39 + [80.0]
+    closes = _mean_reverting_breakdown_closes()
     _write_ohlc_series(tmp_path, timestamps=timestamps, closes=closes)
 
     start = datetime.fromtimestamp(timestamps[0], tz=UTC)
