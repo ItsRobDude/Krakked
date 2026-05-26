@@ -489,6 +489,317 @@ def test_risk_engine_matches_display_intent_to_canonical_position():
     assert action.target_notional_usd == 600.0
 
 
+def test_de_risking_close_ignores_existing_exposure_caps():
+    config = RiskConfig(
+        max_per_asset_pct=5.0,
+        max_portfolio_risk_pct=10.0,
+        max_per_strategy_pct={"vol_breakout": 5.0},
+    )
+    market = MagicMock(spec=MarketDataAPI)
+    portfolio = make_portfolio_service_mock()
+    market.normalize_pair.side_effect = lambda pair: str(pair).replace("/", "").upper()
+    market.get_latest_price.return_value = 100.0
+    market.get_pair_metadata.return_value = PairMetadata(
+        canonical="XBTUSD",
+        base="XBT",
+        quote="USD",
+        rest_symbol="XXBTZUSD",
+        ws_symbol="BTC/USD",
+        raw_name="XXBTZUSD",
+        price_decimals=1,
+        volume_decimals=4,
+        lot_size=1,
+        min_order_size=0.0001,
+        status="online",
+        liquidity_24h_usd=1_000_000.0,
+    )
+    portfolio.get_equity.return_value = EquityView(
+        equity_base=10000.0,
+        cash_base=8500.0,
+        realized_pnl_base_total=0.0,
+        unrealized_pnl_base_total=0.0,
+        drift_flag=False,
+    )
+    portfolio.get_positions.return_value = [
+        SpotPosition(
+            pair="BTC/USD",
+            base_asset="XBT",
+            quote_asset="USD",
+            base_size=5.0,
+            avg_entry_price=100.0,
+            realized_pnl_base=0.0,
+            fees_paid_base=0.0,
+            current_value_base=500.0,
+            strategy_tag="vol_breakout",
+        ),
+        SpotPosition(
+            pair="ETH/USD",
+            base_asset="ETH",
+            quote_asset="USD",
+            base_size=10.0,
+            avg_entry_price=100.0,
+            realized_pnl_base=0.0,
+            fees_paid_base=0.0,
+            current_value_base=1000.0,
+            strategy_tag="vol_breakout",
+        ),
+    ]
+    portfolio.get_asset_exposure.return_value = []
+    portfolio.get_realized_pnl_by_strategy.return_value = {}
+    portfolio.store = MagicMock()
+    portfolio.store.get_snapshots.return_value = []
+
+    engine = RiskEngine(config, market, portfolio)
+    intent = StrategyIntent(
+        "vol_breakout",
+        "BTC/USD",
+        "flat",
+        "exit",
+        0.0,
+        1.0,
+        "15m",
+        datetime.now(timezone.utc),
+    )
+
+    action = engine.process_intents([intent])[0]
+
+    assert action.action_type == "close"
+    assert action.blocked is False
+    assert action.blocked_reasons == []
+    assert action.current_base_size == 5.0
+    assert action.target_notional_usd == 0.0
+
+
+def test_risk_limits_still_block_new_exposure_when_existing_exposure_is_over_cap():
+    config = RiskConfig(
+        max_per_asset_pct=5.0,
+        max_portfolio_risk_pct=10.0,
+        max_per_strategy_pct={"vol_breakout": 5.0},
+    )
+    market = MagicMock(spec=MarketDataAPI)
+    portfolio = make_portfolio_service_mock()
+    market.normalize_pair.side_effect = lambda pair: str(pair).replace("/", "").upper()
+    market.get_latest_price.return_value = 100.0
+    market.get_pair_metadata.return_value = PairMetadata(
+        canonical="SOLUSD",
+        base="SOL",
+        quote="USD",
+        rest_symbol="SOLUSD",
+        ws_symbol="SOL/USD",
+        raw_name="SOLUSD",
+        price_decimals=2,
+        volume_decimals=6,
+        lot_size=1,
+        min_order_size=0.01,
+        status="online",
+        liquidity_24h_usd=1_000_000.0,
+    )
+    portfolio.get_equity.return_value = EquityView(
+        equity_base=10000.0,
+        cash_base=8500.0,
+        realized_pnl_base_total=0.0,
+        unrealized_pnl_base_total=0.0,
+        drift_flag=False,
+    )
+    portfolio.get_positions.return_value = [
+        SpotPosition(
+            pair="BTC/USD",
+            base_asset="XBT",
+            quote_asset="USD",
+            base_size=5.0,
+            avg_entry_price=100.0,
+            realized_pnl_base=0.0,
+            fees_paid_base=0.0,
+            current_value_base=500.0,
+            strategy_tag="vol_breakout",
+        ),
+        SpotPosition(
+            pair="ETH/USD",
+            base_asset="ETH",
+            quote_asset="USD",
+            base_size=10.0,
+            avg_entry_price=100.0,
+            realized_pnl_base=0.0,
+            fees_paid_base=0.0,
+            current_value_base=1000.0,
+            strategy_tag="vol_breakout",
+        ),
+    ]
+    portfolio.get_asset_exposure.return_value = []
+    portfolio.get_realized_pnl_by_strategy.return_value = {}
+    portfolio.store = MagicMock()
+    portfolio.store.get_snapshots.return_value = []
+
+    engine = RiskEngine(config, market, portfolio)
+    intent = StrategyIntent(
+        "vol_breakout",
+        "SOL/USD",
+        "long",
+        "enter",
+        500.0,
+        1.0,
+        "15m",
+        datetime.now(timezone.utc),
+    )
+
+    action = engine.process_intents([intent])[0]
+
+    assert action.action_type == "none"
+    assert action.blocked is True
+    assert any(
+        reason.startswith("Strategy vol_breakout budget exceeded")
+        for reason in action.blocked_reasons
+    )
+
+
+def test_duplicate_same_strategy_intents_resolve_single_action_strategy_id():
+    config = RiskConfig(
+        max_per_asset_pct=100.0,
+        max_portfolio_risk_pct=100.0,
+        max_per_strategy_pct={"vol_breakout": 100.0},
+    )
+    market = MagicMock(spec=MarketDataAPI)
+    portfolio = make_portfolio_service_mock()
+    market.normalize_pair.side_effect = lambda pair: str(pair).replace("/", "").upper()
+    market.get_latest_price.return_value = 100.0
+    market.get_pair_metadata.return_value = PairMetadata(
+        canonical="XBTUSD",
+        base="XBT",
+        quote="USD",
+        rest_symbol="XXBTZUSD",
+        ws_symbol="BTC/USD",
+        raw_name="XXBTZUSD",
+        price_decimals=1,
+        volume_decimals=4,
+        lot_size=1,
+        min_order_size=0.0001,
+        status="online",
+        liquidity_24h_usd=1_000_000.0,
+    )
+    portfolio.get_equity.return_value = EquityView(
+        equity_base=10000.0,
+        cash_base=9500.0,
+        realized_pnl_base_total=0.0,
+        unrealized_pnl_base_total=0.0,
+        drift_flag=False,
+    )
+    portfolio.get_positions.return_value = [
+        SpotPosition(
+            pair="BTC/USD",
+            base_asset="XBT",
+            quote_asset="USD",
+            base_size=5.0,
+            avg_entry_price=100.0,
+            realized_pnl_base=0.0,
+            fees_paid_base=0.0,
+            current_value_base=500.0,
+            strategy_tag="vol_breakout",
+        )
+    ]
+    portfolio.get_asset_exposure.return_value = []
+    portfolio.get_realized_pnl_by_strategy.return_value = {}
+    portfolio.store = MagicMock()
+    portfolio.store.get_snapshots.return_value = []
+
+    engine = RiskEngine(config, market, portfolio)
+    intents = [
+        StrategyIntent(
+            "vol_breakout",
+            "BTC/USD",
+            "flat",
+            "exit",
+            0.0,
+            1.0,
+            "15m",
+            datetime.now(timezone.utc),
+        ),
+        StrategyIntent(
+            "vol_breakout",
+            "BTC/USD",
+            "flat",
+            "exit",
+            0.0,
+            1.0,
+            "1h",
+            datetime.now(timezone.utc),
+        ),
+    ]
+
+    action = engine.process_intents(intents)[0]
+
+    assert action.strategy_id == "vol_breakout"
+    assert action.strategy_tag == "vol_breakout"
+    assert action.userref == "vol_breakout:15m"
+
+
+def test_kill_switch_reduction_matches_display_pair_to_canonical_position():
+    config = RiskConfig()
+    market = MagicMock(spec=MarketDataAPI)
+    portfolio = make_portfolio_service_mock()
+    market.normalize_pair.side_effect = lambda pair: {
+        "BTC/USD": "XBTUSD",
+        "XBTUSD": "XBTUSD",
+    }.get(pair, str(pair).replace("/", "").upper())
+    market.get_latest_price.return_value = 100.0
+    market.get_pair_metadata.return_value = PairMetadata(
+        canonical="XBTUSD",
+        base="XBT",
+        quote="USD",
+        rest_symbol="XXBTZUSD",
+        ws_symbol="BTC/USD",
+        raw_name="XXBTZUSD",
+        price_decimals=1,
+        volume_decimals=4,
+        lot_size=1,
+        min_order_size=0.0001,
+        status="online",
+        liquidity_24h_usd=1_000_000.0,
+    )
+    portfolio.get_equity.return_value = EquityView(
+        equity_base=10000.0,
+        cash_base=9500.0,
+        realized_pnl_base_total=0.0,
+        unrealized_pnl_base_total=0.0,
+        drift_flag=False,
+    )
+    portfolio.get_positions.return_value = [
+        SpotPosition(
+            pair="XBTUSD",
+            base_asset="XBT",
+            quote_asset="USD",
+            base_size=5.0,
+            avg_entry_price=100.0,
+            realized_pnl_base=0.0,
+            fees_paid_base=0.0,
+            current_value_base=500.0,
+            strategy_tag="vol_breakout",
+        )
+    ]
+    portfolio.get_asset_exposure.return_value = []
+    portfolio.store = MagicMock()
+    portfolio.store.get_snapshots.return_value = []
+
+    engine = RiskEngine(config, market, portfolio)
+    engine.set_manual_kill_switch(True)
+    intent = StrategyIntent(
+        "vol_breakout",
+        "BTC/USD",
+        "flat",
+        "exit",
+        0.0,
+        1.0,
+        "15m",
+        datetime.now(timezone.utc),
+    )
+
+    action = engine.process_intents([intent])[0]
+
+    assert action.action_type == "close"
+    assert action.blocked is False
+    assert action.current_base_size == 5.0
+    assert action.target_base_size == 0.0
+
+
 def test_manual_vs_strategy_grouping_and_exposure():
     market = MagicMock(spec=MarketDataAPI)
     portfolio = make_portfolio_service_mock()

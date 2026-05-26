@@ -1047,6 +1047,8 @@ class ExecutionService:
         config = getattr(self.adapter, "config", None)
         if not config:
             return None
+        if self._is_true_risk_reducing_action(action):
+            return None
 
         pair_limit = getattr(config, "max_pair_notional_usd", None)
         if pair_limit is not None:
@@ -1076,3 +1078,9 @@ class ExecutionService:
             )
 
         return None
+
+    @staticmethod
+    def _is_true_risk_reducing_action(action: "RiskAdjustedAction") -> bool:
+        if action.action_type not in {"reduce", "close"}:
+            return False
+        return action.target_base_size < action.current_base_size

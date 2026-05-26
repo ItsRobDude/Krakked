@@ -7,20 +7,22 @@ from krakked.market_data.models import PairMetadata
 from krakked.strategy.models import ExecutionPlan, RiskAdjustedAction
 
 
-def _build_action(pair: str, target_notional: float) -> RiskAdjustedAction:
-    return RiskAdjustedAction(
-        pair=pair,
-        strategy_id="test_strategy",
-        action_type="open",
-        target_base_size=1.0,
-        target_notional_usd=target_notional,
-        current_base_size=0.0,
-        reason="",
-        blocked=False,
-        blocked_reasons=[],
-        strategy_tag="test_strategy",
-        risk_limits_snapshot={},
-    )
+def _build_action(pair: str, target_notional: float, **overrides) -> RiskAdjustedAction:
+    payload = {
+        "pair": pair,
+        "strategy_id": "test_strategy",
+        "action_type": "open",
+        "target_base_size": 1.0,
+        "target_notional_usd": target_notional,
+        "current_base_size": 0.0,
+        "reason": "",
+        "blocked": False,
+        "blocked_reasons": [],
+        "strategy_tag": "test_strategy",
+        "risk_limits_snapshot": {},
+    }
+    payload.update(overrides)
+    return RiskAdjustedAction(**payload)
 
 
 def _pair_metadata(pair: str = "XBTUSD") -> PairMetadata:
@@ -110,3 +112,53 @@ def test_total_notional_guardrail_blocks_submission(inactive_risk_status):
     )
     assert len(result.errors) == 2
     assert adapter.submit_order.call_count == 0
+
+
+def test_notional_guardrails_allow_true_risk_reducing_sell(inactive_risk_status):
+    adapter = MagicMock()
+    adapter.config = ExecutionConfig(
+        max_pair_notional_usd=10.0,
+        max_total_notional_usd=10.0,
+        validate_only=True,
+    )
+    adapter.submit_order.side_effect = (
+        lambda order, pair_metadata, latest_price=None: order
+    )
+
+    plan = ExecutionPlan(
+        plan_id="plan_reduce_over_limit",
+        generated_at=datetime.now(UTC),
+        actions=[
+            _build_action(
+                "XBTUSD",
+                1000.0,
+                action_type="reduce",
+                target_base_size=0.5,
+                current_base_size=2.0,
+            )
+        ],
+        metadata={
+            "order_type": "limit",
+            "requested_price": 100.0,
+            "risk_status": {"total_exposure_pct": 20.0},
+        },
+    )
+
+    market_data = MagicMock()
+    market_data.get_best_bid_ask.return_value = {"bid": 99.0, "ask": 101.0}
+    market_data.get_pair_metadata_or_raise.side_effect = lambda pair: _pair_metadata(
+        pair
+    )
+
+    service = ExecutionService(
+        adapter,
+        market_data=market_data,
+        risk_status_provider=inactive_risk_status,
+    )
+    result = service.execute_plan(plan)
+
+    assert result.errors == []
+    assert len(result.orders) == 1
+    assert result.orders[0].side == "sell"
+    assert result.orders[0].risk_reducing is True
+    assert adapter.submit_order.call_count == 1

@@ -353,10 +353,10 @@ class RiskEngine:
     def _resolve_userref(
         self, strategies: List[str], timeframe: Optional[str] = None
     ) -> Optional[str]:
-        unique_strategies = {sid for sid in strategies if sid}
+        unique_strategies = self._unique_strategy_ids(strategies)
         if len(unique_strategies) != 1:
             return None
-        strategy_id = next(iter(unique_strategies))
+        strategy_id = unique_strategies[0]
         configured = self.strategy_userrefs.get(strategy_id)
         if configured is not None:
             return str(configured)
@@ -366,21 +366,38 @@ class RiskEngine:
         return strategy_id
 
     def _resolve_strategy_tag(self, strategies: List[str]) -> Optional[str]:
-        unique_strategies = {sid for sid in strategies if sid}
+        unique_strategies = self._unique_strategy_ids(strategies)
         if len(unique_strategies) != 1:
             return None
-        strategy_id = next(iter(unique_strategies))
+        strategy_id = unique_strategies[0]
         return self.strategy_tags.get(strategy_id) or strategy_id
+
+    @staticmethod
+    def _unique_strategy_ids(strategies: List[str]) -> List[str]:
+        unique: List[str] = []
+        seen: set[str] = set()
+        for strategy_id in strategies:
+            if not strategy_id or strategy_id in seen:
+                continue
+            seen.add(strategy_id)
+            unique.append(strategy_id)
+        return unique
 
     def _block_all_opens(
         self, intents: List[StrategyIntent], ctx: RiskContext, reason: str
     ) -> List[RiskAdjustedAction]:
         actions: List[RiskAdjustedAction] = []
         for intent in intents:
-            current_pos = next(
-                (p for p in ctx.open_positions if p.pair == intent.pair), None
+            intent_pair_key = pair_key(self.market_data, intent.pair)
+            pair_positions = [
+                p
+                for p in ctx.open_positions
+                if pair_key(self.market_data, getattr(p, "pair", "")) == intent_pair_key
+            ]
+            current_size = sum(
+                float(getattr(position, "base_size", 0.0) or 0.0)
+                for position in pair_positions
             )
-            current_size = current_pos.base_size if current_pos else 0.0
 
             # Fetch metadata to check for dust
             meta = None
@@ -478,7 +495,7 @@ class RiskEngine:
                             blocked_reasons=[],
                             risk_limits_snapshot=asdict(self.config),
                         )
-                    )
+                )
                 continue
 
             actions.append(
@@ -607,6 +624,8 @@ class RiskEngine:
                     target_usd_by_strategy[key], current_by_strategy.get(key, 0.0)
                 )
 
+        strategies_for_action = self._unique_strategy_ids(strategies_involved)
+        strategy_id_text = ",".join(strategies_for_action)
         adjusted_targets, limit_reasons = self._apply_limits(
             target_usd_by_strategy,
             current_by_strategy,
@@ -650,10 +669,10 @@ class RiskEngine:
             if not pair_meta:
                 return RiskAdjustedAction(
                     pair=pair,
-                    strategy_id=",".join(strategies_involved),
-                    strategy_tag=self._resolve_strategy_tag(strategies_involved),
+                    strategy_id=strategy_id_text,
+                    strategy_tag=self._resolve_strategy_tag(strategies_for_action),
                     userref=self._resolve_userref(
-                        strategies_involved, intents[0].timeframe
+                        strategies_for_action, intents[0].timeframe
                     ),
                     action_type="none",
                     target_base_size=current_base,
@@ -673,10 +692,10 @@ class RiskEngine:
             if not delta_ok:
                 return RiskAdjustedAction(
                     pair=pair,
-                    strategy_id=",".join(strategies_involved),
-                    strategy_tag=self._resolve_strategy_tag(strategies_involved),
+                    strategy_id=strategy_id_text,
+                    strategy_tag=self._resolve_strategy_tag(strategies_for_action),
                     userref=self._resolve_userref(
-                        strategies_involved, intents[0].timeframe
+                        strategies_for_action, intents[0].timeframe
                     ),
                     action_type="none",
                     target_base_size=current_base,
@@ -695,10 +714,10 @@ class RiskEngine:
             if not pos_ok:
                 return RiskAdjustedAction(
                     pair=pair,
-                    strategy_id=",".join(strategies_involved),
-                    strategy_tag=self._resolve_strategy_tag(strategies_involved),
+                    strategy_id=strategy_id_text,
+                    strategy_tag=self._resolve_strategy_tag(strategies_for_action),
                     userref=self._resolve_userref(
-                        strategies_involved, intents[0].timeframe
+                        strategies_for_action, intents[0].timeframe
                     ),
                     action_type="none",
                     target_base_size=current_base,
@@ -713,9 +732,9 @@ class RiskEngine:
 
         return RiskAdjustedAction(
             pair=pair,
-            strategy_id=",".join(strategies_involved),
-            strategy_tag=self._resolve_strategy_tag(strategies_involved),
-            userref=self._resolve_userref(strategies_involved, intents[0].timeframe),
+            strategy_id=strategy_id_text,
+            strategy_tag=self._resolve_strategy_tag(strategies_for_action),
+            userref=self._resolve_userref(strategies_for_action, intents[0].timeframe),
             action_type=action_type,
             target_base_size=target_base,
             target_notional_usd=target_usd,
@@ -782,6 +801,10 @@ class RiskEngine:
         target_by_strategy = target_by_strategy.copy()
         total_target_usd = sum(target_by_strategy.values())
         current_usd = sum(current_by_strategy.values())
+        if self._is_de_risking_target(
+            target_by_strategy, current_by_strategy, current_usd
+        ):
+            return target_by_strategy, []
 
         for strategy_id, pct_limit in per_strategy_caps.items():
             if strategy_id == "manual" and not ctx.manual_positions_included:
@@ -864,6 +887,27 @@ class RiskEngine:
                     )
 
         return target_by_strategy, blocked_reasons
+
+    @staticmethod
+    def _is_de_risking_target(
+        target_by_strategy: Dict[str, float],
+        current_by_strategy: Dict[str, float],
+        current_usd: float,
+    ) -> bool:
+        if not target_by_strategy:
+            return False
+
+        epsilon = 1e-9
+        total_target_usd = sum(target_by_strategy.values())
+        if total_target_usd > current_usd + epsilon:
+            return False
+
+        for strategy_id, target_usd in target_by_strategy.items():
+            current_usd_for_strategy = current_by_strategy.get(strategy_id, 0.0)
+            if target_usd > current_usd_for_strategy + epsilon:
+                return False
+
+        return True
 
     @staticmethod
     def _is_manual_position(position: Any) -> bool:
