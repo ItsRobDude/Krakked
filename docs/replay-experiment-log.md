@@ -286,3 +286,117 @@ Readout:
 - Next focused fix: make risk limits allow genuine close/reduce de-risking
   actions for existing positions instead of blocking them because the portfolio
   is already over an exposure cap.
+
+## 2026-05-25: Post-Risk-Fix Strategy Revalidation
+
+Context:
+
+- Purpose: revalidate strategy conclusions after four replay/risk correctness
+  fixes: pair-normalized position matching, de-risking actions, same-cycle risk
+  cap aggregation, and cap-aware volatility sizing.
+- Local artifacts:
+  `C:\Users\Rob\AppData\Local\krakked\krakked\reports\backtests\rs-rotation-post-risk-fix-revalidation-20260525.json`,
+  `C:\Users\Rob\AppData\Local\krakked\krakked\reports\backtests\explicit-3strategy-post-risk-fix-rolling-20260525.json`,
+  `C:\Users\Rob\AppData\Local\krakked\krakked\reports\backtests\all-four-post-risk-fix-ready-window-20260525.json`, and
+  `C:\Users\Rob\AppData\Local\krakked\krakked\reports\backtests\post-risk-fix-latest-unchanged-verification-20260525.json`.
+- `latest.json` was not published or modified:
+  `2026-05-26T00:43:28.057826+00:00` before and after the runs.
+- Pre-risk-fix strategy verdicts in this log should be treated as superseded or
+  cautionary when they depend on strategy/risk execution behavior.
+
+### `rs_rotation` Revalidation
+
+Cost scenarios:
+
+- Current cost: `25 bps` taker fee and `50 bps` slippage.
+- Zero cost: `0 bps` fee and `0 bps` slippage.
+- Sensitivity: `25 bps` taker fee and `20 bps` slippage.
+
+| Requested window | Scenario | Return | `rs_rotation` realized PnL | Actions / blocked / fills | Wins / losses |
+| --- | --- | ---: | ---: | ---: | ---: |
+| `2026-03-21T00:00:00+00:00 -> 2026-04-10T00:00:00+00:00` | current cost | `0.2917%` | `$0.8388` | `14 / 7 / 4` | `2 / 2` |
+| `2026-03-21T00:00:00+00:00 -> 2026-04-10T00:00:00+00:00` | zero cost | `0.3333%` | `$2.6283` | `14 / 7 / 4` | `2 / 0` |
+| `2026-03-21T00:00:00+00:00 -> 2026-04-10T00:00:00+00:00` | `25 bps` fee, `20 bps` slippage | `0.3083%` | `$1.0846` | `14 / 7 / 4` | `2 / 2` |
+| `2026-04-10T00:00:00+00:00 -> 2026-04-30T00:00:00+00:00` | current cost | `-0.4853%` | `-$38.3828` | `24 / 8 / 14` | `3 / 11` |
+| `2026-04-10T00:00:00+00:00 -> 2026-04-30T00:00:00+00:00` | zero cost | `-0.2663%` | `-$18.3198` | `24 / 8 / 14` | `3 / 4` |
+| `2026-04-10T00:00:00+00:00 -> 2026-04-30T00:00:00+00:00` | `25 bps` fee, `20 bps` slippage | `-0.3977%` | `-$30.7310` | `24 / 8 / 14` | `3 / 11` |
+| `2026-04-30T00:00:00+00:00 -> 2026-05-20T00:00:00+00:00` | current cost | `-0.1156%` | `-$11.5640` | `18 / 5 / 5` | `1 / 4` |
+| `2026-04-30T00:00:00+00:00 -> 2026-05-20T00:00:00+00:00` | zero cost | `-0.0394%` | `-$3.9426` | `18 / 5 / 5` | `1 / 2` |
+| `2026-04-30T00:00:00+00:00 -> 2026-05-20T00:00:00+00:00` | `25 bps` fee, `20 bps` slippage | `-0.0851%` | `-$8.5146` | `18 / 5 / 5` | `1 / 4` |
+| `2026-05-05T00:00:00+00:00 -> 2026-05-25T00:00:00+00:00` | current cost | `-0.4547%` | `-$45.2331` | `8 / 3 / 4` | `0 / 4` |
+| `2026-05-05T00:00:00+00:00 -> 2026-05-25T00:00:00+00:00` | zero cost | `-0.3754%` | `-$37.5708` | `8 / 3 / 4` | `0 / 1` |
+| `2026-05-05T00:00:00+00:00 -> 2026-05-25T00:00:00+00:00` | `25 bps` fee, `20 bps` slippage | `-0.4228%` | `-$42.2040` | `8 / 3 / 4` | `0 / 4` |
+
+Aggregate readout:
+
+| Scenario | Ready windows | Actions | Blocked | Fills | Execution errors | Aggregate return PnL | Aggregate realized PnL | Wins / losses |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Current cost | `4/4` | `64` | `23` | `27` | `0` | `-$76.3959` | `-$94.3412` | `6 / 21` |
+| Zero cost | `4/4` | `64` | `23` | `27` | `0` | `-$34.7914` | `-$57.2049` | `6 / 7` |
+| `25 bps` fee, `20 bps` slippage | `4/4` | `64` | `23` | `27` | `0` | `-$59.7408` | `-$80.3650` | `6 / 21` |
+
+Readout:
+
+- `rs_rotation` improved versus the earlier pre-risk-fix conclusion in one
+  older window, but still loses in aggregate under all tested cost scenarios.
+- Zero-cost revalidation is still negative in aggregate, so the updated evidence
+  is no longer just a cost-sensitivity story.
+- Keep `rs_rotation` investigation-only. Do not promote or retire it from this
+  sample; the next useful slice is to explain why April and May windows dominate
+  losses before changing logic or score gates.
+
+### Explicit 3-Strategy Rolling Baseline Rerun
+
+Window:
+`2026-05-05T00:00:00+00:00 -> 2026-05-25T00:00:00+00:00`
+
+- Enabled strategies: `trend_core`, `majors_mean_rev`, `rs_rotation`.
+- Preflight: `ready`; missing series `0`; partial series `0`;
+  strategy coverage gaps `0`.
+- Trust: `limited`.
+- Actions: `8`; blocked `3`; filled orders `5`; execution errors `0`.
+- Equity: `$10000.00 -> $9948.12`; return `-0.5188%`.
+- `rs_rotation` realized PnL: `-$51.5818`; `5` trades, `0` winners,
+  `5` losers; `21` low-score entries filtered.
+
+Delta versus the current published `latest.json`:
+
+| Field | Published latest | Post-risk-fix rerun | Delta |
+| --- | ---: | ---: | ---: |
+| Actions | `7` | `8` | `+1` |
+| Blocked actions | `5` | `3` | `-2` |
+| Filled orders | `2` | `5` | `+3` |
+| Execution errors | `0` | `0` | `0` |
+| Return PnL | `-$138.5588` | `-$51.8786` | `+$86.6803` |
+| Realized PnL | `-$2.5125` | `-$51.5818` | `-$49.0692` |
+
+Readout:
+
+- The risk fixes materially changed the rolling baseline. Fewer actions are
+  blocked and more orders fill, but the result is still not a promotion signal.
+- `trend_core` and `majors_mean_rev` remain evaluated but silent in this window.
+- Do not publish this rerun as latest without a separate replay-baseline
+  decision.
+
+### All-Four Short-Window Rerun
+
+Window:
+`2026-05-18T12:00:00+00:00 -> 2026-05-25T00:00:00+00:00`
+
+- Enabled strategies: `trend_core`, `vol_breakout`, `majors_mean_rev`,
+  `rs_rotation`.
+- Preflight: `limited`.
+- Partial series: `ADA/USD@1d`, `BTC/USD@1d`, `ETH/USD@1d`, `SOL/USD@1d`.
+- Strategy coverage gaps: `0`.
+- Trust: `weak_signal`.
+- Actions: `0`; filled orders `0`; execution errors `0`.
+
+Readout:
+
+- The short window has ready `15m` coverage for `vol_breakout`, but it is not a
+  fully ready all-four replay because `trend_core` asks for `1d` context and the
+  short window is under-warmed for that lane.
+- With the current explicit `vol_breakout` threshold `min_compression_bps=10.0`,
+  `vol_breakout` still emits `0` intents even when `15m` data is ready.
+- This run is useful as a coverage/truth check, not as a strategy-quality
+  comparison.
