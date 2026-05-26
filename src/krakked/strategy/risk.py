@@ -78,6 +78,15 @@ class RiskContext:
     )
 
 
+@dataclass
+class _PairRiskResult:
+    action: RiskAdjustedAction
+    current_usd: float = 0.0
+    target_usd: float = 0.0
+    current_by_strategy: Dict[str, float] = field(default_factory=dict)
+    target_by_strategy: Dict[str, float] = field(default_factory=dict)
+
+
 class RiskEngine:
     def __init__(
         self,
@@ -342,12 +351,33 @@ class RiskEngine:
         for intent in intents:
             intents_by_pair.setdefault(intent.pair, []).append(intent)
 
-        actions = [
-            self._process_pair_intents(
-                pair, pair_intents, ctx, per_strategy_caps=per_strategy_caps
+        actions: List[RiskAdjustedAction] = []
+        projected_strategy_exposure_usd = dict(ctx.per_strategy_exposure_usd)
+        projected_total_exposure_usd = ctx.total_exposure_usd
+        for pair, pair_intents in intents_by_pair.items():
+            result = self._process_pair_intents(
+                pair,
+                pair_intents,
+                ctx,
+                per_strategy_caps=per_strategy_caps,
+                projected_strategy_exposure_usd=projected_strategy_exposure_usd,
+                projected_total_exposure_usd=projected_total_exposure_usd,
             )
-            for pair, pair_intents in intents_by_pair.items()
-        ]
+            actions.append(result.action)
+            projected_total_exposure_usd = max(
+                0.0,
+                projected_total_exposure_usd - result.current_usd + result.target_usd,
+            )
+            for strategy_id, current_usd in result.current_by_strategy.items():
+                projected_strategy_exposure_usd[strategy_id] = max(
+                    0.0,
+                    projected_strategy_exposure_usd.get(strategy_id, 0.0) - current_usd,
+                )
+            for strategy_id, target_usd in result.target_by_strategy.items():
+                projected_strategy_exposure_usd[strategy_id] = (
+                    projected_strategy_exposure_usd.get(strategy_id, 0.0) + target_usd
+                )
+
         return actions
 
     def _resolve_userref(
@@ -495,7 +525,7 @@ class RiskEngine:
                             blocked_reasons=[],
                             risk_limits_snapshot=asdict(self.config),
                         )
-                )
+                    )
                 continue
 
             actions.append(
@@ -524,7 +554,9 @@ class RiskEngine:
         intents: List[StrategyIntent],
         ctx: RiskContext,
         per_strategy_caps: Dict[str, float],
-    ) -> RiskAdjustedAction:
+        projected_strategy_exposure_usd: Dict[str, float],
+        projected_total_exposure_usd: float,
+    ) -> _PairRiskResult:
 
         # Fetch metadata ONCE
         pair_meta = None
@@ -542,8 +574,10 @@ class RiskEngine:
                 exc,
                 extra=structured_log_extra(event="risk_price_stale", pair=pair),
             )
-            return self._create_blocked_action(
-                pair, intents[0].strategy_id, "Stale price data", ctx
+            return _PairRiskResult(
+                self._create_blocked_action(
+                    pair, intents[0].strategy_id, "Stale price data", ctx
+                )
             )
         except Exception as exc:  # noqa: BLE001
             logger.debug(
@@ -552,13 +586,17 @@ class RiskEngine:
                 exc,
                 extra=structured_log_extra(event="risk_price_error", pair=pair),
             )
-            return self._create_blocked_action(
-                pair, intents[0].strategy_id, "Missing price data", ctx
+            return _PairRiskResult(
+                self._create_blocked_action(
+                    pair, intents[0].strategy_id, "Missing price data", ctx
+                )
             )
 
         if not price or price <= 0:
-            return self._create_blocked_action(
-                pair, intents[0].strategy_id, "Missing price data", ctx
+            return _PairRiskResult(
+                self._create_blocked_action(
+                    pair, intents[0].strategy_id, "Missing price data", ctx
+                )
             )
 
         blocked_reasons: List[str] = []
@@ -631,6 +669,8 @@ class RiskEngine:
             current_by_strategy,
             ctx,
             per_strategy_caps=per_strategy_caps,
+            projected_strategy_exposure_usd=projected_strategy_exposure_usd,
+            projected_total_exposure_usd=projected_total_exposure_usd,
         )
         blocked_reasons.extend(limit_reasons)
         target_usd = sum(adjusted_targets.values())
@@ -667,22 +707,28 @@ class RiskEngine:
         if is_sell:
             # If metadata missing, treat as untradeable
             if not pair_meta:
-                return RiskAdjustedAction(
-                    pair=pair,
-                    strategy_id=strategy_id_text,
-                    strategy_tag=self._resolve_strategy_tag(strategies_for_action),
-                    userref=self._resolve_userref(
-                        strategies_for_action, intents[0].timeframe
+                return _PairRiskResult(
+                    action=RiskAdjustedAction(
+                        pair=pair,
+                        strategy_id=strategy_id_text,
+                        strategy_tag=self._resolve_strategy_tag(strategies_for_action),
+                        userref=self._resolve_userref(
+                            strategies_for_action, intents[0].timeframe
+                        ),
+                        action_type="none",
+                        target_base_size=current_base,
+                        target_notional_usd=current_usd,
+                        current_base_size=current_base,
+                        reason=f"Untradeable: missing pair metadata. {reason_text}",
+                        blocked=False,
+                        blocked_reasons=[],
+                        clamped=False,
+                        risk_limits_snapshot=asdict(self.config),
                     ),
-                    action_type="none",
-                    target_base_size=current_base,
-                    target_notional_usd=current_usd,
-                    current_base_size=current_base,
-                    reason=f"Untradeable: missing pair metadata. {reason_text}",
-                    blocked=False,
-                    blocked_reasons=[],
-                    clamped=False,
-                    risk_limits_snapshot=asdict(self.config),
+                    current_usd=current_usd,
+                    target_usd=current_usd,
+                    current_by_strategy=current_by_strategy,
+                    target_by_strategy=current_by_strategy.copy(),
                 )
 
             # Check if sell delta is executable
@@ -690,60 +736,80 @@ class RiskEngine:
             rounded_delta, delta_ok = classify_volume(pair_meta, sell_delta)
 
             if not delta_ok:
-                return RiskAdjustedAction(
-                    pair=pair,
-                    strategy_id=strategy_id_text,
-                    strategy_tag=self._resolve_strategy_tag(strategies_for_action),
-                    userref=self._resolve_userref(
-                        strategies_for_action, intents[0].timeframe
+                return _PairRiskResult(
+                    action=RiskAdjustedAction(
+                        pair=pair,
+                        strategy_id=strategy_id_text,
+                        strategy_tag=self._resolve_strategy_tag(strategies_for_action),
+                        userref=self._resolve_userref(
+                            strategies_for_action, intents[0].timeframe
+                        ),
+                        action_type="none",
+                        target_base_size=current_base,
+                        target_notional_usd=current_usd,
+                        current_base_size=current_base,
+                        reason=f"{dust_reason(pair_meta, sell_delta, rounded_delta)}. {reason_text}",
+                        blocked=False,
+                        blocked_reasons=[],
+                        clamped=False,
+                        risk_limits_snapshot=asdict(self.config),
                     ),
-                    action_type="none",
-                    target_base_size=current_base,
-                    target_notional_usd=current_usd,
-                    current_base_size=current_base,
-                    reason=f"{dust_reason(pair_meta, sell_delta, rounded_delta)}. {reason_text}",
-                    blocked=False,
-                    blocked_reasons=[],
-                    clamped=False,
-                    risk_limits_snapshot=asdict(self.config),
+                    current_usd=current_usd,
+                    target_usd=current_usd,
+                    current_by_strategy=current_by_strategy,
+                    target_by_strategy=current_by_strategy.copy(),
                 )
 
         # Special check for full close / reduce where position ITSELF might be dust
         if action_type in {"close", "reduce"} and pair_meta:
             rounded_pos, pos_ok = classify_volume(pair_meta, current_base)
             if not pos_ok:
-                return RiskAdjustedAction(
-                    pair=pair,
-                    strategy_id=strategy_id_text,
-                    strategy_tag=self._resolve_strategy_tag(strategies_for_action),
-                    userref=self._resolve_userref(
-                        strategies_for_action, intents[0].timeframe
+                return _PairRiskResult(
+                    action=RiskAdjustedAction(
+                        pair=pair,
+                        strategy_id=strategy_id_text,
+                        strategy_tag=self._resolve_strategy_tag(strategies_for_action),
+                        userref=self._resolve_userref(
+                            strategies_for_action, intents[0].timeframe
+                        ),
+                        action_type="none",
+                        target_base_size=current_base,
+                        target_notional_usd=current_usd,
+                        current_base_size=current_base,
+                        reason=f"{dust_reason(pair_meta, current_base, rounded_pos)} (Position). {reason_text}",
+                        blocked=False,
+                        blocked_reasons=[],
+                        clamped=False,
+                        risk_limits_snapshot=asdict(self.config),
                     ),
-                    action_type="none",
-                    target_base_size=current_base,
-                    target_notional_usd=current_usd,
-                    current_base_size=current_base,
-                    reason=f"{dust_reason(pair_meta, current_base, rounded_pos)} (Position). {reason_text}",
-                    blocked=False,
-                    blocked_reasons=[],
-                    clamped=False,
-                    risk_limits_snapshot=asdict(self.config),
+                    current_usd=current_usd,
+                    target_usd=current_usd,
+                    current_by_strategy=current_by_strategy,
+                    target_by_strategy=current_by_strategy.copy(),
                 )
 
-        return RiskAdjustedAction(
-            pair=pair,
-            strategy_id=strategy_id_text,
-            strategy_tag=self._resolve_strategy_tag(strategies_for_action),
-            userref=self._resolve_userref(strategies_for_action, intents[0].timeframe),
-            action_type=action_type,
-            target_base_size=target_base,
-            target_notional_usd=target_usd,
-            current_base_size=current_base,
-            reason=reason_text,
-            blocked=blocked,
-            blocked_reasons=blocked_reasons,
-            clamped=clamped,
-            risk_limits_snapshot=asdict(self.config),
+        return _PairRiskResult(
+            action=RiskAdjustedAction(
+                pair=pair,
+                strategy_id=strategy_id_text,
+                strategy_tag=self._resolve_strategy_tag(strategies_for_action),
+                userref=self._resolve_userref(
+                    strategies_for_action, intents[0].timeframe
+                ),
+                action_type=action_type,
+                target_base_size=target_base,
+                target_notional_usd=target_usd,
+                current_base_size=current_base,
+                reason=reason_text,
+                blocked=blocked,
+                blocked_reasons=blocked_reasons,
+                clamped=clamped,
+                risk_limits_snapshot=asdict(self.config),
+            ),
+            current_usd=current_usd,
+            target_usd=target_usd,
+            current_by_strategy=current_by_strategy,
+            target_by_strategy=adjusted_targets,
         )
 
     def _build_effective_caps(
@@ -767,6 +833,8 @@ class RiskEngine:
         current_by_strategy: Dict[str, float],
         ctx: RiskContext,
         per_strategy_caps: Dict[str, float],
+        projected_strategy_exposure_usd: Optional[Dict[str, float]] = None,
+        projected_total_exposure_usd: Optional[float] = None,
     ) -> tuple[Dict[str, float], List[str]]:
         blocked_reasons: List[str] = []
 
@@ -806,6 +874,17 @@ class RiskEngine:
         ):
             return target_by_strategy, []
 
+        strategy_exposure_usd = (
+            projected_strategy_exposure_usd
+            if projected_strategy_exposure_usd is not None
+            else ctx.per_strategy_exposure_usd
+        )
+        total_exposure_usd = (
+            projected_total_exposure_usd
+            if projected_total_exposure_usd is not None
+            else ctx.total_exposure_usd
+        )
+
         for strategy_id, pct_limit in per_strategy_caps.items():
             if strategy_id == "manual" and not ctx.manual_positions_included:
                 continue
@@ -814,9 +893,7 @@ class RiskEngine:
                 continue
 
             allowed_usd = ctx.equity_usd * (pct_limit / 100.0)
-            current_total_for_strategy = ctx.per_strategy_exposure_usd.get(
-                strategy_id, 0.0
-            )
+            current_total_for_strategy = strategy_exposure_usd.get(strategy_id, 0.0)
             current_pair_usd = current_by_strategy.get(strategy_id, 0.0)
             projected_total = (
                 current_total_for_strategy
@@ -840,9 +917,9 @@ class RiskEngine:
         total_target_usd = sum(target_by_strategy.values())
 
         max_asset_usd = ctx.equity_usd * (self.config.max_per_asset_pct / 100.0)
-        projected_total = ctx.total_exposure_usd - current_usd + total_target_usd
+        projected_total = total_exposure_usd - current_usd + total_target_usd
         if projected_total > max_asset_usd:
-            available = max(max_asset_usd - (ctx.total_exposure_usd - current_usd), 0.0)
+            available = max(max_asset_usd - (total_exposure_usd - current_usd), 0.0)
             reason = (
                 f"Max per asset limit ({projected_total:.2f} > {max_asset_usd:.2f})"
             )
@@ -852,10 +929,10 @@ class RiskEngine:
         portfolio_limit_usd = ctx.equity_usd * (
             self.config.max_portfolio_risk_pct / 100.0
         )
-        projected_total = ctx.total_exposure_usd - current_usd + total_target_usd
+        projected_total = total_exposure_usd - current_usd + total_target_usd
         if projected_total > portfolio_limit_usd:
             available = max(
-                portfolio_limit_usd - (ctx.total_exposure_usd - current_usd), 0.0
+                portfolio_limit_usd - (total_exposure_usd - current_usd), 0.0
             )
             reason = (
                 "Max portfolio exposure limit "
