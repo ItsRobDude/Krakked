@@ -994,6 +994,92 @@ def _build_strategy_constructor_default_warnings(
     ]
 
 
+def _positive_float(value: Any) -> Optional[float]:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _positive_int(value: Any) -> Optional[int]:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _format_pct(value: float) -> str:
+    return f"{float(value):g}%"
+
+
+def _build_strategy_risk_envelope_warnings(
+    config: AppConfig,
+    strategy_inputs: Dict[str, Any],
+) -> List[str]:
+    warnings: List[str] = []
+    risk_config = getattr(config, "risk", None)
+    if risk_config is None:
+        return warnings
+
+    strategy_caps = getattr(risk_config, "max_per_strategy_pct", {}) or {}
+    portfolio_cap = _positive_float(
+        getattr(risk_config, "max_portfolio_risk_pct", None)
+    )
+    asset_cap = _positive_float(getattr(risk_config, "max_per_asset_pct", None))
+
+    for strategy_id, strategy_input in (
+        strategy_inputs.get("strategies") or {}
+    ).items():
+        if not isinstance(strategy_input, dict) or not strategy_input.get("enabled"):
+            continue
+        params = strategy_input.get("params") or {}
+        if not isinstance(params, dict):
+            continue
+
+        total_allocation_pct = _positive_float(params.get("total_allocation_pct"))
+        if total_allocation_pct is None:
+            continue
+
+        top_n = _positive_int(params.get("top_n")) or 1
+        per_asset_target_pct = total_allocation_pct / float(top_n)
+        limit_details: List[str] = []
+
+        strategy_cap = _positive_float(strategy_caps.get(str(strategy_id)))
+        if strategy_cap is not None and total_allocation_pct > strategy_cap:
+            limit_details.append(
+                "strategy cap "
+                f"{_format_pct(strategy_cap)} < requested total "
+                f"{_format_pct(total_allocation_pct)}"
+            )
+        if portfolio_cap is not None and total_allocation_pct > portfolio_cap:
+            limit_details.append(
+                "portfolio cap "
+                f"{_format_pct(portfolio_cap)} < requested total "
+                f"{_format_pct(total_allocation_pct)}"
+            )
+        if asset_cap is not None and per_asset_target_pct > asset_cap:
+            limit_details.append(
+                "per-asset cap "
+                f"{_format_pct(asset_cap)} < requested per-asset "
+                f"{_format_pct(per_asset_target_pct)}"
+            )
+
+        if not limit_details:
+            continue
+
+        warnings.append(
+            f"Strategy {strategy_id} requested allocation may be impossible under "
+            "the active risk envelope: "
+            + "; ".join(limit_details)
+            + ". Replay actions may be cap-constrained rather than expressing "
+            "configured strategy intent."
+        )
+
+    return warnings
+
+
 def _with_strategy_coverage_warnings(
     config: AppConfig,
     preflight: BacktestPreflight,
@@ -1003,6 +1089,7 @@ def _with_strategy_coverage_warnings(
     strategy_warnings = [
         *_build_strategy_coverage_warnings(strategy_inputs, preflight),
         *_build_strategy_constructor_default_warnings(strategy_inputs),
+        *_build_strategy_risk_envelope_warnings(config, strategy_inputs),
     ]
     for warning in strategy_warnings:
         if warning not in warnings:

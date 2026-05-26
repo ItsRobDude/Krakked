@@ -594,6 +594,96 @@ def test_backtest_strategy_inputs_exposes_constructor_default_pair_gap(
     ]
 
 
+def test_backtest_warns_when_strategy_allocation_exceeds_risk_envelope(
+    tmp_path: Path,
+) -> None:
+    config = _build_backtest_config(tmp_path)
+    config.universe.include_pairs = ["BTC/USD", "ETH/USD"]
+    config.strategies.enabled = ["rs_rotation"]
+    config.strategies.configs["rs_rotation"].enabled = True
+    config.strategies.configs["rs_rotation"].params = {
+        "pairs": ["BTC/USD", "ETH/USD"],
+        "timeframe": "1h",
+        "lookback_bars": 2,
+        "rebalance_interval_hours": 24,
+        "top_n": 2,
+        "total_allocation_pct": 20.0,
+        "confidence_return_bps": 250.0,
+    }
+    config.risk.max_per_strategy_pct["rs_rotation"] = 5.0
+    config.risk.max_portfolio_risk_pct = 10.0
+    config.risk.max_per_asset_pct = 5.0
+    _seed_pair_metadata(config)
+    timestamps = [1_700_000_000 + (idx * 3600) for idx in range(6)]
+    btc_closes = [100.0, 101.0, 102.0, 103.0, 104.0, 105.0]
+    eth_closes = [100.0, 100.5, 101.0, 101.5, 102.0, 102.5]
+    _write_ohlc_series(tmp_path, timestamps=timestamps, closes=btc_closes)
+    _write_ohlc_series(
+        tmp_path, timestamps=timestamps, closes=eth_closes, canonical="ETHUSD"
+    )
+
+    start = datetime.fromtimestamp(timestamps[0], tz=UTC)
+    end = datetime.fromtimestamp(timestamps[-1], tz=UTC)
+    expected_warning = (
+        "Strategy rs_rotation requested allocation may be impossible under the "
+        "active risk envelope: strategy cap 5% < requested total 20%; "
+        "portfolio cap 10% < requested total 20%; per-asset cap 5% < "
+        "requested per-asset 10%. Replay actions may be cap-constrained rather "
+        "than expressing configured strategy intent."
+    )
+
+    preflight = runner.build_backtest_preflight(config, start=start, end=end)
+
+    assert preflight.preflight.status == "ready"
+    assert expected_warning in preflight.preflight.warnings
+
+    result = runner.run_backtest(
+        config,
+        start=start,
+        end=end,
+        starting_cash_usd=10_000.0,
+    )
+    report = result.to_report_dict()
+
+    assert expected_warning in report["preflight"]["warnings"]
+    assert expected_warning in report["summary"]["notable_warnings"]
+
+
+def test_backtest_does_not_warn_when_strategy_allocation_fits_risk_envelope(
+    tmp_path: Path,
+) -> None:
+    config = _build_backtest_config(tmp_path)
+    config.strategies.enabled = ["rs_rotation"]
+    config.strategies.configs["rs_rotation"].enabled = True
+    config.strategies.configs["rs_rotation"].params = {
+        "pairs": ["BTC/USD"],
+        "timeframe": "1h",
+        "lookback_bars": 2,
+        "rebalance_interval_hours": 24,
+        "top_n": 1,
+        "total_allocation_pct": 5.0,
+        "confidence_return_bps": 250.0,
+    }
+    config.risk.max_per_strategy_pct["rs_rotation"] = 5.0
+    config.risk.max_portfolio_risk_pct = 10.0
+    config.risk.max_per_asset_pct = 5.0
+    _seed_pair_metadata(config)
+    timestamps = [1_700_000_000 + (idx * 3600) for idx in range(6)]
+    closes = [100.0] * len(timestamps)
+    _write_ohlc_series(tmp_path, timestamps=timestamps, closes=closes)
+
+    start = datetime.fromtimestamp(timestamps[0], tz=UTC)
+    end = datetime.fromtimestamp(timestamps[-1], tz=UTC)
+
+    result = runner.build_backtest_preflight(config, start=start, end=end)
+
+    assert not [
+        warning
+        for warning in result.preflight.warnings
+        if "requested allocation may be impossible" in warning
+    ]
+
+
 def test_build_backtest_preflight_warns_on_strategy_timeframe_gap(
     tmp_path: Path,
 ) -> None:
