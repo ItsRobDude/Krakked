@@ -613,7 +613,14 @@ class RiskEngine:
 
             exposure = intent.desired_exposure_usd
             if exposure is None:
-                exposure = self._size_by_volatility(pair, intent.timeframe, price, ctx)
+                exposure = self._size_by_volatility(
+                    pair,
+                    intent.timeframe,
+                    price,
+                    ctx,
+                    strategy_id=intent.strategy_id,
+                    per_strategy_caps=per_strategy_caps,
+                )
             exposure = exposure or 0.0
 
             confidence = intent.confidence
@@ -1006,7 +1013,14 @@ class RiskEngine:
             return None
 
     def _size_by_volatility(
-        self, pair: str, timeframe: str, price: float, ctx: RiskContext
+        self,
+        pair: str,
+        timeframe: str,
+        price: float,
+        ctx: RiskContext,
+        *,
+        strategy_id: Optional[str] = None,
+        per_strategy_caps: Optional[Dict[str, float]] = None,
     ) -> float:
         tf = timeframe or "1d"
         ohlc = self.market_data.get_ohlc(
@@ -1037,7 +1051,30 @@ class RiskEngine:
         risk_amount_usd = ctx.equity_usd * (self.config.max_risk_per_trade_pct / 100.0)
         if stop_distance_pct <= 0:
             return 0.0
-        return risk_amount_usd / stop_distance_pct
+        raw_target_usd = risk_amount_usd / stop_distance_pct
+        return min(
+            raw_target_usd,
+            self._volatility_sizing_budget_cap_usd(
+                ctx,
+                strategy_id=strategy_id,
+                per_strategy_caps=per_strategy_caps,
+            ),
+        )
+
+    def _volatility_sizing_budget_cap_usd(
+        self,
+        ctx: RiskContext,
+        *,
+        strategy_id: Optional[str],
+        per_strategy_caps: Optional[Dict[str, float]],
+    ) -> float:
+        caps = [
+            ctx.equity_usd * (self.config.max_per_asset_pct / 100.0),
+            ctx.equity_usd * (self.config.max_portfolio_risk_pct / 100.0),
+        ]
+        if strategy_id and per_strategy_caps and strategy_id in per_strategy_caps:
+            caps.append(ctx.equity_usd * (per_strategy_caps[strategy_id] / 100.0))
+        return max(0.0, min(caps))
 
     def _create_blocked_action(
         self, pair: str, strategy_id: str, reason: str, ctx: RiskContext

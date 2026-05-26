@@ -107,6 +107,75 @@ def test_risk_engine_sizing():
     assert action.strategy_tag == "trend_v1"
 
 
+def test_volatility_sizing_is_capped_by_strategy_budget_before_limits():
+    config = RiskConfig(
+        max_risk_per_trade_pct=1.0,
+        volatility_lookback_bars=3,
+        max_per_asset_pct=100.0,
+        max_portfolio_risk_pct=100.0,
+        max_per_strategy_pct={"vol_breakout": 5.0},
+    )
+    market = MagicMock(spec=MarketDataAPI)
+    portfolio = make_portfolio_service_mock()
+
+    market.get_latest_price.return_value = 100.0
+    market.get_pair_metadata.return_value = PairMetadata(
+        canonical="XBTUSD",
+        base="XBT",
+        quote="USD",
+        rest_symbol="XXBTZUSD",
+        ws_symbol="BTC/USD",
+        raw_name="XXBTZUSD",
+        price_decimals=1,
+        volume_decimals=4,
+        lot_size=1,
+        min_order_size=0.0001,
+        status="online",
+        liquidity_24h_usd=1_000_000.0,
+    )
+
+    from dataclasses import dataclass
+
+    @dataclass
+    class MockBar:
+        high: float
+        low: float
+        close: float
+
+    market.get_ohlc.return_value = [MockBar(100.01, 99.99, 100.0) for _ in range(15)]
+    portfolio.get_equity.return_value = EquityView(
+        equity_base=10000.0,
+        cash_base=10000.0,
+        realized_pnl_base_total=0.0,
+        unrealized_pnl_base_total=0.0,
+        drift_flag=False,
+    )
+    portfolio.get_positions.return_value = []
+    portfolio.get_asset_exposure.return_value = []
+    portfolio.get_realized_pnl_by_strategy.return_value = {}
+    portfolio.store = MagicMock()
+    portfolio.store.get_snapshots.return_value = []
+
+    engine = RiskEngine(config, market, portfolio)
+    intent = StrategyIntent(
+        strategy_id="vol_breakout",
+        pair="BTC/USD",
+        side="long",
+        intent_type="enter",
+        desired_exposure_usd=None,
+        confidence=1.0,
+        timeframe="15m",
+        generated_at=datetime.now(timezone.utc),
+    )
+
+    action = engine.process_intents([intent])[0]
+
+    assert action.target_notional_usd == 500.0
+    assert action.blocked is False
+    assert action.clamped is False
+    assert action.reason == "Aggregated Intent"
+
+
 def test_kill_switch_drawdown():
     config = RiskConfig(max_daily_drawdown_pct=5.0)
     market = MagicMock(spec=MarketDataAPI)
