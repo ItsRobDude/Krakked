@@ -400,3 +400,66 @@ Readout:
   `vol_breakout` still emits `0` intents even when `15m` data is ready.
 - This run is useful as a coverage/truth check, not as a strategy-quality
   comparison.
+
+## 2026-05-26: `rs_rotation` Attribution Pass
+
+Context:
+
+- Purpose: explain the post-risk-fix `rs_rotation` losses before changing any
+  strategy logic, thresholds, defaults, risk limits, local config, or published
+  replay reports.
+- Local artifact:
+  `C:\Users\Rob\AppData\Local\krakked\krakked\reports\backtests\rs-rotation-attribution-post-risk-fix-20260526.json`.
+- Windows revalidated:
+  `2026-03-21T00:00:00+00:00 -> 2026-04-10T00:00:00+00:00`,
+  `2026-04-10T00:00:00+00:00 -> 2026-04-30T00:00:00+00:00`,
+  `2026-04-30T00:00:00+00:00 -> 2026-05-20T00:00:00+00:00`, and
+  `2026-05-05T00:00:00+00:00 -> 2026-05-25T00:00:00+00:00`.
+- `latest.json` was not published or modified by this attribution pass.
+
+Aggregate attribution:
+
+| Scenario | Actions / blocked / fills | Return PnL | Realized PnL | Closed gross PnL | Closed net PnL | Closed fees | Closed slippage estimate | Closed W / L | Open unrealized |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Current cost | `64 / 23 / 27` | `-$76.3959` | `-$94.3412` | `-$80.4321` | `-$92.0713` | `$11.6392` | `$23.2998` | `6 / 7` | `$17.9225` |
+| Zero cost | `64 / 23 / 27` | `-$34.7914` | `-$57.2049` | `-$57.1782` | `-$57.1782` | `$0.0000` | `$0.0000` | `6 / 7` | `$22.3867` |
+| `25 bps` fee, `20 bps` slippage | `64 / 23 / 27` | `-$59.7408` | `-$80.3650` | `-$66.4592` | `-$78.0994` | `$11.6402` | `$9.3085` | `6 / 7` | `$20.6001` |
+
+Current-cost pair attribution:
+
+| Pair | Closed segments | Closed W / L | Closed gross PnL | Closed net PnL | Closed fees | Closed slippage estimate | Open unrealized |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `ADA/USD` | `3` | `1 / 2` | `-$28.3176` | `-$33.2128` | `$4.8952` | `$9.7884` | `$0.0000` |
+| `BTC/USD` | `4` | `2 / 2` | `-$3.6391` | `-$5.0616` | `$1.4225` | `$2.8449` | `-$10.1486` |
+| `ETH/USD` | `4` | `3 / 1` | `-$5.2855` | `-$8.0479` | `$2.7624` | `$5.5244` | `$28.3271` |
+| `SOL/USD` | `2` | `0 / 2` | `-$43.1898` | `-$45.7489` | `$2.5591` | `$5.1420` | `-$0.2560` |
+
+Readout:
+
+- Costs make the result worse, but they are not the root cause. Closed gross PnL
+  is already negative under current cost (`-$80.4321`) and zero-cost closed PnL
+  remains negative (`-$57.1782`).
+- Losses are concentrated in `SOL/USD` and `ADA/USD`. The largest losing
+  segment was `SOL/USD` entered at `2026-05-12T00:00:00+00:00` and exited at
+  `2026-05-16T00:00:00+00:00`, with `-$45.0804` net current-cost PnL.
+- Accepted entries were not low-confidence leftovers. The closed-segment median
+  entry score was `1.0`, and the median entry relative return was `607.5063 bps`.
+  The strategy filtered `54` low-score intents before risk.
+- This is not short-hold churn. Closed-segment median hold was `96 hours`
+  (`24` bars on the configured `4h` timeframe).
+- There is a config/risk intent mismatch: local `rs_rotation` params ask for
+  `total_allocation_pct=20.0` across `top_n=2`, while
+  `risk.max_per_strategy_pct["rs_rotation"]` is `5.0`. The replay therefore
+  cannot express the configured two-asset, 20% allocation intent; it becomes a
+  cap-constrained variant with frequent strategy-budget blocks.
+
+Conclusion:
+
+- Keep `rs_rotation` investigation-only. The attribution does not point to a
+  clean code bug or a threshold tweak.
+- The next focused slice should be an in-memory allocation/cap alignment probe:
+  compare the current `20%` target under the `5%` cap against a cap-aligned
+  `5%` target, and optionally a cap-relaxed `20%` diagnostic run. Do not change
+  local config or risk defaults until that probe shows whether the strategy is
+  failing because of the signal itself or because the configured allocation
+  intent is impossible under the current risk envelope.
