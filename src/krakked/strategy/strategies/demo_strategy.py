@@ -1,7 +1,7 @@
 # src/krakked/strategy/strategies/demo_strategy.py
 
 from dataclasses import dataclass
-from typing import Any, List, Optional
+from typing import List, Optional
 
 from krakked.config import StrategyConfig
 from krakked.market_data.api import MarketDataAPI
@@ -84,9 +84,7 @@ class TrendFollowingStrategy(Strategy):
         ):
             min_liquidity = ctx.portfolio.app_config.risk.min_liquidity_24h_usd
 
-        positions: List[Any] = []
-        if hasattr(ctx.portfolio, "get_positions"):
-            positions = ctx.portfolio.get_positions() or []
+        positions_by_pair_key = self._owned_positions_by_pair_key(ctx)
 
         for pair in pairs:
             metadata = ctx.market_data.get_pair_metadata(pair)
@@ -142,15 +140,7 @@ class TrendFollowingStrategy(Strategy):
                     max(0.1, strength_bps / (self.params.min_trend_strength_bps * 2)),
                 )
 
-            existing_position = next(
-                (
-                    pos
-                    for pos in positions
-                    if getattr(pos, "pair", None) == pair
-                    and getattr(pos, "strategy_tag", None) == self.id
-                ),
-                None,
-            )
+            existing_position = positions_by_pair_key.get(self._pair_key(ctx, pair))
             has_position = (
                 existing_position is not None
                 and getattr(existing_position, "base_size", 0) > 0

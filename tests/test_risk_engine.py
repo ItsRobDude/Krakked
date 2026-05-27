@@ -105,6 +105,38 @@ def test_kill_switch_handles_unexpected_price_errors():
     assert actions[0].blocked is True
 
 
+def test_blocked_action_matches_display_pair_to_canonical_position():
+    market_data = MagicMock()
+    market_data.normalize_pair.side_effect = lambda pair: {
+        "BTC/USD": "XBTUSD",
+        "XBTUSD": "XBTUSD",
+    }.get(pair, str(pair).replace("/", "").upper())
+    portfolio = _build_portfolio_mock()
+    engine = RiskEngine(RiskConfig(), market_data, portfolio)
+    ctx = _build_risk_context(
+        open_positions=[
+            SpotPosition(
+                pair="XBTUSD",
+                base_asset="XBT",
+                quote_asset="USD",
+                base_size=5.0,
+                avg_entry_price=100.0,
+                realized_pnl_base=0.0,
+                fees_paid_base=0.0,
+                strategy_tag="trend_core",
+            )
+        ]
+    )
+
+    action = engine._create_blocked_action(
+        "BTC/USD", "trend_core", "Missing price data", ctx
+    )
+
+    assert action.current_base_size == 5.0
+    assert action.target_base_size == 5.0
+    assert action.blocked is True
+
+
 def test_manual_positions_excluded_from_limits():
     market_data = MagicMock()
     market_data.get_latest_price.side_effect = lambda pair: {

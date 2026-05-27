@@ -463,3 +463,18 @@ Conclusion:
   local config or risk defaults until that probe shows whether the strategy is
   failing because of the signal itself or because the configured allocation
   intent is impossible under the current risk envelope.
+
+### `rs_rotation` Cap-Mismatch Warning Decision
+
+The `rs_rotation` allocation warning is intentional and informational, not a
+replay/reporting regression. Local config asks for `total_allocation_pct=20.0`
+across `top_n=2`, while the active risk envelope caps `rs_rotation` at `5%`,
+the portfolio at `10%`, and each asset at `5%`. The warning should remain
+operator-visible because it explains why replay actions can be cap-constrained
+instead of expressing the configured strategy target.
+
+Follow-up allocation probes did not turn this into a cap-loosening task:
+cap-aligned, envelope-aligned, and cap-relaxed variants still failed to produce
+a promotion-quality result. The current operator conclusion is therefore:
+record the mismatch, keep `rs_rotation` investigation-only, and do not loosen
+risk caps or change `rs_rotation` allocation defaults from this evidence alone.

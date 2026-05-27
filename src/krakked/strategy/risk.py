@@ -1079,8 +1079,13 @@ class RiskEngine:
     def _create_blocked_action(
         self, pair: str, strategy_id: str, reason: str, ctx: RiskContext
     ) -> RiskAdjustedAction:
-        current_pos = next((p for p in ctx.open_positions if p.pair == pair), None)
-        current_base = current_pos.base_size if current_pos else 0.0
+        current_pair_key = pair_key(self.market_data, pair)
+        current_base = sum(
+            float(getattr(position, "base_size", 0.0) or 0.0)
+            for position in ctx.open_positions
+            if pair_key(self.market_data, getattr(position, "pair", ""))
+            == current_pair_key
+        )
         return RiskAdjustedAction(
             pair=pair,
             strategy_id=strategy_id,

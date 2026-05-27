@@ -90,7 +90,11 @@ class DcaRebalanceStrategy(Strategy):
         equity_view = ctx.portfolio.get_equity()
         equity = equity_view.equity_base
 
-        positions = {pos.pair: pos for pos in (ctx.portfolio.get_positions() or [])}
+        positions_by_pair_key = {}
+        for position in ctx.portfolio.get_positions() or []:
+            key = self._pair_key(ctx, getattr(position, "pair", ""))
+            if key:
+                positions_by_pair_key[key] = position
 
         pairs = self.params.pairs or ctx.universe
         target_weights = self.params.target_weights
@@ -108,7 +112,7 @@ class DcaRebalanceStrategy(Strategy):
             if price is None:
                 continue
 
-            position = positions.get(pair)
+            position = positions_by_pair_key.get(self._pair_key(ctx, pair))
             base_size = position.base_size if position else 0.0
             current_notional = base_size * price
             target_notional = equity * target_weight

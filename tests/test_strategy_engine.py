@@ -10,7 +10,6 @@ from krakked.market_data.exceptions import DataStaleError
 from krakked.portfolio.models import SpotPosition
 from krakked.strategy.base import Strategy
 from krakked.strategy.engine import StrategyRiskEngine
-from krakked.strategy.strategies.demo_strategy import TrendFollowingStrategy
 from krakked.strategy.models import (
     DecisionRecord,
     RiskAdjustedAction,
@@ -18,6 +17,8 @@ from krakked.strategy.models import (
     StrategyIntent,
     StrategyState,
 )
+from krakked.strategy.strategies.dca_rebalance import DcaRebalanceStrategy
+from krakked.strategy.strategies.demo_strategy import TrendFollowingStrategy
 from tests.runtime_mocks import make_portfolio_service_mock
 
 
@@ -676,6 +677,125 @@ def test_trend_following_reduces_owned_position_when_trend_is_flat():
     assert len(intents) == 1
     assert intents[0].side == "flat"
     assert intents[0].intent_type == "reduce"
+
+
+def test_trend_following_matches_display_pair_to_canonical_owned_position_for_reduce():
+    strat_config = StrategyConfig(
+        name="trend_core",
+        type="trend_following",
+        enabled=True,
+        params={
+            "pairs": ["BTC/USD"],
+            "timeframes": ["1h"],
+            "ma_fast": 5,
+            "ma_slow": 10,
+        },
+    )
+    strategy = TrendFollowingStrategy(strat_config)
+
+    market = MagicMock(spec=MarketDataAPI)
+    market.normalize_pair.side_effect = lambda pair: {
+        "BTC/USD": "XBTUSD",
+        "XBTUSD": "XBTUSD",
+    }.get(pair, str(pair).replace("/", "").upper())
+    market.get_pair_metadata.return_value = MagicMock(liquidity_24h_usd=1_000_000.0)
+
+    from dataclasses import dataclass
+
+    @dataclass
+    class MockBar:
+        close: float
+
+    prices = [100.0 for _ in range(20)]
+    market.get_ohlc.side_effect = [
+        [MockBar(close=p) for p in prices],
+        [MockBar(close=p) for p in prices],
+    ]
+
+    portfolio = make_portfolio_service_mock()
+    portfolio.app_config = MagicMock()
+    portfolio.app_config.risk = RiskConfig(min_liquidity_24h_usd=100000.0)
+    portfolio.get_positions.return_value = [
+        SpotPosition(
+            pair="XBTUSD",
+            base_asset="XBT",
+            quote_asset="USD",
+            base_size=1.0,
+            avg_entry_price=100.0,
+            realized_pnl_base=0.0,
+            fees_paid_base=0.0,
+            strategy_tag="trend_core",
+        )
+    ]
+
+    ctx = SimpleNamespace(
+        timeframe="1h",
+        universe=["BTC/USD"],
+        market_data=market,
+        portfolio=portfolio,
+        regime=None,
+        now=datetime.now(timezone.utc),
+    )
+
+    intents = strategy.generate_intents(ctx)
+
+    assert len(intents) == 1
+    assert intents[0].pair == "BTC/USD"
+    assert intents[0].side == "flat"
+    assert intents[0].intent_type == "reduce"
+
+
+def test_dca_rebalance_matches_display_pair_to_canonical_position():
+    strat_config = StrategyConfig(
+        name="dca_overlay",
+        type="dca_rebalance",
+        enabled=True,
+        params={
+            "pairs": ["BTC/USD"],
+            "target_weights": {"BTC/USD": 0.1},
+            "rebalance_threshold_pct": 1.0,
+            "dca_interval_minutes": 60,
+            "dca_notional_usd": 100.0,
+        },
+    )
+    strategy = DcaRebalanceStrategy(strat_config)
+
+    market = MagicMock(spec=MarketDataAPI)
+    market.normalize_pair.side_effect = lambda pair: {
+        "BTC/USD": "XBTUSD",
+        "XBTUSD": "XBTUSD",
+    }.get(pair, str(pair).replace("/", "").upper())
+    market.get_latest_price.return_value = 100.0
+
+    portfolio = make_portfolio_service_mock(equity_base=10000.0, cash_base=9500.0)
+    portfolio.get_positions.return_value = [
+        SpotPosition(
+            pair="XBTUSD",
+            base_asset="XBT",
+            quote_asset="USD",
+            base_size=5.0,
+            avg_entry_price=100.0,
+            realized_pnl_base=0.0,
+            fees_paid_base=0.0,
+            strategy_tag="dca_overlay",
+        )
+    ]
+
+    ctx = SimpleNamespace(
+        timeframe="1h",
+        universe=["BTC/USD"],
+        market_data=market,
+        portfolio=portfolio,
+        regime=None,
+        now=datetime.now(timezone.utc),
+    )
+
+    intents = strategy.generate_intents(ctx)
+
+    assert len(intents) == 1
+    assert intents[0].pair == "BTC/USD"
+    assert intents[0].intent_type == "increase"
+    assert intents[0].desired_exposure_usd == 600.0
 
 
 def test_actions_inherit_userref_and_persist_in_execution_plan():
