@@ -924,11 +924,11 @@ class RiskEngine:
         total_target_usd = sum(target_by_strategy.values())
 
         max_asset_usd = ctx.equity_usd * (self.config.max_per_asset_pct / 100.0)
-        projected_total = total_exposure_usd - current_usd + total_target_usd
-        if projected_total > max_asset_usd:
-            available = max(max_asset_usd - (total_exposure_usd - current_usd), 0.0)
+        projected_asset_total = total_target_usd
+        if projected_asset_total > max_asset_usd:
+            available = max(max_asset_usd, 0.0)
             reason = (
-                f"Max per asset limit ({projected_total:.2f} > {max_asset_usd:.2f})"
+                f"Max per asset limit ({projected_asset_total:.2f} > {max_asset_usd:.2f})"
             )
             target_by_strategy = clamp_total(available, reason, target_by_strategy)
             total_target_usd = sum(target_by_strategy.values())

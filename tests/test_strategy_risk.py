@@ -487,6 +487,58 @@ def test_max_per_asset():
     assert "Max per asset limit" in actions[0].reason
 
 
+def test_max_per_asset_does_not_share_budget_across_different_assets():
+    config = RiskConfig(
+        max_per_asset_pct=5.0,
+        max_portfolio_risk_pct=100.0,
+        max_per_strategy_pct={"test": 100.0},
+        max_open_positions=100,
+    )
+    market = MagicMock(spec=MarketDataAPI)
+    portfolio = make_portfolio_service_mock()
+    market.normalize_pair.side_effect = lambda pair: str(pair).replace("/", "").upper()
+    market.get_latest_price.return_value = 100.0
+    market.get_pair_metadata.return_value = PairMetadata(
+        canonical="XBTUSD",
+        base="XBT",
+        quote="USD",
+        rest_symbol="XXBTZUSD",
+        ws_symbol="BTC/USD",
+        raw_name="XXBTZUSD",
+        price_decimals=1,
+        volume_decimals=4,
+        lot_size=1,
+        min_order_size=0.0001,
+        status="online",
+        liquidity_24h_usd=1_000_000.0,
+    )
+    portfolio.get_equity.return_value = EquityView(
+        equity_base=10000.0,
+        cash_base=10000.0,
+        realized_pnl_base_total=0.0,
+        unrealized_pnl_base_total=0.0,
+        drift_flag=False,
+    )
+    portfolio.get_positions.return_value = []
+    portfolio.get_asset_exposure.return_value = []
+    portfolio.get_realized_pnl_by_strategy.return_value = {}
+    portfolio.store = MagicMock()
+    portfolio.store.get_snapshots.return_value = []
+
+    engine = RiskEngine(config, market, portfolio)
+    now = datetime.now(timezone.utc)
+    intents = [
+        StrategyIntent("test", "BTC/USD", "long", "enter", 500.0, 1.0, "1h", now),
+        StrategyIntent("test", "ETH/USD", "long", "enter", 500.0, 1.0, "1h", now),
+    ]
+
+    actions = engine.process_intents(intents)
+
+    assert [action.action_type for action in actions] == ["open", "open"]
+    assert [action.blocked for action in actions] == [False, False]
+    assert all(abs(action.target_notional_usd - 500.0) < 1.0 for action in actions)
+
+
 def test_risk_engine_matches_display_intent_to_canonical_position():
     config = RiskConfig(
         max_per_asset_pct=100.0,

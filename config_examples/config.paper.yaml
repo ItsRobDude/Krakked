@@ -21,6 +21,8 @@ ml:
 
 risk:
   max_open_positions: 4
+  # Starter caps are conservative. rs_rotation's base config targets 20% across
+  # its top 2 assets, so paper replays will clamp it unless caps are aligned.
   max_per_strategy_pct:
     trend_core: 5.0
     vol_breakout: 5.0
