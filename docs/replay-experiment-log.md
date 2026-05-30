@@ -478,3 +478,198 @@ cap-aligned, envelope-aligned, and cap-relaxed variants still failed to produce
 a promotion-quality result. The current operator conclusion is therefore:
 record the mismatch, keep `rs_rotation` investigation-only, and do not loosen
 risk caps or change `rs_rotation` allocation defaults from this evidence alone.
+
+### 2026-05-30 Starter Cap Alignment
+
+After the OHLC freshness path was made explicit and the same rolling replay
+remained behaviorally unchanged, the remaining warning was no longer a replay
+trust issue. The starter config was aligned by reducing
+`rs_rotation.total_allocation_pct` to `5.0`, matching the conservative
+`risk.max_per_strategy_pct["rs_rotation"]` default instead of loosening risk
+caps. This removes the default replay warning while keeping `rs_rotation`
+investigation-only under current evidence.
+
+### 2026-05-30 `rs_rotation` Default Disable And V2 Direction
+
+After the cap alignment, a read-only strategy-quality pass isolated
+`rs_rotation` and rechecked five covered 20-day replay windows:
+
+| Scenario | Avg return | Realized PnL | Actions / fills | Positive windows |
+| --- | ---: | ---: | ---: | ---: |
+| Active `5%`, current costs | `-0.2081%` | `-$116.7125` | `63 / 50` | `0 / 5` |
+| Active `5%`, zero costs | `-0.0984%` | `-$65.0642` | `63 / 50` | `1 / 5` |
+| Cap-relaxed `20%`, current costs | `-0.8038%` | `-$451.4611` | `60 / 53` | `0 / 5` |
+
+Signal diagnostics on the default `lookback_bars=42`, `top_n=2`,
+24-hour-forward horizon showed the selected pairs were only slightly less bad
+than the full starter universe, not tradable after costs:
+
+- Mean selected forward return: `-0.3045%`
+- Mean universe forward return: `-0.3617%`
+- Mean selected spread over universe: `+0.0572%`
+- Positive selected cycle rate: `41.54%`
+- Mean rank correlation: `0.0123`
+- Top trailing pair was the next forward-best pair in only `24.62%` of cycles.
+
+Conclusion:
+
+- Disable `rs_rotation` from the default starter enabled list.
+- Keep its config block and conservative risk cap available for manual
+  research, but leave the config entry disabled by default.
+- Do not loosen caps or increase allocation. Larger allocation only scaled the
+  same weak signal.
+- A real v2 should not be a parameter tweak to v1. It should combine an
+  absolute time-series momentum gate, volatility-normalized cross-sectional
+  scoring, explicit cash/flat behavior in broad selloffs, turnover controls,
+  and out-of-sample promotion gates before becoming an operator default.
+
+### 2026-05-30 `rs_rotation_v2` Research Probe
+
+A replay-only `rs-rotation-v2-research` CLI command now exists so the next
+signal can be tested without registering a new live/paper strategy. It reads
+cached OHLC only, uses the configured `rs_rotation` pairs/timeframe/lookback by
+default, and writes a structured JSON report when `--save-report` is supplied.
+
+The probe deliberately changes the signal shape instead of tweaking v1:
+
+- absolute trailing momentum must clear estimated round-trip costs plus an
+  explicit edge buffer;
+- cross-sectional rank is volatility-normalized rather than raw trailing return;
+- BTC and broad-basket regime gates keep the strategy in cash during weak
+  markets unless explicitly disabled for diagnostics;
+- current holdings are retained unless a replacement clears the configured
+  score-gap hurdle;
+- reports include active/cash cycle counts, turnover, fees, slippage estimate,
+  forward-selection diagnostics, an equal-weight reference, and research gates.
+
+Example:
+
+```bash
+poetry run krakked rs-rotation-v2-research \
+  --start 2026-05-10T00:00:00Z \
+  --end 2026-05-30T00:00:00Z \
+  --json \
+  --save-report rs-rotation-v2-research.json
+```
+
+This is still research-only. A `research_pass` report is evidence for deeper
+out-of-sample work, not approval to enable a runtime strategy by default.
+
+Initial rolling-window check:
+
+- Window: `2026-05-10T00:00:00+00:00 -> 2026-05-30T00:00:00+00:00`.
+- Report:
+  `C:\Users\Rob\AppData\Local\krakked\krakked\reports\backtests\rs-rotation-v2-research-20260530.json`.
+- Coverage: `ready`, `4` usable `4h` series, no missing or partial series.
+- Status: `research_fail`.
+- Result: stayed in cash, `0` trades, `0` active cycles, ending equity
+  `$10,000.00`.
+- Gate failures: `positive_return_after_costs`, `enough_active_cycles`.
+- Readout: this is the intended behavior for the default v2 filter in a broad
+  weak window. It avoided the v1 failure mode of forcing relative winners when
+  absolute and regime evidence was still negative.
+
+Diagnostics:
+
+- Disabling both regime gates and removing only the extra edge buffer still
+  produced `0` trades because no pair cleared the `150 bps` fee/slippage hurdle.
+- With zero fees, zero slippage, zero edge buffer, and regime gates disabled,
+  the ranking/sizing path executed but still failed: `3` trades, `2` active
+  cycles, return `-0.0407%`, and selected forward return underperformed the
+  universe on the only evaluable active cycle.
+
+### 2026-05-30 `rs_rotation_v2` Multi-Window Sweep
+
+Artifacts:
+
+- `C:\Users\Rob\AppData\Local\krakked\krakked\reports\backtests\rs-rotation-v2-sweep-20260530\aggregate.json`
+- `C:\Users\Rob\AppData\Local\krakked\krakked\reports\backtests\rs-rotation-v2-sweep-20260530\parameter-grid.json`
+- `C:\Users\Rob\AppData\Local\krakked\krakked\reports\backtests\rs-rotation-v2-sweep-20260530\simple-baselines.json`
+- `C:\Users\Rob\AppData\Local\krakked\krakked\reports\backtests\rs-rotation-v2-sweep-20260530\btc-absolute-momentum-grid.json`
+
+Windows:
+
+- `2026-03-21T00:00:00+00:00 -> 2026-04-10T00:00:00+00:00`
+- `2026-04-10T00:00:00+00:00 -> 2026-04-30T00:00:00+00:00`
+- `2026-04-30T00:00:00+00:00 -> 2026-05-20T00:00:00+00:00`
+- `2026-05-05T00:00:00+00:00 -> 2026-05-25T00:00:00+00:00`
+- `2026-05-10T00:00:00+00:00 -> 2026-05-30T00:00:00+00:00`
+
+Scenario summary:
+
+| Scenario | Avg return | Positive windows | Passed windows | Trades | Active cycles |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `default` | `-0.1154%` | `1/5` | `1/5` | `38` | `23` |
+| `cost_hurdle_no_regime` | `-0.1801%` | `1/5` | `1/5` | `36` | `28` |
+| `raw_rank_zero_cost_no_regime` | `-0.0599%` | `1/5` | `1/5` | `44` | `33` |
+
+Parameter grid:
+
+- Grid size: `864` current-cost configurations across lookback, rebalance
+  interval, `top_n`, edge buffer, minimum absolute momentum, and regime mode.
+- `0 / 864` had positive average return.
+- `0 / 864` passed at least `3 / 5` windows.
+- `0 / 864` were positive in at least `3 / 5` windows.
+- `0 / 864` beat equal-weight in at least `4 / 5` windows.
+
+Best grid row:
+
+| Lookback | Rebalance bars | Top N | Edge bps | Min abs bps | Regime | Avg return | Passed | Positive | Trades | Active cycles |
+| ---: | ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: |
+| `42` | `12` | `1` | `0` | `0` | `btc_only` | `-0.0401%` | `2/5` | `2/5` | `15` | `13` |
+
+Best row by window:
+
+| Window | Status | Return | Active cycles | Trades | Equal-weight return |
+| --- | --- | ---: | ---: | ---: | ---: |
+| `20260321-20260410` | `research_pass` | `+0.2175%` | `4` | `5` | `-0.1306%` |
+| `20260410-20260430` | `research_fail` | `-0.0824%` | `5` | `4` | `+0.0856%` |
+| `20260430-20260520` | `research_pass` | `+0.0367%` | `3` | `4` | `-0.0453%` |
+| `20260505-20260525` | `research_fail` | `-0.3724%` | `1` | `2` | `-0.2700%` |
+| `20260510-20260530` | `research_fail` | `+0.0000%` | `0` | `0` | `-0.5841%` |
+
+Simple baselines at `5%` allocation:
+
+| Baseline | Avg return | Positive windows |
+| --- | ---: | ---: |
+| Cash | `+0.0000%` | `0/5` |
+| Equal-weight starter basket | `-0.1889%` | `1/5` |
+| BTC-only buy-and-hold | `-0.0564%` | `3/5` |
+| Oracle best single pair per window | `-0.0054%` | `4/5` |
+
+BTC-only absolute-momentum diagnostic:
+
+- Best row averaged `+0.0189%`, but passed only `1/5` windows and was positive
+  in only `2/5`.
+- This is more plausible as a defensive overlay than the alt-rotation family,
+  but it is not a standalone promotion candidate under the current gates.
+
+Conclusion:
+
+- Do not wire `rs_rotation_v2` as a runtime strategy.
+- Do not keep tuning raw relative-strength rotation. The multi-window evidence
+  says this signal family is still too weak after costs and gates.
+- The only useful idea that survived the sweep is not rotation itself; it is a
+  defensive market-state filter that sometimes keeps the book in cash. Treat
+  that as future risk-overlay research, separate from `rs_rotation`.
+
+### 2026-05-30 Market Regime Overlay Decision
+
+Decision:
+
+- Stop `rs_rotation` / `rs_rotation_v2` standalone strategy work.
+- Move the surviving defensive behavior into a research-only portfolio-level
+  market regime overlay lane.
+- Do not wire runtime blocking, runtime clamping, or config defaults until the
+  overlay proves itself in multi-window replay comparison.
+
+The hardened plan is recorded in
+[`market-regime-overlay-plan.md`](./market-regime-overlay-plan.md). The next
+slice should implement only the cache-only evaluator and comparison report:
+
+- `krakked market-regime-research`
+- `krakked market-regime-overlay-backtest`
+
+Promotion requires improved or preserved average return after costs, drawdown
+improvement in at least `3 / 5` windows, no weak-signal regression, explicit
+operator-readable reason codes, and no strict-data gaps.

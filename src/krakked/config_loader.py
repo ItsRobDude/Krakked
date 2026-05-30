@@ -36,6 +36,9 @@ DEFAULT_STARTER_STRATEGY_IDS = [
     "trend_core",
     "vol_breakout",
     "majors_mean_rev",
+]
+DEFAULT_STARTER_CONFIG_STRATEGY_IDS = [
+    *DEFAULT_STARTER_STRATEGY_IDS,
     "rs_rotation",
 ]
 DEFAULT_STARTER_PAIRS = ["BTC/USD", "ETH/USD", "SOL/USD", "ADA/USD"]
@@ -122,12 +125,12 @@ def get_default_starter_strategies_config() -> Dict[str, Any]:
     """Return a conservative non-ML starter strategy block for first run."""
 
     configs: Dict[str, Any] = {}
-    for strategy_id in DEFAULT_STARTER_STRATEGY_IDS:
+    for strategy_id in DEFAULT_STARTER_CONFIG_STRATEGY_IDS:
         definition = CANONICAL_STRATEGIES[strategy_id]
         configs[strategy_id] = {
             "name": strategy_id,
             "type": definition.type,
-            "enabled": True,
+            "enabled": strategy_id in DEFAULT_STARTER_STRATEGY_IDS,
             "strategy_weight": 100,
         }
 

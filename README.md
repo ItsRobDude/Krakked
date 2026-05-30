@@ -259,6 +259,26 @@ poetry run krakked backtest \
 
 Start with `backtest-preflight` if you want a quick local coverage check before running the strategy stack. Add `--fee-bps` to tune the flat taker-fee assumption, `--strict-data` to hard-fail on missing or partial coverage, `--db-path backtest.db` if you want to keep the SQLite decisions/orders/results after the run, and `--publish-latest` when you want the operator dashboard to read the latest validated replay summary. Use `poetry run krakked compare-backtests --baseline a.json --candidate b.json` to compare two saved reports without rerunning. See [`docs/simulation.md`](docs/simulation.md) for the current assumptions, limits, and replay smoke scenarios.
 
+For `rs_rotation` replacement work, use the replay-only research probe instead
+of enabling the disabled v1 strategy:
+
+```bash
+poetry run krakked rs-rotation-v2-research \
+  --start 2026-05-10T00:00:00Z \
+  --end 2026-05-30T00:00:00Z \
+  --json \
+  --save-report rs-rotation-v2-research.json
+```
+
+That command remains cache-only and research-only. It tests absolute momentum,
+volatility-normalized ranking, regime cash behavior, turnover controls, and
+explicit research gates before any runtime strategy wiring.
+
+Current decision: do not continue `rs_rotation_v2` as a standalone strategy.
+The useful follow-up is a research-only market regime overlay that may reduce
+new risk during weak regimes if replay proves it helps the starter pack. See
+[`docs/market-regime-overlay-plan.md`](docs/market-regime-overlay-plan.md).
+
 ### ▶️ Running the bot
 
 * **Full orchestrator**: `poetry run krakked run` starts the WebSocket loop, scheduler, strategies, execution, and FastAPI UI.
@@ -306,6 +326,7 @@ Use the packaged console script for the common workflows:
 * `poetry run krakked run-once` — single forced-safe paper cycle for quick safety checks.
 * `poetry run krakked backtest-preflight --start <iso> --end <iso>` — check historical pair/timeframe coverage and replay readiness without running strategies.
 * `poetry run krakked backtest --start <iso> --end <iso>` — offline replay over stored OHLC using the live strategy/risk/execution stack with slippage/fee-aware simulation fills, coverage preflight, and optional saved JSON reports.
+* `poetry run krakked rs-rotation-v2-research --start <iso> --end <iso>` — cache-only research probe for a replacement relative-strength signal; it is not a runtime strategy.
 * `poetry run krakked compare-backtests --baseline <report.json> --candidate <report.json>` — compare two saved replay reports without rerunning the strategy stack.
 * `poetry run krakked migrate --db-path <path>` — create or migrate the SQLite portfolio store (defaults to `portfolio.db`).
 * `poetry run krakked db-schema-version --db-path <path>` — inspect the current schema version recorded in the store.

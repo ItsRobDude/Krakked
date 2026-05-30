@@ -526,8 +526,10 @@ class BotController:
                     "market_data": {
                         "ws": {},
                         "ohlc_store": get_default_ohlc_store_config(),
-                        "backfill_timeframes": ["1h", "4h"],
-                        "ws_timeframes": ["1m"],
+                        "backfill_timeframes": list(
+                            DEFAULT_STARTER_BACKFILL_TIMEFRAMES
+                        ),
+                        "ws_timeframes": list(DEFAULT_STARTER_WS_TIMEFRAMES),
                     },
                     "execution": {
                         "mode": "paper",

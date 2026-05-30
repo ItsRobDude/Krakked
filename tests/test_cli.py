@@ -19,15 +19,15 @@ from krakked.backtest.runner import (
 )
 from krakked.config import load_config
 from krakked.credentials import CredentialResult, CredentialStatus
+from krakked.market_data.ohlc_refresh import (
+    OHLCTailRefreshSeriesResult,
+    OHLCTailRefreshSummary,
+)
 from krakked.portfolio.exceptions import PortfolioSchemaError
 from krakked.portfolio.store import (
     CURRENT_SCHEMA_VERSION,
     MLArtifactGroup,
     SQLitePortfolioStore,
-)
-from krakked.market_data.ohlc_refresh import (
-    OHLCTailRefreshSeriesResult,
-    OHLCTailRefreshSummary,
 )
 from krakked.strategy.ml_pruning import find_stale_ml_artifact_groups
 
@@ -940,6 +940,160 @@ def test_backtest_subcommand_publish_latest_requires_ready_preflight(
     assert exit_code == 0
     payload = json.loads(latest_path.read_text(encoding="utf-8"))
     assert payload["preflight"]["status"] == "limited"
+
+
+def test_rs_rotation_v2_research_subcommand_writes_json_report(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: Any
+) -> None:
+    captured: dict[str, Any] = {}
+    config = SimpleNamespace(execution=SimpleNamespace(max_slippage_bps=33))
+    start = datetime(2026, 4, 1, tzinfo=UTC)
+    end = datetime(2026, 4, 2, tzinfo=UTC)
+
+    class _FakeResearchResult:
+        def to_report_dict(self) -> dict[str, Any]:
+            return {
+                "report_version": 1,
+                "report_type": "rs_rotation_v2_research",
+                "generated_at": start.isoformat(),
+                "summary": {
+                    "strategy_id": "rs_rotation_v2",
+                    "status": "research_pass",
+                    "start": start.isoformat(),
+                    "end": end.isoformat(),
+                    "pairs": ["BTC/USD", "ETH/USD"],
+                    "timeframe": "4h",
+                    "starting_cash_usd": 10_000.0,
+                    "ending_equity_usd": 10_050.0,
+                    "absolute_pnl_usd": 50.0,
+                    "return_pct": 0.5,
+                    "max_drawdown_pct": 0.2,
+                    "filled_orders": 2,
+                    "blocked_actions": 0,
+                    "execution_errors": 0,
+                    "total_cycles": 6,
+                    "active_cycles": 4,
+                    "cash_cycles": 2,
+                    "trade_count": 2,
+                    "turnover_usd": 500.0,
+                    "fees_usd": 0.0,
+                    "slippage_estimate_usd": 0.0,
+                    "equal_weight_reference": None,
+                    "forward_diagnostics": {"evaluated_cycles": 0},
+                    "gates": {
+                        "positive_return_after_costs": {"passed": True},
+                    },
+                    "warnings": [],
+                    "per_strategy": {},
+                    "replay_inputs": {"params": {}},
+                },
+                "preflight": {"status": "ready"},
+                "cycles": [],
+                "trades": [],
+            }
+
+    def _fake_run_rs_rotation_v2_research(
+        config_arg: Any,
+        *,
+        start: datetime,
+        end: datetime,
+        pairs: list[str] | None,
+        params: Any,
+        strict_data: bool,
+    ) -> _FakeResearchResult:
+        captured["config"] = config_arg
+        captured["start"] = start
+        captured["end"] = end
+        captured["pairs"] = pairs
+        captured["params"] = params
+        captured["strict_data"] = strict_data
+        return _FakeResearchResult()
+
+    monkeypatch.setattr(cli, "_load_backtest_config", lambda args: config)
+    monkeypatch.setattr(
+        cli, "run_rs_rotation_v2_research", _fake_run_rs_rotation_v2_research
+    )
+
+    report_path = tmp_path / "rs-v2.json"
+    exit_code = cli.main(
+        [
+            "rs-rotation-v2-research",
+            "--start",
+            "2026-04-01T00:00:00Z",
+            "--end",
+            "2026-04-02T00:00:00Z",
+            "--pair",
+            "BTC/USD",
+            "--pair",
+            "ETH/USD",
+            "--timeframe",
+            "4h",
+            "--lookback-bars",
+            "10",
+            "--volatility-lookback-bars",
+            "12",
+            "--top-n",
+            "1",
+            "--total-allocation-pct",
+            "5",
+            "--save-report",
+            str(report_path),
+            "--json",
+        ]
+    )
+
+    assert exit_code == 0
+    assert captured["config"] is config
+    assert captured["pairs"] == ["BTC/USD", "ETH/USD"]
+    assert captured["strict_data"] is False
+    assert captured["params"].timeframe == "4h"
+    assert captured["params"].lookback_bars == 10
+    assert captured["params"].volatility_lookback_bars == 12
+    assert captured["params"].top_n == 1
+    assert captured["params"].slippage_bps == 33.0
+
+    stdout_payload = json.loads(capsys.readouterr().out)
+    saved_payload = json.loads(report_path.read_text(encoding="utf-8"))
+    assert stdout_payload["provenance"]["generated_by"] == (
+        "krakked rs-rotation-v2-research"
+    )
+    assert saved_payload["summary"]["replay_inputs"]["config_path"] is None
+    assert saved_payload["report_type"] == "rs_rotation_v2_research"
+
+
+def test_rs_rotation_v2_research_subcommand_returns_nonzero_on_failure(
+    monkeypatch: pytest.MonkeyPatch, capsys: Any
+) -> None:
+    config = SimpleNamespace(execution=SimpleNamespace(max_slippage_bps=50))
+
+    def _raise(*_: Any, **__: Any) -> None:
+        raise ValueError("missing: BTC/USD@4h")
+
+    monkeypatch.setattr(cli, "_load_backtest_config", lambda args: config)
+    monkeypatch.setattr(cli, "run_rs_rotation_v2_research", _raise)
+
+    exit_code = cli.main(
+        [
+            "rs-rotation-v2-research",
+            "--start",
+            "2026-04-01T00:00:00Z",
+            "--end",
+            "2026-04-02T00:00:00Z",
+            "--timeframe",
+            "4h",
+            "--lookback-bars",
+            "10",
+            "--top-n",
+            "1",
+            "--total-allocation-pct",
+            "5",
+        ]
+    )
+
+    assert exit_code == 1
+    output = capsys.readouterr().out
+    assert "RS rotation v2 research failed" in output
+    assert "missing: BTC/USD@4h" in output
 
 
 def test_ml_walk_forward_subcommand_writes_report(

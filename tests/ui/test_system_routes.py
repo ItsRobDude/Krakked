@@ -1037,8 +1037,8 @@ def test_setup_config_uses_starter_universe_when_none_provided(
         "trend_core",
         "vol_breakout",
         "majors_mean_rev",
-        "rs_rotation",
     ]
+    assert config_data["strategies"]["configs"]["rs_rotation"]["enabled"] is False
 
 
 def test_setup_config_preserves_ws_style_pairs(monkeypatch, client, temp_config_dir):

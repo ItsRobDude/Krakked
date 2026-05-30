@@ -72,8 +72,8 @@ risk:
   max_portfolio_risk_pct: 10.0
   max_open_positions: 4
   max_per_asset_pct: 5.0
-  # Starter caps are conservative. rs_rotation's default 20% top-2 target below
-  # will be clamped unless strategy, portfolio, and per-asset caps are aligned.
+  # Starter caps are conservative. rs_rotation stays capped for manual research
+  # but is disabled by default until a stronger v2 signal is validated.
   max_per_strategy_pct:
     trend_core: 5.0
     vol_breakout: 5.0
@@ -90,7 +90,6 @@ strategies:
     - "trend_core"
     - "vol_breakout"
     - "majors_mean_rev"
-    - "rs_rotation"
   configs:
     trend_core:
       name: "trend_core"
@@ -133,16 +132,16 @@ strategies:
     rs_rotation:
       name: "rs_rotation"
       type: "relative_strength"
-      enabled: true
+      enabled: false
       params:
         pairs: ["BTC/USD", "ETH/USD", "SOL/USD", "ADA/USD"]
         lookback_bars: 42
         timeframe: "4h"
         rebalance_interval_hours: 24
         top_n: 2
-        # Balanced-profile intent: 20% total means 10% per selected asset.
-        # Conservative starter caps above intentionally keep this constrained.
-        total_allocation_pct: 20.0
+        # Experimental only: v1 rank-following underperformed replay evidence.
+        # Keep sizing conservative when manually enabled for research.
+        total_allocation_pct: 5.0
         confidence_return_bps: 250.0
       userref: 1004
 

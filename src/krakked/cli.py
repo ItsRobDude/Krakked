@@ -17,22 +17,28 @@ from krakked import APP_VERSION, secrets
 from krakked.backtest import (
     BacktestPreflightResult,
     BacktestResult,
+    RSRotationV2ResearchParams,
     build_backtest_preflight,
+    default_rs_rotation_v2_allocation_pct,
+    default_rs_rotation_v2_lookback_bars,
+    default_rs_rotation_v2_timeframe,
+    default_rs_rotation_v2_top_n,
     load_backtest_report,
     publish_latest_backtest_report,
     publish_latest_ml_walk_forward_report,
     run_backtest,
     run_ml_walk_forward,
+    run_rs_rotation_v2_research,
     write_backtest_report,
     write_ml_walk_forward_report,
-)
-from krakked.backtest.ml_report_compare import (
-    compare_ml_reports,
-    render_ml_report_comparison,
 )
 from krakked.backtest.ml_feature_ablation_summary import (
     render_ml_feature_ablation_summary,
     summarize_ml_feature_ablation,
+)
+from krakked.backtest.ml_report_compare import (
+    compare_ml_reports,
+    render_ml_report_comparison,
 )
 from krakked.config import (
     AppConfig,
@@ -59,8 +65,8 @@ from krakked.portfolio.store import (
     ensure_portfolio_tables,
 )
 from krakked.scripts import run_strategy_once
-from krakked.strategy.ml_pruning import find_stale_ml_artifact_groups
 from krakked.strategy.features import ML_FEATURE_PROFILES
+from krakked.strategy.ml_pruning import find_stale_ml_artifact_groups
 from krakked.utils.io import backup_file
 
 DEFAULT_DB_PATH = "portfolio.db"
@@ -450,6 +456,63 @@ def _print_backtest_summary(
 
     if persist_db_path:
         print(f"SQLite output: {persist_db_path}")
+    if report_path:
+        print(f"Saved report: {report_path}")
+
+
+def _print_rs_rotation_v2_research_summary(
+    payload: dict[str, Any], report_path: str | None
+) -> None:
+    summary = payload["summary"]
+    print("RS rotation v2 research completed.")
+    print(
+        f"Status: {summary['status']} | "
+        f"Window: {summary['start']} -> {summary['end']}"
+    )
+    print(
+        f"Pairs: {', '.join(summary['pairs'])} | "
+        f"Timeframe: {summary['timeframe']} | "
+        f"Cycles: {summary['total_cycles']} "
+        f"({summary['active_cycles']} active, {summary['cash_cycles']} cash)"
+    )
+    print(
+        f"Wallet: start ${summary['starting_cash_usd']:,.2f} -> "
+        f"end ${summary['ending_equity_usd']:,.2f} "
+        f"({summary['absolute_pnl_usd']:+,.2f}, {summary['return_pct']:+.2f}%)"
+    )
+    print(
+        f"Trades: {summary['trade_count']} | "
+        f"Turnover ${summary['turnover_usd']:,.2f} | "
+        f"Fees ${summary['fees_usd']:,.2f} | "
+        f"Slippage estimate ${summary['slippage_estimate_usd']:,.2f}"
+    )
+    reference = summary.get("equal_weight_reference")
+    if reference:
+        print(
+            "Equal-weight reference: "
+            f"{float(reference['return_pct']):+.2f}% "
+            f"({int(reference['pair_count'])} pairs at "
+            f"{float(reference['allocation_pct']):.2f}% allocation)"
+        )
+    forward = summary.get("forward_diagnostics") or {}
+    if forward.get("evaluated_cycles"):
+        selected_forward = forward.get("mean_selected_forward_return_pct")
+        universe_forward = forward.get("mean_universe_forward_return_pct")
+        spread = forward.get("mean_selected_spread_pct")
+        print(
+            "Forward check: "
+            f"selected {float(selected_forward):+.2f}% | "
+            f"universe {float(universe_forward):+.2f}% | "
+            f"spread {float(spread):+.2f}%"
+        )
+    print("Research gates:")
+    for gate_name, gate in summary["gates"].items():
+        outcome = "pass" if gate.get("passed") else "fail"
+        print(f"- {gate_name}: {outcome}")
+    if summary.get("warnings"):
+        print("Warnings:")
+        for warning in summary["warnings"]:
+            print(f"- {warning}")
     if report_path:
         print(f"Saved report: {report_path}")
 
@@ -846,6 +909,95 @@ def _backtest_command(args: argparse.Namespace) -> int:
         if saved_report_path and published_report_path:
             print(f"Published latest replay: {published_report_path}")
 
+    return 0
+
+
+def _rs_rotation_v2_research_command(args: argparse.Namespace) -> int:
+    """Run the replay-only relative-strength v2 research probe."""
+
+    try:
+        start = _parse_datetime_arg(args.start)
+        end = _parse_datetime_arg(args.end)
+    except ValueError as exc:
+        return _print_error(f"Invalid research datetime: {exc}")
+
+    try:
+        config = _load_backtest_config(args)
+        timeframe = args.timeframe or default_rs_rotation_v2_timeframe(config)
+        lookback_bars = (
+            int(args.lookback_bars)
+            if args.lookback_bars is not None
+            else default_rs_rotation_v2_lookback_bars(config)
+        )
+        top_n = (
+            int(args.top_n)
+            if args.top_n is not None
+            else default_rs_rotation_v2_top_n(config)
+        )
+        total_allocation_pct = (
+            float(args.total_allocation_pct)
+            if args.total_allocation_pct is not None
+            else default_rs_rotation_v2_allocation_pct(config)
+        )
+        params = RSRotationV2ResearchParams(
+            timeframe=timeframe,
+            lookback_bars=lookback_bars,
+            volatility_lookback_bars=int(args.volatility_lookback_bars),
+            rebalance_interval_bars=int(args.rebalance_interval_bars),
+            forward_horizon_bars=int(args.forward_horizon_bars),
+            top_n=top_n,
+            total_allocation_pct=total_allocation_pct,
+            starting_cash_usd=float(args.starting_cash_usd),
+            fee_bps=float(args.fee_bps),
+            slippage_bps=(
+                float(args.slippage_bps)
+                if args.slippage_bps is not None
+                else float(config.execution.max_slippage_bps)
+            ),
+            edge_buffer_bps=float(args.edge_buffer_bps),
+            min_abs_momentum_bps=float(args.min_abs_momentum_bps),
+            min_score_gap=float(args.min_score_gap),
+            require_btc_regime=bool(args.require_btc_regime),
+            require_basket_regime=bool(args.require_basket_regime),
+            benchmark_pair=args.benchmark_pair,
+            min_trade_usd=float(args.min_trade_usd),
+            min_active_cycles=int(args.min_active_cycles),
+            max_drawdown_pct=float(args.max_drawdown_pct),
+        )
+        result = run_rs_rotation_v2_research(
+            config,
+            start=start,
+            end=end,
+            pairs=args.pair,
+            params=params,
+            strict_data=bool(args.strict_data),
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _print_error(f"RS rotation v2 research failed: {exc}")
+
+    payload = result.to_report_dict()
+    payload["summary"]["replay_inputs"]["config_path"] = (
+        str(Path(args.config).expanduser().resolve()) if args.config else None
+    )
+    payload["provenance"] = {
+        "app_version": APP_VERSION,
+        "config_path": (
+            str(Path(args.config).expanduser().resolve()) if args.config else None
+        ),
+        "generated_by": "krakked rs-rotation-v2-research",
+    }
+
+    saved_report_path: str | None = None
+    if args.save_report:
+        try:
+            saved_report_path = _write_backtest_report(payload, args.save_report)
+        except Exception as exc:  # noqa: BLE001
+            return _print_error(f"RS rotation v2 report write failed: {exc}")
+
+    if args.json:
+        print(json.dumps(payload, indent=2))
+    else:
+        _print_rs_rotation_v2_research_summary(payload, saved_report_path)
     return 0
 
 
@@ -1609,6 +1761,158 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Print the backtest summary as JSON",
     )
     backtest_parser.set_defaults(func=_backtest_command)
+
+    rs_rotation_v2_parser = subparsers.add_parser(
+        "rs-rotation-v2-research",
+        help="Evaluate a replay-only relative-strength v2 research signal",
+    )
+    rs_rotation_v2_parser.add_argument(
+        "--start",
+        required=True,
+        help="Research window start time in ISO-8601 form",
+    )
+    rs_rotation_v2_parser.add_argument(
+        "--end",
+        required=True,
+        help="Research window end time in ISO-8601 form",
+    )
+    rs_rotation_v2_parser.add_argument(
+        "--config",
+        help="Optional path to the base config.yaml to use for the research run",
+    )
+    rs_rotation_v2_parser.add_argument(
+        "--pair",
+        action="append",
+        help="Limit the research run to one pair; repeat to include multiple pairs",
+    )
+    rs_rotation_v2_parser.add_argument(
+        "--timeframe",
+        help="Single timeframe to evaluate; defaults to rs_rotation config timeframe",
+    )
+    rs_rotation_v2_parser.add_argument(
+        "--lookback-bars",
+        type=int,
+        default=None,
+        help="Momentum lookback bars; defaults to rs_rotation config lookback",
+    )
+    rs_rotation_v2_parser.add_argument(
+        "--volatility-lookback-bars",
+        type=int,
+        default=42,
+        help="Bars used for volatility-normalized ranking",
+    )
+    rs_rotation_v2_parser.add_argument(
+        "--rebalance-interval-bars",
+        type=int,
+        default=6,
+        help="Bars between simulated rebalances",
+    )
+    rs_rotation_v2_parser.add_argument(
+        "--forward-horizon-bars",
+        type=int,
+        default=6,
+        help="Bars used for the forward-selection diagnostic",
+    )
+    rs_rotation_v2_parser.add_argument(
+        "--top-n",
+        type=int,
+        default=None,
+        help="Maximum selected pairs per rebalance; defaults to rs_rotation config",
+    )
+    rs_rotation_v2_parser.add_argument(
+        "--total-allocation-pct",
+        type=float,
+        default=None,
+        help="Total simulated allocation percentage; defaults to rs_rotation config",
+    )
+    rs_rotation_v2_parser.add_argument(
+        "--starting-cash-usd",
+        type=float,
+        default=10_000.0,
+        help="Synthetic starting USD wallet balance for the research run",
+    )
+    rs_rotation_v2_parser.add_argument(
+        "--fee-bps",
+        type=float,
+        default=25.0,
+        help="Flat taker fee in basis points applied to simulated fills",
+    )
+    rs_rotation_v2_parser.add_argument(
+        "--slippage-bps",
+        type=float,
+        default=None,
+        help="Override one-way slippage bps; defaults to execution.max_slippage_bps",
+    )
+    rs_rotation_v2_parser.add_argument(
+        "--edge-buffer-bps",
+        type=float,
+        default=50.0,
+        help="Extra basis-point edge required above estimated round-trip costs",
+    )
+    rs_rotation_v2_parser.add_argument(
+        "--min-abs-momentum-bps",
+        type=float,
+        default=0.0,
+        help="Minimum absolute trailing momentum bps before a pair can be selected",
+    )
+    rs_rotation_v2_parser.add_argument(
+        "--min-score-gap",
+        type=float,
+        default=0.25,
+        help="Vol-normalized score advantage required to replace an existing holding",
+    )
+    rs_rotation_v2_parser.add_argument(
+        "--no-btc-regime",
+        dest="require_btc_regime",
+        action="store_false",
+        default=True,
+        help="Disable the benchmark positive-momentum regime gate",
+    )
+    rs_rotation_v2_parser.add_argument(
+        "--no-basket-regime",
+        dest="require_basket_regime",
+        action="store_false",
+        default=True,
+        help="Disable the broad-universe positive-momentum regime gate",
+    )
+    rs_rotation_v2_parser.add_argument(
+        "--benchmark-pair",
+        default="BTC/USD",
+        help="Benchmark pair used by the BTC regime gate",
+    )
+    rs_rotation_v2_parser.add_argument(
+        "--min-trade-usd",
+        type=float,
+        default=10.0,
+        help="Ignore simulated rebalance deltas below this notional",
+    )
+    rs_rotation_v2_parser.add_argument(
+        "--min-active-cycles",
+        type=int,
+        default=3,
+        help="Minimum active cycles required for the research gate to pass",
+    )
+    rs_rotation_v2_parser.add_argument(
+        "--max-drawdown-pct",
+        type=float,
+        default=5.0,
+        help="Maximum allowed simulated drawdown for the research gate to pass",
+    )
+    rs_rotation_v2_parser.add_argument(
+        "--save-report",
+        help="Optional JSON path for a durable v2 research report artifact",
+    )
+    rs_rotation_v2_parser.add_argument(
+        "--strict-data",
+        action="store_true",
+        help="Fail if any requested pair/timeframe is missing or only partially covered",
+    )
+    rs_rotation_v2_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print the v2 research report as JSON",
+    )
+    rs_rotation_v2_parser.set_defaults(func=_rs_rotation_v2_research_command)
 
     ml_walk_forward_parser = subparsers.add_parser(
         "ml-walk-forward",
