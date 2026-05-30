@@ -4,6 +4,7 @@ import appdirs  # type: ignore[import-untyped]
 
 from krakked.config import get_config_dir, load_config
 from krakked.config_loader import (
+    DEFAULT_OHLC_TAIL_REFRESH_INTERVAL_SECONDS,
     DEFAULT_STARTER_BACKFILL_TIMEFRAMES,
     DEFAULT_STARTER_PAIRS,
     DEFAULT_STARTER_STRATEGY_IDS,
@@ -114,8 +115,33 @@ def test_load_config_applies_default_starter_strategies_when_missing(
         == DEFAULT_STARTER_BACKFILL_TIMEFRAMES
     )
     assert app_config.market_data.ws_timeframes == DEFAULT_STARTER_WS_TIMEFRAMES
+    assert (
+        app_config.market_data.ohlc_tail_refresh_interval_seconds
+        == DEFAULT_OHLC_TAIL_REFRESH_INTERVAL_SECONDS
+    )
     assert app_config.risk.max_open_positions == 4
     assert app_config.risk.max_per_strategy_pct["trend_core"] == 5.0
+
+
+def test_load_config_allows_disabling_ohlc_tail_refresh(monkeypatch, tmp_path: Path):
+    config_dir = tmp_path / "config"
+    data_dir = tmp_path / "data"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    (config_dir / "config.yaml").write_text(
+        """
+market_data:
+  ohlc_tail_refresh_interval_seconds: 0
+""".strip()
+    )
+
+    monkeypatch.setattr(appdirs, "user_config_dir", lambda appname: config_dir)
+    monkeypatch.setattr(appdirs, "user_data_dir", lambda appname: data_dir)
+
+    app_config = load_config()
+
+    assert app_config.market_data.ohlc_tail_refresh_interval_seconds == 0
 
 
 def test_load_config_unwraps_strategy_params(monkeypatch, tmp_path: Path):

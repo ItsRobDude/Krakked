@@ -41,6 +41,7 @@ DEFAULT_STARTER_STRATEGY_IDS = [
 DEFAULT_STARTER_PAIRS = ["BTC/USD", "ETH/USD", "SOL/USD", "ADA/USD"]
 DEFAULT_STARTER_BACKFILL_TIMEFRAMES = ["1h", "4h", "1d"]
 DEFAULT_STARTER_WS_TIMEFRAMES = ["1m"]
+DEFAULT_OHLC_TAIL_REFRESH_INTERVAL_SECONDS = 3600
 DEFAULT_STARTER_PROFILE_NAME = "Default"
 DEFAULT_STARTER_PROFILE_DESCRIPTION = "Starter paper profile"
 DEFAULT_STARTER_STRATEGY_LIMITS: Dict[str, float] = {
@@ -1286,6 +1287,13 @@ def parse_app_config(
 
     default_ohlc_store = get_default_ohlc_store_config()
     merged_ohlc_store = {**default_ohlc_store, **ohlc_store}
+    ohlc_tail_refresh_interval_seconds = _validate_config_int(
+        market_data.get("ohlc_tail_refresh_interval_seconds"),
+        DEFAULT_OHLC_TAIL_REFRESH_INTERVAL_SECONDS,
+        "config_market_data_ohlc_tail_refresh_interval_seconds",
+        config_path,
+        min_value=0,
+    )
 
     execution_data = raw_config.get("execution") or {}
     if not isinstance(execution_data, dict):
@@ -1517,6 +1525,7 @@ def parse_app_config(
                 "ws_timeframes", list(DEFAULT_STARTER_WS_TIMEFRAMES)
             ),
             metadata_path=market_data.get("metadata_path"),
+            ohlc_tail_refresh_interval_seconds=ohlc_tail_refresh_interval_seconds,
         ),
         portfolio=portfolio_config,
         execution=execution_config,

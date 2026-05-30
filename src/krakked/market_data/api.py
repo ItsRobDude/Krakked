@@ -15,6 +15,10 @@ from krakked.market_data.exceptions import DataStaleError, PairNotFoundError
 from krakked.market_data.metadata_store import PairMetadataStore
 from krakked.market_data.models import ConnectionStatus, OHLCBar, PairMetadata
 from krakked.market_data.ohlc_fetcher import backfill_ohlc
+from krakked.market_data.ohlc_refresh import (
+    OHLCTailRefreshSummary,
+    refresh_ohlc_tails,
+)
 from krakked.market_data.ohlc_store import FileOHLCStore, OHLCStore
 from krakked.market_data.universe import build_universe
 from krakked.market_data.ws_client import KrakenWSClientV2
@@ -79,7 +83,9 @@ def validate_pairs_with_client(client: KrakenRESTClient, pairs: List[str]) -> Li
                 base, quote = normalized.split("/", 1)
                 alias_base = ASSET_ALIASES.get(base, base)
                 alias_quote = ASSET_ALIASES.get(quote, quote)
-                candidates.extend([f"{alias_base}/{alias_quote}", f"{alias_base}{alias_quote}"])
+                candidates.extend(
+                    [f"{alias_base}/{alias_quote}", f"{alias_base}{alias_quote}"]
+                )
 
             if not any(candidate in known_aliases for candidate in candidates):
                 invalid.append(pair)
@@ -148,6 +154,9 @@ class MarketDataAPI:
             "stale_tolerance_seconds", 60
         )
         self._backfill_thread: Optional[threading.Thread] = None
+        self._tail_refresh_thread: Optional[threading.Thread] = None
+        self._tail_refresh_lock = threading.Lock()
+        self._last_tail_refresh_started_at = time.monotonic()
         self._initialized_at = time.time()
         self._last_rest_check_at = 0.0
         self._last_rest_reachable = False
@@ -233,6 +242,75 @@ class MarketDataAPI:
         self._backfill_thread = threading.Thread(target=_run, daemon=True)
         self._backfill_thread.start()
 
+    def refresh_ohlc_tails(
+        self,
+        pairs: Optional[List[str]] = None,
+        timeframes: Optional[List[str]] = None,
+        since: Optional[int] = None,
+    ) -> OHLCTailRefreshSummary:
+        """Refresh local OHLC tails using the current store tail as the default since."""
+        return refresh_ohlc_tails(
+            self,
+            pairs=pairs,
+            timeframes=timeframes or self._config.market_data.backfill_timeframes,
+            since=since,
+        )
+
+    def start_background_ohlc_tail_refresh(self) -> bool:
+        """Start one OHLC tail refresh in the background, skipping overlaps."""
+        if not self._config.market_data.backfill_timeframes or not self._universe:
+            return False
+
+        if not self._tail_refresh_lock.acquire(blocking=False):
+            logger.info("OHLC tail refresh already running; skipping.")
+            return False
+
+        def _run() -> None:
+            logger.info("Scheduled OHLC tail refresh started.")
+            try:
+                result = self.refresh_ohlc_tails()
+            except Exception as exc:  # pragma: no cover - defensive logging
+                logger.exception("Scheduled OHLC tail refresh failed: %s", exc)
+            else:
+                if result.failed_count:
+                    logger.warning(
+                        "Scheduled OHLC tail refresh completed with %s failed series.",
+                        result.failed_count,
+                    )
+                else:
+                    logger.info(
+                        "Scheduled OHLC tail refresh completed; fetched %s bars.",
+                        result.fetched_bars,
+                    )
+            finally:
+                self._tail_refresh_lock.release()
+
+        self._tail_refresh_thread = threading.Thread(
+            target=_run, daemon=True, name="OHLCTailRefresh"
+        )
+        self._tail_refresh_thread.start()
+        return True
+
+    def maybe_start_scheduled_ohlc_tail_refresh(
+        self, now_monotonic: Optional[float] = None
+    ) -> bool:
+        """Start a scheduled tail refresh if the configured interval has elapsed."""
+        interval = self._config.market_data.ohlc_tail_refresh_interval_seconds
+        if interval <= 0:
+            return False
+
+        now = now_monotonic if now_monotonic is not None else time.monotonic()
+        if now - self._last_tail_refresh_started_at < interval:
+            return False
+
+        if self._backfill_thread and self._backfill_thread.is_alive():
+            return False
+
+        started = self.start_background_ohlc_tail_refresh()
+        if started:
+            self._last_tail_refresh_started_at = now
+        return started
+
     def get_cached_data_status(self) -> ConnectionStatus:
         return self._last_connection_status
 
@@ -264,6 +342,11 @@ class MarketDataAPI:
         """Gracefully shuts down the WebSocket client."""
         if self._ws_client:
             self._ws_client.stop()
+
+        if self._tail_refresh_thread and self._tail_refresh_thread.is_alive():
+            self._tail_refresh_thread.join(timeout=5.0)
+            if self._tail_refresh_thread.is_alive():
+                logger.warning("OHLC tail refresh did not stop before timeout.")
 
         # Shutdown OHLC store worker if supported
         shutdown_store = getattr(self._ohlc_store, "shutdown", None)
@@ -579,7 +662,9 @@ class MarketDataAPI:
         freshest_stale_time = -1.0
 
         for timeframe in live_timeframes:
-            last_update = self._ws_client.last_ohlc_update_ts.get(pair, {}).get(timeframe)
+            last_update = self._ws_client.last_ohlc_update_ts.get(pair, {}).get(
+                timeframe
+            )
             if not last_update:
                 continue
 
@@ -812,9 +897,15 @@ class MarketDataAPI:
                 stale_detected = True
                 stale_pairs.append(pair_meta.canonical)
 
-        in_startup_grace = (time.time() - self._initialized_at) < self._startup_grace_seconds
-        backfill_active = bool(self._backfill_thread and self._backfill_thread.is_alive())
-        awaiting_first_ticks = connection_status.streaming_pairs == 0 and bool(self._universe)
+        in_startup_grace = (
+            time.time() - self._initialized_at
+        ) < self._startup_grace_seconds
+        backfill_active = bool(
+            self._backfill_thread and self._backfill_thread.is_alive()
+        )
+        awaiting_first_ticks = connection_status.streaming_pairs == 0 and bool(
+            self._universe
+        )
 
         if awaiting_first_ticks and (in_startup_grace or backfill_active):
             status = MarketDataStatus(
@@ -848,10 +939,14 @@ class MarketDataAPI:
 
         if stale_detected:
             if stale_pairs:
-                display_pairs = [self.get_display_pair(pair) for pair in stale_pairs[:3]]
+                display_pairs = [
+                    self.get_display_pair(pair) for pair in stale_pairs[:3]
+                ]
                 market_data_detail = ", ".join(display_pairs)
                 if len(stale_pairs) > 3:
-                    market_data_detail = f"{market_data_detail} and {len(stale_pairs) - 3} more"
+                    market_data_detail = (
+                        f"{market_data_detail} and {len(stale_pairs) - 3} more"
+                    )
             status_name = (
                 "warming_up"
                 if (in_startup_grace or backfill_active)

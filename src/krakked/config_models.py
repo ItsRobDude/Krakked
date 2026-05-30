@@ -32,6 +32,7 @@ class MarketDataConfig:
     backfill_timeframes: list[str]
     ws_timeframes: list[str]
     metadata_path: Optional[str] = None
+    ohlc_tail_refresh_interval_seconds: int = 3600
 
 
 @dataclass

@@ -25,6 +25,10 @@ from krakked.portfolio.store import (
     MLArtifactGroup,
     SQLitePortfolioStore,
 )
+from krakked.market_data.ohlc_refresh import (
+    OHLCTailRefreshSeriesResult,
+    OHLCTailRefreshSummary,
+)
 from krakked.strategy.ml_pruning import find_stale_ml_artifact_groups
 
 
@@ -282,6 +286,119 @@ def test_run_subcommand_defaults_to_non_interactive_setup(
 
     assert exit_code == 0
     assert captured["allow_interactive_setup"] is False
+
+
+def test_refresh_ohlc_subcommand_outputs_json_and_passes_filters(
+    monkeypatch: pytest.MonkeyPatch, capsys: Any
+) -> None:
+    captured: dict[str, Any] = {}
+
+    class _DummyMarketData:
+        def __init__(self, config: Any) -> None:
+            captured["config"] = config
+            self.shutdown_called = False
+
+        def refresh_universe(self) -> None:
+            captured["refresh_universe"] = True
+
+        def refresh_ohlc_tails(
+            self,
+            *,
+            pairs: list[str] | None,
+            timeframes: list[str] | None,
+            since: int | None,
+        ) -> OHLCTailRefreshSummary:
+            captured["pairs"] = pairs
+            captured["timeframes"] = timeframes
+            captured["since"] = since
+            return OHLCTailRefreshSummary(
+                generated_at=datetime(2026, 5, 30, tzinfo=UTC),
+                pairs=pairs or [],
+                timeframes=timeframes or [],
+                series=[
+                    OHLCTailRefreshSeriesResult(
+                        pair="BTC/USD",
+                        timeframe="1h",
+                        prior_latest_timestamp=1000,
+                        since_timestamp=1772323200,
+                        new_latest_timestamp=1060,
+                        fetched_bars=1,
+                        status="refreshed",
+                    )
+                ],
+            )
+
+        def shutdown(self) -> None:
+            captured["shutdown"] = True
+
+    monkeypatch.setattr(cli, "load_config", lambda config_path=None: object())
+    monkeypatch.setattr(cli, "MarketDataAPI", _DummyMarketData)
+
+    exit_code = cli.main(
+        [
+            "refresh-ohlc",
+            "--pair",
+            "BTC/USD",
+            "--timeframe",
+            "1h",
+            "--since",
+            "2026-03-01T00:00:00Z",
+            "--json",
+        ]
+    )
+
+    assert exit_code == 0
+    assert captured["refresh_universe"] is True
+    assert captured["pairs"] == ["BTC/USD"]
+    assert captured["timeframes"] == ["1h"]
+    assert captured["since"] == 1772323200
+    assert captured["shutdown"] is True
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["success"] is True
+    assert payload["series"][0]["status"] == "refreshed"
+
+
+def test_refresh_ohlc_subcommand_exits_nonzero_on_series_failure(
+    monkeypatch: pytest.MonkeyPatch, capsys: Any
+) -> None:
+    class _DummyMarketData:
+        def __init__(self, config: Any) -> None:  # noqa: ARG002
+            pass
+
+        def refresh_universe(self) -> None:
+            pass
+
+        def refresh_ohlc_tails(self, **_: Any) -> OHLCTailRefreshSummary:
+            return OHLCTailRefreshSummary(
+                generated_at=datetime(2026, 5, 30, tzinfo=UTC),
+                pairs=["BTC/USD"],
+                timeframes=["2h"],
+                series=[
+                    OHLCTailRefreshSeriesResult(
+                        pair="BTC/USD",
+                        timeframe="2h",
+                        prior_latest_timestamp=None,
+                        since_timestamp=None,
+                        new_latest_timestamp=None,
+                        fetched_bars=0,
+                        status="failed",
+                        error="Unsupported timeframe",
+                    )
+                ],
+            )
+
+        def shutdown(self) -> None:
+            pass
+
+    monkeypatch.setattr(cli, "load_config", lambda config_path=None: object())
+    monkeypatch.setattr(cli, "MarketDataAPI", _DummyMarketData)
+
+    exit_code = cli.main(["refresh-ohlc", "--timeframe", "2h"])
+
+    assert exit_code == 1
+    output = capsys.readouterr().out
+    assert "Failed: 1" in output
+    assert "Unsupported timeframe" in output
 
 
 def test_migrate_db_subcommand_upgrades_outdated_schema(tmp_path, capsys: Any) -> None:
@@ -948,9 +1065,9 @@ def test_ml_walk_forward_subcommand_writes_report(
     assert captured["kwargs"]["test_bars"] == 6
     assert captured["kwargs"]["slippage_bps"] == pytest.approx(20.0)
     assert (
-        captured["args"][0].strategies.configs["ai_regression"].params[
-            "feature_profile"
-        ]
+        captured["args"][0]
+        .strategies.configs["ai_regression"]
+        .params["feature_profile"]
         == "drop_weakest"
     )
     payload = json.loads(report_path.read_text(encoding="utf-8"))
@@ -1630,8 +1747,7 @@ def test_ml_walk_forward_summary_prints_next_tier_blockers_for_risk_overlay(
             },
             "promotable": True,
             "promotable_reasons": [
-                "Walk-forward metrics clear the risk overlay candidate"
-                " thresholds."
+                "Walk-forward metrics clear the risk overlay candidate" " thresholds."
             ],
         }
     }
@@ -1813,9 +1929,7 @@ def _write_ml_ablation_report(
                     ],
                     "clipping": {
                         "features": {
-                            "risky_keep": {
-                                "clipped_rate": 0.06 if index == 2 else 0.01
-                            }
+                            "risky_keep": {"clipped_rate": 0.06 if index == 2 else 0.01}
                         }
                     },
                     "linear_contributions": contributions,

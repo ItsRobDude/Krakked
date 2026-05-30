@@ -3,7 +3,11 @@
 import signal
 from types import SimpleNamespace
 
-from krakked.config_loader import get_initial_ui_config
+from krakked.config_loader import (
+    DEFAULT_OHLC_TAIL_REFRESH_INTERVAL_SECONDS,
+    DEFAULT_STARTER_BACKFILL_TIMEFRAMES,
+    get_initial_ui_config,
+)
 from krakked.main import BotController
 from krakked.ui.context import AppContext
 
@@ -63,6 +67,14 @@ def test_bootstrap_locked_context_seeds_starter_profile(monkeypatch, tmp_path):
     assert "Default" in ctx.config.profiles
     assert ctx.config.session.profile_name == "Default"
     assert ctx.session.profile_name == "Default"
+    assert (
+        ctx.config.market_data.backfill_timeframes
+        == DEFAULT_STARTER_BACKFILL_TIMEFRAMES
+    )
+    assert (
+        ctx.config.market_data.ohlc_tail_refresh_interval_seconds
+        == DEFAULT_OHLC_TAIL_REFRESH_INTERVAL_SECONDS
+    )
     assert (tmp_path / "profiles" / "Default.yaml").exists()
 
 

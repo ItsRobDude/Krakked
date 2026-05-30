@@ -291,6 +291,50 @@ def test_get_latest_price_falls_back_to_rest_when_ws_missing(mock_config):
     api._rest_client.get_public.assert_called_once()
 
 
+@patch("krakked.market_data.api.FileOHLCStore")
+def test_scheduled_ohlc_tail_refresh_waits_for_configured_interval(
+    mock_store, mock_config
+):
+    mock_config.market_data.backfill_timeframes = ["1h"]
+    mock_config.market_data.ohlc_tail_refresh_interval_seconds = 3600
+    api = MarketDataAPI(mock_config)
+    api._universe = [MagicMock()]
+    api.start_background_ohlc_tail_refresh = MagicMock(return_value=True)
+    api._last_tail_refresh_started_at = 100.0
+
+    assert api.maybe_start_scheduled_ohlc_tail_refresh(3699.0) is False
+    assert api.maybe_start_scheduled_ohlc_tail_refresh(3700.0) is True
+    api.start_background_ohlc_tail_refresh.assert_called_once_with()
+
+
+@patch("krakked.market_data.api.FileOHLCStore")
+def test_scheduled_ohlc_tail_refresh_respects_disable_interval(mock_store, mock_config):
+    mock_config.market_data.backfill_timeframes = ["1h"]
+    mock_config.market_data.ohlc_tail_refresh_interval_seconds = 0
+    api = MarketDataAPI(mock_config)
+    api._universe = [MagicMock()]
+    api.start_background_ohlc_tail_refresh = MagicMock(return_value=True)
+    api._last_tail_refresh_started_at = 100.0
+
+    assert api.maybe_start_scheduled_ohlc_tail_refresh(10_000.0) is False
+    api.start_background_ohlc_tail_refresh.assert_not_called()
+
+
+@patch("krakked.market_data.api.FileOHLCStore")
+def test_background_ohlc_tail_refresh_skips_when_already_running(
+    mock_store, mock_config
+):
+    mock_config.market_data.backfill_timeframes = ["1h"]
+    api = MarketDataAPI(mock_config)
+    api._universe = [MagicMock()]
+
+    assert api._tail_refresh_lock.acquire(blocking=False) is True
+    try:
+        assert api.start_background_ohlc_tail_refresh() is False
+    finally:
+        api._tail_refresh_lock.release()
+
+
 def test_get_latest_price_falls_back_to_rest_when_ws_stale(mock_config):
     mock_config.market_data.ws_timeframes = ["1m"]
 

@@ -49,6 +49,7 @@ from krakked.connection.exceptions import (
 from krakked.connection.rest_client import KrakenRESTClient
 from krakked.credentials import CredentialResult, CredentialStatus
 from krakked.main import run as run_orchestrator
+from krakked.market_data.api import MarketDataAPI
 from krakked.portfolio.exceptions import PortfolioSchemaError
 from krakked.portfolio.store import (
     CURRENT_SCHEMA_VERSION,
@@ -278,6 +279,72 @@ def _parse_datetime_arg(value: str) -> datetime:
     if parsed.tzinfo is None:
         return parsed.replace(tzinfo=UTC)
     return parsed.astimezone(UTC)
+
+
+def _parse_since_arg(value: str) -> int:
+    stripped = value.strip()
+    try:
+        if "." in stripped:
+            parsed_epoch = int(float(stripped))
+        else:
+            parsed_epoch = int(stripped, 10)
+    except ValueError:
+        parsed_epoch = int(_parse_datetime_arg(stripped).timestamp())
+
+    if parsed_epoch < 0:
+        raise ValueError("since must be a non-negative epoch or datetime")
+    return parsed_epoch
+
+
+def _print_ohlc_refresh_summary(payload: dict[str, Any]) -> None:
+    print("OHLC tail refresh completed.")
+    print(
+        f"Series: {len(payload['series'])} | "
+        f"Fetched bars: {payload['fetched_bars']} | "
+        f"Failed: {payload['failed_count']}"
+    )
+    for item in payload["series"]:
+        error_suffix = f" | error: {item['error']}" if item.get("error") else ""
+        print(
+            f"- {item['pair']}@{item['timeframe']}: {item['status']}, "
+            f"fetched {item['fetched_bars']}, "
+            f"prior {item['prior_latest_timestamp']}, "
+            f"new {item['new_latest_timestamp']}{error_suffix}"
+        )
+
+
+def _refresh_ohlc_command(args: argparse.Namespace) -> int:
+    try:
+        since = _parse_since_arg(args.since) if args.since else None
+    except ValueError as exc:
+        return _print_error(f"Invalid refresh since value: {exc}")
+
+    market_data: MarketDataAPI | None = None
+    try:
+        config_path = Path(args.config).expanduser().resolve() if args.config else None
+        config = load_config(config_path=config_path)
+        market_data = MarketDataAPI(config)
+        market_data.refresh_universe()
+        result = market_data.refresh_ohlc_tails(
+            pairs=args.pair,
+            timeframes=args.timeframe,
+            since=since,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _print_error(f"OHLC tail refresh failed: {exc}")
+    finally:
+        if market_data is not None:
+            market_data.shutdown()
+
+    payload = result.to_dict()
+    if args.json:
+        print(json.dumps(payload, indent=2))
+    else:
+        _print_ohlc_refresh_summary(payload)
+
+    if result.failed_count:
+        return 1
+    return 0
 
 
 def _load_backtest_config(args: argparse.Namespace) -> AppConfig:
@@ -1404,6 +1471,35 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     run_parser.set_defaults(func=_run_command)
 
+    refresh_ohlc_parser = subparsers.add_parser(
+        "refresh-ohlc",
+        help="Refresh local OHLC tails using public Kraken market-data endpoints",
+    )
+    refresh_ohlc_parser.add_argument(
+        "--config",
+        help="Optional path to the base config.yaml to use for market-data refresh",
+    )
+    refresh_ohlc_parser.add_argument(
+        "--pair",
+        action="append",
+        help="Limit refresh to one pair; repeat to include multiple pairs",
+    )
+    refresh_ohlc_parser.add_argument(
+        "--timeframe",
+        action="append",
+        help="Limit refresh to one timeframe; repeat to include multiple timeframes",
+    )
+    refresh_ohlc_parser.add_argument(
+        "--since",
+        help="Override refresh start as an ISO-8601 datetime or epoch seconds",
+    )
+    refresh_ohlc_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print the refresh result payload as JSON",
+    )
+    refresh_ohlc_parser.set_defaults(func=_refresh_ohlc_command)
+
     backtest_preflight_parser = subparsers.add_parser(
         "backtest-preflight",
         help="Check local historical coverage for an offline replay without running strategies",
@@ -1663,9 +1759,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--output",
         help="Optional path to write the rendered feature ablation table",
     )
-    ml_feature_ablation_parser.set_defaults(
-        func=_ml_feature_ablation_summary_command
-    )
+    ml_feature_ablation_parser.set_defaults(func=_ml_feature_ablation_summary_command)
 
     ml_prune_stale_parser = subparsers.add_parser(
         "ml-prune-stale",

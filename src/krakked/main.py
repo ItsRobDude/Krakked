@@ -16,6 +16,7 @@ import uvicorn
 from krakked import APP_VERSION
 from krakked.bootstrap import CredentialBootstrapError, bootstrap
 from krakked.config_loader import (
+    DEFAULT_OHLC_TAIL_REFRESH_INTERVAL_SECONDS,
     cleanup_active_config_chain,
     dump_runtime_overrides,
     get_default_ohlc_store_config,
@@ -23,6 +24,8 @@ from krakked.config_loader import (
     get_default_starter_strategies_config,
     get_config_dir,
     get_initial_ui_config,
+    DEFAULT_STARTER_BACKFILL_TIMEFRAMES,
+    DEFAULT_STARTER_WS_TIMEFRAMES,
     ensure_starter_profile,
     load_config,
     write_initial_config,
@@ -68,6 +71,13 @@ def _has_non_interactive_credentials() -> bool:
     api_secret = (os.getenv("KRAKEN_API_SECRET") or "").strip()
     secret_password = (os.getenv("KRAKKED_SECRET_PW") or "").strip()
     return bool(secret_password or (api_key and api_secret))
+
+
+def _maybe_start_ohlc_tail_refresh(market_data: MarketDataAPI) -> bool:
+    scheduler = getattr(market_data, "maybe_start_scheduled_ohlc_tail_refresh", None)
+    if not callable(scheduler):
+        return False
+    return bool(scheduler())
 
 
 def _refresh_metrics_state(
@@ -434,10 +444,14 @@ def _run_loop_iteration(
                     result = execution_service.execute_plan(plan)
                     is_paper_mode_reader = getattr(portfolio, "_is_paper_mode", None)
                     is_paper_mode = (
-                        is_paper_mode_reader() if callable(is_paper_mode_reader) else False
+                        is_paper_mode_reader()
+                        if callable(is_paper_mode_reader)
+                        else False
                     )
                     if is_paper_mode is True:
-                        ingest_filled_orders = getattr(portfolio, "ingest_filled_orders", None)
+                        ingest_filled_orders = getattr(
+                            portfolio, "ingest_filled_orders", None
+                        )
                         if callable(ingest_filled_orders):
                             ingest_filled_orders(result)
                     kill_switch_rejections = [
@@ -691,8 +705,13 @@ class BotController:
                         "market_data": {
                             "ws": {},
                             "ohlc_store": get_default_ohlc_store_config(),
-                            "backfill_timeframes": ["1h", "4h"],
-                            "ws_timeframes": ["1m"],
+                            "backfill_timeframes": list(
+                                DEFAULT_STARTER_BACKFILL_TIMEFRAMES
+                            ),
+                            "ohlc_tail_refresh_interval_seconds": (
+                                DEFAULT_OHLC_TAIL_REFRESH_INTERVAL_SECONDS
+                            ),
+                            "ws_timeframes": list(DEFAULT_STARTER_WS_TIMEFRAMES),
                         },
                         "execution": {
                             "mode": "paper",
@@ -1040,6 +1059,9 @@ class BotController:
 
             # --- MAIN TRADING LOOP ---
             now = datetime.now(timezone.utc)
+
+            if self.context and self.context.market_data:
+                _maybe_start_ohlc_tail_refresh(self.context.market_data)
 
             # Safely extract config intervals
             strategy_interval = _coerce_interval(

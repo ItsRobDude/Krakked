@@ -3,7 +3,11 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-from krakked.main import _refresh_metrics_state, _run_loop_iteration
+from krakked.main import (
+    _maybe_start_ohlc_tail_refresh,
+    _refresh_metrics_state,
+    _run_loop_iteration,
+)
 from krakked.market_data.api import MarketDataStatus
 from krakked.metrics import SystemMetrics
 from krakked.portfolio.models import DriftMismatchedAsset, DriftStatus
@@ -132,6 +136,15 @@ class StubMarketData:
 
     def get_health_status(self) -> MarketDataStatus:
         return self.status
+
+
+def test_main_loop_tail_refresh_helper_triggers_market_data_scheduler() -> None:
+    market_data = SimpleNamespace(
+        maybe_start_scheduled_ohlc_tail_refresh=MagicMock(return_value=True)
+    )
+
+    assert _maybe_start_ohlc_tail_refresh(market_data) is True
+    market_data.maybe_start_scheduled_ohlc_tail_refresh.assert_called_once_with()
 
 
 class StubSystemMetrics(SystemMetrics):

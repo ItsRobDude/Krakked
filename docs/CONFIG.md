@@ -48,6 +48,7 @@ Krakked now boots with a conservative operator-first starter profile unless you 
 * Normal paper config uses `execution.validate_only: false` because no Kraken live order is submitted. Operator safety summaries may still treat paper as effectively safe/validated; that is not the same as the raw config flag.
 * The starter universe is limited to `BTC/USD`, `ETH/USD`, `SOL/USD`, and `ADA/USD`.
 * Historical backfill defaults to `1h`, `4h`, and `1d`.
+* Long-running sessions refresh configured OHLC tails hourly by default (`market_data.ohlc_tail_refresh_interval_seconds: 3600`); set it to `0` to disable.
 * Live websocket OHLC defaults to a single `1m` stream.
 * The enabled starter strategy pack is:
   * `trend_core`
@@ -74,3 +75,13 @@ Set `KRAKKED_ENV` to choose which overlay is applied:
 * `live`
 
 If `KRAKKED_ENV` is missing or any other value, the bot defaults to the `paper` overlay. The loader always reads `config.yaml` first and then merges in `config.<env>.yaml` (if present) from the same directory, so per-environment tweaks stay isolated while shared settings live in the base file.
+
+## Refreshing OHLC tails before replay
+
+Backtests and preflight checks intentionally read cached OHLC only. To update those caches before a rolling replay window, run:
+
+```bash
+krakked refresh-ohlc
+```
+
+Use `--pair`, `--timeframe`, `--since`, and `--json` for targeted replay prep or automation. The command uses public Kraken market-data endpoints only; it does not require private credentials and does not change live-trading gates.

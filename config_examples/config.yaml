@@ -29,6 +29,9 @@ market_data:
     - "1h"
     - "4h"
     - "1d"
+  # Hourly public REST refresh keeps replay/cache tails fresh for long-running sessions.
+  # Set to 0 to disable scheduled tail refresh.
+  ohlc_tail_refresh_interval_seconds: 3600
   ws_timeframes:
     - "1m"
   metadata_path: "~/.local/share/krakked/metadata.json"
