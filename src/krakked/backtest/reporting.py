@@ -105,6 +105,7 @@ def summarize_latest_backtest_report(
     preflight = payload.get("preflight") or {}
     replay_inputs = summary.get("replay_inputs") or {}
     blocked_reason_counts = summary.get("blocked_reason_counts") or {}
+    clamped_reason_counts = summary.get("clamped_reason_counts") or {}
     missing_series = list(
         preflight.get("missing_series") or summary.get("missing_series") or []
     )
@@ -138,6 +139,7 @@ def summarize_latest_backtest_report(
         "return_pct": summary.get("return_pct"),
         "fills": summary.get("filled_orders"),
         "blocked_actions": summary.get("blocked_actions"),
+        "clamped_actions": summary.get("clamped_actions", 0),
         "execution_errors": summary.get("execution_errors"),
         "coverage_status": coverage_status,
         "usable_series_count": usable_series_count,
@@ -145,6 +147,7 @@ def summarize_latest_backtest_report(
         "partial_series": partial_series,
         "strategy_coverage_gaps": strategy_coverage_gaps,
         "blocked_reason_counts": blocked_reason_counts,
+        "clamped_reason_counts": clamped_reason_counts,
         "cost_model": summary.get("cost_model"),
         "replay_inputs": replay_inputs,
         "report_path": str(resolved_path),

@@ -55,8 +55,8 @@ Saved report highlights:
 - requested window, pairs, timeframes, and bankroll
 - simple replay trust fields for a default operator view: `trust_level`, `trust_note`, and `notable_warnings`
 - ending equity, return, realized/unrealized PnL, and max drawdown
-- total actions, blocked actions, orders, fills, rejects, and execution errors
-- grouped blocked-action reason counts for deeper debugging
+- total actions, blocked actions, clamped actions, orders, fills, rejects, and execution errors
+- grouped blocked-action and clamped-action reason counts for deeper debugging
 - full data coverage results for every requested pair/timeframe
 - per-strategy realized PnL summary
 - the exact replay assumptions used, including slippage and fee settings
@@ -70,7 +70,7 @@ poetry run krakked compare-backtests \
   --candidate runs/candidate.json
 ```
 
-This compares two saved reports without rerunning simulations and prints the deltas that matter: ending equity, return, drawdown, fills, blocked actions, execution errors, and overlapping per-strategy realized PnL.
+This compares two saved reports without rerunning simulations and prints the deltas that matter: ending equity, return, drawdown, fills, blocked actions, clamped actions, execution errors, and overlapping per-strategy realized PnL.
 
 Suggested workflow:
 

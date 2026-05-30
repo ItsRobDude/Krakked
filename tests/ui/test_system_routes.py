@@ -431,8 +431,12 @@ def test_latest_replay_endpoint_returns_compact_summary(
                     "max_drawdown_pct": 4.5,
                     "filled_orders": 3,
                     "blocked_actions": 1,
+                    "clamped_actions": 2,
                     "execution_errors": 0,
                     "blocked_reason_counts": {"Max open positions reached (1)": 1},
+                    "clamped_reason_counts": {
+                        "Max per asset limit (750.00 > 500.00)": 2
+                    },
                     "cost_model": "Immediate candle-close fills using configured slippage and flat taker fees.",
                     "trust_level": "limited",
                     "trust_note": "Limited signal: some strategy actions were blocked by guardrails.",
@@ -490,12 +494,16 @@ def test_latest_replay_endpoint_returns_compact_summary(
     assert payload["end_equity_usd"] == 10120.0
     assert payload["pnl_usd"] == 120.0
     assert payload["fills"] == 3
+    assert payload["clamped_actions"] == 2
     assert payload["coverage_status"] == "limited"
     assert payload["strategy_coverage_gaps"][0]["strategy_id"] == "majors_mean_rev"
     assert (
         payload["strategy_coverage_gaps"][0]["coverage_status"] == "partial_window"
     )
     assert payload["blocked_reason_counts"]["Max open positions reached (1)"] == 1
+    assert payload["clamped_reason_counts"][
+        "Max per asset limit (750.00 > 500.00)"
+    ] == 2
     assert payload["replay_inputs"]["enabled_strategies"] == ["majors_mean_rev"]
     assert payload["report_path"].endswith("reports\\backtests\\latest.json")
 

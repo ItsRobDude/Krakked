@@ -428,6 +428,7 @@ def test_backtest_subcommand_prints_summary(
                 total_cycles=12,
                 total_actions=4,
                 blocked_actions=1,
+                clamped_actions=1,
                 total_orders=3,
                 filled_orders=2,
                 rejected_orders=1,
@@ -471,6 +472,7 @@ def test_backtest_subcommand_prints_summary(
                 trust_note="Limited signal: some strategy actions were blocked by guardrails.",
                 notable_warnings=["Most strategy actions were blocked by guardrails."],
                 blocked_reason_counts={"Max open positions reached (1)": 1},
+                clamped_reason_counts={"Max per asset limit (750.00 > 500.00)": 1},
                 assumptions=["Synthetic fills only."],
             ),
         )
@@ -505,8 +507,10 @@ def test_backtest_subcommand_prints_summary(
         in output
     )
     assert "Cost model: 50 bps slippage + 25.00 bps taker fee" in output
+    assert "Actions: 4 total, 1 blocked, 1 clamped" in output
     assert "Missing OHLC series:" in output
     assert "Top blocked reason: Max open positions reached (1) (1)" in output
+    assert "Top clamped reason: Max per asset limit (750.00 > 500.00) (1)" in output
     assert captured["config_source"] == "default_paper_config"
     assert captured["config_arg_supplied"] is False
     assert captured["resolved_config_path"].endswith("config.yaml")
@@ -1997,6 +2001,7 @@ def test_compare_backtests_prints_deltas(tmp_path: Path, capsys: Any) -> None:
                     "max_drawdown_pct": 5.0,
                     "filled_orders": 2,
                     "blocked_actions": 1,
+                    "clamped_actions": 0,
                     "execution_errors": 0,
                     "replay_inputs": {},
                     "per_strategy": {"majors_mean_rev": {"realized_pnl_usd": 25.0}},
@@ -2015,6 +2020,7 @@ def test_compare_backtests_prints_deltas(tmp_path: Path, capsys: Any) -> None:
                     "max_drawdown_pct": 4.5,
                     "filled_orders": 3,
                     "blocked_actions": 0,
+                    "clamped_actions": 2,
                     "execution_errors": 0,
                     "replay_inputs": {},
                     "per_strategy": {"majors_mean_rev": {"realized_pnl_usd": 55.0}},
@@ -2038,6 +2044,7 @@ def test_compare_backtests_prints_deltas(tmp_path: Path, capsys: Any) -> None:
     output = capsys.readouterr().out
     assert "Backtest comparison" in output
     assert "Ending equity USD: 10,000.00 -> 10,120.00 (+120.00)" in output
+    assert "Clamped actions: 0.00 -> 2.00 (+2.00)" in output
     assert "Per-strategy realized PnL delta:" in output
     assert "majors_mean_rev: 25.00 -> 55.00 (+30.00)" in output
 

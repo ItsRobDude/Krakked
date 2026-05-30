@@ -344,7 +344,10 @@ def _print_backtest_summary(
         f"max drawdown {summary.max_drawdown_pct:.2f}%"
     )
     print(f"Replay trust: {summary.trust_note}")
-    print(f"Actions: {summary.total_actions} total, {summary.blocked_actions} blocked")
+    print(
+        f"Actions: {summary.total_actions} total, {summary.blocked_actions} blocked, "
+        f"{summary.clamped_actions} clamped"
+    )
     print(
         f"Orders: {summary.total_orders} total, {summary.filled_orders} filled, "
         f"{summary.rejected_orders} rejected"
@@ -370,6 +373,9 @@ def _print_backtest_summary(
     if summary.blocked_reason_counts:
         top_reason, count = next(iter(summary.blocked_reason_counts.items()))
         print(f"Top blocked reason: {top_reason} ({count})")
+    if summary.clamped_reason_counts:
+        top_reason, count = next(iter(summary.clamped_reason_counts.items()))
+        print(f"Top clamped reason: {top_reason} ({count})")
 
     print("Simulation limits:")
     for assumption in summary.assumptions:
@@ -547,6 +553,13 @@ def _compare_backtests_command(args: argparse.Namespace) -> int:
             "Blocked actions",
             float(baseline_summary.get("blocked_actions", 0.0)),
             float(candidate_summary.get("blocked_actions", 0.0)),
+        )
+    )
+    print(
+        _format_delta(
+            "Clamped actions",
+            float(baseline_summary.get("clamped_actions", 0.0)),
+            float(candidate_summary.get("clamped_actions", 0.0)),
         )
     )
     print(

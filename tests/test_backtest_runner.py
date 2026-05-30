@@ -14,7 +14,7 @@ from krakked.config import AppConfig, load_config
 from krakked.execution.models import ExecutionResult, LocalOrder
 from krakked.market_data.metadata_store import PairMetadataStore
 from krakked.market_data.models import PairMetadata
-from krakked.strategy.models import ExecutionPlan
+from krakked.strategy.models import ExecutionPlan, RiskAdjustedAction
 
 
 def _build_backtest_config(tmp_path: Path) -> AppConfig:
@@ -32,6 +32,52 @@ def _build_backtest_config(tmp_path: Path) -> AppConfig:
         "max_positions": 1,
     }
     return config
+
+
+def test_backtest_reason_counts_separate_blocked_and_clamped_actions() -> None:
+    generated_at = datetime(2026, 5, 1, tzinfo=UTC)
+    plan = ExecutionPlan(
+        plan_id="plan-1",
+        generated_at=generated_at,
+        actions=[
+            RiskAdjustedAction(
+                pair="BTC/USD",
+                strategy_id="rs_rotation",
+                action_type="open",
+                target_base_size=0.01,
+                target_notional_usd=500.0,
+                current_base_size=0.0,
+                reason="Clamped: Max per asset limit (1000.00 > 500.00)",
+                blocked=False,
+                blocked_reasons=["Max per asset limit (1000.00 > 500.00)"],
+                clamped=True,
+            ),
+            RiskAdjustedAction(
+                pair="ETH/USD",
+                strategy_id="rs_rotation",
+                action_type="none",
+                target_base_size=0.0,
+                target_notional_usd=0.0,
+                current_base_size=0.0,
+                reason=(
+                    "Blocked: Strategy rs_rotation budget exceeded "
+                    "(1500.00 > 500.00)"
+                ),
+                blocked=True,
+                blocked_reasons=[
+                    "Strategy rs_rotation budget exceeded (1500.00 > 500.00)"
+                ],
+                clamped=False,
+            ),
+        ],
+    )
+
+    assert runner._build_blocked_reason_counts([plan]) == {
+        "Strategy rs_rotation budget exceeded (1500.00 > 500.00)": 1
+    }
+    assert runner._build_clamped_reason_counts([plan]) == {
+        "Max per asset limit (1000.00 > 500.00)": 1
+    }
 
 
 def _seed_pair_metadata(config: AppConfig) -> None:

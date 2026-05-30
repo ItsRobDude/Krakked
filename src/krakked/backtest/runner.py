@@ -101,6 +101,7 @@ class BacktestSummary:
     total_cycles: int = 0
     total_actions: int = 0
     blocked_actions: int = 0
+    clamped_actions: int = 0
     total_orders: int = 0
     filled_orders: int = 0
     rejected_orders: int = 0
@@ -119,6 +120,7 @@ class BacktestSummary:
     coverage: List[BacktestCoverageItem] = field(default_factory=list)
     strategy_coverage_gaps: List[Dict[str, Any]] = field(default_factory=list)
     blocked_reason_counts: Dict[str, int] = field(default_factory=dict)
+    clamped_reason_counts: Dict[str, int] = field(default_factory=dict)
     per_strategy: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     trust_level: str = ""
     trust_note: str = ""
@@ -142,6 +144,7 @@ class BacktestSummary:
             "total_cycles": self.total_cycles,
             "total_actions": self.total_actions,
             "blocked_actions": self.blocked_actions,
+            "clamped_actions": self.clamped_actions,
             "total_orders": self.total_orders,
             "filled_orders": self.filled_orders,
             "rejected_orders": self.rejected_orders,
@@ -155,6 +158,7 @@ class BacktestSummary:
             "coverage": [item.to_dict() for item in self.coverage],
             "strategy_coverage_gaps": copy.deepcopy(self.strategy_coverage_gaps),
             "blocked_reason_counts": dict(self.blocked_reason_counts),
+            "clamped_reason_counts": dict(self.clamped_reason_counts),
             "per_strategy": copy.deepcopy(self.per_strategy),
             "trust_level": self.trust_level,
             "trust_note": self.trust_note,
@@ -1373,11 +1377,18 @@ def _build_backtest_summary(
         for action in plan.actions
         if getattr(action, "blocked", False)
     )
+    clamped_actions = sum(
+        1
+        for plan in plans
+        for action in plan.actions
+        if getattr(action, "clamped", False)
+    )
     orders = [order for execution in executions for order in execution.orders]
     filled_orders = sum(1 for order in orders if order.status == "filled")
     rejected_orders = sum(1 for order in orders if order.status == "rejected")
     execution_errors = sum(len(execution.errors) for execution in executions)
     blocked_reason_counts = _build_blocked_reason_counts(plans)
+    clamped_reason_counts = _build_clamped_reason_counts(plans)
     equity_view = portfolio.get_equity()
     ending_equity = equity_view.equity_base
     absolute_pnl = ending_equity - float(starting_cash_usd)
@@ -1440,6 +1451,7 @@ def _build_backtest_summary(
         total_cycles=len(plans),
         total_actions=total_actions,
         blocked_actions=blocked_actions,
+        clamped_actions=clamped_actions,
         total_orders=len(orders),
         filled_orders=filled_orders,
         rejected_orders=rejected_orders,
@@ -1453,6 +1465,7 @@ def _build_backtest_summary(
         coverage=list(preflight.coverage),
         strategy_coverage_gaps=copy.deepcopy(preflight.strategy_coverage_gaps),
         blocked_reason_counts=blocked_reason_counts,
+        clamped_reason_counts=clamped_reason_counts,
         per_strategy=per_strategy,
         trust_level=trust_level,
         trust_note=trust_note,
@@ -1581,18 +1594,39 @@ def _build_strategy_summary(
     return summary
 
 
-def _build_blocked_reason_counts(plans: List[ExecutionPlan]) -> Dict[str, int]:
+def _build_action_reason_counts(
+    plans: List[ExecutionPlan],
+    *,
+    flag_attr: str,
+    fallback_reason: str,
+) -> Dict[str, int]:
     counts: Dict[str, int] = {}
     for plan in plans:
         for action in plan.actions:
-            if not getattr(action, "blocked", False):
+            if not getattr(action, flag_attr, False):
                 continue
             reasons = list(getattr(action, "blocked_reasons", []) or [])
             if not reasons:
-                reasons = ["Blocked by risk guardrails"]
+                reasons = [fallback_reason]
             for reason in reasons:
                 counts[reason] = counts.get(reason, 0) + 1
     return dict(sorted(counts.items(), key=lambda item: (-item[1], item[0])))
+
+
+def _build_blocked_reason_counts(plans: List[ExecutionPlan]) -> Dict[str, int]:
+    return _build_action_reason_counts(
+        plans,
+        flag_attr="blocked",
+        fallback_reason="Blocked by risk guardrails",
+    )
+
+
+def _build_clamped_reason_counts(plans: List[ExecutionPlan]) -> Dict[str, int]:
+    return _build_action_reason_counts(
+        plans,
+        flag_attr="clamped",
+        fallback_reason="Clamped by risk guardrails",
+    )
 
 
 def _build_trend_core_warmup_warnings(
