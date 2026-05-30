@@ -15,8 +15,12 @@ from typing import Any, Callable
 
 from krakked import APP_VERSION, secrets
 from krakked.backtest import (
+    DEFAULT_EXPOSURE_OVERLAY_MODES,
+    DEFAULT_EXPOSURE_SCENARIOS,
     BacktestPreflightResult,
     BacktestResult,
+    MarketRegimeExposureScenarioParams,
+    MarketRegimeOverlayParams,
     RSRotationV2ResearchParams,
     build_backtest_preflight,
     default_rs_rotation_v2_allocation_pct,
@@ -27,6 +31,9 @@ from krakked.backtest import (
     publish_latest_backtest_report,
     publish_latest_ml_walk_forward_report,
     run_backtest,
+    run_market_regime_exposure_research,
+    run_market_regime_overlay_backtest,
+    run_market_regime_research,
     run_ml_walk_forward,
     run_rs_rotation_v2_research,
     write_backtest_report,
@@ -73,6 +80,67 @@ DEFAULT_DB_PATH = "portfolio.db"
 EXPORT_MANIFEST_NAME = "manifest.json"
 WINDOWS_FILE_RETRY_ATTEMPTS = 30
 WINDOWS_FILE_RETRY_DELAY_SECONDS = 0.2
+MARKET_REGIME_EXPOSURE_WINDOW_SETS = {
+    "recent_20d": [
+        (
+            "20260321-20260410",
+            "2026-03-21T00:00:00Z",
+            "2026-04-10T00:00:00Z",
+        ),
+        (
+            "20260410-20260430",
+            "2026-04-10T00:00:00Z",
+            "2026-04-30T00:00:00Z",
+        ),
+        (
+            "20260430-20260520",
+            "2026-04-30T00:00:00Z",
+            "2026-05-20T00:00:00Z",
+        ),
+        (
+            "20260505-20260525",
+            "2026-05-05T00:00:00Z",
+            "2026-05-25T00:00:00Z",
+        ),
+        (
+            "20260510-20260530",
+            "2026-05-10T00:00:00Z",
+            "2026-05-30T00:00:00Z",
+        ),
+    ],
+    "long_4h": [
+        (
+            "20251221-20260120",
+            "2025-12-21T00:00:00Z",
+            "2026-01-20T00:00:00Z",
+        ),
+        (
+            "20260120-20260219",
+            "2026-01-20T00:00:00Z",
+            "2026-02-19T00:00:00Z",
+        ),
+        (
+            "20260219-20260321",
+            "2026-02-19T00:00:00Z",
+            "2026-03-21T00:00:00Z",
+        ),
+        (
+            "20260321-20260420",
+            "2026-03-21T00:00:00Z",
+            "2026-04-20T00:00:00Z",
+        ),
+        (
+            "20260420-20260520",
+            "2026-04-20T00:00:00Z",
+            "2026-05-20T00:00:00Z",
+        ),
+        (
+            "20260430-20260530",
+            "2026-04-30T00:00:00Z",
+            "2026-05-30T00:00:00Z",
+        ),
+    ],
+}
 
 
 def _add_db_path_argument(subparser: argparse.ArgumentParser) -> None:
@@ -82,6 +150,220 @@ def _add_db_path_argument(subparser: argparse.ArgumentParser) -> None:
         "--db-path",
         default=DEFAULT_DB_PATH,
         help=f"Path to the SQLite portfolio store (defaults to {DEFAULT_DB_PATH})",
+    )
+
+
+def _add_market_regime_research_arguments(
+    subparser: argparse.ArgumentParser,
+    *,
+    include_overlay_backtest_args: bool = False,
+    include_exposure_research_args: bool = False,
+) -> None:
+    subparser.add_argument(
+        "--start",
+        required=True,
+        help="Research window start time in ISO-8601 form",
+    )
+    subparser.add_argument(
+        "--end",
+        required=True,
+        help="Research window end time in ISO-8601 form",
+    )
+    subparser.add_argument(
+        "--config",
+        help="Optional path to the base config.yaml to use",
+    )
+    subparser.add_argument(
+        "--pair",
+        action="append",
+        help="Limit to one pair; repeat to include multiple pairs",
+    )
+    subparser.add_argument(
+        "--timeframe",
+        default="4h",
+        help="OHLC timeframe for market-regime features",
+    )
+    subparser.add_argument(
+        "--benchmark-pair",
+        default="BTC/USD",
+        help="Benchmark pair used for market-state decisions",
+    )
+    subparser.add_argument(
+        "--momentum-lookback-bars",
+        type=int,
+        default=42,
+        help="Benchmark momentum lookback bars",
+    )
+    subparser.add_argument(
+        "--basket-momentum-lookback-bars",
+        type=int,
+        default=42,
+        help="Starter-basket momentum lookback bars",
+    )
+    subparser.add_argument(
+        "--volatility-lookback-bars",
+        type=int,
+        default=42,
+        help="Benchmark realized-volatility lookback bars",
+    )
+    subparser.add_argument(
+        "--drawdown-lookback-bars",
+        type=int,
+        default=42,
+        help="Benchmark drawdown lookback bars",
+    )
+    subparser.add_argument(
+        "--neutral-allocation-multiplier",
+        type=float,
+        default=0.5,
+        help="Exposure multiplier for neutral states",
+    )
+    subparser.add_argument(
+        "--risk-off-allocation-multiplier",
+        type=float,
+        default=0.0,
+        help="Exposure multiplier for risk-off states",
+    )
+    subparser.add_argument(
+        "--neutral-benchmark-momentum-bps",
+        type=float,
+        default=150.0,
+        help="Benchmark momentum below this value marks neutral",
+    )
+    subparser.add_argument(
+        "--neutral-basket-momentum-bps",
+        type=float,
+        default=100.0,
+        help="Basket momentum below this value marks neutral",
+    )
+    subparser.add_argument(
+        "--risk-off-benchmark-momentum-bps",
+        type=float,
+        default=0.0,
+        help="Benchmark momentum below this value can mark risk-off",
+    )
+    subparser.add_argument(
+        "--risk-off-basket-momentum-bps",
+        type=float,
+        default=0.0,
+        help="Basket momentum below this value can mark risk-off",
+    )
+    subparser.add_argument(
+        "--neutral-benchmark-drawdown-pct",
+        type=float,
+        default=4.0,
+        help="Benchmark drawdown percentage that marks neutral",
+    )
+    subparser.add_argument(
+        "--risk-off-benchmark-drawdown-pct",
+        type=float,
+        default=8.0,
+        help="Benchmark drawdown percentage that marks risk-off",
+    )
+    subparser.add_argument(
+        "--neutral-volatility-pct",
+        type=float,
+        default=2.5,
+        help="Benchmark realized volatility percentage that marks neutral",
+    )
+    subparser.add_argument(
+        "--risk-off-volatility-pct",
+        type=float,
+        default=4.0,
+        help="Benchmark realized volatility percentage that marks risk-off",
+    )
+    if include_overlay_backtest_args:
+        subparser.add_argument(
+            "--replay-timeframe",
+            action="append",
+            help="Limit replay to one timeframe; repeat to include multiple",
+        )
+        subparser.add_argument(
+            "--starting-cash-usd",
+            type=float,
+            default=10_000.0,
+            help="Synthetic starting USD wallet balance for the comparison",
+        )
+        subparser.add_argument(
+            "--fee-bps",
+            type=float,
+            default=25.0,
+            help="Flat taker fee in basis points applied to simulated fills",
+        )
+    if include_exposure_research_args:
+        subparser.add_argument(
+            "--scenario",
+            action="append",
+            choices=sorted(DEFAULT_EXPOSURE_SCENARIOS),
+            help=(
+                "Controlled exposure scenario to run; repeat to include multiple "
+                f"(defaults to {', '.join(DEFAULT_EXPOSURE_SCENARIOS)})"
+            ),
+        )
+        subparser.add_argument(
+            "--overlay-mode",
+            action="append",
+            choices=sorted(DEFAULT_EXPOSURE_OVERLAY_MODES),
+            help=(
+                "Overlay mode to compare against each baseline scenario; repeat to "
+                f"include multiple (defaults to {', '.join(DEFAULT_EXPOSURE_OVERLAY_MODES)})"
+            ),
+        )
+        subparser.add_argument(
+            "--allocation-pct",
+            type=float,
+            default=20.0,
+            help="Total synthetic exposure allocation percentage for each scenario",
+        )
+        subparser.add_argument(
+            "--rebalance-interval-bars",
+            type=int,
+            default=6,
+            help="Rebalance cadence in bars for controlled exposure scenarios",
+        )
+        subparser.add_argument(
+            "--starting-cash-usd",
+            type=float,
+            default=10_000.0,
+            help="Synthetic starting USD wallet balance for exposure scenarios",
+        )
+        subparser.add_argument(
+            "--fee-bps",
+            type=float,
+            default=25.0,
+            help="Flat taker fee in basis points applied to simulated scenario trades",
+        )
+        subparser.add_argument(
+            "--target-lookback-bars",
+            type=int,
+            default=63,
+            help="Bars used by dynamic target scenarios such as trend_proxy",
+        )
+        subparser.add_argument(
+            "--min-momentum-bps",
+            type=float,
+            default=150.0,
+            help="Minimum momentum required for trend_proxy eligibility",
+        )
+        subparser.add_argument(
+            "--max-target-pairs",
+            type=int,
+            default=4,
+            help="Maximum number of trend_proxy pairs to target",
+        )
+    subparser.add_argument(
+        "--save-report",
+        help="Optional JSON path for a durable market-regime report artifact",
+    )
+    subparser.add_argument(
+        "--strict-data",
+        action="store_true",
+        help="Fail if any requested pair/timeframe is missing or partially covered",
+    )
+    subparser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print the market-regime report as JSON",
     )
 
 
@@ -513,6 +795,343 @@ def _print_rs_rotation_v2_research_summary(
         print("Warnings:")
         for warning in summary["warnings"]:
             print(f"- {warning}")
+    if report_path:
+        print(f"Saved report: {report_path}")
+
+
+def _market_regime_params_from_args(
+    args: argparse.Namespace,
+) -> MarketRegimeOverlayParams:
+    return MarketRegimeOverlayParams(
+        timeframe=args.timeframe,
+        benchmark_pair=args.benchmark_pair,
+        momentum_lookback_bars=int(args.momentum_lookback_bars),
+        basket_momentum_lookback_bars=int(args.basket_momentum_lookback_bars),
+        volatility_lookback_bars=int(args.volatility_lookback_bars),
+        drawdown_lookback_bars=int(args.drawdown_lookback_bars),
+        neutral_allocation_multiplier=float(args.neutral_allocation_multiplier),
+        risk_off_allocation_multiplier=float(args.risk_off_allocation_multiplier),
+        neutral_benchmark_momentum_bps=float(args.neutral_benchmark_momentum_bps),
+        neutral_basket_momentum_bps=float(args.neutral_basket_momentum_bps),
+        risk_off_benchmark_momentum_bps=float(args.risk_off_benchmark_momentum_bps),
+        risk_off_basket_momentum_bps=float(args.risk_off_basket_momentum_bps),
+        neutral_benchmark_drawdown_pct=float(args.neutral_benchmark_drawdown_pct),
+        risk_off_benchmark_drawdown_pct=float(args.risk_off_benchmark_drawdown_pct),
+        neutral_volatility_pct=float(args.neutral_volatility_pct),
+        risk_off_volatility_pct=float(args.risk_off_volatility_pct),
+    )
+
+
+def _market_regime_exposure_scenario_params_from_args(
+    args: argparse.Namespace,
+) -> MarketRegimeExposureScenarioParams:
+    return MarketRegimeExposureScenarioParams(
+        allocation_pct=float(args.allocation_pct),
+        rebalance_interval_bars=int(args.rebalance_interval_bars),
+        starting_cash_usd=float(args.starting_cash_usd),
+        fee_bps=float(args.fee_bps),
+        target_lookback_bars=int(args.target_lookback_bars),
+        min_momentum_bps=float(args.min_momentum_bps),
+        max_target_pairs=int(args.max_target_pairs),
+    )
+
+
+def _print_market_regime_research_summary(
+    payload: dict[str, Any], report_path: str | None
+) -> None:
+    summary = payload["summary"]
+    print("Market regime research completed.")
+    print(f"Window: {summary['start']} -> {summary['end']}")
+    print(
+        f"Pairs: {', '.join(summary['pairs'])} | "
+        f"Benchmark: {summary['benchmark_pair']} | "
+        f"Timeframe: {summary['timeframe']}"
+    )
+    print(
+        f"Cycles: {summary['total_cycles']} | "
+        f"risk_on {summary['risk_on_cycles']} | "
+        f"neutral {summary['neutral_cycles']} | "
+        f"risk_off {summary['risk_off_cycles']}"
+    )
+    if summary.get("reason_counts"):
+        print("Top regime reasons:")
+        for reason, count in list(summary["reason_counts"].items())[:5]:
+            print(f"- {reason}: {count}")
+    if report_path:
+        print(f"Saved report: {report_path}")
+
+
+def _print_market_regime_exposure_research_summary(
+    payload: dict[str, Any], report_path: str | None
+) -> None:
+    summary = payload["summary"]
+    print("Market regime exposure research completed.")
+    print(f"Window: {summary['start']} -> {summary['end']}")
+    print(
+        f"Scenarios: {', '.join(summary['scenarios'])} | "
+        f"Overlay modes: {', '.join(summary['overlay_modes'])}"
+    )
+    print(
+        f"Comparisons: {summary['comparison_count']} | "
+        f"positive return {summary['positive_return_comparisons']} | "
+        f"drawdown improved {summary['drawdown_improved_comparisons']} | "
+        f"not cash-only {summary['not_cash_only_comparisons']}"
+    )
+    best = summary.get("best_by_return")
+    if best:
+        delta = best["delta"]
+        print(
+            "Best return delta: "
+            f"{best['scenario_id']} / {best['overlay_mode']} "
+            f"{float(delta['return_pct']):+.4f} pct pts"
+        )
+    if report_path:
+        print(f"Saved report: {report_path}")
+
+
+def _add_market_regime_exposure_sweep_arguments(
+    subparser: argparse.ArgumentParser,
+) -> None:
+    subparser.add_argument(
+        "--window-set",
+        action="append",
+        required=True,
+        choices=sorted(MARKET_REGIME_EXPOSURE_WINDOW_SETS),
+        help="Window set to run; repeat to include multiple sets",
+    )
+    subparser.add_argument(
+        "--config",
+        help="Optional path to the base config.yaml to use",
+    )
+    subparser.add_argument(
+        "--pair",
+        action="append",
+        help="Limit to one pair; repeat to include multiple pairs",
+    )
+    subparser.add_argument(
+        "--scenario",
+        action="append",
+        choices=sorted(DEFAULT_EXPOSURE_SCENARIOS),
+        default=None,
+        help="Controlled exposure scenario to run; repeat to include multiple",
+    )
+    subparser.add_argument(
+        "--overlay-mode",
+        action="append",
+        choices=sorted(DEFAULT_EXPOSURE_OVERLAY_MODES),
+        default=None,
+        help="Overlay mode to compare against each baseline scenario",
+    )
+    subparser.add_argument(
+        "--allocation-pct",
+        action="append",
+        type=float,
+        default=None,
+        help="Total synthetic allocation percentage; repeat to include multiple",
+    )
+    subparser.add_argument(
+        "--save-dir",
+        required=True,
+        help="Directory for per-window reports plus aggregate.json",
+    )
+    subparser.add_argument(
+        "--timeframe",
+        default="4h",
+        help="OHLC timeframe for market-regime and target features",
+    )
+    subparser.add_argument(
+        "--benchmark-pair",
+        default="BTC/USD",
+        help="Benchmark pair used for market-state decisions",
+    )
+    subparser.add_argument(
+        "--momentum-lookback-bars",
+        type=int,
+        default=63,
+        help="Benchmark momentum lookback bars",
+    )
+    subparser.add_argument(
+        "--basket-momentum-lookback-bars",
+        type=int,
+        default=63,
+        help="Starter-basket momentum lookback bars",
+    )
+    subparser.add_argument(
+        "--volatility-lookback-bars",
+        type=int,
+        default=63,
+        help="Benchmark realized-volatility lookback bars",
+    )
+    subparser.add_argument(
+        "--drawdown-lookback-bars",
+        type=int,
+        default=63,
+        help="Benchmark drawdown lookback bars",
+    )
+    subparser.add_argument(
+        "--neutral-allocation-multiplier",
+        type=float,
+        default=0.5,
+        help="Exposure multiplier for neutral states",
+    )
+    subparser.add_argument(
+        "--risk-off-allocation-multiplier",
+        type=float,
+        default=0.0,
+        help="Exposure multiplier for risk-off states",
+    )
+    subparser.add_argument(
+        "--neutral-benchmark-momentum-bps",
+        type=float,
+        default=150.0,
+        help="Benchmark momentum below this value marks neutral",
+    )
+    subparser.add_argument(
+        "--neutral-basket-momentum-bps",
+        type=float,
+        default=100.0,
+        help="Basket momentum below this value marks neutral",
+    )
+    subparser.add_argument(
+        "--risk-off-benchmark-momentum-bps",
+        type=float,
+        default=0.0,
+        help="Benchmark momentum below this value can mark risk-off",
+    )
+    subparser.add_argument(
+        "--risk-off-basket-momentum-bps",
+        type=float,
+        default=0.0,
+        help="Basket momentum below this value can mark risk-off",
+    )
+    subparser.add_argument(
+        "--neutral-benchmark-drawdown-pct",
+        type=float,
+        default=4.0,
+        help="Benchmark drawdown percentage that marks neutral",
+    )
+    subparser.add_argument(
+        "--risk-off-benchmark-drawdown-pct",
+        type=float,
+        default=8.0,
+        help="Benchmark drawdown percentage that marks risk-off",
+    )
+    subparser.add_argument(
+        "--neutral-volatility-pct",
+        type=float,
+        default=2.5,
+        help="Benchmark realized volatility percentage that marks neutral",
+    )
+    subparser.add_argument(
+        "--risk-off-volatility-pct",
+        type=float,
+        default=4.0,
+        help="Benchmark realized volatility percentage that marks risk-off",
+    )
+    subparser.add_argument(
+        "--rebalance-interval-bars",
+        type=int,
+        default=6,
+        help="Rebalance cadence in bars for controlled exposure scenarios",
+    )
+    subparser.add_argument(
+        "--starting-cash-usd",
+        type=float,
+        default=10_000.0,
+        help="Synthetic starting USD wallet balance for exposure scenarios",
+    )
+    subparser.add_argument(
+        "--fee-bps",
+        type=float,
+        default=25.0,
+        help="Flat taker fee in basis points applied to simulated scenario trades",
+    )
+    subparser.add_argument(
+        "--target-lookback-bars",
+        type=int,
+        default=63,
+        help="Bars used by dynamic target scenarios such as trend_proxy",
+    )
+    subparser.add_argument(
+        "--min-momentum-bps",
+        type=float,
+        default=150.0,
+        help="Minimum momentum required for trend_proxy eligibility",
+    )
+    subparser.add_argument(
+        "--max-target-pairs",
+        type=int,
+        default=4,
+        help="Maximum number of trend_proxy pairs to target",
+    )
+    subparser.add_argument(
+        "--strict-data",
+        action="store_true",
+        help="Fail if any requested pair/timeframe is missing or partially covered",
+    )
+    subparser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print the sweep aggregate as JSON",
+    )
+
+
+def _print_market_regime_exposure_sweep_summary(payload: dict[str, Any]) -> None:
+    summary = payload["summary"]
+    print("Market regime exposure sweep completed.")
+    print(
+        f"Window sets: {', '.join(summary['window_sets'])} | "
+        f"Reports: {summary['report_count']} | "
+        f"Aggregate groups: {len(summary['groups'])}"
+    )
+    for group in summary["groups"]:
+        print(
+            f"- {group['window_set']} {group['scenario_id']} "
+            f"{group['overlay_mode']} alloc {float(group['allocation_pct']):g}%: "
+            f"avg return {float(group['avg_delta_return_pct']):+.4f}, "
+            f"positive {group['positive_return_windows']}/{group['window_count']}, "
+            f"drawdown {group['drawdown_improved_windows']}/{group['window_count']}, "
+            f"passed={group['promotion_gate']['passed']}"
+        )
+    print(f"Saved aggregate: {payload['summary']['aggregate_path']}")
+
+
+def _print_market_regime_overlay_backtest_summary(
+    payload: dict[str, Any], report_path: str | None
+) -> None:
+    summary = payload["summary"]
+    baseline = summary["baseline"]
+    overlay = summary["overlay"]
+    delta = summary["delta"]
+    interventions = summary["overlay_interventions"]
+    print("Market regime overlay backtest completed.")
+    print(f"Window: {summary['start']} -> {summary['end']}")
+    print(
+        "Return: "
+        f"baseline {float(baseline['return_pct']):+.2f}% -> "
+        f"overlay {float(overlay['return_pct']):+.2f}% "
+        f"({float(delta['return_pct']):+.2f} pct pts)"
+    )
+    print(
+        "Max drawdown: "
+        f"baseline {float(baseline['max_drawdown_pct']):.2f}% -> "
+        f"overlay {float(overlay['max_drawdown_pct']):.2f}% "
+        f"({float(delta['max_drawdown_pct']):+.2f} pct pts)"
+    )
+    print(
+        f"Overlay interventions: {interventions['overlay_interventions']} "
+        f"({interventions['overlay_blocked_actions']} blocked, "
+        f"{interventions['overlay_clamped_actions']} clamped)"
+    )
+    if interventions.get("state_counts"):
+        states = ", ".join(
+            f"{state} {count}" for state, count in interventions["state_counts"].items()
+        )
+        print(f"Regime cycles: {states}")
+    if interventions.get("reason_counts"):
+        print("Top overlay reasons:")
+        for reason, count in list(interventions["reason_counts"].items())[:5]:
+            print(f"- {reason}: {count}")
     if report_path:
         print(f"Saved report: {report_path}")
 
@@ -999,6 +1618,407 @@ def _rs_rotation_v2_research_command(args: argparse.Namespace) -> int:
     else:
         _print_rs_rotation_v2_research_summary(payload, saved_report_path)
     return 0
+
+
+def _market_regime_research_command(args: argparse.Namespace) -> int:
+    """Label cached replay cycles with market regime overlay states."""
+
+    try:
+        start = _parse_datetime_arg(args.start)
+        end = _parse_datetime_arg(args.end)
+    except ValueError as exc:
+        return _print_error(f"Invalid market regime datetime: {exc}")
+
+    try:
+        config = _load_backtest_config(args)
+        params = _market_regime_params_from_args(args)
+        result = run_market_regime_research(
+            config,
+            start=start,
+            end=end,
+            pairs=args.pair,
+            params=params,
+            strict_data=bool(args.strict_data),
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _print_error(f"Market regime research failed: {exc}")
+
+    payload = result.to_report_dict()
+    payload["summary"]["config_path"] = (
+        str(Path(args.config).expanduser().resolve()) if args.config else None
+    )
+    payload["provenance"] = {
+        "app_version": APP_VERSION,
+        "config_path": (
+            str(Path(args.config).expanduser().resolve()) if args.config else None
+        ),
+        "generated_by": "krakked market-regime-research",
+    }
+
+    saved_report_path: str | None = None
+    if args.save_report:
+        try:
+            saved_report_path = _write_backtest_report(payload, args.save_report)
+        except Exception as exc:  # noqa: BLE001
+            return _print_error(f"Market regime report write failed: {exc}")
+
+    if args.json:
+        print(json.dumps(payload, indent=2))
+    else:
+        _print_market_regime_research_summary(payload, saved_report_path)
+    return 0
+
+
+def _market_regime_overlay_backtest_command(args: argparse.Namespace) -> int:
+    """Compare normal replay against market-regime overlay replay."""
+
+    try:
+        start = _parse_datetime_arg(args.start)
+        end = _parse_datetime_arg(args.end)
+    except ValueError as exc:
+        return _print_error(f"Invalid overlay backtest datetime: {exc}")
+
+    try:
+        config = _load_backtest_config(args)
+        params = _market_regime_params_from_args(args)
+        result = run_market_regime_overlay_backtest(
+            config,
+            start=start,
+            end=end,
+            pairs=args.pair,
+            params=params,
+            timeframes=args.replay_timeframe,
+            starting_cash_usd=float(args.starting_cash_usd),
+            fee_bps=float(args.fee_bps),
+            strict_data=bool(args.strict_data),
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _print_error(f"Market regime overlay backtest failed: {exc}")
+
+    payload = result.to_report_dict()
+    payload["summary"]["config_path"] = (
+        str(Path(args.config).expanduser().resolve()) if args.config else None
+    )
+    payload["provenance"] = {
+        "app_version": APP_VERSION,
+        "config_path": (
+            str(Path(args.config).expanduser().resolve()) if args.config else None
+        ),
+        "generated_by": "krakked market-regime-overlay-backtest",
+    }
+
+    saved_report_path: str | None = None
+    if args.save_report:
+        try:
+            saved_report_path = _write_backtest_report(payload, args.save_report)
+        except Exception as exc:  # noqa: BLE001
+            return _print_error(f"Market regime overlay report write failed: {exc}")
+
+    if args.json:
+        print(json.dumps(payload, indent=2))
+    else:
+        _print_market_regime_overlay_backtest_summary(payload, saved_report_path)
+    return 0
+
+
+def _market_regime_exposure_payload(
+    result: Any,
+    args: argparse.Namespace,
+    *,
+    generated_by: str,
+) -> dict[str, Any]:
+    payload = result.to_report_dict()
+    payload["summary"]["config_path"] = (
+        str(Path(args.config).expanduser().resolve()) if args.config else None
+    )
+    payload["provenance"] = {
+        "app_version": APP_VERSION,
+        "config_path": (
+            str(Path(args.config).expanduser().resolve()) if args.config else None
+        ),
+        "generated_by": generated_by,
+    }
+    return payload
+
+
+def _market_regime_exposure_research_command(args: argparse.Namespace) -> int:
+    """Run controlled exposure scenarios through market-regime overlay modes."""
+
+    try:
+        start = _parse_datetime_arg(args.start)
+        end = _parse_datetime_arg(args.end)
+    except ValueError as exc:
+        return _print_error(f"Invalid exposure research datetime: {exc}")
+
+    try:
+        config = _load_backtest_config(args)
+        regime_params = _market_regime_params_from_args(args)
+        scenario_params = _market_regime_exposure_scenario_params_from_args(args)
+        result = run_market_regime_exposure_research(
+            config,
+            start=start,
+            end=end,
+            pairs=args.pair,
+            regime_params=regime_params,
+            scenario_params=scenario_params,
+            scenarios=args.scenario,
+            overlay_modes=args.overlay_mode,
+            strict_data=bool(args.strict_data),
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _print_error(f"Market regime exposure research failed: {exc}")
+
+    payload = _market_regime_exposure_payload(
+        result,
+        args,
+        generated_by="krakked market-regime-exposure-research",
+    )
+
+    saved_report_path: str | None = None
+    if args.save_report:
+        try:
+            saved_report_path = _write_backtest_report(payload, args.save_report)
+        except Exception as exc:  # noqa: BLE001
+            return _print_error(f"Market regime exposure report write failed: {exc}")
+
+    if args.json:
+        print(json.dumps(payload, indent=2))
+    else:
+        _print_market_regime_exposure_research_summary(payload, saved_report_path)
+    return 0
+
+
+def _market_regime_exposure_sweep_command(args: argparse.Namespace) -> int:
+    """Run market-regime exposure research across configured window sets."""
+
+    try:
+        config = _load_backtest_config(args)
+        regime_params = _market_regime_params_from_args(args)
+        allocations = [float(value) for value in (args.allocation_pct or [20.0])]
+        save_dir = Path(args.save_dir).expanduser().resolve()
+        save_dir.mkdir(parents=True, exist_ok=True)
+    except Exception as exc:  # noqa: BLE001
+        return _print_error(f"Market regime exposure sweep setup failed: {exc}")
+
+    reports: list[dict[str, Any]] = []
+    report_paths: list[str] = []
+    try:
+        for window_set in _unique_strings(args.window_set):
+            for allocation_pct in allocations:
+                scenario_params = MarketRegimeExposureScenarioParams(
+                    allocation_pct=allocation_pct,
+                    rebalance_interval_bars=int(args.rebalance_interval_bars),
+                    starting_cash_usd=float(args.starting_cash_usd),
+                    fee_bps=float(args.fee_bps),
+                    target_lookback_bars=int(args.target_lookback_bars),
+                    min_momentum_bps=float(args.min_momentum_bps),
+                    max_target_pairs=int(args.max_target_pairs),
+                )
+                for (
+                    window_id,
+                    start_text,
+                    end_text,
+                ) in MARKET_REGIME_EXPOSURE_WINDOW_SETS[window_set]:
+                    result = run_market_regime_exposure_research(
+                        config,
+                        start=_parse_datetime_arg(start_text),
+                        end=_parse_datetime_arg(end_text),
+                        pairs=args.pair,
+                        regime_params=regime_params,
+                        scenario_params=scenario_params,
+                        scenarios=args.scenario or ["trend_proxy"],
+                        overlay_modes=args.overlay_mode or ["target_scale"],
+                        strict_data=bool(args.strict_data),
+                    )
+                    payload = _market_regime_exposure_payload(
+                        result,
+                        args,
+                        generated_by="krakked market-regime-exposure-sweep",
+                    )
+                    payload["summary"]["window_set"] = window_set
+                    payload["summary"]["window_id"] = window_id
+                    payload["summary"]["allocation_pct"] = allocation_pct
+                    report_path = (
+                        save_dir
+                        / window_set
+                        / f"allocation-{allocation_pct:g}"
+                        / f"{window_id}.json"
+                    )
+                    saved = _write_backtest_report(payload, str(report_path))
+                    reports.append(payload)
+                    report_paths.append(saved)
+    except Exception as exc:  # noqa: BLE001
+        return _print_error(f"Market regime exposure sweep failed: {exc}")
+
+    aggregate = _market_regime_exposure_sweep_aggregate(
+        reports,
+        report_paths=report_paths,
+        save_dir=save_dir,
+    )
+    aggregate_path = save_dir / "aggregate.json"
+    try:
+        saved_aggregate_path = _write_backtest_report(aggregate, str(aggregate_path))
+    except Exception as exc:  # noqa: BLE001
+        return _print_error(f"Market regime exposure aggregate write failed: {exc}")
+    aggregate["summary"]["aggregate_path"] = saved_aggregate_path
+    _write_backtest_report(aggregate, str(aggregate_path))
+
+    if args.json:
+        print(json.dumps(aggregate, indent=2))
+    else:
+        _print_market_regime_exposure_sweep_summary(aggregate)
+    return 0
+
+
+def _unique_strings(values: list[str]) -> list[str]:
+    unique: list[str] = []
+    for value in values:
+        if value not in unique:
+            unique.append(value)
+    return unique
+
+
+def _market_regime_exposure_sweep_aggregate(
+    reports: list[dict[str, Any]],
+    *,
+    report_paths: list[str],
+    save_dir: Path,
+) -> dict[str, Any]:
+    rows: list[dict[str, Any]] = []
+    for report, report_path in zip(reports, report_paths):
+        summary = report["summary"]
+        preflight = report.get("preflight") or {}
+        strict_data_ready = not (
+            preflight.get("missing_series") or preflight.get("partial_series")
+        )
+        for comparison in report.get("comparisons", []):
+            baseline = comparison["baseline"]
+            overlay = comparison["overlay"]
+            interventions = comparison["overlay_interventions"]
+            baseline_exposure = float(baseline.get("avg_exposure_pct", 0.0) or 0.0)
+            overlay_exposure = float(overlay.get("avg_exposure_pct", 0.0) or 0.0)
+            rows.append(
+                {
+                    "window_set": summary["window_set"],
+                    "window_id": summary["window_id"],
+                    "allocation_pct": float(summary["allocation_pct"]),
+                    "scenario_id": comparison["scenario_id"],
+                    "overlay_mode": comparison["overlay_mode"],
+                    "report_path": report_path,
+                    "delta_return_pct": float(comparison["delta"]["return_pct"]),
+                    "delta_max_drawdown_pct": float(
+                        comparison["delta"]["max_drawdown_pct"]
+                    ),
+                    "baseline_avg_exposure_pct": baseline_exposure,
+                    "overlay_avg_exposure_pct": overlay_exposure,
+                    "overlay_exposure_ratio": (
+                        overlay_exposure / baseline_exposure
+                        if baseline_exposure > 0.0
+                        else 0.0
+                    ),
+                    "overlay_active_cycle_pct": float(
+                        overlay.get("active_cycle_pct", 0.0) or 0.0
+                    ),
+                    "overlay_interventions": int(
+                        interventions.get("overlay_interventions", 0) or 0
+                    ),
+                    "overlay_target_reductions": int(
+                        interventions.get("overlay_target_reductions", 0) or 0
+                    ),
+                    "reasons_present": bool(summary.get("reason_counts"))
+                    or int(interventions.get("overlay_target_reductions", 0) or 0) == 0,
+                    "strict_data_ready": strict_data_ready,
+                }
+            )
+
+    groups: list[dict[str, Any]] = []
+    group_keys = sorted(
+        {
+            (
+                row["window_set"],
+                row["allocation_pct"],
+                row["scenario_id"],
+                row["overlay_mode"],
+            )
+            for row in rows
+        }
+    )
+    for window_set, allocation_pct, scenario_id, overlay_mode in group_keys:
+        items = [
+            row
+            for row in rows
+            if row["window_set"] == window_set
+            and row["allocation_pct"] == allocation_pct
+            and row["scenario_id"] == scenario_id
+            and row["overlay_mode"] == overlay_mode
+        ]
+        window_count = len(items)
+        required_windows = 3 if window_count <= 5 else 4
+        positive_windows = sum(1 for row in items if row["delta_return_pct"] > 0.0)
+        drawdown_windows = sum(
+            1 for row in items if row["delta_max_drawdown_pct"] < 0.0
+        )
+        avg_return_delta = (
+            sum(row["delta_return_pct"] for row in items) / window_count
+            if window_count
+            else 0.0
+        )
+        min_active = (
+            min(row["overlay_active_cycle_pct"] for row in items) if items else 0.0
+        )
+        min_exposure_ratio = (
+            min(row["overlay_exposure_ratio"] for row in items) if items else 0.0
+        )
+        gate = {
+            "average_return_delta_positive": avg_return_delta > 0.0,
+            "positive_return_windows": positive_windows >= required_windows,
+            "drawdown_improved_windows": drawdown_windows >= required_windows,
+            "overlay_active_cycles": min_active >= 50.0,
+            "overlay_exposure_ratio": min_exposure_ratio >= 0.35,
+            "strict_data_ready": all(row["strict_data_ready"] for row in items),
+            "reasons_present": all(row["reasons_present"] for row in items),
+        }
+        gate["passed"] = all(gate.values())
+        groups.append(
+            {
+                "window_set": window_set,
+                "allocation_pct": allocation_pct,
+                "scenario_id": scenario_id,
+                "overlay_mode": overlay_mode,
+                "window_count": window_count,
+                "required_positive_windows": required_windows,
+                "avg_delta_return_pct": avg_return_delta,
+                "positive_return_windows": positive_windows,
+                "avg_delta_max_drawdown_pct": (
+                    sum(row["delta_max_drawdown_pct"] for row in items) / window_count
+                    if window_count
+                    else 0.0
+                ),
+                "drawdown_improved_windows": drawdown_windows,
+                "min_overlay_active_cycle_pct": min_active,
+                "min_overlay_exposure_ratio": min_exposure_ratio,
+                "total_overlay_interventions": sum(
+                    row["overlay_interventions"] for row in items
+                ),
+                "promotion_gate": gate,
+            }
+        )
+
+    return {
+        "report_version": 1,
+        "report_type": "market_regime_exposure_sweep",
+        "generated_at": datetime.now(UTC).isoformat(),
+        "summary": {
+            "research_only": True,
+            "runtime_wiring_approved": False,
+            "save_dir": str(save_dir),
+            "aggregate_path": str(save_dir / "aggregate.json"),
+            "window_sets": sorted({row["window_set"] for row in rows}),
+            "report_count": len(reports),
+            "rows": rows,
+            "groups": groups,
+        },
+    }
 
 
 def _ml_walk_forward_command(args: argparse.Namespace) -> int:
@@ -1913,6 +2933,46 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Print the v2 research report as JSON",
     )
     rs_rotation_v2_parser.set_defaults(func=_rs_rotation_v2_research_command)
+
+    market_regime_parser = subparsers.add_parser(
+        "market-regime-research",
+        help="Label cached OHLC windows with research-only market regime states",
+    )
+    _add_market_regime_research_arguments(market_regime_parser)
+    market_regime_parser.set_defaults(func=_market_regime_research_command)
+
+    market_regime_overlay_parser = subparsers.add_parser(
+        "market-regime-overlay-backtest",
+        help="Compare normal replay against a research-only market regime overlay",
+    )
+    _add_market_regime_research_arguments(
+        market_regime_overlay_parser,
+        include_overlay_backtest_args=True,
+    )
+    market_regime_overlay_parser.set_defaults(
+        func=_market_regime_overlay_backtest_command
+    )
+
+    market_regime_exposure_parser = subparsers.add_parser(
+        "market-regime-exposure-research",
+        help="Run controlled exposure scenarios through market-regime overlays",
+    )
+    _add_market_regime_research_arguments(
+        market_regime_exposure_parser,
+        include_exposure_research_args=True,
+    )
+    market_regime_exposure_parser.set_defaults(
+        func=_market_regime_exposure_research_command
+    )
+
+    market_regime_exposure_sweep_parser = subparsers.add_parser(
+        "market-regime-exposure-sweep",
+        help="Run market-regime exposure research across configured window sets",
+    )
+    _add_market_regime_exposure_sweep_arguments(market_regime_exposure_sweep_parser)
+    market_regime_exposure_sweep_parser.set_defaults(
+        func=_market_regime_exposure_sweep_command
+    )
 
     ml_walk_forward_parser = subparsers.add_parser(
         "ml-walk-forward",

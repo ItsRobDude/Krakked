@@ -732,6 +732,7 @@ def test_backtest_subcommand_save_report_writes_json(
             "2026-04-02T00:00:00Z",
             "--save-report",
             str(report_path),
+            "--strict-data",
             "--json",
         ]
     )
@@ -1093,6 +1094,488 @@ def test_rs_rotation_v2_research_subcommand_returns_nonzero_on_failure(
     assert exit_code == 1
     output = capsys.readouterr().out
     assert "RS rotation v2 research failed" in output
+    assert "missing: BTC/USD@4h" in output
+
+
+def test_market_regime_research_subcommand_writes_json_report(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: Any
+) -> None:
+    captured: dict[str, Any] = {}
+    start = datetime(2026, 5, 1, tzinfo=UTC)
+    end = datetime(2026, 5, 2, tzinfo=UTC)
+
+    class _FakeRegimeResearchResult:
+        def to_report_dict(self) -> dict[str, Any]:
+            return {
+                "report_version": 1,
+                "report_type": "market_regime_research",
+                "generated_at": start.isoformat(),
+                "summary": {
+                    "start": start.isoformat(),
+                    "end": end.isoformat(),
+                    "pairs": ["BTC/USD", "ETH/USD"],
+                    "benchmark_pair": "BTC/USD",
+                    "timeframe": "4h",
+                    "total_cycles": 2,
+                    "risk_on_cycles": 1,
+                    "neutral_cycles": 1,
+                    "risk_off_cycles": 0,
+                    "reason_counts": {"btc_momentum_soft": 1},
+                },
+                "preflight": {"status": "ready"},
+                "cycles": [],
+            }
+
+    def _fake_run_market_regime_research(
+        config: Any,
+        *,
+        start: datetime,
+        end: datetime,
+        pairs: list[str] | None,
+        params: Any,
+        strict_data: bool,
+    ) -> _FakeRegimeResearchResult:
+        captured["config"] = config
+        captured["start"] = start
+        captured["end"] = end
+        captured["pairs"] = pairs
+        captured["params"] = params
+        captured["strict_data"] = strict_data
+        return _FakeRegimeResearchResult()
+
+    config = object()
+    monkeypatch.setattr(cli, "_load_backtest_config", lambda args: config)
+    monkeypatch.setattr(
+        cli, "run_market_regime_research", _fake_run_market_regime_research
+    )
+
+    report_path = tmp_path / "market-regime.json"
+    exit_code = cli.main(
+        [
+            "market-regime-research",
+            "--start",
+            "2026-05-01T00:00:00Z",
+            "--end",
+            "2026-05-02T00:00:00Z",
+            "--pair",
+            "BTC/USD",
+            "--pair",
+            "ETH/USD",
+            "--timeframe",
+            "4h",
+            "--save-report",
+            str(report_path),
+            "--strict-data",
+            "--json",
+        ]
+    )
+
+    assert exit_code == 0
+    assert captured["config"] is config
+    assert captured["pairs"] == ["BTC/USD", "ETH/USD"]
+    assert captured["params"].timeframe == "4h"
+    assert captured["params"].benchmark_pair == "BTC/USD"
+    assert captured["strict_data"] is True
+    payload = json.loads(capsys.readouterr().out)
+    saved = json.loads(report_path.read_text(encoding="utf-8"))
+    assert payload["report_type"] == "market_regime_research"
+    assert saved["provenance"]["generated_by"] == "krakked market-regime-research"
+
+
+def test_market_regime_overlay_backtest_subcommand_writes_json_report(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: Any
+) -> None:
+    captured: dict[str, Any] = {}
+    start = datetime(2026, 5, 1, tzinfo=UTC)
+    end = datetime(2026, 5, 2, tzinfo=UTC)
+
+    class _FakeOverlayBacktestResult:
+        def to_report_dict(self) -> dict[str, Any]:
+            return {
+                "report_version": 1,
+                "report_type": "market_regime_overlay_backtest",
+                "generated_at": start.isoformat(),
+                "summary": {
+                    "start": start.isoformat(),
+                    "end": end.isoformat(),
+                    "baseline": {
+                        "return_pct": -0.2,
+                        "max_drawdown_pct": 1.0,
+                    },
+                    "overlay": {
+                        "return_pct": -0.1,
+                        "max_drawdown_pct": 0.5,
+                    },
+                    "delta": {
+                        "return_pct": 0.1,
+                        "max_drawdown_pct": -0.5,
+                    },
+                    "overlay_interventions": {
+                        "overlay_interventions": 2,
+                        "overlay_blocked_actions": 1,
+                        "overlay_clamped_actions": 1,
+                        "state_counts": {"risk_off": 1},
+                        "reason_counts": {"btc_momentum_negative": 1},
+                    },
+                },
+                "baseline": {"summary": {"return_pct": -0.2}},
+                "overlay": {"summary": {"return_pct": -0.1}},
+            }
+
+    def _fake_run_market_regime_overlay_backtest(
+        config: Any,
+        *,
+        start: datetime,
+        end: datetime,
+        pairs: list[str] | None,
+        params: Any,
+        timeframes: list[str] | None,
+        starting_cash_usd: float,
+        fee_bps: float,
+        strict_data: bool,
+    ) -> _FakeOverlayBacktestResult:
+        captured["config"] = config
+        captured["start"] = start
+        captured["end"] = end
+        captured["pairs"] = pairs
+        captured["params"] = params
+        captured["timeframes"] = timeframes
+        captured["starting_cash_usd"] = starting_cash_usd
+        captured["fee_bps"] = fee_bps
+        captured["strict_data"] = strict_data
+        return _FakeOverlayBacktestResult()
+
+    config = object()
+    monkeypatch.setattr(cli, "_load_backtest_config", lambda args: config)
+    monkeypatch.setattr(
+        cli,
+        "run_market_regime_overlay_backtest",
+        _fake_run_market_regime_overlay_backtest,
+    )
+
+    report_path = tmp_path / "market-regime-overlay.json"
+    exit_code = cli.main(
+        [
+            "market-regime-overlay-backtest",
+            "--start",
+            "2026-05-01T00:00:00Z",
+            "--end",
+            "2026-05-02T00:00:00Z",
+            "--pair",
+            "BTC/USD",
+            "--replay-timeframe",
+            "1h",
+            "--replay-timeframe",
+            "4h",
+            "--starting-cash-usd",
+            "12000",
+            "--fee-bps",
+            "10",
+            "--save-report",
+            str(report_path),
+            "--json",
+        ]
+    )
+
+    assert exit_code == 0
+    assert captured["pairs"] == ["BTC/USD"]
+    assert captured["timeframes"] == ["1h", "4h"]
+    assert captured["starting_cash_usd"] == 12_000.0
+    assert captured["fee_bps"] == 10.0
+    payload = json.loads(capsys.readouterr().out)
+    saved = json.loads(report_path.read_text(encoding="utf-8"))
+    assert payload["report_type"] == "market_regime_overlay_backtest"
+    assert saved["provenance"]["generated_by"] == (
+        "krakked market-regime-overlay-backtest"
+    )
+
+
+def test_market_regime_exposure_research_subcommand_writes_json_report(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: Any
+) -> None:
+    captured: dict[str, Any] = {}
+    start = datetime(2026, 5, 1, tzinfo=UTC)
+    end = datetime(2026, 5, 2, tzinfo=UTC)
+
+    class _FakeExposureResearchResult:
+        def to_report_dict(self) -> dict[str, Any]:
+            return {
+                "report_version": 1,
+                "report_type": "market_regime_exposure_research",
+                "generated_at": start.isoformat(),
+                "summary": {
+                    "start": start.isoformat(),
+                    "end": end.isoformat(),
+                    "scenarios": ["trend_proxy"],
+                    "overlay_modes": ["target_scale"],
+                    "comparison_count": 1,
+                    "positive_return_comparisons": 1,
+                    "drawdown_improved_comparisons": 1,
+                    "not_cash_only_comparisons": 1,
+                    "best_by_return": {
+                        "scenario_id": "trend_proxy",
+                        "overlay_mode": "target_scale",
+                        "delta": {"return_pct": 0.1},
+                    },
+                },
+                "preflight": {"status": "ready"},
+                "runs": [],
+                "comparisons": [],
+            }
+
+    def _fake_run_market_regime_exposure_research(
+        config: Any,
+        *,
+        start: datetime,
+        end: datetime,
+        pairs: list[str] | None,
+        regime_params: Any,
+        scenario_params: Any,
+        scenarios: list[str] | None,
+        overlay_modes: list[str] | None,
+        strict_data: bool,
+    ) -> _FakeExposureResearchResult:
+        captured["config"] = config
+        captured["start"] = start
+        captured["end"] = end
+        captured["pairs"] = pairs
+        captured["regime_params"] = regime_params
+        captured["scenario_params"] = scenario_params
+        captured["scenarios"] = scenarios
+        captured["overlay_modes"] = overlay_modes
+        captured["strict_data"] = strict_data
+        return _FakeExposureResearchResult()
+
+    config = object()
+    monkeypatch.setattr(cli, "_load_backtest_config", lambda args: config)
+    monkeypatch.setattr(
+        cli,
+        "run_market_regime_exposure_research",
+        _fake_run_market_regime_exposure_research,
+    )
+
+    report_path = tmp_path / "market-regime-exposure.json"
+    exit_code = cli.main(
+        [
+            "market-regime-exposure-research",
+            "--start",
+            "2026-05-01T00:00:00Z",
+            "--end",
+            "2026-05-02T00:00:00Z",
+            "--pair",
+            "BTC/USD",
+            "--scenario",
+            "trend_proxy",
+            "--overlay-mode",
+            "target_scale",
+            "--allocation-pct",
+            "50",
+            "--rebalance-interval-bars",
+            "3",
+            "--fee-bps",
+            "10",
+            "--target-lookback-bars",
+            "63",
+            "--min-momentum-bps",
+            "150",
+            "--max-target-pairs",
+            "4",
+            "--save-report",
+            str(report_path),
+            "--strict-data",
+            "--json",
+        ]
+    )
+
+    assert exit_code == 0
+    assert captured["pairs"] == ["BTC/USD"]
+    assert captured["scenarios"] == ["trend_proxy"]
+    assert captured["overlay_modes"] == ["target_scale"]
+    assert captured["scenario_params"].allocation_pct == 50.0
+    assert captured["scenario_params"].rebalance_interval_bars == 3
+    assert captured["scenario_params"].fee_bps == 10.0
+    assert captured["scenario_params"].target_lookback_bars == 63
+    assert captured["scenario_params"].min_momentum_bps == 150.0
+    assert captured["scenario_params"].max_target_pairs == 4
+    assert captured["strict_data"] is True
+    payload = json.loads(capsys.readouterr().out)
+    saved = json.loads(report_path.read_text(encoding="utf-8"))
+    assert payload["report_type"] == "market_regime_exposure_research"
+    assert saved["provenance"]["generated_by"] == (
+        "krakked market-regime-exposure-research"
+    )
+
+
+def test_market_regime_exposure_sweep_writes_reports_and_aggregate(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: Any
+) -> None:
+    captured: list[dict[str, Any]] = []
+
+    class _FakeExposureSweepResult:
+        def __init__(
+            self,
+            *,
+            start: datetime,
+            end: datetime,
+            allocation_pct: float,
+        ) -> None:
+            self.start = start
+            self.end = end
+            self.allocation_pct = allocation_pct
+
+        def to_report_dict(self) -> dict[str, Any]:
+            return {
+                "report_version": 1,
+                "report_type": "market_regime_exposure_research",
+                "generated_at": self.start.isoformat(),
+                "summary": {
+                    "start": self.start.isoformat(),
+                    "end": self.end.isoformat(),
+                    "reason_counts": {"risk_on_conditions_met": 1},
+                    "scenario_params": {"allocation_pct": self.allocation_pct},
+                },
+                "preflight": {
+                    "status": "ready",
+                    "missing_series": [],
+                    "partial_series": [],
+                },
+                "runs": [],
+                "comparisons": [
+                    {
+                        "scenario_id": "trend_proxy",
+                        "overlay_mode": "target_scale",
+                        "baseline": {
+                            "return_pct": 1.0,
+                            "max_drawdown_pct": 2.0,
+                            "active_cycle_pct": 100.0,
+                            "avg_exposure_pct": 20.0,
+                        },
+                        "overlay": {
+                            "return_pct": 1.5,
+                            "max_drawdown_pct": 1.0,
+                            "active_cycle_pct": 75.0,
+                            "avg_exposure_pct": 10.0,
+                        },
+                        "delta": {
+                            "return_pct": 0.5,
+                            "max_drawdown_pct": -1.0,
+                        },
+                        "overlay_interventions": {
+                            "overlay_interventions": 2,
+                            "overlay_target_reductions": 2,
+                        },
+                    }
+                ],
+            }
+
+    def _fake_run_market_regime_exposure_research(
+        config: Any,
+        *,
+        start: datetime,
+        end: datetime,
+        pairs: list[str] | None,
+        regime_params: Any,
+        scenario_params: Any,
+        scenarios: list[str] | None,
+        overlay_modes: list[str] | None,
+        strict_data: bool,
+    ) -> _FakeExposureSweepResult:
+        captured.append(
+            {
+                "config": config,
+                "start": start,
+                "end": end,
+                "pairs": pairs,
+                "regime_params": regime_params,
+                "scenario_params": scenario_params,
+                "scenarios": scenarios,
+                "overlay_modes": overlay_modes,
+                "strict_data": strict_data,
+            }
+        )
+        return _FakeExposureSweepResult(
+            start=start,
+            end=end,
+            allocation_pct=float(scenario_params.allocation_pct),
+        )
+
+    monkeypatch.setitem(
+        cli.MARKET_REGIME_EXPOSURE_WINDOW_SETS,
+        "tiny",
+        [
+            ("w1", "2026-05-01T00:00:00Z", "2026-05-02T00:00:00Z"),
+            ("w2", "2026-05-02T00:00:00Z", "2026-05-03T00:00:00Z"),
+        ],
+    )
+    monkeypatch.setattr(cli, "_load_backtest_config", lambda args: object())
+    monkeypatch.setattr(
+        cli,
+        "run_market_regime_exposure_research",
+        _fake_run_market_regime_exposure_research,
+    )
+
+    save_dir = tmp_path / "sweep"
+    exit_code = cli.main(
+        [
+            "market-regime-exposure-sweep",
+            "--window-set",
+            "tiny",
+            "--scenario",
+            "trend_proxy",
+            "--overlay-mode",
+            "target_scale",
+            "--allocation-pct",
+            "5",
+            "--allocation-pct",
+            "20",
+            "--save-dir",
+            str(save_dir),
+            "--strict-data",
+            "--json",
+        ]
+    )
+
+    assert exit_code == 0
+    assert len(captured) == 4
+    assert {call["scenario_params"].allocation_pct for call in captured} == {
+        5.0,
+        20.0,
+    }
+    assert all(call["scenarios"] == ["trend_proxy"] for call in captured)
+    assert all(call["overlay_modes"] == ["target_scale"] for call in captured)
+    aggregate = json.loads((save_dir / "aggregate.json").read_text(encoding="utf-8"))
+    output = json.loads(capsys.readouterr().out)
+    assert output["report_type"] == "market_regime_exposure_sweep"
+    assert aggregate["summary"]["report_count"] == 4
+    assert len(aggregate["summary"]["groups"]) == 2
+    assert all(
+        group["promotion_gate"]["overlay_exposure_ratio"]
+        for group in aggregate["summary"]["groups"]
+    )
+
+
+def test_market_regime_research_subcommand_returns_nonzero_on_failure(
+    monkeypatch: pytest.MonkeyPatch, capsys: Any
+) -> None:
+    def _raise(*_: Any, **__: Any) -> None:
+        raise ValueError("missing: BTC/USD@4h")
+
+    monkeypatch.setattr(cli, "_load_backtest_config", lambda args: object())
+    monkeypatch.setattr(cli, "run_market_regime_research", _raise)
+
+    exit_code = cli.main(
+        [
+            "market-regime-research",
+            "--start",
+            "2026-05-01T00:00:00Z",
+            "--end",
+            "2026-05-02T00:00:00Z",
+        ]
+    )
+
+    assert exit_code == 1
+    output = capsys.readouterr().out
+    assert "Market regime research failed" in output
     assert "missing: BTC/USD@4h" in output
 
 

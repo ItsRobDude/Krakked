@@ -1098,9 +1098,7 @@ def _with_strategy_coverage_warnings(
     for warning in strategy_warnings:
         if warning not in warnings:
             warnings.append(warning)
-    strategy_coverage_gaps = _build_strategy_coverage_gaps(
-        strategy_inputs, preflight
-    )
+    strategy_coverage_gaps = _build_strategy_coverage_gaps(strategy_inputs, preflight)
 
     return BacktestPreflight(
         coverage=list(preflight.coverage),
@@ -1172,6 +1170,9 @@ def run_backtest(
     config_source: str = "provided_config",
     resolved_config_path: Optional[str] = None,
     config_arg_supplied: bool = False,
+    plan_transform: Optional[
+        Callable[[ExecutionPlan, BacktestMarketData, datetime], ExecutionPlan]
+    ] = None,
 ) -> BacktestResult:
     """Run the configured strategies across stored OHLC bars for the window."""
 
@@ -1268,6 +1269,8 @@ def run_backtest(
             now = datetime.fromtimestamp(ts, tz=UTC)
             market_data.set_time(now)
             plan = strategy_engine.run_cycle(now=now)
+            if plan_transform is not None:
+                plan = plan_transform(plan, market_data, now)
             plans.append(plan)
 
             execution = execution_service.execute_plan(plan)
@@ -1687,8 +1690,7 @@ def _build_replay_diagnostics(
     if extra_warnings:
         warnings.extend(str(warning) for warning in extra_warnings)
     total_contexts_evaluated = sum(
-        int(entry.get("contexts_evaluated", 0) or 0)
-        for entry in per_strategy.values()
+        int(entry.get("contexts_evaluated", 0) or 0) for entry in per_strategy.values()
     )
     total_intents_emitted = sum(
         int(entry.get("intents_emitted", 0) or 0) for entry in per_strategy.values()
@@ -1718,6 +1720,7 @@ def _build_replay_diagnostics(
 
     if total_actions == 0:
         if all_intents_filtered_by_score:
+
             def _count_label(count: int, singular: str, plural: str) -> str:
                 return f"{count} {singular if count == 1 else plural}"
 
@@ -1785,22 +1788,14 @@ def _build_replay_diagnostics(
                 "reached the score gate."
             )
         elif filtered_low_score_entries:
-            trust_note = (
-                "Weak signal: strategy entries were emitted but all were below the score gate."
-            )
+            trust_note = "Weak signal: strategy entries were emitted but all were below the score gate."
         elif filtered_no_position_exits and not filtered_position_exits:
-            trust_note = (
-                "Weak signal: only no-position exits reached the score gate."
-            )
+            trust_note = "Weak signal: only no-position exits reached the score gate."
         else:
-            trust_note = (
-                "Weak signal: strategy intents were emitted but all were filtered before risk checks."
-            )
+            trust_note = "Weak signal: strategy intents were emitted but all were filtered before risk checks."
     elif total_actions == 0 and strategies_evaluated_without_intents:
         trust_level = "weak_signal"
-        trust_note = (
-            "Weak signal: strategies were evaluated but emitted no intents in this window."
-        )
+        trust_note = "Weak signal: strategies were evaluated but emitted no intents in this window."
     elif total_actions == 0:
         trust_level = "weak_signal"
         trust_note = "Weak signal: no strategy actions were generated in this window."

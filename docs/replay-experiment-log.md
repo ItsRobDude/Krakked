@@ -673,3 +673,223 @@ slice should implement only the cache-only evaluator and comparison report:
 Promotion requires improved or preserved average return after costs, drawdown
 improvement in at least `3 / 5` windows, no weak-signal regression, explicit
 operator-readable reason codes, and no strict-data gaps.
+
+### 2026-05-30 Market Regime Overlay Research Implementation
+
+Implemented the research-only overlay lane:
+
+- `krakked market-regime-research`
+- `krakked market-regime-overlay-backtest`
+
+Both commands remain cache-only and do not change runtime strategy behavior,
+live-trading gates, config defaults, or normal replay semantics.
+
+Initial rolling-window artifacts:
+
+- `C:\Users\Rob\AppData\Local\krakked\krakked\reports\backtests\market-regime-research-20260530.json`
+- `C:\Users\Rob\AppData\Local\krakked\krakked\reports\backtests\market-regime-overlay-backtest-20260530.json`
+
+Initial rolling-window result:
+
+- Window: `2026-05-10T00:00:00+00:00 -> 2026-05-30T00:00:00+00:00`.
+- Strict-data mode: passed.
+- Research classifier cycles: `121` total, `0` risk-on, `48` neutral, `73`
+  risk-off.
+- Top reasons: `btc_momentum_negative`, `basket_momentum_negative`, and
+  warmup `insufficient_data`.
+- Overlay replay comparison: baseline and overlay both stayed `weak_signal`,
+  ending equity stayed `$10,000.00`, fills stayed `0`, and overlay interventions
+  stayed `0`.
+
+Readout:
+
+- The implementation and report path are working.
+- This is not promotion evidence yet. With the current starter defaults,
+  the replay produced no strategy intents, so the overlay had nothing to clamp
+  or block.
+- The next useful task is the five-window overlay comparison from
+  `docs/market-regime-overlay-plan.md`, not runtime wiring.
+
+### 2026-05-30 Market Regime Overlay Five-Window Fixed Defaults
+
+Artifact:
+
+- `C:\Users\Rob\AppData\Local\krakked\krakked\reports\backtests\market-regime-overlay-five-window-20260530\aggregate.json`
+
+Window results:
+
+| Window | Baseline return | Overlay return | Baseline fills | Overlay fills | Overlay interventions | Trust change |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| `20260321-20260410` | `+0.0422%` | `+0.0422%` | `2` | `2` | `0` | `limited -> limited` |
+| `20260410-20260430` | `-0.1130%` | `+0.0000%` | `4` | `0` | `12` | `decision_helpful -> weak_signal` |
+| `20260430-20260520` | `+0.0000%` | `+0.0000%` | `0` | `0` | `0` | `weak_signal -> weak_signal` |
+| `20260505-20260525` | `+0.0000%` | `+0.0000%` | `0` | `0` | `0` | `weak_signal -> weak_signal` |
+| `20260510-20260530` | `+0.0000%` | `+0.0000%` | `0` | `0` | `0` | `weak_signal -> weak_signal` |
+
+Aggregate:
+
+- Average baseline return: `-0.0142%`.
+- Average overlay return: `+0.0084%`.
+- Total baseline fills: `6`.
+- Total overlay fills: `2`.
+- Overlay interventions: `12`, all blocks, all in one window.
+- Drawdown improved or preserved in `5 / 5` windows, but the only material
+  improvement came from eliminating all trades in the losing window.
+
+Decision:
+
+- Do not runtime-wire the fixed-default overlay.
+- Do not call this a promotion pass. It violates the gate that the overlay must
+  not turn a decision-helpful replay into a weak-signal replay.
+- The result is useful but mostly says the current starter default replay is too
+  sparse for overlay evaluation.
+- The next research step should be a controlled exposure scenario, not a broad
+  parameter sweep.
+
+### 2026-05-30 Market Regime Controlled Exposure Scenarios
+
+Implemented:
+
+- `krakked market-regime-exposure-research`
+
+This command is cache-only and research-only. It simulates controlled long
+exposure over cached OHLC, including fees, rebalancing, equity curves, drawdown,
+and exposure percentage. It does not use the strategy engine, order router, or
+live/paper execution path.
+
+Scenario set:
+
+- `starter_equal_weight`
+- `btc_only`
+- `alt_equal_weight`
+
+Overlay modes:
+
+- `entry_guard`: block/clamp only new or increased exposure.
+- `target_scale`: scale target exposure by market state; neutral halves target
+  exposure and risk-off targets cash.
+
+Default controlled exposure artifact:
+
+- `C:\Users\Rob\AppData\Local\krakked\krakked\reports\backtests\market-regime-exposure-scenarios-20260530\aggregate.json`
+
+Default settings:
+
+- Allocation: `20%`.
+- Rebalance interval: `6` bars.
+- Timeframe: `4h`.
+- Fees: `25 bps`.
+
+Default five-window aggregate:
+
+| Scenario | Mode | Avg return delta | Positive windows | Avg drawdown delta | Drawdown improved | Avg overlay active cycles |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| `starter_equal_weight` | `entry_guard` | `-0.0309%` | `2 / 5` | `-0.0770%` | `5 / 5` | `100.0%` |
+| `starter_equal_weight` | `target_scale` | `+0.3158%` | `3 / 5` | `-1.1280%` | `4 / 5` | `63.6%` |
+| `btc_only` | `entry_guard` | `-0.0253%` | `2 / 5` | `-0.0646%` | `4 / 5` | `100.0%` |
+| `btc_only` | `target_scale` | `+0.0410%` | `2 / 5` | `-0.7718%` | `4 / 5` | `63.6%` |
+| `alt_equal_weight` | `entry_guard` | `-0.0329%` | `1 / 5` | `-0.0992%` | `5 / 5` | `100.0%` |
+| `alt_equal_weight` | `target_scale` | `+0.4077%` | `3 / 5` | `-1.2726%` | `4 / 5` | `63.6%` |
+
+Allocation sensitivity artifact:
+
+- `C:\Users\Rob\AppData\Local\krakked\krakked\reports\backtests\market-regime-exposure-sensitivity-20260530\aggregate.json`
+
+Allocation sensitivity readout:
+
+- Tested `5%`, `20%`, and `50%` allocation.
+- `target_scale` stayed average-return positive for starter and alt-basket
+  scenarios at all tested allocations.
+- `entry_guard` stayed average-return negative at all tested allocations.
+- Target-scale was not cash-only: average active cycles stayed `63.6%`.
+
+Lookback sensitivity artifact:
+
+- `C:\Users\Rob\AppData\Local\krakked\krakked\reports\backtests\market-regime-exposure-lookback-20260530\aggregate.json`
+
+Lookback sensitivity readout:
+
+- Tested target-scale at `21`, `42`, and `63` bars with `20%` allocation.
+- `63` bars was strongest:
+  - `starter_equal_weight`: average return delta `+0.57%`, positive in `4 / 5`,
+    drawdown improved in `5 / 5`.
+  - `alt_equal_weight`: average return delta `+0.66%`, positive in `4 / 5`,
+    drawdown improved in `5 / 5`.
+  - `btc_only`: average return delta `+0.31%`, positive in `3 / 5`, drawdown
+    improved in `5 / 5`.
+
+Decision:
+
+- Discard `entry_guard` as the leading runtime shape.
+- Continue researching `target_scale` as a portfolio target-exposure throttle.
+- Do not runtime-wire it yet. The result is promising, but it is synthetic
+  exposure evidence rather than actual starter-strategy intent evidence.
+- The next serious step is a strategy-like target exposure adapter plus longer
+  out-of-sample windows, not a broad parameter grid.
+
+### 2026-05-30 Market Regime Strategy-Proxy Target-Scale Sweep
+
+Implemented:
+
+- `trend_proxy` scenario for `krakked market-regime-exposure-research`
+- `krakked market-regime-exposure-sweep`
+
+`trend_proxy` rules:
+
+- Uses cached `4h` OHLC only.
+- Computes `63`-bar momentum at each rebalance.
+- Requires momentum `>= 150 bps`.
+- Ranks eligible starter pairs by momentum.
+- Targets the top `4` pairs equally inside the configured allocation.
+- Targets cash when no pair qualifies.
+- Does not use the market-regime classifier for baseline target selection.
+
+Sweep artifact:
+
+- `C:\Users\Rob\AppData\Local\krakked\krakked\reports\backtests\market-regime-exposure-trend-proxy-sweep-20260530\aggregate.json`
+
+Command:
+
+```bash
+poetry run krakked market-regime-exposure-sweep \
+  --window-set recent_20d \
+  --window-set long_4h \
+  --scenario trend_proxy \
+  --overlay-mode target_scale \
+  --allocation-pct 5 \
+  --allocation-pct 20 \
+  --target-lookback-bars 63 \
+  --min-momentum-bps 150 \
+  --max-target-pairs 4 \
+  --rebalance-interval-bars 6 \
+  --fee-bps 25 \
+  --strict-data \
+  --save-dir C:\Users\Rob\AppData\Local\krakked\krakked\reports\backtests\market-regime-exposure-trend-proxy-sweep-20260530
+```
+
+Results:
+
+| Window set | Allocation | Avg return delta | Positive windows | Drawdown improved | Min overlay active cycles | Min exposure ratio | Gate |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| `recent_20d` | `5%` | `+0.0807%` | `4 / 5` | `4 / 5` | `0.0%` | `0.0000` | fail |
+| `recent_20d` | `20%` | `+0.3221%` | `4 / 5` | `4 / 5` | `0.0%` | `0.0000` | fail |
+| `long_4h` | `5%` | `+0.1375%` | `5 / 6` | `4 / 6` | `3.3%` | `0.1268` | fail |
+| `long_4h` | `20%` | `+0.5477%` | `5 / 6` | `5 / 6` | `3.3%` | `0.1265` | fail |
+
+Readout:
+
+- Return and drawdown evidence were directionally good.
+- The promotion gate still failed because the overlay did not stay active
+  enough and cut exposure too far in the weakest windows.
+- Recent `2026-05-10 -> 2026-05-30` had no baseline trend-proxy exposure, so it
+  could not support a runtime-throttle conclusion.
+- The long set exposed the same issue less severely: January/February had only
+  `3.3%` overlay active cycles and about `12.7%` of baseline average exposure.
+
+Decision:
+
+- Do not runtime-wire target-scale.
+- The market-regime classifier is still useful as an operator-facing market
+  state and as research input.
+- Runtime throttling needs either a less sparse target source or a deliberately
+  softer scaling rule before it is worth testing again.

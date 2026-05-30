@@ -275,9 +275,46 @@ volatility-normalized ranking, regime cash behavior, turnover controls, and
 explicit research gates before any runtime strategy wiring.
 
 Current decision: do not continue `rs_rotation_v2` as a standalone strategy.
-The useful follow-up is a research-only market regime overlay that may reduce
-new risk during weak regimes if replay proves it helps the starter pack. See
-[`docs/market-regime-overlay-plan.md`](docs/market-regime-overlay-plan.md).
+The useful follow-up is the research-only market regime overlay lane:
+
+```bash
+poetry run krakked market-regime-research \
+  --start 2026-05-10T00:00:00Z \
+  --end 2026-05-30T00:00:00Z \
+  --json \
+  --save-report market-regime-research.json
+
+poetry run krakked market-regime-overlay-backtest \
+  --start 2026-05-10T00:00:00Z \
+  --end 2026-05-30T00:00:00Z \
+  --json \
+  --save-report market-regime-overlay-backtest.json
+
+poetry run krakked market-regime-exposure-research \
+  --start 2026-05-10T00:00:00Z \
+  --end 2026-05-30T00:00:00Z \
+  --json \
+  --save-report market-regime-exposure-research.json
+
+poetry run krakked market-regime-exposure-sweep \
+  --window-set recent_20d \
+  --window-set long_4h \
+  --scenario trend_proxy \
+  --overlay-mode target_scale \
+  --allocation-pct 5 \
+  --allocation-pct 20 \
+  --strict-data \
+  --save-dir market-regime-exposure-sweep
+```
+
+These commands may reduce or block new risk during weak regimes in replay
+comparison only. `market-regime-exposure-research` uses controlled synthetic
+exposure scenarios so the overlay can be evaluated even when starter strategy
+replay is too sparse. `market-regime-exposure-sweep` aggregates those research
+runs across documented windows. Runtime wiring stays out of scope unless the
+multi-window gate in
+[`docs/market-regime-overlay-plan.md`](docs/market-regime-overlay-plan.md)
+passes.
 
 ### ▶️ Running the bot
 
