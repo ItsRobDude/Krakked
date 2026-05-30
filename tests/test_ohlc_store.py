@@ -1,5 +1,6 @@
 # tests/test_ohlc_store.py
 
+import threading
 from pathlib import Path
 from typing import Generator
 
@@ -113,6 +114,43 @@ def test_get_bars_non_existent(store: FileOHLCStore):
     """Tests that retrieving from a non-existent store returns an empty list."""
     bars = store.get_bars("NONEXISTENT", "1h", lookback=100)
     assert bars == []
+
+
+def test_shutdown_drains_queued_writes(
+    mock_market_data_config: MarketDataConfig,
+) -> None:
+    store = FileOHLCStore(mock_market_data_config)
+    original_persist = store._persist_bars
+    first_write_started = threading.Event()
+    release_first_write = threading.Event()
+    persist_calls: list[int] = []
+
+    def _delayed_persist(pair: str, timeframe: str, bars: list[OHLCBar]) -> None:
+        persist_calls.append(bars[0].timestamp)
+        if len(persist_calls) == 1:
+            first_write_started.set()
+            assert release_first_write.wait(timeout=2.0)
+        original_persist(pair, timeframe, bars)
+
+    store._persist_bars = _delayed_persist  # type: ignore[method-assign]
+    store.append_bars("XBTUSD", "1m", [OHLCBar(1000, 1, 1, 1, 1, 1)])
+    assert first_write_started.wait(timeout=2.0)
+    store.append_bars("XBTUSD", "1m", [OHLCBar(1060, 2, 2, 2, 2, 2)])
+
+    shutdown_thread = threading.Thread(target=store.shutdown)
+    shutdown_thread.start()
+    release_first_write.set()
+    shutdown_thread.join(timeout=2.0)
+
+    assert not shutdown_thread.is_alive()
+    assert persist_calls == [1000, 1060]
+
+    reopened = FileOHLCStore(mock_market_data_config)
+    try:
+        bars = reopened.get_bars("XBTUSD", "1m", lookback=10)
+        assert [bar.timestamp for bar in bars] == [1000, 1060]
+    finally:
+        reopened.shutdown()
 
 
 def test_file_ohlc_store_defaults(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):

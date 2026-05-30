@@ -66,7 +66,9 @@ region:
 def test_get_config_dir_prefers_env_override(monkeypatch, tmp_path: Path):
     config_dir = tmp_path / "compose-config"
     monkeypatch.setenv("KRAKKED_CONFIG_DIR", str(config_dir))
-    monkeypatch.setattr(appdirs, "user_config_dir", lambda appname: tmp_path / "ignored")
+    monkeypatch.setattr(
+        appdirs, "user_config_dir", lambda appname: tmp_path / "ignored"
+    )
 
     assert get_config_dir() == config_dir
 
@@ -107,7 +109,10 @@ def test_load_config_applies_default_starter_strategies_when_missing(
     assert app_config.ml.enabled is False
     assert app_config.universe.include_pairs == DEFAULT_STARTER_PAIRS
     assert app_config.universe.min_24h_volume_usd == 100000.0
-    assert app_config.market_data.backfill_timeframes == DEFAULT_STARTER_BACKFILL_TIMEFRAMES
+    assert (
+        app_config.market_data.backfill_timeframes
+        == DEFAULT_STARTER_BACKFILL_TIMEFRAMES
+    )
     assert app_config.market_data.ws_timeframes == DEFAULT_STARTER_WS_TIMEFRAMES
     assert app_config.risk.max_open_positions == 4
     assert app_config.risk.max_per_strategy_pct["trend_core"] == 5.0
@@ -194,6 +199,9 @@ def test_cleanup_active_config_chain_normalizes_bootstrap_residue(
 execution:
   mode: paper
 market_data:
+  backfill_timeframes:
+  - 1h
+  - 4h
   ws_timeframes:
   - 1m
   - 5m
@@ -260,6 +268,10 @@ strategies:
     cleaned_main = load_config()
     cleaned_profile = (config_dir / "profiles" / "Rob.yaml").read_text()
     assert cleaned_main.ml.enabled is False
+    assert (
+        cleaned_main.market_data.backfill_timeframes
+        == DEFAULT_STARTER_BACKFILL_TIMEFRAMES
+    )
     assert cleaned_main.market_data.ws_timeframes == DEFAULT_STARTER_WS_TIMEFRAMES
     assert "enabled: true" not in cleaned_profile
 
@@ -270,6 +282,10 @@ strategies:
     assert "profile_name: Rob" in runtime_text
 
     assert app_config.ml.enabled is False
+    assert (
+        app_config.market_data.backfill_timeframes
+        == DEFAULT_STARTER_BACKFILL_TIMEFRAMES
+    )
     assert app_config.market_data.ws_timeframes == DEFAULT_STARTER_WS_TIMEFRAMES
     assert app_config.strategies.enabled == DEFAULT_STARTER_STRATEGY_IDS
     assert app_config.risk.max_open_positions == 4

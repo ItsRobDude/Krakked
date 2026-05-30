@@ -142,6 +142,11 @@ def backfill_ohlc(
             store.append_bars(pair_metadata.canonical, timeframe, bars)
         total_bars_fetched += len(bars)
 
+    if store:
+        flush = getattr(store, "flush", None)
+        if callable(flush):
+            flush()
+
     if total_bars_fetched > 0:
         logger.info(
             f"Completed backfill for {pair_metadata.canonical} ({timeframe}). Fetched {total_bars_fetched} new bars."

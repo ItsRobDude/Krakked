@@ -39,7 +39,7 @@ DEFAULT_STARTER_STRATEGY_IDS = [
     "rs_rotation",
 ]
 DEFAULT_STARTER_PAIRS = ["BTC/USD", "ETH/USD", "SOL/USD", "ADA/USD"]
-DEFAULT_STARTER_BACKFILL_TIMEFRAMES = ["1h", "4h"]
+DEFAULT_STARTER_BACKFILL_TIMEFRAMES = ["1h", "4h", "1d"]
 DEFAULT_STARTER_WS_TIMEFRAMES = ["1m"]
 DEFAULT_STARTER_PROFILE_NAME = "Default"
 DEFAULT_STARTER_PROFILE_DESCRIPTION = "Starter paper profile"
@@ -218,6 +218,13 @@ def _is_legacy_ws_timeframes(value: Any) -> bool:
     return normalized == ["1m", "5m"]
 
 
+def _is_legacy_backfill_timeframes(value: Any) -> bool:
+    if not isinstance(value, list):
+        return False
+    normalized = [str(item) for item in value]
+    return normalized == ["1h", "4h"]
+
+
 def _is_empty_strategy_override(value: Any) -> bool:
     if not isinstance(value, dict):
         return False
@@ -264,7 +271,9 @@ def normalize_bootstrap_residue(
     if (
         isinstance(normalized_main.get("ml"), dict)
         and normalized_main["ml"].get("enabled") is True
-        and not _uses_ml_strategies(normalized_main, normalized_profile, normalized_overrides)
+        and not _uses_ml_strategies(
+            normalized_main, normalized_profile, normalized_overrides
+        )
         and not _has_nonempty_strategy_config(normalized_main)
         and not _has_nonempty_strategy_config(normalized_profile)
     ):
@@ -276,7 +285,9 @@ def normalize_bootstrap_residue(
     if (
         isinstance(normalized_profile.get("ml"), dict)
         and normalized_profile["ml"].get("enabled") is True
-        and not _uses_ml_strategies(normalized_main, normalized_profile, normalized_overrides)
+        and not _uses_ml_strategies(
+            normalized_main, normalized_profile, normalized_overrides
+        )
         and not _has_nonempty_strategy_config(normalized_profile)
     ):
         normalized_profile = dict(normalized_profile)
@@ -292,6 +303,17 @@ def normalize_bootstrap_residue(
         normalized_main["market_data"] = dict(market_data)
         normalized_main["market_data"]["ws_timeframes"] = list(
             DEFAULT_STARTER_WS_TIMEFRAMES
+        )
+        changed = True
+
+    market_data = normalized_main.get("market_data")
+    if isinstance(market_data, dict) and _is_legacy_backfill_timeframes(
+        market_data.get("backfill_timeframes")
+    ):
+        normalized_main = dict(normalized_main)
+        normalized_main["market_data"] = dict(market_data)
+        normalized_main["market_data"]["backfill_timeframes"] = list(
+            DEFAULT_STARTER_BACKFILL_TIMEFRAMES
         )
         changed = True
 
@@ -383,9 +405,7 @@ def cleanup_active_config_chain(
     return writes
 
 
-def _coerce_strategy_weight(
-    value: Any, strategy_id: str, config_path: Path
-) -> int:
+def _coerce_strategy_weight(value: Any, strategy_id: str, config_path: Path) -> int:
     """Validate a user-facing strategy weight on a simple 1-100 scale."""
 
     if value is None:
@@ -654,7 +674,9 @@ def ensure_starter_profile(
 
     logger.info(
         "Seeded starter profile",
-        extra=structured_log_extra(event="starter_profile_seeded", profile=profile_name),
+        extra=structured_log_extra(
+            event="starter_profile_seeded", profile=profile_name
+        ),
     )
     return True
 

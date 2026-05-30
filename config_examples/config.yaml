@@ -28,6 +28,7 @@ market_data:
   backfill_timeframes:
     - "1h"
     - "4h"
+    - "1d"
   ws_timeframes:
     - "1m"
   metadata_path: "~/.local/share/krakked/metadata.json"

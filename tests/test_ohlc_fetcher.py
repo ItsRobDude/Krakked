@@ -96,3 +96,4 @@ def test_backfill_ohlc_pagination(mock_pair_metadata: PairMetadata):
 
     # 3. Verify the data was stored three times
     assert mock_store.append_bars.call_count == 3
+    mock_store.flush.assert_called_once_with()

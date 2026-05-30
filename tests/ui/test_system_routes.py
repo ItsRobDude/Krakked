@@ -497,13 +497,11 @@ def test_latest_replay_endpoint_returns_compact_summary(
     assert payload["clamped_actions"] == 2
     assert payload["coverage_status"] == "limited"
     assert payload["strategy_coverage_gaps"][0]["strategy_id"] == "majors_mean_rev"
-    assert (
-        payload["strategy_coverage_gaps"][0]["coverage_status"] == "partial_window"
-    )
+    assert payload["strategy_coverage_gaps"][0]["coverage_status"] == "partial_window"
     assert payload["blocked_reason_counts"]["Max open positions reached (1)"] == 1
-    assert payload["clamped_reason_counts"][
-        "Max per asset limit (750.00 > 500.00)"
-    ] == 2
+    assert (
+        payload["clamped_reason_counts"]["Max per asset limit (750.00 > 500.00)"] == 2
+    )
     assert payload["replay_inputs"]["enabled_strategies"] == ["majors_mean_rev"]
     assert payload["report_path"].endswith("reports\\backtests\\latest.json")
 
@@ -808,9 +806,7 @@ def test_live_readiness_blocks_missing_enabled_strategy_risk_caps(
     )
 
 
-def test_cockpit_market_data_ignores_healthy_streaming_detail(
-    client, system_context
-):
+def test_cockpit_market_data_ignores_healthy_streaming_detail(client, system_context):
     system_context.market_data.get_cached_data_status.return_value = SimpleNamespace(
         rest_api_reachable=True,
         websocket_connected=True,
@@ -1010,7 +1006,7 @@ def test_setup_config_updates_existing_bootstrap_config(
     assert config_data["ml"]["enabled"] is False
     assert config_data["risk"]["max_open_positions"] == 4
     assert config_data["risk"]["max_per_strategy_pct"]["trend_core"] == 5.0
-    assert config_data["market_data"]["backfill_timeframes"] == ["1h", "4h"]
+    assert config_data["market_data"]["backfill_timeframes"] == ["1h", "4h", "1d"]
     assert config_data["market_data"]["ws_timeframes"] == ["1m"]
 
 
@@ -1061,7 +1057,7 @@ def test_setup_config_preserves_ws_style_pairs(monkeypatch, client, temp_config_
     config_data = yaml.safe_load((temp_config_dir / "config.yaml").read_text())
     assert config_data["universe"]["include_pairs"] == ["BTC/USD", "ETH/USD"]
     assert config_data["universe"]["min_24h_volume_usd"] == 100000.0
-    assert config_data["market_data"]["backfill_timeframes"] == ["1h", "4h"]
+    assert config_data["market_data"]["backfill_timeframes"] == ["1h", "4h", "1d"]
     assert config_data["market_data"]["ws_timeframes"] == ["1m"]
 
 
@@ -1138,7 +1134,7 @@ def test_setup_config_upgrades_legacy_bootstrap_defaults(
         "ADA/USD",
     ]
     assert config_data["universe"]["min_24h_volume_usd"] == 100000.0
-    assert config_data["market_data"]["backfill_timeframes"] == ["1h", "4h"]
+    assert config_data["market_data"]["backfill_timeframes"] == ["1h", "4h", "1d"]
     assert config_data["market_data"]["ws_timeframes"] == ["1m"]
     assert config_data["ml"]["enabled"] is False
 

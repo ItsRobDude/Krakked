@@ -26,6 +26,8 @@ class OHLCStore(Protocol):
         self, pair: str, timeframe: str, since_ts: int
     ) -> List[OHLCBar]: ...
 
+    def flush(self) -> None: ...
+
     def shutdown(self) -> None: ...
 
 
@@ -88,10 +90,12 @@ class FileOHLCStore:
     def _worker(self) -> None:
         """Background worker to process write requests from the queue."""
         logger.debug("OHLC Store worker thread started")
-        while not self._stop_event.is_set():
+        while True:
             try:
                 task = self._write_queue.get(timeout=1.0)
             except queue.Empty:
+                if self._stop_event.is_set():
+                    break
                 continue
 
             if task is None:
@@ -110,13 +114,19 @@ class FileOHLCStore:
 
         logger.debug("OHLC Store worker thread stopped")
 
+    def flush(self) -> None:
+        """Wait for queued OHLC writes to reach disk."""
+        self._write_queue.join()
+
     def shutdown(self) -> None:
-        """Stops the background worker thread and waits for pending writes."""
+        """Stops the background worker thread after pending writes drain."""
         logger.info("Shutting down OHLC Store worker...")
-        self._stop_event.set()
         self._write_queue.put(None)
         if self._worker_thread.is_alive():
             self._worker_thread.join(timeout=5.0)
+        self._stop_event.set()
+        if self._worker_thread.is_alive():
+            logger.warning("OHLC Store worker did not stop before timeout.")
         logger.info("OHLC Store shutdown complete.")
 
     def _persist_bars(self, pair: str, timeframe: str, bars: List[OHLCBar]) -> None:
