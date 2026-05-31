@@ -956,3 +956,58 @@ Decision:
 - Keep `trend_rank_proxy` as a research-only target-source scenario.
 - The next research pass should improve signal quality before trying more
   runtime-adjacent wiring.
+
+### 2026-05-30 Signal-Quality Concentration Pass
+
+Research finding:
+
+- `trend_rank_proxy --max-target-pairs 4` was too broad for the current starter
+  universe because it usually selected all four configured pairs.
+- The target source needed concentration before more formula work.
+
+Follow-up command shape:
+
+```bash
+poetry run krakked market-regime-exposure-sweep \
+  --window-set recent_20d \
+  --window-set long_4h \
+  --scenario trend_rank_proxy \
+  --overlay-mode target_scale \
+  --allocation-pct 5 \
+  --allocation-pct 20 \
+  --target-lookback-bars 63 \
+  --max-target-pairs 2 \
+  --rebalance-interval-bars 6 \
+  --fee-bps 25 \
+  --neutral-allocation-multiplier 0.75 \
+  --risk-off-allocation-multiplier 0.25 \
+  --strict-data \
+  --save-dir C:\Users\Rob\AppData\Local\krakked\krakked\reports\backtests\market-regime-exposure-trend-rank-proxy-top2-soft-scale-sweep-20260530
+```
+
+Artifacts:
+
+- Top 1:
+  `C:\Users\Rob\AppData\Local\krakked\krakked\reports\backtests\market-regime-exposure-trend-rank-proxy-top1-soft-scale-sweep-20260530\aggregate.json`
+- Top 2:
+  `C:\Users\Rob\AppData\Local\krakked\krakked\reports\backtests\market-regime-exposure-trend-rank-proxy-top2-soft-scale-sweep-20260530\aggregate.json`
+- Top 3:
+  `C:\Users\Rob\AppData\Local\krakked\krakked\reports\backtests\market-regime-exposure-trend-rank-proxy-top3-soft-scale-sweep-20260530\aggregate.json`
+
+Top 2 result:
+
+| Window set | Allocation | Avg return delta | Positive windows | Drawdown improved | Min overlay active cycles | Min exposure ratio | Gate |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| `recent_20d` | `5%` | `+0.1285%` | `4 / 5` | `5 / 5` | `95.0%` | `0.5105` | pass |
+| `recent_20d` | `20%` | `+0.5144%` | `4 / 5` | `5 / 5` | `95.0%` | `0.5105` | pass |
+| `long_4h` | `5%` | `+0.1337%` | `4 / 6` | `4 / 6` | `96.7%` | `0.4389` | pass |
+| `long_4h` | `20%` | `+0.5356%` | `4 / 6` | `4 / 6` | `96.7%` | `0.4388` | pass |
+
+Decision:
+
+- Top 1, top 2, and top 3 concentrated rank variants all passed the existing
+  research promotion gate under soft target-scale.
+- Top 2 is the preferred candidate because it avoids single-asset concentration
+  while still fixing the broad equal-weight problem.
+- This is enough evidence to plan a runtime risk-throttle slice, but not enough
+  to enable runtime behavior in this pass.

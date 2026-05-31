@@ -303,6 +303,9 @@ poetry run krakked market-regime-exposure-sweep \
   --overlay-mode target_scale \
   --allocation-pct 5 \
   --allocation-pct 20 \
+  --max-target-pairs 2 \
+  --neutral-allocation-multiplier 0.75 \
+  --risk-off-allocation-multiplier 0.25 \
   --strict-data \
   --save-dir market-regime-exposure-sweep
 ```
@@ -313,8 +316,10 @@ exposure scenarios so the overlay can be evaluated even when starter strategy
 replay is too sparse. `market-regime-exposure-sweep` aggregates those research
 runs across documented windows. `trend_proxy` is the strict positive-momentum
 adapter; `trend_rank_proxy` is the denser rank-only adapter used to separate
-target-source sparsity from overlay scaling. Runtime wiring stays out of scope
-unless the multi-window gate in
+target-source sparsity from overlay scaling. The current research candidate is
+`trend_rank_proxy` with `--max-target-pairs 2` and soft target-scale multipliers
+of `0.75` neutral / `0.25` risk-off. Runtime wiring stays out of scope unless
+the multi-window gate in
 [`docs/market-regime-overlay-plan.md`](docs/market-regime-overlay-plan.md)
 passes.
 

@@ -490,3 +490,67 @@ Decision:
   filters, volatility-adjusted ranking, or a simple cash/benchmark fallback
   whose baseline exposure remains stable enough for the overlay test to be
   meaningful.
+
+## Signal-Quality Concentration Pass
+
+Implemented on `2026-05-30`.
+
+The dense `trend_rank_proxy` pass revealed a practical issue with the first
+setup: with the current starter universe, `max_target_pairs=4` usually selected
+all four configured pairs. That made the scenario behave like equal-weight
+starter exposure after warmup, so it did not meaningfully test signal quality.
+
+The follow-up kept the same research-only scenario and soft target-scale
+settings, but swept concentrated rank selections:
+
+```bash
+poetry run krakked market-regime-exposure-sweep \
+  --window-set recent_20d \
+  --window-set long_4h \
+  --scenario trend_rank_proxy \
+  --overlay-mode target_scale \
+  --allocation-pct 5 \
+  --allocation-pct 20 \
+  --target-lookback-bars 63 \
+  --max-target-pairs 2 \
+  --rebalance-interval-bars 6 \
+  --fee-bps 25 \
+  --neutral-allocation-multiplier 0.75 \
+  --risk-off-allocation-multiplier 0.25 \
+  --strict-data \
+  --save-dir C:\Users\Rob\AppData\Local\krakked\krakked\reports\backtests\market-regime-exposure-trend-rank-proxy-top2-soft-scale-sweep-20260530
+```
+
+Artifacts:
+
+- Top 1:
+  `C:\Users\Rob\AppData\Local\krakked\krakked\reports\backtests\market-regime-exposure-trend-rank-proxy-top1-soft-scale-sweep-20260530\aggregate.json`
+- Top 2:
+  `C:\Users\Rob\AppData\Local\krakked\krakked\reports\backtests\market-regime-exposure-trend-rank-proxy-top2-soft-scale-sweep-20260530\aggregate.json`
+- Top 3:
+  `C:\Users\Rob\AppData\Local\krakked\krakked\reports\backtests\market-regime-exposure-trend-rank-proxy-top3-soft-scale-sweep-20260530\aggregate.json`
+
+All three concentrated variants passed the existing promotion gate. Top 2 is
+the preferred research candidate because it improves signal quality without
+making the proxy single-asset concentrated.
+
+Top 2 result:
+
+| Window set | Allocation | Avg return delta | Positive windows | Drawdown improved | Min overlay active cycles | Min exposure ratio | Gate |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| `recent_20d` | `5%` | `+0.1285%` | `4 / 5` | `5 / 5` | `95.0%` | `0.5105` | pass |
+| `recent_20d` | `20%` | `+0.5144%` | `4 / 5` | `5 / 5` | `95.0%` | `0.5105` | pass |
+| `long_4h` | `5%` | `+0.1337%` | `4 / 6` | `4 / 6` | `96.7%` | `0.4389` | pass |
+| `long_4h` | `20%` | `+0.5356%` | `4 / 6` | `4 / 6` | `96.7%` | `0.4388` | pass |
+
+Decision:
+
+- Signal quality improved enough for the research gate to pass when
+  `trend_rank_proxy` is limited to the top `2` ranked pairs.
+- This is the first market-regime target-scale candidate that clears both
+  recent and long cache-only window sets at `5%` and `20%` allocations.
+- This is still research evidence, not runtime approval. No live, paper, risk
+  engine, strategy-default, or order-routing behavior changes in this pass.
+- The next slice may plan runtime risk-throttle wiring, but that plan needs an
+  explicit operator-facing config boundary, a default-disabled rollout path,
+  and replay proof against actual strategy intents before enabling anything.
