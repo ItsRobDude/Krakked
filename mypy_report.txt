@@ -1,1 +1,0 @@
-Success: no issues found in 82 source files

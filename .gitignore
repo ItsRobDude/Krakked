@@ -160,3 +160,8 @@ reports/
 compose.unraid.yaml
 portfolio.db
 *.db
+
+# Tool output and temp artifacts (should not be tracked)
+flake8_report.txt
+mypy_report.txt
+tmp-*.png
