@@ -7,8 +7,9 @@ compare the results with `krakked ml-report-compare`.
 
 The current "research baseline" is `ohlc_v5` on the 4h PA lane (see
 [`ml-experiment-log.md`](./ml-experiment-log.md) for the recorded evidence). It
-cleared the realistic-cost gate on one window. This runbook checks whether that
-result holds when the underlying market regime changes.
+showed single-window promise but remains research-only after the 2026-05-31
+cost-semantics and baseline proof pass. This runbook checks whether any future
+ML result holds when the underlying market regime changes.
 
 ## When to run cross-window validation
 
@@ -103,8 +104,8 @@ The output table includes `tier` (the highest promotion tier the run cleared),
 `precision_long`, `base_hit`, `p95_lift`, `selected_avg_ret`, `upper_half`, and
 the per-fold diagnostic warnings. The `tier` column is the headline indicator:
 
-- `blocked` — research-promising failed; experiment is not viable
-- `research_promising` — research-promising cleared; risk-overlay failed
+- `blocked` — did not clear the research-promising criteria
+- `research_promising` — cleared research-promising criteria but not the risk-overlay criteria
 - `risk_overlay_candidate` — viable when paired with the risk overlay
 - `self_standing` — model carries the strategy on its own
 
@@ -119,7 +120,7 @@ hold across the three windows:
 
 1. The same `promotion_tier` (or better) is reached in at least **2 of 3**
    windows
-2. No window collapses below `research_promising` (i.e. no `blocked` runs)
+2. No window falls below `research_promising` (i.e. no `blocked` runs)
 3. `upper_half_monotonicity` is `true` or `insufficient_data` in 2 of 3
    windows — `false` in more than one window is a hard fail
 4. The `diagnostic_warnings` column is empty or contains only

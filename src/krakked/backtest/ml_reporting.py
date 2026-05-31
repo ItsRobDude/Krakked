@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-ML_WALK_FORWARD_REPORT_VERSION = 7
+ML_WALK_FORWARD_REPORT_VERSION = 8
 LATEST_ML_WALK_FORWARD_REPORT_RELATIVE_PATH = Path("reports") / "ml" / "latest.json"
 
 
@@ -40,12 +40,15 @@ def validate_ml_walk_forward_report_payload(
         "start",
         "end",
         "strategy_id",
+        "strategy_type",
         "timeframe",
         "train_bars",
         "test_bars",
         "evaluation_mode",
         "edge_scoring_mode",
         "model_state_reused_across_folds",
+        "model_semantics",
+        "cost_semantics",
         "fold_count",
         "pairs",
         "fee_bps",
@@ -56,6 +59,7 @@ def validate_ml_walk_forward_report_payload(
         "metrics",
         "confidence_buckets",
         "regression_calibration",
+        "baselines",
         "diagnostic_warnings",
         "promotion_tier",
         "promotion_tiers",
@@ -80,6 +84,12 @@ def validate_ml_walk_forward_report_payload(
         raise ValueError(
             f"ML report regression calibration is invalid in {resolved_path}"
         )
+    if not isinstance(summary.get("model_semantics"), dict):
+        raise ValueError(f"ML report model semantics are invalid in {resolved_path}")
+    if not isinstance(summary.get("cost_semantics"), dict):
+        raise ValueError(f"ML report cost semantics are invalid in {resolved_path}")
+    if not isinstance(summary.get("baselines"), dict):
+        raise ValueError(f"ML report baselines are invalid in {resolved_path}")
     if not isinstance(summary.get("diagnostic_warnings"), list):
         raise ValueError(f"ML report diagnostic warnings are invalid in {resolved_path}")
     if not isinstance(summary.get("promotion_tier"), str):
@@ -100,6 +110,10 @@ def validate_ml_walk_forward_report_payload(
         if not isinstance(fold.get("regression_calibration"), dict):
             raise ValueError(
                 f"ML report fold {index} regression calibration is invalid in {resolved_path}"
+            )
+        if not isinstance(fold.get("baselines"), dict):
+            raise ValueError(
+                f"ML report fold {index} baselines are invalid in {resolved_path}"
             )
 
     provenance = payload.get("provenance")
@@ -159,6 +173,7 @@ def summarize_latest_ml_walk_forward_report(
         "report_path": str(Path(resolved_path).expanduser().resolve()),
         "generated_at": payload.get("generated_at"),
         "strategy_id": summary.get("strategy_id"),
+        "strategy_type": summary.get("strategy_type"),
         "timeframe": summary.get("timeframe"),
         "evaluation_mode": summary.get("evaluation_mode"),
         "edge_scoring_mode": summary.get("edge_scoring_mode"),
@@ -178,6 +193,9 @@ def summarize_latest_ml_walk_forward_report(
         "coverage_status": summary.get("coverage_status"),
         "warnings": list(summary.get("warnings") or []),
         "diagnostic_warnings": list(summary.get("diagnostic_warnings") or []),
+        "model_semantics": dict(summary.get("model_semantics") or {}),
+        "cost_semantics": dict(summary.get("cost_semantics") or {}),
+        "baselines": dict(summary.get("baselines") or {}),
         "confidence_buckets": list(summary.get("confidence_buckets") or []),
         "regression_calibration": dict(summary.get("regression_calibration") or {}),
     }

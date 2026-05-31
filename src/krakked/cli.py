@@ -18,6 +18,7 @@ from krakked.backtest import (
     DEFAULT_EXPOSURE_OVERLAY_MODES,
     DEFAULT_EXPOSURE_SCENARIOS,
     DEFAULT_PAIR_LOCAL_SOURCE_SCENARIOS,
+    DEFAULT_STRATEGY_EVIDENCE_GROUP_IDS,
     DEFAULT_STRATEGY_ACTIVITY_GROUP_IDS,
     DEFAULT_TARGET_SOURCE_SCENARIOS,
     STRATEGY_ACTIVITY_WINDOW_SETS,
@@ -32,6 +33,9 @@ from krakked.backtest import (
     aggregate_target_source_research_reports,
     backtest_strict_data_details,
     build_backtest_preflight,
+    build_strategy_evidence_baselines,
+    build_strategy_evidence_groups,
+    build_strategy_evidence_scoreboard,
     default_rs_rotation_v2_allocation_pct,
     default_rs_rotation_v2_lookback_bars,
     default_rs_rotation_v2_timeframe,
@@ -1646,6 +1650,84 @@ def _add_strategy_activity_sweep_arguments(
     )
 
 
+def _add_strategy_evidence_scoreboard_arguments(
+    subparser: argparse.ArgumentParser,
+) -> None:
+    subparser.add_argument(
+        "--config",
+        help="Optional path to the base config.yaml to use",
+    )
+    subparser.add_argument(
+        "--pair",
+        action="append",
+        help="Limit the replay universe and buy-hold baseline to one pair; repeat to include multiple pairs",
+    )
+    subparser.add_argument(
+        "--window-set",
+        action="append",
+        choices=sorted(STRATEGY_ACTIVITY_WINDOW_SETS),
+        help="Evidence window set to run; repeat to include multiple sets",
+    )
+    subparser.add_argument(
+        "--group",
+        action="append",
+        choices=sorted(DEFAULT_STRATEGY_EVIDENCE_GROUP_IDS),
+        help=(
+            "Strategy pack group to include; repeat to include multiple groups "
+            f"(defaults to {', '.join(DEFAULT_STRATEGY_EVIDENCE_GROUP_IDS)})"
+        ),
+    )
+    subparser.add_argument(
+        "--strategy",
+        action="append",
+        help=(
+            "Strategy id to test as its own group; repeat to include multiple. "
+            "Defaults to every strategy configured in the selected config."
+        ),
+    )
+    subparser.add_argument(
+        "--starting-cash-usd",
+        type=float,
+        default=10_000.0,
+        help="Synthetic starting USD wallet balance for each replay",
+    )
+    subparser.add_argument(
+        "--fee-bps",
+        type=float,
+        default=25.0,
+        help="Flat per-fill fee in basis points applied to simulated fills and buy-hold entry/exit marks",
+    )
+    subparser.add_argument(
+        "--baseline-timeframe",
+        default="4h",
+        help="Timeframe used for equal-weight buy-hold baseline context",
+    )
+    subparser.add_argument(
+        "--warmup-days",
+        type=float,
+        default=None,
+        help=(
+            "Days of cached OHLC before each window start to expose for replay warmup; "
+            "defaults to the configured strategy/risk lookback requirement"
+        ),
+    )
+    subparser.add_argument(
+        "--save-dir",
+        required=True,
+        help="Directory where per-run reports and aggregate.json are written",
+    )
+    subparser.add_argument(
+        "--strict-data",
+        action="store_true",
+        help="Fail strategy runs if any requested pair/timeframe is missing or partially covered",
+    )
+    subparser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print the strategy evidence scoreboard as JSON",
+    )
+
+
 def _add_strategy_action_diagnostics_arguments(
     subparser: argparse.ArgumentParser,
 ) -> None:
@@ -1908,6 +1990,36 @@ def _print_strategy_activity_sweep_summary(payload: dict[str, Any]) -> None:
     print(f"Saved aggregate: {summary['aggregate_path']}")
 
 
+def _print_strategy_evidence_scoreboard_summary(payload: dict[str, Any]) -> None:
+    summary = payload["summary"]
+    scoreboard = summary["scoreboard"]
+    print("Strategy evidence scoreboard completed.")
+    print(
+        f"Window sets: {', '.join(summary['window_sets'])} | "
+        f"Runs: {summary['run_count']} | Groups: {summary['group_count']}"
+    )
+    for row in scoreboard["rows"]:
+        print(
+            f"- {row['group_id']} ({', '.join(row['strategies'])}): "
+            f"ready {row['ready_windows']}/{row['window_count']}, "
+            f"fills {row['filled_windows']}/{row['window_count']}, "
+            f"positive {row['positive_ready_windows']}/{row['ready_windows']}, "
+            f"avg return {_format_optional_pct(row.get('avg_return_ready_pct'))}, "
+            f"avg dd {_format_optional_pct(row.get('avg_max_drawdown_ready_pct'))}, "
+            f"status={row['evidence_status']}"
+        )
+    buy_hold = (scoreboard.get("baselines") or {}).get("buy_hold_equal_weight") or {}
+    if buy_hold:
+        print(
+            "Equal-weight buy-hold: "
+            f"usable {buy_hold.get('usable_windows')}/{buy_hold.get('window_count')}, "
+            f"avg return {_format_optional_pct(buy_hold.get('avg_return_pct'))}, "
+            f"avg dd {_format_optional_pct(buy_hold.get('avg_max_drawdown_pct'))}"
+        )
+    print("Cash baseline: +0.0000%")
+    print(f"Saved aggregate: {summary['aggregate_path']}")
+
+
 def _print_strategy_action_diagnostics_summary(
     payload: dict[str, Any],
     report_path: str | None,
@@ -2122,6 +2234,14 @@ def _print_ml_walk_forward_summary(
         f"Train/test bars: {summary['train_bars']}/{summary['test_bars']} | "
         f"Pairs: {', '.join(summary['pairs'])}"
     )
+    model_semantics = summary.get("model_semantics") or {}
+    if model_semantics:
+        print(
+            "Model semantics: "
+            f"{model_semantics.get('model_family', 'unknown')} | "
+            f"training {model_semantics.get('training_target', 'unknown')} | "
+            f"prediction {model_semantics.get('prediction_target', 'unknown')}"
+        )
     print(f"Predictions scored: {metrics['prediction_count']}")
 
     def _pct(value: Any) -> str:
@@ -2132,7 +2252,23 @@ def _print_ml_walk_forward_summary(
         "Edge prediction accuracy: " f"{_pct(metrics.get('edge_prediction_accuracy'))}"
     )
     print(f"Long precision: {_pct(metrics.get('precision_long'))}")
+    cost_semantics = summary.get("cost_semantics") or {}
+    hurdle_source = cost_semantics.get("evaluation_hurdle_source", "unknown")
+    hurdle_pct = cost_semantics.get("evaluation_hurdle_pct")
+    hurdle_text = (
+        "mixed"
+        if hurdle_pct is None
+        else f"{float(hurdle_pct) * 100.0:.2f}%"
+    )
     print(f"Cost hurdle: {summary['round_trip_cost_bps']:.2f} bps estimated round trip")
+    print(f"Evaluation hurdle: {hurdle_source} ({hurdle_text})")
+    baselines = summary.get("baselines") or {}
+    equal_weight = baselines.get("buy_hold_equal_weight") or {}
+    if equal_weight.get("avg_return_pct") is not None:
+        print(
+            "Equal-weight buy-hold avg return: "
+            f"{float(equal_weight['avg_return_pct']):+.2f}%"
+        )
     current_tier = summary.get("promotion_tier", "unknown")
     print(
         f"Promotion tier: {current_tier} "
@@ -3169,6 +3305,117 @@ def _strategy_activity_sweep_command(args: argparse.Namespace) -> int:
         print(json.dumps(payload, indent=2))
     else:
         _print_strategy_activity_sweep_summary(payload)
+    return 0
+
+
+def _strategy_evidence_scoreboard_command(args: argparse.Namespace) -> int:
+    """Run one comparable strategy evidence scoreboard across replay windows."""
+
+    try:
+        config = _load_backtest_config(args)
+        groups = build_strategy_evidence_groups(
+            config,
+            group_ids=args.group,
+            strategy_ids=args.strategy,
+        )
+        if not groups:
+            return _print_error("Strategy evidence scoreboard has no groups to run.")
+        selected_window_sets = _unique_strings(args.window_set or ["recent_20d"])
+        window_sets = {
+            window_set: STRATEGY_ACTIVITY_WINDOW_SETS[window_set]
+            for window_set in selected_window_sets
+        }
+        save_dir = Path(args.save_dir).expanduser().resolve()
+        save_dir.mkdir(parents=True, exist_ok=True)
+    except Exception as exc:  # noqa: BLE001
+        return _print_error(f"Strategy evidence scoreboard setup failed: {exc}")
+
+    try:
+        result = run_strategy_activity_sweep(
+            config,
+            window_sets=window_sets,
+            groups=groups,
+            starting_cash_usd=float(args.starting_cash_usd),
+            fee_bps=float(args.fee_bps),
+            strict_data=bool(args.strict_data),
+            warmup_days=args.warmup_days,
+        )
+        baselines = build_strategy_evidence_baselines(
+            config,
+            window_sets=window_sets,
+            pairs=args.pair,
+            timeframe=str(args.baseline_timeframe),
+            starting_cash_usd=float(args.starting_cash_usd),
+            fee_bps=float(args.fee_bps),
+        )
+        scoreboard = build_strategy_evidence_scoreboard(
+            result.runs,
+            groups,
+            baselines=baselines,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _print_error(f"Strategy evidence scoreboard failed: {exc}")
+
+    payload = result.to_report_dict()
+    payload["report_type"] = "strategy_evidence_scoreboard"
+    payload["summary"]["config_path"] = (
+        str(Path(args.config).expanduser().resolve()) if args.config else None
+    )
+    payload["summary"]["save_dir"] = str(save_dir)
+    payload["summary"]["scoreboard"] = scoreboard
+    payload["summary"]["inputs"] = {
+        "window_sets": selected_window_sets,
+        "groups": [group.group_id for group in groups],
+        "starting_cash_usd": float(args.starting_cash_usd),
+        "fee_bps": float(args.fee_bps),
+        "strict_data": bool(args.strict_data),
+        "warmup_days": args.warmup_days,
+        "baseline_timeframe": str(args.baseline_timeframe),
+        "baseline_pairs": args.pair or list(config.universe.include_pairs),
+    }
+    payload["provenance"] = {
+        "app_version": APP_VERSION,
+        "config_path": (
+            str(Path(args.config).expanduser().resolve()) if args.config else None
+        ),
+        "generated_by": "krakked strategy-evidence-scoreboard",
+    }
+
+    report_paths: list[str] = []
+    try:
+        for run in payload["runs"]:
+            report_path = (
+                save_dir
+                / str(run["window_set"])
+                / str(run["group_id"])
+                / f"{run['window_id']}.json"
+            )
+            saved_path = _write_backtest_report(
+                {
+                    "report_version": payload["report_version"],
+                    "report_type": "strategy_evidence_run",
+                    "generated_at": payload["generated_at"],
+                    "summary": run,
+                    "provenance": payload["provenance"],
+                },
+                str(report_path),
+            )
+            run["report_path"] = saved_path
+            report_paths.append(saved_path)
+
+        aggregate_path = save_dir / "aggregate.json"
+        payload["summary"]["aggregate_path"] = str(aggregate_path)
+        payload["summary"]["report_paths"] = report_paths
+        saved_aggregate_path = _write_backtest_report(payload, str(aggregate_path))
+        payload["summary"]["aggregate_path"] = saved_aggregate_path
+        _write_backtest_report(payload, str(aggregate_path))
+    except Exception as exc:  # noqa: BLE001
+        return _print_error(f"Strategy evidence scoreboard report write failed: {exc}")
+
+    if args.json:
+        print(json.dumps(payload, indent=2))
+    else:
+        _print_strategy_evidence_scoreboard_summary(payload)
     return 0
 
 
@@ -4422,6 +4669,15 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     _add_strategy_activity_sweep_arguments(strategy_activity_sweep_parser)
     strategy_activity_sweep_parser.set_defaults(func=_strategy_activity_sweep_command)
+
+    strategy_evidence_scoreboard_parser = subparsers.add_parser(
+        "strategy-evidence-scoreboard",
+        help="Compare configured, runtime, and ML strategies in one replay scoreboard",
+    )
+    _add_strategy_evidence_scoreboard_arguments(strategy_evidence_scoreboard_parser)
+    strategy_evidence_scoreboard_parser.set_defaults(
+        func=_strategy_evidence_scoreboard_command
+    )
 
     strategy_action_diagnostics_parser = subparsers.add_parser(
         "strategy-action-diagnostics",

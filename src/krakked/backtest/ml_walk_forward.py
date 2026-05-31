@@ -8,6 +8,7 @@ import logging
 import math
 import pickle
 import sqlite3
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -25,6 +26,7 @@ from krakked.backtest.runner import (
 from krakked.config import AppConfig
 from krakked.strategy.engine import StrategyEngine
 from krakked.strategy.ml_labels import (
+    FEE_ADJUSTED_CLASSIFICATION_LABEL_TYPE,
     FEE_ADJUSTED_EDGE_PREDICTION_TARGET,
     NO_POSITIVE_EDGE_PREDICTION,
     POSITIVE_EDGE_PREDICTION,
@@ -144,6 +146,7 @@ class MLWalkForwardFold:
     test_cycles: int
     predictions: list[MLWalkForwardPrediction] = field(default_factory=list)
     diagnostics: dict[str, Any] = field(default_factory=dict)
+    baselines: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -160,6 +163,7 @@ class MLWalkForwardFold:
             "regression_calibration": _build_regression_calibration(
                 self.predictions
             ),
+            "baselines": copy.deepcopy(self.baselines),
             "diagnostics": copy.deepcopy(self.diagnostics),
         }
 
@@ -176,6 +180,7 @@ class MLWalkForwardSummary:
     fee_bps: float
     slippage_bps: float
     pairs: list[str]
+    strategy_type: str
     coverage_status: str
     warnings: list[str]
     evaluation_mode: str = EVALUATION_MODE
@@ -189,6 +194,17 @@ class MLWalkForwardSummary:
         metrics = _build_prediction_metrics(predictions)
         fold_dicts = [fold.to_dict() for fold in self.folds]
         regression_calibration = _build_regression_calibration(predictions)
+        model_semantics = _build_model_semantics(
+            strategy_type=self.strategy_type,
+            predictions=predictions,
+            fold_dicts=fold_dicts,
+        )
+        cost_semantics = _build_cost_semantics(
+            predictions,
+            fee_bps=self.fee_bps,
+            slippage_bps=self.slippage_bps,
+        )
+        baselines = _aggregate_baselines(fold_dicts)
         diagnostic_warnings = _build_diagnostic_warnings(fold_dicts)
         if (
             regression_calibration.get("monotonicity", {}).get("upper_half_improves")
@@ -226,16 +242,24 @@ class MLWalkForwardSummary:
                 reason = f"Diagnostic warning: {warning}"
                 if reason not in promotable_reasons:
                     promotable_reasons.append(reason)
+        report_warnings = list(self.warnings)
+        for warning in baselines.get("warnings") or []:
+            warning_text = f"Baseline warning: {warning}"
+            if warning_text not in report_warnings:
+                report_warnings.append(warning_text)
         return {
             "start": self.start.astimezone(UTC).isoformat(),
             "end": self.end.astimezone(UTC).isoformat(),
             "strategy_id": self.strategy_id,
+            "strategy_type": self.strategy_type,
             "timeframe": self.timeframe,
             "train_bars": self.train_bars,
             "test_bars": self.test_bars,
             "evaluation_mode": self.evaluation_mode,
             "edge_scoring_mode": self.edge_scoring_mode,
             "model_state_reused_across_folds": self.model_state_reused_across_folds,
+            "model_semantics": model_semantics,
+            "cost_semantics": cost_semantics,
             "fold_count": len(self.folds),
             "pairs": list(self.pairs),
             "fee_bps": self.fee_bps,
@@ -244,10 +268,11 @@ class MLWalkForwardSummary:
                 fee_bps=self.fee_bps, slippage_bps=self.slippage_bps
             ),
             "coverage_status": self.coverage_status,
-            "warnings": list(self.warnings),
+            "warnings": report_warnings,
             "metrics": metrics,
             "confidence_buckets": _build_confidence_buckets(predictions),
             "regression_calibration": regression_calibration,
+            "baselines": baselines,
             "diagnostic_warnings": diagnostic_warnings,
             "promotion_tier": assessment.tier,
             "promotion_tiers": assessment.to_dict()["tiers"],
@@ -279,6 +304,157 @@ def _round_trip_cost_bps(*, fee_bps: float, slippage_bps: float) -> float:
 
 def _round_trip_cost_pct(*, fee_bps: float, slippage_bps: float) -> float:
     return _round_trip_cost_bps(fee_bps=fee_bps, slippage_bps=slippage_bps) / 10_000.0
+
+
+def _model_family_for_strategy_type(strategy_type: str) -> str:
+    if strategy_type == "machine_learning_regression":
+        return "regression"
+    if strategy_type in {"machine_learning", "machine_learning_alt"}:
+        return "classifier"
+    return "unknown"
+
+
+def _training_target_for_strategy_type(strategy_type: str) -> str:
+    if strategy_type == "machine_learning_regression":
+        return "signed_return_delta"
+    if strategy_type in {"machine_learning", "machine_learning_alt"}:
+        return FEE_ADJUSTED_CLASSIFICATION_LABEL_TYPE
+    return "unknown"
+
+
+def _default_prediction_target_for_strategy_type(strategy_type: str) -> str:
+    if strategy_type == "machine_learning_regression":
+        return "signed_return_delta"
+    if strategy_type in {"machine_learning", "machine_learning_alt"}:
+        return FEE_ADJUSTED_EDGE_PREDICTION_TARGET
+    return "unknown"
+
+
+def _unique_or_mixed(values: Iterable[object], *, default: object = None) -> object:
+    unique = sorted({str(value) for value in values if value is not None and str(value)})
+    if not unique:
+        return default
+    if len(unique) == 1:
+        return unique[0]
+    return "mixed"
+
+
+def _feature_semantics_from_folds(fold_dicts: list[dict[str, Any]]) -> dict[str, Any]:
+    schemas: list[str] = []
+    profiles: list[str] = []
+    for fold in fold_dicts:
+        diagnostics = fold.get("diagnostics") or {}
+        if not isinstance(diagnostics, dict):
+            continue
+        features = diagnostics.get("features") or {}
+        if not isinstance(features, dict):
+            continue
+        schema = features.get("schema_version")
+        if isinstance(schema, str) and schema:
+            schemas.append(schema)
+        profile = features.get("feature_profile")
+        if isinstance(profile, str) and profile:
+            profiles.append(profile)
+    return {
+        "feature_schema": _unique_or_mixed(schemas),
+        "feature_profile": _unique_or_mixed(profiles, default="all"),
+        "feature_schemas": sorted(set(schemas)),
+        "feature_profiles": sorted(set(profiles)),
+    }
+
+
+def _build_model_semantics(
+    *,
+    strategy_type: str,
+    predictions: list[MLWalkForwardPrediction],
+    fold_dicts: list[dict[str, Any]],
+) -> dict[str, Any]:
+    prediction_targets = [
+        prediction.prediction_target
+        for prediction in predictions
+        if prediction.prediction_target
+    ]
+    feature_semantics = _feature_semantics_from_folds(fold_dicts)
+    return {
+        "model_family": _model_family_for_strategy_type(strategy_type),
+        "strategy_type": strategy_type,
+        "training_target": _training_target_for_strategy_type(strategy_type),
+        "prediction_target": _unique_or_mixed(
+            prediction_targets,
+            default=_default_prediction_target_for_strategy_type(strategy_type),
+        ),
+        "prediction_targets": sorted(set(prediction_targets)),
+        **feature_semantics,
+    }
+
+
+def _metadata_float_values(
+    predictions: list[MLWalkForwardPrediction],
+    key: str,
+    *,
+    nested_key: str | None = None,
+) -> list[float]:
+    values: list[float] = []
+    for prediction in predictions:
+        source: object = prediction.metadata
+        if nested_key is not None:
+            nested = prediction.metadata.get(nested_key)
+            if not isinstance(nested, dict):
+                continue
+            source = nested
+        if not isinstance(source, dict):
+            continue
+        value = _finite_float(source.get(key))
+        if value is not None:
+            values.append(value)
+    return values
+
+
+def _build_cost_semantics(
+    predictions: list[MLWalkForwardPrediction],
+    *,
+    fee_bps: float,
+    slippage_bps: float,
+) -> dict[str, Any]:
+    hurdle_values = [prediction.evaluation_hurdle_pct for prediction in predictions]
+    hurdle_sources = [
+        prediction.evaluation_hurdle_source
+        for prediction in predictions
+        if prediction.evaluation_hurdle_source
+    ]
+    source_counts = dict(sorted(Counter(hurdle_sources).items()))
+    unique_hurdles = {
+        round(float(value), 12)
+        for value in hurdle_values
+        if _finite_float(value) is not None
+    }
+    primary_source = _unique_or_mixed(hurdle_sources)
+    return {
+        "fee_bps": float(fee_bps),
+        "slippage_bps": float(slippage_bps),
+        "round_trip_cost_bps": _round_trip_cost_bps(
+            fee_bps=fee_bps, slippage_bps=slippage_bps
+        ),
+        "round_trip_cost_pct": _round_trip_cost_pct(
+            fee_bps=fee_bps, slippage_bps=slippage_bps
+        ),
+        "label_cost_multipliers": sorted(
+            set(
+                _metadata_float_values(
+                    predictions, "label_cost_multiplier", nested_key="label"
+                )
+            )
+        ),
+        "edge_cost_multipliers": sorted(
+            set(_metadata_float_values(predictions, "edge_cost_multiplier"))
+        ),
+        "evaluation_hurdle_source": primary_source,
+        "evaluation_hurdle_sources": source_counts,
+        "evaluation_hurdle_pct": (
+            next(iter(unique_hurdles)) if len(unique_hurdles) == 1 else None
+        ),
+        "evaluation_hurdle_pct_quantiles": _quantiles(hurdle_values),
+    }
 
 
 def _build_walk_forward_folds(
@@ -643,6 +819,264 @@ def _threshold_counts(values: list[float]) -> list[dict[str, Any]]:
         }
         for threshold in DIAGNOSTIC_RETURN_THRESHOLDS
     ]
+
+
+def _max_drawdown_pct(equity_curve: Iterable[float]) -> float:
+    peak = 0.0
+    max_drawdown = 0.0
+    for equity in equity_curve:
+        value = float(equity)
+        if value <= 0.0:
+            continue
+        peak = max(peak, value)
+        if peak <= 0.0:
+            continue
+        drawdown = ((peak - value) / peak) * 100.0
+        max_drawdown = max(max_drawdown, drawdown)
+    return max_drawdown
+
+
+def _baseline_result(
+    *,
+    name: str,
+    equity_curve: list[float],
+    starting_cash_usd: float,
+    warnings: list[str] | None = None,
+) -> dict[str, Any]:
+    ending_equity = equity_curve[-1] if equity_curve else starting_cash_usd
+    return {
+        "name": name,
+        "starting_cash_usd": float(starting_cash_usd),
+        "ending_equity_usd": float(ending_equity),
+        "return_pct": (
+            ((float(ending_equity) - float(starting_cash_usd)) / starting_cash_usd)
+            * 100.0
+            if starting_cash_usd > 0.0
+            else 0.0
+        ),
+        "max_drawdown_pct": _max_drawdown_pct(equity_curve),
+        "warnings": list(warnings or []),
+    }
+
+
+def _buy_hold_pair_baseline(
+    market_data: BacktestMarketData,
+    *,
+    pair: str,
+    timeframe: str,
+    test_timestamps: list[int],
+    starting_cash_usd: float,
+    one_way_cost_pct: float,
+) -> dict[str, Any]:
+    display_pair = str(getattr(market_data, "get_display_pair", lambda item: item)(pair))
+    warnings: list[str] = []
+    if not test_timestamps:
+        return _baseline_result(
+            name="buy_hold",
+            equity_curve=[],
+            starting_cash_usd=starting_cash_usd,
+            warnings=[f"No test timestamps available for {display_pair}."],
+        )
+
+    start_bar = market_data.get_bar_at_or_after(pair, timeframe, test_timestamps[0])
+    if start_bar is None or float(start_bar.close) <= 0.0:
+        return _baseline_result(
+            name="buy_hold",
+            equity_curve=[],
+            starting_cash_usd=starting_cash_usd,
+            warnings=[f"Missing start bar for {display_pair}@{timeframe}."],
+        )
+
+    base_size = (starting_cash_usd * (1.0 - one_way_cost_pct)) / float(start_bar.close)
+    equity_curve: list[float] = []
+    for timestamp in test_timestamps:
+        bar = market_data.get_bar_at_or_before(pair, timeframe, timestamp)
+        if bar is None or float(bar.close) <= 0.0:
+            warnings.append(
+                f"Missing mark bar for {display_pair}@{timeframe} at {timestamp}."
+            )
+            continue
+        equity_curve.append(base_size * float(bar.close) * (1.0 - one_way_cost_pct))
+
+    result = _baseline_result(
+        name="buy_hold",
+        equity_curve=equity_curve,
+        starting_cash_usd=starting_cash_usd,
+        warnings=warnings,
+    )
+    result["pair"] = display_pair
+    result["entry_close"] = float(start_bar.close)
+    result["one_way_cost_pct"] = one_way_cost_pct
+    return result
+
+
+def _build_fold_baselines(
+    market_data: BacktestMarketData,
+    *,
+    pairs: list[str],
+    timeframe: str,
+    test_timestamps: list[int],
+    fee_bps: float,
+    slippage_bps: float,
+    starting_cash_usd: float = 10_000.0,
+) -> dict[str, Any]:
+    one_way_cost_pct = (max(float(fee_bps), 0.0) + max(float(slippage_bps), 0.0)) / 10_000.0
+    cash = _baseline_result(
+        name="cash",
+        equity_curve=[float(starting_cash_usd)] * max(len(test_timestamps), 1),
+        starting_cash_usd=starting_cash_usd,
+    )
+
+    by_pair: dict[str, Any] = {}
+    equal_weight_curves: list[list[float]] = []
+    warnings: list[str] = []
+    pair_cash = starting_cash_usd / float(len(pairs)) if pairs else starting_cash_usd
+    for pair in pairs:
+        result = _buy_hold_pair_baseline(
+            market_data,
+            pair=pair,
+            timeframe=timeframe,
+            test_timestamps=test_timestamps,
+            starting_cash_usd=starting_cash_usd,
+            one_way_cost_pct=one_way_cost_pct,
+        )
+        display_pair = str(result.get("pair") or pair)
+        by_pair[display_pair] = result
+        warnings.extend(str(warning) for warning in result.get("warnings") or [])
+
+        equal_weight_result = _buy_hold_pair_baseline(
+            market_data,
+            pair=pair,
+            timeframe=timeframe,
+            test_timestamps=test_timestamps,
+            starting_cash_usd=pair_cash,
+            one_way_cost_pct=one_way_cost_pct,
+        )
+        if equal_weight_result.get("warnings"):
+            warnings.extend(str(warning) for warning in equal_weight_result["warnings"])
+            continue
+        equity_curve = _equity_curve_from_baseline_result(
+            market_data,
+            pair=pair,
+            timeframe=timeframe,
+            test_timestamps=test_timestamps,
+            starting_cash_usd=pair_cash,
+            one_way_cost_pct=one_way_cost_pct,
+        )
+        if equity_curve:
+            equal_weight_curves.append(equity_curve)
+
+    equal_weight_curve: list[float] = []
+    if equal_weight_curves and len(equal_weight_curves) == len(pairs):
+        min_length = min(len(curve) for curve in equal_weight_curves)
+        equal_weight_curve = [
+            sum(curve[index] for curve in equal_weight_curves)
+            for index in range(min_length)
+        ]
+    elif pairs:
+        warnings.append("Equal-weight buy-hold baseline had no complete pair curves.")
+
+    return {
+        "cash": cash,
+        "buy_hold_by_pair": by_pair,
+        "buy_hold_equal_weight": _baseline_result(
+            name="buy_hold_equal_weight",
+            equity_curve=equal_weight_curve,
+            starting_cash_usd=starting_cash_usd,
+            warnings=[] if equal_weight_curve else warnings,
+        ),
+        "warnings": sorted(set(warnings)),
+    }
+
+
+def _equity_curve_from_baseline_result(
+    market_data: BacktestMarketData,
+    *,
+    pair: str,
+    timeframe: str,
+    test_timestamps: list[int],
+    starting_cash_usd: float,
+    one_way_cost_pct: float,
+) -> list[float]:
+    if not test_timestamps:
+        return []
+    start_bar = market_data.get_bar_at_or_after(pair, timeframe, test_timestamps[0])
+    if start_bar is None or float(start_bar.close) <= 0.0:
+        return []
+    base_size = (starting_cash_usd * (1.0 - one_way_cost_pct)) / float(start_bar.close)
+    curve: list[float] = []
+    for timestamp in test_timestamps:
+        bar = market_data.get_bar_at_or_before(pair, timeframe, timestamp)
+        if bar is None or float(bar.close) <= 0.0:
+            return []
+        curve.append(base_size * float(bar.close) * (1.0 - one_way_cost_pct))
+    return curve
+
+
+def _aggregate_baseline_results(items: Iterable[dict[str, Any]]) -> dict[str, Any]:
+    rows = [item for item in items if isinstance(item, dict)]
+    returns = [
+        float(value)
+        for row in rows
+        if (value := _finite_float(row.get("return_pct"))) is not None
+    ]
+    drawdowns = [
+        float(value)
+        for row in rows
+        if (value := _finite_float(row.get("max_drawdown_pct"))) is not None
+    ]
+    warnings = [
+        str(warning)
+        for row in rows
+        for warning in (row.get("warnings") or [])
+        if warning
+    ]
+    return {
+        "fold_count": len(rows),
+        "avg_return_pct": _average(returns),
+        "positive_folds": sum(1 for value in returns if value > 0.0),
+        "avg_max_drawdown_pct": _average(drawdowns),
+        "warnings": sorted(set(warnings)),
+    }
+
+
+def _aggregate_baselines(fold_dicts: list[dict[str, Any]]) -> dict[str, Any]:
+    baseline_payloads = [
+        fold.get("baselines")
+        for fold in fold_dicts
+        if isinstance(fold.get("baselines"), dict)
+    ]
+    pair_names = sorted(
+        {
+            str(pair)
+            for baselines in baseline_payloads
+            for pair in (baselines.get("buy_hold_by_pair") or {}).keys()
+        }
+    )
+    warnings = sorted(
+        {
+            str(warning)
+            for baselines in baseline_payloads
+            for warning in (baselines.get("warnings") or [])
+            if warning
+        }
+    )
+    return {
+        "cash": _aggregate_baseline_results(
+            baselines.get("cash") for baselines in baseline_payloads
+        ),
+        "buy_hold_by_pair": {
+            pair: _aggregate_baseline_results(
+                (baselines.get("buy_hold_by_pair") or {}).get(pair)
+                for baselines in baseline_payloads
+            )
+            for pair in pair_names
+        },
+        "buy_hold_equal_weight": _aggregate_baseline_results(
+            baselines.get("buy_hold_equal_weight") for baselines in baseline_payloads
+        ),
+        "warnings": warnings,
+    }
 
 
 def _regression_rows(
@@ -2521,6 +2955,7 @@ def run_ml_walk_forward(
         fee_bps=fee_bps,
         slippage_bps=slippage_bps,
     )
+    strategy_type = config_copy.strategies.configs[strategy_id].type
     effective_slippage_bps = float(
         slippage_bps
         if slippage_bps is not None
@@ -2617,6 +3052,14 @@ def run_ml_walk_forward(
                     strategy_id=strategy_id,
                     predictions=predictions,
                 )
+                baselines = _build_fold_baselines(
+                    market_data,
+                    pairs=pairs,
+                    timeframe=timeframe,
+                    test_timestamps=list(test_timestamps),
+                    fee_bps=float(fee_bps),
+                    slippage_bps=effective_slippage_bps,
+                )
                 folds.append(
                     MLWalkForwardFold(
                         fold_index=fold_index,
@@ -2628,6 +3071,7 @@ def run_ml_walk_forward(
                         test_cycles=len(test_timestamps),
                         predictions=predictions,
                         diagnostics=diagnostics,
+                        baselines=baselines,
                     )
                 )
             finally:
@@ -2655,6 +3099,7 @@ def run_ml_walk_forward(
         fee_bps=float(fee_bps),
         slippage_bps=effective_slippage_bps,
         pairs=display_pairs,
+        strategy_type=strategy_type,
         coverage_status=preflight.status,
         warnings=list(preflight.warnings),
     )

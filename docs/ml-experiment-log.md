@@ -174,3 +174,63 @@ Decision:
 - Do not promote a model or expose UI controls.
 - Treat `ohlc_v5` as the current cleaned research baseline for 4h PA regression.
 - Next useful research should address the remaining feature-health warnings and fold-1 monotonicity, rather than adding back candle-body or lower-wick features.
+
+## 2026-05-31: `ohlc_v5` Cost-Semantics and Baseline Proof Pass
+
+Change:
+
+- Bumped ML walk-forward reports to version 8.
+- Added explicit report semantics for model family, strategy type, training
+  target, prediction target, feature schema/profile, cost multipliers,
+  evaluation-hurdle source, and evaluation-hurdle values.
+- Added fold and aggregate baselines for cash, pair-level buy-and-hold, and
+  equal-weight buy-and-hold. These are research context only, not runtime
+  approval.
+
+Configuration:
+
+- Strategy: `ai_regression`
+- Backend: Passive-Aggressive regressor
+- Feature schema: `ohlc_v5`
+- Timeframe: `4h`
+- Pairs: BTC/USD and ETH/USD
+- Train/test bars: `180` / `42`
+- Costs: 10 bps fee, 20 bps slippage
+- Strict cached data only after explicit `refresh-ohlc` maintenance for BTC/USD
+  and ETH/USD `4h`
+
+Artifacts:
+
+- `reports/ml/ml-baseline-proof-20260531/ai-regression-mid_2026.json`
+- `reports/ml/ml-baseline-proof-20260531/ai-regression-recent_2026.json`
+
+Strict-data note:
+
+- Exact `early_2026` (`2025-12-01 -> 2026-01-31`) could not be rerun with
+  strict data. After the allowed targeted refresh, Kraken OHLC returned the
+  latest 721 `4h` bars, leaving the local BTC/ETH `4h` cache starting around
+  `2025-12-20`. The exact early window therefore remained partial and is a
+  strict-data miss for the promotion gate.
+
+Observed strict-window summary:
+
+| window | tier | predictions | positive calls | long precision | base hit | p95 lift | p95 selected avg return | upper half | equal-weight buy-hold avg |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: |
+| `mid_2026` | `blocked` | 336 | 162 | 24.07% | 24.70% | 1.191x | 0.0945% | false | -0.5451% |
+| `recent_2026` | `research_promising` | 252 | 88 | 14.77% | 15.87% | 0.000x | -0.2936% | false | -1.3141% |
+
+Decision:
+
+- Keep ML away from runtime strategy, risk overlay, and operator controls until a
+  shared evidence gate clears.
+- Keep ML in Krakked as active research infrastructure and checkpoint/report
+  plumbing.
+- The result does not clear the current ML promotion gate: one required strict window
+  missed data coverage, no window reached `risk_overlay_candidate`, monotonicity
+  did not hold in both runnable windows, and recent p95 selected return was negative.
+- ML remains in scope; it is currently unpromoted research infrastructure.
+  Further ML work should either start from a genuinely new written hypothesis or
+  improve data retention enough to make the intended strict windows reproducible.
+- Cross-strategy judgment should use the unified runtime scoreboard in
+  [`replay-experiment-log.md`](./replay-experiment-log.md#2026-05-31-unified-strategy-evidence-scoreboard);
+  the ML walk-forward report alone is not an apples-to-apples strategy verdict.

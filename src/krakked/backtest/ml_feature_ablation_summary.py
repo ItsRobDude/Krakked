@@ -11,7 +11,7 @@ from typing import Any, Iterable, Literal, Optional
 from krakked.backtest.ml_report_compare import expand_ml_report_paths
 from krakked.backtest.ml_reporting import ML_WALK_FORWARD_REPORT_VERSION
 
-SUPPORTED_ML_ABLATION_REPORT_VERSIONS = {6, ML_WALK_FORWARD_REPORT_VERSION}
+SUPPORTED_ML_ABLATION_REPORT_VERSIONS = {6, 7, ML_WALK_FORWARD_REPORT_VERSION}
 AblationFormat = Literal["markdown", "tsv", "json"]
 AblationSort = Literal["drop-score", "contribution", "rank", "health", "name"]
 

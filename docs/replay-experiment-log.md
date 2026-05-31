@@ -657,7 +657,8 @@ Conclusion:
 
 Decision:
 
-- Stop `rs_rotation` / `rs_rotation_v2` standalone strategy work.
+- Keep `rs_rotation` / `rs_rotation_v2` standalone strategy work research-only
+  unless a new written hypothesis changes the evidence target.
 - Move the surviving defensive behavior into a research-only portfolio-level
   market regime overlay lane.
 - Do not wire runtime blocking, runtime clamping, or config defaults until the
@@ -1148,7 +1149,7 @@ Decision:
 
 Purpose:
 
-- Stop tuning the failed `trend_core` target source and test explicit
+- Move away from tuning the current `trend_core` target source and test explicit
   target-weight adapters directly against cached `4h` OHLC.
 - Keep the work research-only: no runtime config, strategy defaults, risk
   behavior, order routing, paper/live execution, or operator UI behavior change.
@@ -1179,8 +1180,8 @@ Gate:
   drawdown in each requested window set.
 - It must be positive or near-flat in at least `3 / 5` recent windows and
   `4 / 6` long windows.
-- The current rolling `2026-05-10 -> 2026-05-30` window must not be an obvious
-  failure at 20 percent allocation.
+- The current rolling `2026-05-10 -> 2026-05-30` window must not be a clear
+  negative outlier at 20 percent allocation.
 - Average exposure must remain adequate unless the scenario is explicitly
   defensive-only.
 - Strict data must pass and reports must state `research_only=true` and
@@ -1216,12 +1217,12 @@ Run result:
 
 Decision:
 
-- The source edge is not proven. Do not wire any of these sources into runtime
-  strategy/risk behavior.
-- The top-2 momentum baseline is bad enough to remain useful as a rejection
-  baseline, not as a candidate.
+- The source edge is not currently proven. Do not wire any of these sources into
+  runtime strategy/risk behavior from this evidence alone.
+- The top-2 momentum baseline remains useful as a comparison baseline, not as a
+  candidate.
 - The defensive oversold source is the only scenario with a partial pass: it
-  passed the long-window gate at 20 percent, but failed the recent-window gate
+  passed the long-window gate at 20 percent, but did not pass the recent-window gate
   and therefore remains operator/research evidence only.
 - 5 percent allocation is scale-sensitivity evidence only; it is intentionally
   not a promotion candidate.
@@ -1251,7 +1252,7 @@ Updated artifact:
 
 Diagnosis:
 
-- The dominant failure is not one thing. Momentum-like sources often improved
+- The weak readout is not driven by one thing. Momentum-like sources often improved
   drawdown versus `rank_top2`, but they mostly did it by going cash too often;
   the sparse exposure then left too little edge to overcome fees and bad picks.
 - `rank_top2` stayed active, but frequently held the wrong pair mix and showed
@@ -1266,8 +1267,9 @@ Diagnosis:
 
 Decision:
 
-- Still no runtime wiring.
-- Do not continue with more top-N momentum variants as the next serious source.
+- Runtime wiring remains unsupported by the current evidence.
+- Do not spend the next source pass on more top-N momentum variants unless the
+  hypothesis changes.
 - If strategy-source work continues, the next source should be pair-local first:
   score each pair's own setup/exit quality and only allocate after that edge is
   proven, instead of ranking weak global momentum snapshots.
@@ -1276,7 +1278,7 @@ Decision:
 
 Purpose:
 
-- Answer the terminal strategy-source question: does any individual starter pair
+- Answer the current strategy-source question: does any individual starter pair
   have repeatable setup/exit behavior that survives fees, drawdown, recent and
   long windows, and the current rolling window?
 
@@ -1325,18 +1327,158 @@ Best 20 percent slices:
 
 Diagnosis:
 
-- ETH/USD `pair_oversold_reversion` passed the recent-window gate but failed
-  long-window proof, so it is not promotable.
+- ETH/USD `pair_oversold_reversion` passed the recent-window gate but did not
+  pass long-window proof, so it is not currently promotable.
 - SOL/USD and ETH/USD trend-pullback showed the most interesting positive
   slices, but their active exposure was too sparse and they missed too much
   pair upside while cash.
-- The final pair-local gate did not find a repeatable source that survives both
+- The latest pair-local gate did not find a repeatable source that survives both
   recent and long out-of-sample sets.
 
 Decision:
 
-- Stop strategy-source development for this lane.
-- Do not wire any source into paper runtime.
+- Pause strategy-source development for this lane until a new written
+  hypothesis exists.
+- Do not wire any source into paper runtime from this evidence alone.
 - Keep Krakked's near-term work focused on replay/data reliability, operator
   visibility, risk-state reporting, and paper-mode safety/observability unless
   a genuinely new strategy hypothesis is introduced.
+
+### 2026-05-31 Runtime Strategy Evidence Sweep At ML-Cost Proxy
+
+Purpose:
+
+- Check the existing runtime strategies under the same evidence posture used
+  for the ML proof pass instead of implying ML alone was uniquely weak.
+- Keep this as research evidence only: no runtime config, strategy defaults,
+  risk behavior, order routing, paper/live execution, or operator UI behavior
+  changed.
+
+Command:
+
+```bash
+poetry run krakked strategy-activity-sweep \
+  --config reports/ml/ml-baseline-proof-20260531/ml-proof-config.yaml \
+  --window-set recent_20d \
+  --window-set long_4h \
+  --group configured \
+  --group starter_all \
+  --group trend_core \
+  --group vol_breakout \
+  --group majors_mean_rev \
+  --strategy rs_rotation \
+  --starting-cash-usd 10000 \
+  --fee-bps 30 \
+  --strict-data \
+  --save-dir reports/strategy-evidence-sweep-20260531-runtime-30bps \
+  --json
+```
+
+Notes:
+
+- Runtime replay currently has one fill-cost input, so `--fee-bps 30` is an
+  all-in proxy for the ML proof pass' 10 bps fee plus 20 bps slippage.
+- Cash remains the primary baseline at `0.0%`.
+- Equal-weight buy-and-hold was computed separately over cached `4h` OHLC for
+  context. It is not runtime approval.
+
+Result:
+
+| group | ready windows | fill windows | positive ready windows | avg ready return | avg ready max DD | current recent | current long |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| configured | `0 / 11` | `0 / 11` | `0 / 11` | n/a | n/a | data not ready | data not ready |
+| starter_all | `0 / 11` | `0 / 11` | `0 / 11` | n/a | n/a | data not ready | data not ready |
+| trend_core | `5 / 11` | `5 / 11` | `0 / 5` | `-0.2683%` | `0.6393%` | `-0.6080%` | `-0.3329%` |
+| vol_breakout | `0 / 11` | `0 / 11` | `0 / 11` | n/a | n/a | data not ready | data not ready |
+| majors_mean_rev | `6 / 11` | `0 / 11` | `0 / 6` | `0.0000%` | `0.0000%` | `0.0000%` | `0.0000%` |
+| rs_rotation | `6 / 11` | `6 / 11` | `0 / 6` | `-0.3157%` | `0.4908%` | `-0.2910%` | `-0.3150%` |
+
+Equal-weight buy-and-hold context with the same 30 bps one-way cost:
+
+| basket | recent avg return | recent positive windows | recent avg max DD | long avg return | long positive windows | long avg max DD |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| BTC/ETH | `-3.8807%` | `2 / 5` | `10.3009%` | `-4.3960%` | `3 / 6` | `14.4256%` |
+| starter four | `-4.3540%` | `1 / 5` | `11.6860%` | `-5.3545%` | `2 / 6` | `15.6744%` |
+
+Decision:
+
+- ML should be described as retained but unpromoted under current evidence, not
+  removed or singled out from the rest of the strategy set.
+- The same posture applies to the bundled runtime strategies: the active
+  trading strategies did not beat cash in any ready/fill window, and inactive
+  strategies only matched cash by not trading.
+- `trend_core` and `rs_rotation` lost less than equal-weight buy-and-hold
+  because they were small/capped and often defensive, not because source edge
+  was proven.
+- `vol_breakout` and the configured starter pack have a separate evidence
+  hygiene problem: the strategy requires `15m` data, but strict replay coverage
+  is not maintained for that lane.
+- The next fair-comparison improvement is a durable unified strategy evidence
+  command/report that includes cash and buy-and-hold baselines directly, rather
+  than relying on separate ML and runtime-strategy scoreboards.
+
+### 2026-05-31 Unified Strategy Evidence Scoreboard
+
+Purpose:
+
+- Put ML, starter strategies, disabled research strategies, cash, and
+  equal-weight buy-and-hold into one comparable runtime replay context.
+- Replace separate hand-stitched ML/runtime comparisons with one report using
+  the same cached data rules, synthetic wallet, risk engine, order simulation,
+  and fee assumption.
+
+Command:
+
+```bash
+poetry run krakked strategy-evidence-scoreboard \
+  --config reports/ml/ml-baseline-proof-20260531/ml-proof-config.yaml \
+  --window-set recent_20d \
+  --window-set long_4h \
+  --starting-cash-usd 10000 \
+  --fee-bps 30 \
+  --strict-data \
+  --save-dir reports/strategy-evidence-scoreboard-20260531-runtime-30bps
+```
+
+Artifact:
+
+- `C:\Users\Rob\Documents\dev\krakked\reports\strategy-evidence-scoreboard-20260531-runtime-30bps\aggregate.json`
+
+Shared context:
+
+- Same `run_backtest` runtime replay path for every strategy row.
+- Same configured risk caps, order router, OMS simulation, synthetic wallet, and
+  strict cached-data rule.
+- Same 30 bps per-fill cost assumption for strategy replays and equal-weight
+  buy-and-hold entry/exit context.
+
+Scoreboard:
+
+| group | ready windows | fill windows | positive ready windows | avg ready return | avg ready max DD | current recent | current long | status |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| configured | `0 / 11` | `0 / 11` | `0 / 11` | n/a | n/a | data not ready | data not ready | `data_not_ready` |
+| starter_all | `0 / 11` | `0 / 11` | `0 / 11` | n/a | n/a | data not ready | data not ready | `data_not_ready` |
+| trend_core | `5 / 11` | `5 / 11` | `0 / 5` | `-0.2683%` | `0.6393%` | `-0.6080%` | `-0.3329%` | `unproven` |
+| vol_breakout | `0 / 11` | `0 / 11` | `0 / 11` | n/a | n/a | data not ready | data not ready | `data_not_ready` |
+| majors_mean_rev | `6 / 11` | `0 / 11` | `0 / 6` | `0.0000%` | `0.0000%` | `0.0000%` | `0.0000%` | `inactive_or_cash` |
+| rs_rotation | `6 / 11` | `6 / 11` | `0 / 6` | `-0.3157%` | `0.4908%` | `-0.2910%` | `-0.3150%` | `unproven` |
+| ai_predictor_alt | `6 / 11` | `0 / 11` | `0 / 6` | `0.0000%` | `0.0000%` | `0.0000%` | `0.0000%` | `inactive_or_cash` |
+| ai_regression | `6 / 11` | `6 / 11` | `0 / 6` | `-0.6222%` | `0.6233%` | `-0.7278%` | `-0.8452%` | `unproven` |
+
+Baselines:
+
+- Cash: `0.0000%` return, `0.0000%` max drawdown.
+- Equal-weight buy-and-hold over the starter universe: usable `11 / 11`,
+  average return `-4.8997%`, average max drawdown `13.8615%`.
+
+Decision:
+
+- The earlier ML walk-forward result is useful ML diagnostics, but it is not a
+  sufficient cross-strategy verdict by itself.
+- In the unified runtime replay scoreboard, ML is not uniquely disqualified;
+  it is one unproven strategy row among several unproven or inactive rows.
+- No configured strategy row has enough evidence to promote runtime behavior
+  today.
+- The honest near-term product posture remains: retain ML and bundled
+  strategies as research/investigation infrastructure, and use the unified
+  scoreboard for future evidence claims.

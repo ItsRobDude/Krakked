@@ -1,6 +1,6 @@
 # Krakked
 
-Krakked is a modular Kraken trading system for California and broader U.S. use, built with a strong bias toward safety, testing, clean architecture, and an eventual path to live trading.
+Krakked is a modular Kraken trading system for California and broader U.S. use, built with a strong bias toward safety, testing, clean architecture, and honest research evidence.
 
 ## 🚀 Current Status
 
@@ -15,18 +15,19 @@ This repository includes working, test-covered implementations across the core t
 | **Phase 5: Execution** | ✅ Implemented | OMS with market-data-driven routing, retries/backoff, dead-man switch hooks, panic cancel, and SQLite persistence; paper now uses a persistent synthetic account by default, with explicit `allow_live_trading` gates for live submission. |
 | **Phase 6: UI/Control** | ✅ Implemented | CLI/web interface for monitoring and manual control. See [Phase 6 contract](docs/phases/phase6.md#status--todo) for the completed scope and API details. |
 | **Phase 7: Ops & Runtime** | ✅ Implemented with follow-up validation | Orchestrator, structured logging, metrics, schema guard, CI, packaging, release workflow, backup/export/import, and Docker deployment docs are in place. |
-| **Current Product Track** | 🚧 In progress | The main remaining work is deployment proof on a real Docker host, richer strategy/ML UX, live-readiness hardening, and commercial/distribution polish. |
+| **Current Product Track** | 🚧 In progress | The main remaining work is deployment proof on a real Docker host, operator visibility, paper/execution reliability, ML/research reporting, and commercial/distribution polish. |
 
 The repo now has a strong engineering base and has moved past the original phase plan. The current work is less about building missing architecture and more about productization:
 
 * Docker-first install, upgrade, backup, and release docs now exist.
 * GitHub Actions covers CI and tag-driven release publishing.
 * Strategy weighting and ML checkpoint/resume foundations are present in code.
-* The next milestone is operational validation and UX polish rather than another major subsystem.
+* Current bundled strategies are research-stage; recent unified evidence has not yet shown a production edge.
+* The next milestone is operational validation, research honesty, and UX polish rather than another major subsystem.
 
 See the consolidated phase contract in [`docs/contract.md`](docs/contract.md) for the full design scope across Phases 1–7. Individual phase files remain available for historical reference.
 
-See [`docs/product-roadmap.md`](docs/product-roadmap.md) for the current product direction and post-phase milestones: Docker-first deployment, California/U.S. positioning, live-trading goals, strategy weighting, ML roadmap, and productization priorities.
+See [`docs/product-roadmap.md`](docs/product-roadmap.md) for the current product direction and post-phase milestones: Docker-first deployment, California/U.S. positioning, paper/execution reliability, strategy evidence boundaries, ML roadmap, and productization priorities.
 
 See [`docs/docker.md`](docs/docker.md) for the preferred self-hosted deployment flow.
 
@@ -274,7 +275,7 @@ That command remains cache-only and research-only. It tests absolute momentum,
 volatility-normalized ranking, regime cash behavior, turnover controls, and
 explicit research gates before any runtime strategy wiring.
 
-Current decision: do not continue `rs_rotation_v2` as a standalone strategy.
+Current decision: keep `rs_rotation_v2` research-only rather than treating it as a standalone runtime strategy.
 The useful follow-up is the research-only market regime overlay lane:
 
 ```bash

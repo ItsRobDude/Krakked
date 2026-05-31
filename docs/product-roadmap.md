@@ -4,13 +4,13 @@
 
 Krakked is a Docker-first, self-hosted Kraken trading product aimed at California and broader U.S. users.
 
-The intended product is:
+The intended v1 product is:
 
-- Live-trading capable, with paper trading as a staging environment rather than the final destination.
-- Strategy-driven, with per-strategy enable/disable controls and simple user-facing weights.
+- Safe paper/execution and research infrastructure first.
+- Strategy-aware, with per-strategy controls and attribution, while keeping bundled strategies clearly labeled as research-stage until evidence improves.
 - Friendly to beginners while still exposing advanced controls for experienced operators.
 - Sellable/distributable software rather than an internal-only bot.
-- Extensible to optional machine-learning strategies and continuous training workflows.
+- Extensible to optional machine-learning research and continuous training workflows.
 
 ## California / U.S. Assumptions
 
@@ -20,7 +20,7 @@ Current product assumptions:
 
 - Spot trading remains the default and lowest-complexity product scope for v1.
 - Margin and derivatives are out of scope for v1, even if Kraken supports some U.S. margin/derivatives offerings for eligible users.
-- Live trading is the target end state once deployment, controls, and safety flows are production-ready.
+- Live trading remains a plumbing and safety-readiness target, not a claim that current bundled strategies are profitable.
 
 This is a product and engineering constraint, not a claim that California law categorically forbids all non-spot activity.
 
@@ -41,15 +41,20 @@ This is a product and engineering constraint, not a claim that California law ca
    - Users can enable/disable strategies live in the UI.
    - Users can assign strategy weights on a 1-100 scale.
    - The engine normalizes weights internally and exposes attribution in the UI.
+   - Strategy surfaces must label unproven bundled strategies as research-stage until a documented gate promotes them.
 
 4. ML controls
-   - ML strategies are toggleable per strategy.
+   - ML stays in scope as research infrastructure.
    - Training can run continuously, but model promotion must be controlled and resumable.
    - Checkpoints and training metadata must survive machine crashes or shutdowns.
+   - Reports must expose training target, prediction target, cost hurdle, and
+     cash/buy-hold baselines before any runtime wiring discussion.
+   - Cross-strategy claims should use the unified evidence scoreboard, not an
+     ML-only report in isolation.
 
 5. Live-trading readiness
    - Paper mode remains the proving ground.
-   - Live mode must be operationally first-class, not treated as an afterthought.
+   - Live mode must be operationally first-class if enabled later, not treated as an afterthought.
    - Emergency controls, audits, and runtime safety checks must stay intact in live mode.
 
 ## Current Repo State
@@ -67,6 +72,7 @@ Implemented or substantially in place:
 - Backup, export, import, and upgrade-oriented operator tooling
 - Operator cockpit shell that now prefers one cockpit snapshot, partial rendering, and local section degradation over global loading deadlocks
 - Paper mode now uses a profile-scoped persistent synthetic wallet, with live exchange balances kept only as optional reference context
+- Strategy-source evidence currently does not support runtime promotion for the tested bundled/source candidates
 
 Still needing real-world validation or product work:
 
@@ -76,7 +82,9 @@ Still needing real-world validation or product work:
 - A cleaner startup/unlock/session lifecycle model so first-run and reinitialization states stay explicit and predictable
 - Simple/Advanced UI presentation split
 - ML operator controls beyond the checkpoint/resume foundation
-- Live-trading readiness drills and operator runbooks
+- Unified strategy evidence reporting with explicit cost semantics and
+  cash/buy-hold comparisons
+- Live-trading readiness drills and operator runbooks after paper/execution reliability is proven
 - Commercial packaging, licensing, and legal/business review
 
 ## Current Operator Reality
@@ -85,6 +93,8 @@ Krakked is now closer to an operator-facing control room than a hobby bot shell,
 
 - Paper mode is a local persistent synthetic wallet that can exercise the strategy, risk, OMS, and portfolio loops without transmitting live orders.
 - Exchange balances are now optional reference context in paper mode, not the paper account baseline.
+- Current strategy-source evidence does not yet support runtime promotion of `rs_rotation`, `rs_rotation_v2`, `trend_core` signal-quality claims, global top-N momentum proxies, or pair-local source variants.
+- ML remains in scope, but current models stay research-only until unified evidence beats cash and buy-hold baselines under explicit cost semantics.
 - The active dashboard now has cockpit snapshot V1 for coherent active-session refreshes, operator-safe section degradation, and visible snapshot freshness. Remaining cockpit work is mostly around startup/setup fan-out and clearer first-run lifecycle states.
 - Startup, unlock, and session-start flows have improved significantly, but they still need a tighter lifecycle model before the product feels fully polished for a first-time operator.
 
@@ -121,7 +131,7 @@ Continuous learning is in scope, but it should be implemented as a crash-safe pi
 - Training state must checkpoint atomically.
 - Interrupted training must resume cleanly after restart.
 - Inference should keep using the last known-good model if training is interrupted.
-- New model versions should be validated before they become active for trading.
+- New model versions must pass cross-window, cost-aware, cash/buy-hold baseline proof before any active-trading plan is written.
 
 ## Distribution Recommendation
 
@@ -144,12 +154,12 @@ The next milestones are product-facing rather than architecture-facing:
    - Confirm the published-image path works cleanly for a non-developer operator.
 
 2. Operator UX
-   - Improve strategy toggles, weights, and per-strategy attribution in the UI.
+   - Improve strategy toggles, weights, and per-strategy attribution in the UI without implying proven production edge.
    - Continue cockpit snapshot V1 polish by trimming remaining startup/setup fan-out and tightening first-run lifecycle states.
    - Introduce a clearer Simple vs Advanced presentation model.
    - Surface ML status and training/checkpoint information more directly.
 
-3. Live Trading Readiness
+3. Reliability and Live-Readiness Plumbing
    - Formalize operational runbooks and pre-live checklists.
    - Tighten live-mode guidance, safety prompts, and emergency control flows.
    - Practice rollback, restore, and upgrade drills on realistic deployments.

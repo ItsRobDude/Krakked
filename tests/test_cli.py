@@ -2154,6 +2154,127 @@ def test_strategy_activity_sweep_writes_reports_and_aggregate(
     assert (save_dir / "tiny" / "configured" / "w1.json").exists()
 
 
+def test_strategy_evidence_scoreboard_writes_shared_aggregate(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: Any
+) -> None:
+    captured: dict[str, Any] = {}
+    start = datetime(2026, 5, 1, tzinfo=UTC)
+
+    class _FakeStrategyActivityResult:
+        runs = [
+            {
+                "window_set": "tiny",
+                "window_id": "w1",
+                "group_id": "ai_regression",
+                "strategies": ["ai_regression"],
+                "stage": "filled",
+                "return_pct": -0.1,
+                "max_drawdown_pct": 0.2,
+                "total_actions": 1,
+                "filled_orders": 1,
+            }
+        ]
+
+        def to_report_dict(self) -> dict[str, Any]:
+            return {
+                "report_version": 1,
+                "report_type": "strategy_activity_sweep",
+                "generated_at": start.isoformat(),
+                "summary": {
+                    "research_only": True,
+                    "runtime_config_changed": False,
+                    "group_count": 1,
+                    "run_count": 1,
+                    "window_sets": ["tiny"],
+                    "groups": [],
+                    "ready_for_gate2": False,
+                },
+                "runs": [dict(self.runs[0])],
+            }
+
+    def _fake_run_strategy_activity_sweep(
+        config: Any,
+        *,
+        window_sets: Any,
+        groups: Any,
+        starting_cash_usd: float,
+        fee_bps: float,
+        strict_data: bool,
+        warmup_days: float | None,
+    ) -> _FakeStrategyActivityResult:
+        captured["config"] = config
+        captured["window_sets"] = window_sets
+        captured["groups"] = groups
+        captured["starting_cash_usd"] = starting_cash_usd
+        captured["fee_bps"] = fee_bps
+        captured["strict_data"] = strict_data
+        captured["warmup_days"] = warmup_days
+        return _FakeStrategyActivityResult()
+
+    monkeypatch.setitem(
+        cli.STRATEGY_ACTIVITY_WINDOW_SETS,
+        "tiny",
+        [("w1", "2026-05-01T00:00:00Z", "2026-05-02T00:00:00Z")],
+    )
+    monkeypatch.setattr(
+        cli,
+        "_load_backtest_config",
+        lambda args: SimpleNamespace(universe=SimpleNamespace(include_pairs=["BTC/USD"])),
+    )
+    monkeypatch.setattr(
+        cli,
+        "build_strategy_evidence_groups",
+        lambda config, group_ids=None, strategy_ids=None: [
+            SimpleNamespace(group_id="ai_regression", strategies=("ai_regression",))
+        ],
+    )
+    monkeypatch.setattr(
+        cli,
+        "run_strategy_activity_sweep",
+        _fake_run_strategy_activity_sweep,
+    )
+    monkeypatch.setattr(
+        cli,
+        "build_strategy_evidence_baselines",
+        lambda *args, **kwargs: {
+            "cash": {"return_pct": 0.0, "max_drawdown_pct": 0.0},
+            "buy_hold_equal_weight": {
+                "window_count": 1,
+                "usable_windows": 1,
+                "avg_return_pct": -1.0,
+                "avg_max_drawdown_pct": 2.0,
+            },
+        },
+    )
+
+    save_dir = tmp_path / "scoreboard"
+    exit_code = cli.main(
+        [
+            "strategy-evidence-scoreboard",
+            "--window-set",
+            "tiny",
+            "--strategy",
+            "ai_regression",
+            "--fee-bps",
+            "30",
+            "--save-dir",
+            str(save_dir),
+            "--strict-data",
+            "--json",
+        ]
+    )
+
+    assert exit_code == 0
+    assert captured["strict_data"] is True
+    assert captured["fee_bps"] == pytest.approx(30.0)
+    output = json.loads(capsys.readouterr().out)
+    aggregate = json.loads((save_dir / "aggregate.json").read_text(encoding="utf-8"))
+    assert output["report_type"] == "strategy_evidence_scoreboard"
+    assert aggregate["summary"]["scoreboard"]["same_replay_engine"] is True
+    assert aggregate["summary"]["scoreboard"]["rows"][0]["group_id"] == "ai_regression"
+    assert (save_dir / "tiny" / "ai_regression" / "w1.json").exists()
+
+
 def test_strategy_action_diagnostics_subcommand_writes_report(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -2393,18 +2514,42 @@ def test_ml_walk_forward_subcommand_writes_report(
     class _FakeWalkForwardResult:
         def to_report_dict(self) -> dict[str, Any]:
             return {
-                "report_version": 7,
+                "report_version": 8,
                 "generated_at": start.isoformat(),
                 "summary": {
                     "start": start.isoformat(),
                     "end": end.isoformat(),
                     "strategy_id": "ai_regression",
+                    "strategy_type": "machine_learning_regression",
                     "timeframe": "1h",
                     "train_bars": 12,
                     "test_bars": 6,
                     "evaluation_mode": "rolling_window_isolated",
                     "edge_scoring_mode": "intent_hurdle_aligned",
                     "model_state_reused_across_folds": False,
+                    "model_semantics": {
+                        "model_family": "regression",
+                        "strategy_type": "machine_learning_regression",
+                        "training_target": "signed_return_delta",
+                        "prediction_target": "signed_return_delta",
+                        "prediction_targets": ["signed_return_delta"],
+                        "feature_schema": "ohlc_v5",
+                        "feature_profile": "all",
+                        "feature_schemas": ["ohlc_v5"],
+                        "feature_profiles": ["all"],
+                    },
+                    "cost_semantics": {
+                        "fee_bps": 25.0,
+                        "slippage_bps": 50.0,
+                        "round_trip_cost_bps": 150.0,
+                        "round_trip_cost_pct": 0.015,
+                        "label_cost_multipliers": [],
+                        "edge_cost_multipliers": [1.0],
+                        "evaluation_hurdle_source": "effective_min_edge_pct",
+                        "evaluation_hurdle_sources": {"effective_min_edge_pct": 3},
+                        "evaluation_hurdle_pct": 0.015,
+                        "evaluation_hurdle_pct_quantiles": {"count": 3},
+                    },
                     "fold_count": 1,
                     "pairs": ["BTC/USD"],
                     "fee_bps": 25.0,
@@ -2428,6 +2573,24 @@ def test_ml_walk_forward_subcommand_writes_report(
                         "threshold_sweeps": [],
                         "predicted_delta_deciles": [],
                         "monotonicity": {"available": False},
+                    },
+                    "baselines": {
+                        "cash": {
+                            "fold_count": 1,
+                            "avg_return_pct": 0.0,
+                            "positive_folds": 0,
+                            "avg_max_drawdown_pct": 0.0,
+                            "warnings": [],
+                        },
+                        "buy_hold_by_pair": {},
+                        "buy_hold_equal_weight": {
+                            "fold_count": 1,
+                            "avg_return_pct": 0.1,
+                            "positive_folds": 1,
+                            "avg_max_drawdown_pct": 0.2,
+                            "warnings": [],
+                        },
+                        "warnings": [],
                     },
                     "diagnostic_warnings": [],
                     "promotion_tier": "blocked",

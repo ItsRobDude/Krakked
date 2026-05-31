@@ -10,7 +10,7 @@ from typing import Any, Mapping, Sequence
 
 from krakked.config import AppConfig
 
-from .runner import BacktestResult, run_backtest
+from .runner import BacktestMarketData, BacktestResult, run_backtest
 
 REPORT_TYPE_STRATEGY_ACTIVITY_SWEEP = "strategy_activity_sweep"
 REPORT_VERSION = 1
@@ -22,6 +22,7 @@ DEFAULT_STRATEGY_ACTIVITY_GROUP_IDS = (
     "vol_breakout",
     "majors_mean_rev",
 )
+DEFAULT_STRATEGY_EVIDENCE_GROUP_IDS = ("configured", "starter_all")
 STRATEGY_ACTIVITY_WINDOW_SETS = {
     "recent_20d": [
         (
@@ -138,6 +139,41 @@ def build_strategy_activity_groups(
         key = ("custom", tuple(custom))
         if key not in seen:
             groups.append(StrategyActivityGroup(group_id="custom", strategies=key[1]))
+
+    return groups
+
+
+def build_strategy_evidence_groups(
+    config: AppConfig,
+    group_ids: Sequence[str] | None = None,
+    *,
+    strategy_ids: Sequence[str] | None = None,
+) -> list[StrategyActivityGroup]:
+    """Build one scoreboard group per requested strategy plus optional packs."""
+
+    requested_groups = list(group_ids or DEFAULT_STRATEGY_EVIDENCE_GROUP_IDS)
+    requested_strategies = list(strategy_ids or config.strategies.configs.keys())
+    groups: list[StrategyActivityGroup] = []
+    seen: set[tuple[str, tuple[str, ...]]] = set()
+
+    for group_id in requested_groups:
+        strategies = _strategies_for_group(config, group_id)
+        if not strategies:
+            continue
+        key = (group_id, tuple(strategies))
+        if key in seen:
+            continue
+        groups.append(StrategyActivityGroup(group_id=group_id, strategies=key[1]))
+        seen.add(key)
+
+    for strategy_id in _clean_strategy_ids(requested_strategies):
+        if strategy_id not in config.strategies.configs:
+            raise ValueError(f"Unknown strategy id: {strategy_id}")
+        key = (strategy_id, (strategy_id,))
+        if key in seen:
+            continue
+        groups.append(StrategyActivityGroup(group_id=strategy_id, strategies=key[1]))
+        seen.add(key)
 
     return groups
 
@@ -403,6 +439,135 @@ def _activity_sweep_summary(
     }
 
 
+def build_strategy_evidence_scoreboard(
+    runs: Sequence[Mapping[str, Any]],
+    groups: Sequence[StrategyActivityGroup],
+    *,
+    baselines: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Summarize strategy replay runs as one comparable evidence table."""
+
+    rows: list[dict[str, Any]] = []
+    for group in groups:
+        group_runs = [run for run in runs if run.get("group_id") == group.group_id]
+        if not group_runs:
+            continue
+        ready_runs = [
+            run
+            for run in group_runs
+            if not run.get("error") and run.get("stage") != "data_not_ready"
+        ]
+        filled_runs = [run for run in ready_runs if run.get("stage") == "filled"]
+        ready_returns = [
+            float(run.get("return_pct", 0.0) or 0.0) for run in ready_runs
+        ]
+        filled_returns = [
+            float(run.get("return_pct", 0.0) or 0.0) for run in filled_runs
+        ]
+        ready_drawdowns = [
+            float(run.get("max_drawdown_pct", 0.0) or 0.0) for run in ready_runs
+        ]
+        positive_ready = [value for value in ready_returns if value > 0.0]
+        row = {
+            "group_id": group.group_id,
+            "strategies": list(group.strategies),
+            "window_count": len(group_runs),
+            "ready_windows": len(ready_runs),
+            "filled_windows": len(filled_runs),
+            "positive_ready_windows": len(positive_ready),
+            "avg_return_ready_pct": _mean_or_none(ready_returns),
+            "avg_return_filled_pct": _mean_or_none(filled_returns),
+            "avg_max_drawdown_ready_pct": _mean_or_none(ready_drawdowns),
+            "total_actions": sum(
+                int(run.get("total_actions", 0) or 0) for run in group_runs
+            ),
+            "total_filled_orders": sum(
+                int(run.get("filled_orders", 0) or 0) for run in group_runs
+            ),
+            "stage_counts": dict(
+                Counter(str(run.get("stage") or "unknown") for run in group_runs)
+            ),
+            "beats_cash_ready_windows": len(positive_ready),
+            "current_recent_20d": _scoreboard_window_snapshot(
+                group_runs,
+                window_set="recent_20d",
+                window_id="20260510-20260530",
+            ),
+            "current_long_4h": _scoreboard_window_snapshot(
+                group_runs,
+                window_set="long_4h",
+                window_id="20260430-20260530",
+            ),
+        }
+        row["evidence_status"] = _strategy_evidence_status(row)
+        rows.append(row)
+
+    return {
+        "research_only": True,
+        "runtime_config_changed": False,
+        "same_replay_engine": True,
+        "cash_baseline_return_pct": 0.0,
+        "rows": rows,
+        "baselines": copy.deepcopy(dict(baselines or {})),
+    }
+
+
+def build_strategy_evidence_baselines(
+    config: AppConfig,
+    *,
+    window_sets: Mapping[str, Sequence[tuple[str, str, str]]],
+    pairs: Sequence[str] | None = None,
+    timeframe: str = "4h",
+    starting_cash_usd: float = 10_000.0,
+    fee_bps: float = 25.0,
+) -> dict[str, Any]:
+    """Build cash and equal-weight buy-hold context over the scoreboard windows."""
+
+    baseline_pairs = _clean_pairs(
+        pairs if pairs is not None else config.universe.include_pairs
+    )
+    windows: list[dict[str, Any]] = []
+    for window_set, rows in window_sets.items():
+        for window_id, start_text, end_text in rows:
+            start = _parse_utc(start_text)
+            end = _parse_utc(end_text)
+            windows.append(
+                _buy_hold_equal_weight_window(
+                    config,
+                    window_set=window_set,
+                    window_id=window_id,
+                    start=start,
+                    end=end,
+                    pairs=baseline_pairs,
+                    timeframe=timeframe,
+                    starting_cash_usd=starting_cash_usd,
+                    fee_bps=fee_bps,
+                )
+            )
+
+    usable = [window for window in windows if window.get("return_pct") is not None]
+    returns = [float(window["return_pct"]) for window in usable]
+    drawdowns = [float(window["max_drawdown_pct"]) for window in usable]
+    return {
+        "cash": {
+            "return_pct": 0.0,
+            "max_drawdown_pct": 0.0,
+            "window_count": len(windows),
+        },
+        "buy_hold_equal_weight": {
+            "pairs": baseline_pairs,
+            "timeframe": timeframe,
+            "one_way_fee_bps": float(fee_bps),
+            "window_count": len(windows),
+            "usable_windows": len(usable),
+            "positive_windows": sum(1 for value in returns if value > 0.0),
+            "avg_return_pct": _mean_or_none(returns),
+            "avg_max_drawdown_pct": _mean_or_none(drawdowns),
+            "windows": windows,
+        },
+    }
+
+
 def _best_activity_group(groups: Sequence[Mapping[str, Any]]) -> str | None:
     candidates = [group for group in groups if bool(group.get("gate2_candidate"))]
     if not candidates:
@@ -418,6 +583,171 @@ def _best_activity_group(groups: Sequence[Mapping[str, Any]]) -> str | None:
         reverse=True,
     )
     return str(ranked[0]["group_id"])
+
+
+def _mean_or_none(values: Sequence[float]) -> float | None:
+    if not values:
+        return None
+    return sum(values) / len(values)
+
+
+def _scoreboard_window_snapshot(
+    runs: Sequence[Mapping[str, Any]],
+    *,
+    window_set: str,
+    window_id: str,
+) -> dict[str, Any] | None:
+    for run in runs:
+        if run.get("window_set") == window_set and run.get("window_id") == window_id:
+            return {
+                "window_set": window_set,
+                "window_id": window_id,
+                "stage": run.get("stage"),
+                "return_pct": run.get("return_pct") if not run.get("error") else None,
+                "max_drawdown_pct": (
+                    run.get("max_drawdown_pct") if not run.get("error") else None
+                ),
+                "filled_orders": run.get("filled_orders"),
+                "error": run.get("error"),
+            }
+    return None
+
+
+def _strategy_evidence_status(row: Mapping[str, Any]) -> str:
+    if int(row.get("ready_windows", 0) or 0) <= 0:
+        return "data_not_ready"
+    if int(row.get("filled_windows", 0) or 0) <= 0:
+        return "inactive_or_cash"
+    avg_return = row.get("avg_return_ready_pct")
+    if avg_return is None:
+        return "insufficient_data"
+    return "positive" if float(avg_return) > 0.0 else "unproven"
+
+
+def _clean_pairs(values: Sequence[str]) -> list[str]:
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        pair = str(value).strip()
+        if not pair or pair in seen:
+            continue
+        cleaned.append(pair)
+        seen.add(pair)
+    return cleaned
+
+
+def _buy_hold_equal_weight_window(
+    config: AppConfig,
+    *,
+    window_set: str,
+    window_id: str,
+    start: datetime,
+    end: datetime,
+    pairs: Sequence[str],
+    timeframe: str,
+    starting_cash_usd: float,
+    fee_bps: float,
+) -> dict[str, Any]:
+    if not pairs:
+        return _baseline_window_payload(
+            window_set=window_set,
+            window_id=window_id,
+            return_pct=None,
+            max_drawdown_pct=None,
+            warnings=["No buy-hold baseline pairs requested."],
+        )
+
+    market_data = BacktestMarketData(config, pairs, [timeframe], start, end)
+    coverage = [item.to_dict() for item in market_data.get_preflight().coverage]
+    timestamps = list(market_data.iter_timestamps())
+    if not timestamps:
+        return _baseline_window_payload(
+            window_set=window_set,
+            window_id=window_id,
+            return_pct=None,
+            max_drawdown_pct=None,
+            warnings=["No cached bars available for buy-hold baseline window."],
+            coverage=coverage,
+        )
+
+    pair_cash = float(starting_cash_usd) / len(pairs)
+    one_way_cost = max(float(fee_bps), 0.0) / 10_000.0
+    curves: list[list[float]] = []
+    warnings: list[str] = []
+    for pair in pairs:
+        start_bar = market_data.get_bar_at_or_after(pair, timeframe, timestamps[0])
+        if start_bar is None or float(start_bar.close) <= 0.0:
+            warnings.append(f"Missing start bar for {pair}@{timeframe}.")
+            continue
+        base_size = (pair_cash * (1.0 - one_way_cost)) / float(start_bar.close)
+        curve: list[float] = []
+        for timestamp in timestamps:
+            bar = market_data.get_bar_at_or_before(pair, timeframe, timestamp)
+            if bar is None or float(bar.close) <= 0.0:
+                warnings.append(f"Missing mark bar for {pair}@{timeframe}.")
+                curve = []
+                break
+            curve.append(base_size * float(bar.close) * (1.0 - one_way_cost))
+        if curve:
+            curves.append(curve)
+
+    if len(curves) != len(pairs):
+        return _baseline_window_payload(
+            window_set=window_set,
+            window_id=window_id,
+            return_pct=None,
+            max_drawdown_pct=None,
+            warnings=warnings,
+            coverage=coverage,
+        )
+
+    min_length = min(len(curve) for curve in curves)
+    equity_curve = [
+        sum(curve[index] for curve in curves) for index in range(min_length)
+    ]
+    ending_equity = equity_curve[-1] if equity_curve else float(starting_cash_usd)
+    return _baseline_window_payload(
+        window_set=window_set,
+        window_id=window_id,
+        return_pct=((ending_equity - starting_cash_usd) / starting_cash_usd) * 100.0,
+        max_drawdown_pct=_max_drawdown_pct(equity_curve),
+        warnings=warnings,
+        coverage=coverage,
+    )
+
+
+def _baseline_window_payload(
+    *,
+    window_set: str,
+    window_id: str,
+    return_pct: float | None,
+    max_drawdown_pct: float | None,
+    warnings: Sequence[str],
+    coverage: Sequence[Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
+    return {
+        "window_set": window_set,
+        "window_id": window_id,
+        "return_pct": return_pct,
+        "max_drawdown_pct": max_drawdown_pct,
+        "warnings": sorted(set(str(warning) for warning in warnings if warning)),
+        "coverage": copy.deepcopy(list(coverage or [])),
+    }
+
+
+def _max_drawdown_pct(equity_curve: Sequence[float]) -> float:
+    peak = 0.0
+    max_drawdown = 0.0
+    for equity in equity_curve:
+        value = float(equity)
+        if value <= 0.0:
+            continue
+        peak = max(peak, value)
+        if peak <= 0.0:
+            continue
+        drawdown = ((peak - value) / peak) * 100.0
+        max_drawdown = max(max_drawdown, drawdown)
+    return max_drawdown
 
 
 def _activity_stage(

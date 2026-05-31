@@ -65,6 +65,25 @@ poetry run krakked strategy-action-diagnostics \
 
 This is research-only. It reruns one cache-only replay and reports action stages, normalized guardrail reason buckets, per-pair activity, filled-order tape rows, and approximate fill-level realized PnL. It does not change runtime config, strategy defaults, risk behavior, or order routing.
 
+Unified strategy evidence scoreboard:
+
+```bash
+poetry run krakked strategy-evidence-scoreboard \
+  --window-set recent_20d \
+  --window-set long_4h \
+  --fee-bps 30 \
+  --strict-data \
+  --save-dir strategy-evidence-scoreboard
+```
+
+This is research-only. It runs configured packs and individual configured
+strategies, including disabled research/ML strategies, through the same cached
+runtime replay path and writes one aggregate scoreboard. Use it when comparing
+ML, starter strategies, cash, and equal-weight buy-and-hold under one replay
+context instead of stitching separate research reports together. It does not
+change runtime config, strategy defaults, risk behavior, order routing, or
+paper/live execution.
+
 trend_core signal-quality research:
 
 ```bash
@@ -128,11 +147,11 @@ poetry run krakked pair-local-source-research \
   --save-dir pair-local-source-research
 ```
 
-This is the final source-edge proof gate before any runtime strategy wiring.
+This is the current source-edge comparison gate before any runtime strategy wiring.
 It evaluates each starter pair independently against cached `4h` OHLC using
 pair-local setup/exit rules. The aggregate reports
-`promote_pair_local_source` and `runtime_wiring_approved`; runtime wiring stays
-blocked unless a pair/scenario passes both recent and long window-set gates at
+`promote_pair_local_source` and `runtime_wiring_approved`; runtime wiring is not
+eligible unless a pair/scenario passes both recent and long window-set gates at
 the primary 20 percent allocation.
 
 Saved report highlights:

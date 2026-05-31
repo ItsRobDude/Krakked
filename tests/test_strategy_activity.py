@@ -69,6 +69,63 @@ def test_build_strategy_activity_groups_includes_configured_and_starters() -> No
     assert by_id["vol_breakout"] == ("vol_breakout",)
 
 
+def test_build_strategy_evidence_groups_defaults_to_all_configured_strategies() -> None:
+    config = load_config(config_path=Path("config_examples/config.yaml"), env="paper")
+    config.strategies.enabled = ["trend_core", "majors_mean_rev"]
+
+    groups = strategy_activity.build_strategy_evidence_groups(config)
+
+    by_id = {group.group_id: group.strategies for group in groups}
+    assert by_id["configured"] == ("trend_core", "majors_mean_rev")
+    assert by_id["starter_all"] == (
+        "trend_core",
+        "vol_breakout",
+        "majors_mean_rev",
+    )
+    assert by_id["ai_regression"] == ("ai_regression",)
+    assert by_id["rs_rotation"] == ("rs_rotation",)
+
+
+def test_strategy_evidence_scoreboard_compares_cash_on_ready_windows() -> None:
+    groups = [
+        strategy_activity.StrategyActivityGroup("trend_core", ("trend_core",)),
+        strategy_activity.StrategyActivityGroup("ai_regression", ("ai_regression",)),
+    ]
+    runs = [
+        {
+            "window_set": "recent_20d",
+            "window_id": "20260510-20260530",
+            "group_id": "trend_core",
+            "stage": "filled",
+            "return_pct": -0.5,
+            "max_drawdown_pct": 0.8,
+            "total_actions": 2,
+            "filled_orders": 1,
+        },
+        {
+            "window_set": "recent_20d",
+            "window_id": "20260510-20260530",
+            "group_id": "ai_regression",
+            "stage": "filled",
+            "return_pct": 0.25,
+            "max_drawdown_pct": 0.2,
+            "total_actions": 3,
+            "filled_orders": 2,
+        },
+    ]
+
+    scoreboard = strategy_activity.build_strategy_evidence_scoreboard(runs, groups)
+
+    by_id = {row["group_id"]: row for row in scoreboard["rows"]}
+    assert by_id["trend_core"]["evidence_status"] == "unproven"
+    assert by_id["trend_core"]["beats_cash_ready_windows"] == 0
+    assert by_id["ai_regression"]["evidence_status"] == "positive"
+    assert by_id["ai_regression"]["beats_cash_ready_windows"] == 1
+    assert by_id["ai_regression"]["current_recent_20d"]["return_pct"] == pytest.approx(
+        0.25
+    )
+
+
 def test_strategy_activity_sweep_summarizes_gate2_candidate(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

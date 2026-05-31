@@ -172,12 +172,22 @@ def test_run_ml_walk_forward_scores_out_of_sample_predictions(tmp_path: Path) ->
     report = result.to_report_dict()
     summary = report["summary"]
 
-    assert report["report_version"] == 7
+    assert report["report_version"] == 8
     assert report["provenance"]["generated_by"] == "krakked ml-walk-forward"
     assert summary["strategy_id"] == "ai_regression"
+    assert summary["strategy_type"] == "machine_learning_regression"
     assert summary["timeframe"] == "1h"
     assert summary["evaluation_mode"] == "rolling_window_isolated"
     assert summary["edge_scoring_mode"] == "intent_hurdle_aligned"
+    assert summary["model_semantics"]["model_family"] == "regression"
+    assert summary["model_semantics"]["training_target"] == "signed_return_delta"
+    assert summary["model_semantics"]["prediction_target"] == "signed_return_delta"
+    assert summary["model_semantics"]["feature_schema"] == ML_FEATURE_SCHEMA_VERSION
+    assert (
+        summary["cost_semantics"]["evaluation_hurdle_source"]
+        == "effective_min_edge_pct"
+    )
+    assert summary["cost_semantics"]["edge_cost_multipliers"] == [1.0]
     assert summary["model_state_reused_across_folds"] is False
     assert summary["fold_count"] >= 1
     assert summary["metrics"]["prediction_count"] > 0
@@ -193,6 +203,18 @@ def test_run_ml_walk_forward_scores_out_of_sample_predictions(tmp_path: Path) ->
     assert summary["folds"][0]["prediction_count"] > 0
     assert summary["folds"][0]["confidence_buckets"]
     assert summary["folds"][0]["regression_calibration"]["threshold_sweeps"]
+    assert summary["folds"][0]["baselines"]["cash"]["return_pct"] == pytest.approx(
+        0.0
+    )
+    assert "buy_hold_by_pair" in summary["folds"][0]["baselines"]
+    assert summary["baselines"]["cash"]["avg_return_pct"] == pytest.approx(0.0)
+    assert "buy_hold_equal_weight" in summary["baselines"]
+    btc_baseline = summary["baselines"]["buy_hold_by_pair"]["BTC/USD"]
+    assert btc_baseline["avg_return_pct"] is not None
+    assert btc_baseline["avg_max_drawdown_pct"] is not None
+    assert summary["baselines"]["buy_hold_equal_weight"][
+        "avg_return_pct"
+    ] == pytest.approx(btc_baseline["avg_return_pct"])
     fold_diagnostics = summary["folds"][0]["diagnostics"]
     assert fold_diagnostics["models"]
     assert "coef" in fold_diagnostics["models"][0]
@@ -526,6 +548,79 @@ def test_ml_walk_forward_scores_classifier_against_label_hurdle() -> None:
     assert _build_prediction_metrics([prediction])["precision_long"] == pytest.approx(
         0.0
     )
+
+
+def test_classifier_summary_reports_fee_adjusted_label_semantics() -> None:
+    now = datetime.fromtimestamp(1_700_000_000, tz=UTC)
+    prediction = MLWalkForwardPrediction(
+        fold_index=1,
+        generated_at=now,
+        strategy_id="ai_predictor",
+        pair="BTC/USD",
+        timeframe="1h",
+        side="long",
+        intent_type="enter",
+        confidence=0.8,
+        prediction_target="fee_adjusted_positive_edge",
+        predicted_positive_edge=True,
+        predicted_direction=None,
+        current_close=100.0,
+        future_close=104.0,
+        realized_return=0.04,
+        round_trip_cost_pct=0.015,
+        evaluation_hurdle_pct=0.03,
+        evaluation_hurdle_source="label_hurdle_bps",
+        directional_correct=None,
+        evaluation_hurdle_correct=True,
+        metadata={
+            "feature_schema_version": ML_FEATURE_SCHEMA_VERSION,
+            "label": {
+                "label_cost_multiplier": 2.0,
+                "label_hurdle_bps": 300.0,
+            },
+        },
+    )
+    summary = MLWalkForwardSummary(
+        start=now,
+        end=now,
+        strategy_id="ai_predictor",
+        strategy_type="machine_learning",
+        timeframe="1h",
+        train_bars=3,
+        test_bars=3,
+        folds=[
+            MLWalkForwardFold(
+                fold_index=1,
+                train_start=now,
+                train_end=now,
+                test_start=now,
+                test_end=now,
+                train_cycles=3,
+                test_cycles=3,
+                predictions=[prediction],
+            )
+        ],
+        fee_bps=25.0,
+        slippage_bps=50.0,
+        pairs=["BTC/USD"],
+        coverage_status="ready",
+        warnings=[],
+    )
+
+    payload = summary.to_dict()
+
+    assert payload["model_semantics"]["model_family"] == "classifier"
+    assert (
+        payload["model_semantics"]["training_target"]
+        == "fee_adjusted_classification"
+    )
+    assert (
+        payload["model_semantics"]["prediction_target"]
+        == "fee_adjusted_positive_edge"
+    )
+    assert payload["cost_semantics"]["label_cost_multipliers"] == [2.0]
+    assert payload["cost_semantics"]["evaluation_hurdle_source"] == "label_hurdle_bps"
+    assert payload["cost_semantics"]["evaluation_hurdle_pct"] == pytest.approx(0.03)
 
 
 def test_ml_walk_forward_scores_regression_against_effective_min_edge() -> None:
@@ -1018,6 +1113,7 @@ def test_summary_warns_when_aggregate_regression_calibration_is_non_monotonic() 
         start=now,
         end=now,
         strategy_id="ai_regression",
+        strategy_type="machine_learning_regression",
         timeframe="1h",
         train_bars=3,
         test_bars=3,
@@ -1064,6 +1160,7 @@ def test_summary_skips_monotonicity_warning_for_insufficient_data() -> None:
         start=now,
         end=now,
         strategy_id="ai_regression",
+        strategy_type="machine_learning_regression",
         timeframe="1h",
         train_bars=3,
         test_bars=3,
@@ -1300,6 +1397,7 @@ def test_summary_promotable_reasons_are_clean_for_operational_tier() -> None:
         start=now,
         end=now,
         strategy_id="ai_regression",
+        strategy_type="machine_learning_regression",
         timeframe="4h",
         train_bars=40,
         test_bars=40,

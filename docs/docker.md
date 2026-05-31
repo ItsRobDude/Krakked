@@ -103,7 +103,9 @@ This is the recommended operator workflow for customers and non-developer instal
 
 - `KRAKKED_CONFIG_DIR` and `KRAKKED_DATA_DIR` are supported environment overrides for container deployments.
 - The container health check targets `GET /api/health`.
-- `paper` is the recommended starting environment; treat it as staging for live trading, not the final product mode.
+- `paper` is the recommended operating and research environment for v1; move to
+  `live` only after deployment, safety, and strategy evidence are deliberately
+  reviewed.
 - Before switching to `live`, make sure the live overlay enables auth and points to the persisted state paths above.
 - The image entrypoint is `krakked`, so operational helpers can be run directly through Compose:
 

@@ -63,6 +63,9 @@ Krakked now boots with a conservative operator-first starter profile unless you 
 * `rs_rotation` remains configured with conservative caps for manual research,
   but is disabled by default after replay evidence showed the v1 signal was not
   promotion-ready.
+* The starter pack and ML strategies are research-stage until the unified
+  strategy evidence scoreboard shows a repeatable edge under the same replay
+  context.
 * The shipped examples intentionally split defaults by environment:
   * `paper` enables the active starter pack above
   * `live` keeps the same configured strategies, but enables only `trend_core` and `majors_mean_rev` by default

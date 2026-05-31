@@ -10,7 +10,7 @@ from typing import Any, Iterable, Literal, Optional
 
 from krakked.backtest.ml_reporting import ML_WALK_FORWARD_REPORT_VERSION
 
-SUPPORTED_ML_COMPARE_REPORT_VERSIONS = {5, 6, ML_WALK_FORWARD_REPORT_VERSION}
+SUPPORTED_ML_COMPARE_REPORT_VERSIONS = {5, 6, 7, ML_WALK_FORWARD_REPORT_VERSION}
 CompareFormat = Literal["markdown", "tsv", "json"]
 CompareSort = Literal["name", "precision-long", "p95-lift", "positive-calls"]
 
@@ -248,6 +248,14 @@ def _iter_model_diagnostics(summary: dict[str, Any]) -> Iterable[dict[str, Any]]
 
 
 def _feature_schema(summary: dict[str, Any], model: dict[str, Any]) -> Optional[str]:
+    model_semantics = summary.get("model_semantics") or {}
+    if isinstance(model_semantics, dict):
+        semantic_schema = _optional_str(model_semantics.get("feature_schema"))
+        if semantic_schema and semantic_schema != "mixed":
+            profile = _optional_str(model_semantics.get("feature_profile"))
+            if profile and profile not in {"all", "mixed"}:
+                return f"{semantic_schema}/{profile}"
+            return semantic_schema
     for fold in summary.get("folds") or []:
         if not isinstance(fold, dict):
             continue
