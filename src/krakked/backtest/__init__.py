@@ -1,5 +1,11 @@
 """Backtesting utilities for running strategies against stored OHLC data."""
 
+from .action_diagnostics import (
+    StrategyActionDiagnosticsResult,
+    build_strategy_action_diagnostics,
+    normalize_action_reason,
+    run_strategy_action_diagnostics,
+)
 from .market_regime_exposure import (
     DEFAULT_EXPOSURE_OVERLAY_MODES,
     DEFAULT_EXPOSURE_SCENARIOS,
@@ -98,6 +104,7 @@ __all__ = [
     "RSRotationV2ResearchParams",
     "RSRotationV2ResearchResult",
     "STARTER_STRATEGIES",
+    "StrategyActionDiagnosticsResult",
     "STRATEGY_ACTIVITY_WINDOW_SETS",
     "StrategyActivityGroup",
     "StrategyActivitySweepResult",
@@ -105,6 +112,7 @@ __all__ = [
     "apply_strategy_activity_override",
     "backtest_strict_data_details",
     "build_backtest_preflight",
+    "build_strategy_action_diagnostics",
     "build_strategy_activity_groups",
     "classify_market_regime_snapshot",
     "DEFAULT_STRATEGY_ACTIVITY_GROUP_IDS",
@@ -119,9 +127,11 @@ __all__ = [
     "get_latest_ml_walk_forward_report_path",
     "load_backtest_report",
     "load_ml_walk_forward_report",
+    "normalize_action_reason",
     "publish_latest_backtest_report",
     "publish_latest_ml_walk_forward_report",
     "run_backtest",
+    "run_strategy_action_diagnostics",
     "run_market_regime_exposure_research",
     "run_market_regime_overlay_backtest",
     "run_market_regime_research",

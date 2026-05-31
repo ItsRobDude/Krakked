@@ -40,6 +40,7 @@ from krakked.backtest import (
     run_market_regime_throttle_backtest,
     run_ml_walk_forward,
     run_rs_rotation_v2_research,
+    run_strategy_action_diagnostics,
     run_strategy_activity_sweep,
     write_backtest_report,
     write_ml_walk_forward_report,
@@ -1345,6 +1346,81 @@ def _add_strategy_activity_sweep_arguments(
     )
 
 
+def _add_strategy_action_diagnostics_arguments(
+    subparser: argparse.ArgumentParser,
+) -> None:
+    subparser.add_argument(
+        "--start",
+        required=True,
+        help="Replay window start time in ISO-8601 form",
+    )
+    subparser.add_argument(
+        "--end",
+        required=True,
+        help="Replay window end time in ISO-8601 form",
+    )
+    subparser.add_argument(
+        "--config",
+        help="Optional path to the base config.yaml to use",
+    )
+    subparser.add_argument(
+        "--pair",
+        action="append",
+        help="Limit the replay universe to one pair; repeat to include multiple pairs",
+    )
+    subparser.add_argument(
+        "--strategy",
+        action="append",
+        help="Limit replay to one strategy; repeat to include multiple strategies",
+    )
+    subparser.add_argument(
+        "--timeframe",
+        action="append",
+        help="Limit replay to one timeframe; repeat to include multiple timeframes",
+    )
+    subparser.add_argument(
+        "--starting-cash-usd",
+        type=float,
+        default=10_000.0,
+        help="Synthetic starting USD wallet balance for the replay",
+    )
+    subparser.add_argument(
+        "--fee-bps",
+        type=float,
+        default=25.0,
+        help="Flat taker fee in basis points applied to simulated fills",
+    )
+    subparser.add_argument(
+        "--warmup-days",
+        type=float,
+        default=None,
+        help=(
+            "Days of cached OHLC before --start to expose for replay warmup; "
+            "defaults to the configured strategy/risk lookback requirement"
+        ),
+    )
+    subparser.add_argument(
+        "--max-fill-rows",
+        type=int,
+        default=100,
+        help="Maximum filled-order tape rows to include in the JSON report",
+    )
+    subparser.add_argument(
+        "--save-report",
+        help="Optional JSON path for a durable diagnostics report artifact",
+    )
+    subparser.add_argument(
+        "--strict-data",
+        action="store_true",
+        help="Fail if any requested pair/timeframe is missing or partially covered",
+    )
+    subparser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print the strategy action diagnostics report as JSON",
+    )
+
+
 def _print_market_regime_exposure_sweep_summary(payload: dict[str, Any]) -> None:
     summary = payload["summary"]
     print("Market regime exposure sweep completed.")
@@ -1391,6 +1467,52 @@ def _print_strategy_activity_sweep_summary(payload: dict[str, Any]) -> None:
     else:
         print("Best Gate 2 candidate: none")
     print(f"Saved aggregate: {summary['aggregate_path']}")
+
+
+def _print_strategy_action_diagnostics_summary(
+    payload: dict[str, Any],
+    report_path: str | None,
+) -> None:
+    summary = payload["summary"]
+    print("Strategy action diagnostics completed.")
+    print(f"Window: {summary['start']} -> {summary['end']}")
+    print(
+        f"Stage: {summary['stage_assessment']} | Trust: {summary['trust_level']} | "
+        f"Warmup: {summary['warmup_status']} ({summary['warmup_days']:g} days)"
+    )
+    print(
+        f"Actions: {summary['total_actions']} total, "
+        f"{summary['executable_actions']} executable, "
+        f"{summary['blocked_actions']} blocked, "
+        f"{summary['clamped_actions']} clamped, "
+        f"{summary['none_actions']} none"
+    )
+    print(
+        f"Orders: {summary['total_orders']} total, "
+        f"{summary['filled_orders']} filled, "
+        f"{summary['rejected_orders']} rejected"
+    )
+    print(
+        f"Return: {float(summary['return_pct']):+.4f}% | "
+        f"Max drawdown: {float(summary['max_drawdown_pct']):.4f}% | "
+        f"Approx fill PnL: ${float(summary['approx_fill_realized_pnl_usd']):+,.2f}"
+    )
+    if summary.get("blocked_reason_buckets"):
+        reason, count = next(iter(summary["blocked_reason_buckets"].items()))
+        print(f"Top blocked bucket: {reason} ({count})")
+    if summary.get("clamped_reason_buckets"):
+        reason, count = next(iter(summary["clamped_reason_buckets"].items()))
+        print(f"Top clamped bucket: {reason} ({count})")
+    if payload.get("pair_diagnostics"):
+        print("Pair diagnostics:")
+        for row in payload["pair_diagnostics"][:5]:
+            print(
+                f"- {row['pair']}: actions {row['total_actions']}, "
+                f"fills {row['filled_orders']}, "
+                f"approx PnL ${float(row['approx_realized_pnl_usd']):+,.2f}"
+            )
+    if report_path:
+        print(f"Saved report: {report_path}")
 
 
 def _print_market_regime_overlay_backtest_summary(
@@ -1785,8 +1907,7 @@ def _backtest_preflight_command(args: argparse.Namespace) -> int:
     strict_details = backtest_strict_data_details(result.preflight)
     if args.strict_data and strict_details:
         return _print_error(
-            "Backtest preflight failed in strict mode: "
-            + "; ".join(strict_details)
+            "Backtest preflight failed in strict mode: " + "; ".join(strict_details)
         )
 
     payload = result.to_dict()
@@ -1866,7 +1987,10 @@ def _backtest_command(args: argparse.Namespace) -> int:
             if isinstance(preflight_payload, dict)
             else None
         )
-        if warmup_status not in {"ready", "disabled"} and not args.allow_non_ready_publish:
+        if (
+            warmup_status not in {"ready", "disabled"}
+            and not args.allow_non_ready_publish
+        ):
             status_text = str(warmup_status or "unknown")
             return _print_error(
                 "Backtest latest-report publish refused: warmup status is "
@@ -2379,6 +2503,54 @@ def _strategy_activity_sweep_command(args: argparse.Namespace) -> int:
         print(json.dumps(payload, indent=2))
     else:
         _print_strategy_activity_sweep_summary(payload)
+    return 0
+
+
+def _strategy_action_diagnostics_command(args: argparse.Namespace) -> int:
+    """Run one cache-only replay and emit action-quality diagnostics."""
+
+    try:
+        config = _load_backtest_config(args)
+        result = run_strategy_action_diagnostics(
+            config,
+            start=_parse_datetime_arg(args.start),
+            end=_parse_datetime_arg(args.end),
+            strategies=args.strategy,
+            timeframes=args.timeframe,
+            starting_cash_usd=float(args.starting_cash_usd),
+            fee_bps=float(args.fee_bps),
+            strict_data=bool(args.strict_data),
+            warmup_days=args.warmup_days,
+            max_fill_rows=int(args.max_fill_rows),
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _print_error(f"Strategy action diagnostics failed: {exc}")
+
+    payload = result.to_report_dict()
+    payload["summary"]["config_path"] = (
+        str(Path(args.config).expanduser().resolve()) if args.config else None
+    )
+    payload["provenance"] = {
+        "app_version": APP_VERSION,
+        "config_path": (
+            str(Path(args.config).expanduser().resolve()) if args.config else None
+        ),
+        "generated_by": "krakked strategy-action-diagnostics",
+    }
+
+    saved_report_path: str | None = None
+    if args.save_report:
+        try:
+            saved_report_path = _write_backtest_report(payload, args.save_report)
+        except Exception as exc:  # noqa: BLE001
+            return _print_error(f"Strategy action diagnostics write failed: {exc}")
+        payload["summary"]["report_path"] = saved_report_path
+        _write_backtest_report(payload, saved_report_path)
+
+    if args.json:
+        print(json.dumps(payload, indent=2))
+    else:
+        _print_strategy_action_diagnostics_summary(payload, saved_report_path)
     return 0
 
 
@@ -3519,6 +3691,15 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     _add_strategy_activity_sweep_arguments(strategy_activity_sweep_parser)
     strategy_activity_sweep_parser.set_defaults(func=_strategy_activity_sweep_command)
+
+    strategy_action_diagnostics_parser = subparsers.add_parser(
+        "strategy-action-diagnostics",
+        help="Inspect action, guardrail, and fill quality for one cached replay window",
+    )
+    _add_strategy_action_diagnostics_arguments(strategy_action_diagnostics_parser)
+    strategy_action_diagnostics_parser.set_defaults(
+        func=_strategy_action_diagnostics_command
+    )
 
     ml_walk_forward_parser = subparsers.add_parser(
         "ml-walk-forward",

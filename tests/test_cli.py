@@ -1828,6 +1828,106 @@ def test_strategy_activity_sweep_writes_reports_and_aggregate(
     assert (save_dir / "tiny" / "configured" / "w1.json").exists()
 
 
+def test_strategy_action_diagnostics_subcommand_writes_report(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: Any,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    class _FakeActionDiagnosticsResult:
+        def to_report_dict(self) -> dict[str, Any]:
+            return {
+                "report_version": 1,
+                "report_type": "strategy_action_diagnostics",
+                "generated_at": "2026-05-31T00:00:00+00:00",
+                "summary": {
+                    "research_only": True,
+                    "runtime_config_changed": False,
+                    "start": "2026-05-10T00:00:00+00:00",
+                    "end": "2026-05-30T00:00:00+00:00",
+                    "selected_strategies": ["trend_core"],
+                    "selected_timeframes": ["1h"],
+                    "trust_level": "limited",
+                    "trust_note": "test",
+                    "warmup_status": "ready",
+                    "warmup_days": 30.0,
+                    "total_cycles": 1,
+                    "total_actions": 1,
+                    "blocked_actions": 0,
+                    "clamped_actions": 0,
+                    "none_actions": 0,
+                    "executable_actions": 1,
+                    "total_orders": 1,
+                    "filled_orders": 1,
+                    "rejected_orders": 0,
+                    "execution_errors": 0,
+                    "return_pct": -0.1,
+                    "max_drawdown_pct": 0.2,
+                    "realized_pnl_usd": -1.0,
+                    "approx_fill_realized_pnl_usd": -1.0,
+                    "gross_turnover_usd": 100.0,
+                    "blocked_reason_buckets": {},
+                    "clamped_reason_buckets": {},
+                    "none_reason_buckets": {},
+                    "action_type_counts": {"open": 1},
+                    "order_status_counts": {"filled": 1},
+                    "stage_assessment": "filled",
+                },
+                "strategy_diagnostics": [],
+                "pair_diagnostics": [],
+                "fill_tape": [],
+                "cycle_diagnostics": {},
+                "preflight": None,
+            }
+
+    def _fake_run_strategy_action_diagnostics(config: Any, **kwargs: Any) -> Any:
+        captured["config"] = config
+        captured.update(kwargs)
+        return _FakeActionDiagnosticsResult()
+
+    monkeypatch.setattr(cli, "_load_backtest_config", lambda args: object())
+    monkeypatch.setattr(
+        cli,
+        "run_strategy_action_diagnostics",
+        _fake_run_strategy_action_diagnostics,
+    )
+
+    report_path = tmp_path / "action-diagnostics.json"
+    exit_code = cli.main(
+        [
+            "strategy-action-diagnostics",
+            "--start",
+            "2026-05-10T00:00:00Z",
+            "--end",
+            "2026-05-30T00:00:00Z",
+            "--strategy",
+            "trend_core",
+            "--timeframe",
+            "1h",
+            "--warmup-days",
+            "30",
+            "--max-fill-rows",
+            "25",
+            "--save-report",
+            str(report_path),
+            "--strict-data",
+            "--json",
+        ]
+    )
+
+    assert exit_code == 0
+    assert captured["strategies"] == ["trend_core"]
+    assert captured["timeframes"] == ["1h"]
+    assert captured["warmup_days"] == pytest.approx(30.0)
+    assert captured["max_fill_rows"] == 25
+    assert captured["strict_data"] is True
+    output = json.loads(capsys.readouterr().out)
+    saved = json.loads(report_path.read_text(encoding="utf-8"))
+    assert output["report_type"] == "strategy_action_diagnostics"
+    assert saved["summary"]["stage_assessment"] == "filled"
+
+
 def test_market_regime_research_subcommand_returns_nonzero_on_failure(
     monkeypatch: pytest.MonkeyPatch, capsys: Any
 ) -> None:

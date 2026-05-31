@@ -52,6 +52,19 @@ Useful flags:
 - `--db-path backtest.db`: keep the SQLite decisions/orders/results for inspection after the run
 - `--json`: print the replay summary as JSON
 
+Action-quality diagnostics:
+
+```bash
+poetry run krakked strategy-action-diagnostics \
+  --start 2026-05-10T00:00:00Z \
+  --end 2026-05-30T00:00:00Z \
+  --strategy trend_core \
+  --strict-data \
+  --save-report action-diagnostics.json
+```
+
+This is research-only. It reruns one cache-only replay and reports action stages, normalized guardrail reason buckets, per-pair activity, filled-order tape rows, and approximate fill-level realized PnL. It does not change runtime config, strategy defaults, risk behavior, or order routing.
+
 Saved report highlights:
 
 - requested window, pairs, timeframes, and bankroll
