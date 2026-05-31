@@ -8,8 +8,10 @@ import pytest
 from krakked.backtest.target_source_research import (
     TargetSourceResearchParams,
     aggregate_target_source_research_reports,
+    evaluate_target_source_scenarios,
     select_target_source_weights,
 )
+from krakked.market_data.models import OHLCBar
 
 
 def _timeline(count: int) -> list[int]:
@@ -21,6 +23,20 @@ def _timeline(count: int) -> list[int]:
 
 def _price_map(prices: list[float]) -> dict[int, float]:
     return {ts: price for ts, price in zip(_timeline(len(prices)), prices)}
+
+
+def _bars(prices: list[float]) -> list[OHLCBar]:
+    return [
+        OHLCBar(
+            timestamp=ts,
+            open=price,
+            high=price,
+            low=price,
+            close=price,
+            volume=1.0,
+        )
+        for ts, price in zip(_timeline(len(prices)), prices)
+    ]
 
 
 def _selector_params(**overrides: Any) -> TargetSourceResearchParams:
@@ -177,6 +193,80 @@ def test_unknown_target_source_scenario_fails_clearly() -> None:
             index=2,
             params=_selector_params(),
         )
+
+
+def test_target_source_run_emits_rebalance_trace_and_diagnostics() -> None:
+    start = datetime.fromtimestamp(_timeline(8)[0], tz=UTC)
+    end = datetime.fromtimestamp(_timeline(8)[-1], tz=UTC)
+
+    result = evaluate_target_source_scenarios(
+        {
+            "BTC/USD": _bars([100, 101, 102, 103, 104, 105, 106, 107]),
+            "ETH/USD": _bars([100, 100, 101, 101, 102, 102, 103, 103]),
+        },
+        start=start,
+        end=end,
+        pairs=["BTC/USD", "ETH/USD"],
+        scenarios=["rank_top2"],
+        params=_selector_params(rebalance_interval_bars=2),
+        preflight={"missing_series": [], "partial_series": []},
+    )
+
+    run = result.runs[0]
+    trace = run["rebalance_trace"]
+    active_trace = next(row for row in trace if row["selected_pairs"])
+    assert active_trace["candidate_scores"]["BTC/USD"]["eligible"] is True
+    assert active_trace["target_weights"]["BTC/USD"] == pytest.approx(0.10)
+    assert active_trace["equity_before_usd"] > 0.0
+    assert active_trace["fees_usd"] >= 0.0
+    assert active_trace["selected_forward_return_pct"] is not None
+    assert run["diagnostics"]["active_rebalance_count"] > 0
+    assert "pair_edge_summary" in run["diagnostics"]
+
+
+def test_target_source_diagnostics_marks_sparse_cash_source() -> None:
+    start = datetime.fromtimestamp(_timeline(8)[0], tz=UTC)
+    end = datetime.fromtimestamp(_timeline(8)[-1], tz=UTC)
+
+    result = evaluate_target_source_scenarios(
+        {
+            "BTC/USD": _bars([100, 101, 102, 103, 104, 105, 106, 107]),
+            "ETH/USD": _bars([100, 100, 101, 101, 102, 102, 103, 103]),
+        },
+        start=start,
+        end=end,
+        pairs=["BTC/USD", "ETH/USD"],
+        scenarios=["oversold_reversion_top1"],
+        params=_selector_params(rebalance_interval_bars=2),
+        preflight={"missing_series": [], "partial_series": []},
+    )
+
+    diagnostics = result.runs[0]["diagnostics"]
+    assert diagnostics["cash_target_rebalance_pct"] == pytest.approx(100.0)
+    assert diagnostics["sparse_exposure"] is True
+
+
+def test_target_source_diagnostics_reports_hidden_pair_edge() -> None:
+    start = datetime.fromtimestamp(_timeline(10)[0], tz=UTC)
+    end = datetime.fromtimestamp(_timeline(10)[-1], tz=UTC)
+
+    result = evaluate_target_source_scenarios(
+        {
+            "BTC/USD": _bars([100, 101, 102, 103, 104, 105, 106, 107, 108, 109]),
+            "ETH/USD": _bars([100, 98, 96, 94, 92, 90, 88, 86, 84, 82]),
+        },
+        start=start,
+        end=end,
+        pairs=["BTC/USD", "ETH/USD"],
+        scenarios=["rank_top2"],
+        params=_selector_params(rebalance_interval_bars=2),
+        preflight={"missing_series": [], "partial_series": []},
+    )
+
+    diagnostics = result.runs[0]["diagnostics"]
+    assert diagnostics["pair_level_edge_hidden"] is True
+    assert "pair_edge_hidden_inside_bad_allocation" in diagnostics["failure_reasons"]
+    assert any(row["pair"] == "BTC/USD" for row in diagnostics["pair_edge_candidates"])
 
 
 def test_aggregate_gate_compares_against_rank_top2() -> None:

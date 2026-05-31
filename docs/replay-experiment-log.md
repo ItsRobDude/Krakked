@@ -1225,3 +1225,49 @@ Decision:
   and therefore remains operator/research evidence only.
 - 5 percent allocation is scale-sensitivity evidence only; it is intentionally
   not a promotion candidate.
+
+### 2026-05-30 Target-Source Loss Decomposition
+
+The target-source harness now writes per-rebalance traces and diagnostic failure
+buckets for each run. Trace rows include timestamp, selected pairs, per-pair
+scores/features, target weights, cash targeting, equity/exposure before and
+after rebalance, fees, next-rebalance forward returns, and selected-vs-best
+forward-return gaps.
+
+Updated artifact:
+
+- `C:\Users\Rob\AppData\Local\krakked\krakked\reports\backtests\target-source-research-20260530\aggregate.json`
+
+20 percent decomposition summary:
+
+| Scenario | Avg selected-vs-best next-rebalance gap | Avg cash target rebalances | Avg fee drag | Hidden pair-edge windows |
+| --- | ---: | ---: | ---: | ---: |
+| rank_top2 | `-1.0437%` | `3.9%` | `0.4671%` | `7` |
+| dual_momentum_top2 | `-1.3580%` | `77.4%` | `0.2502%` | `2` |
+| vol_adj_dual_momentum_top2 | `-1.2642%` | `77.4%` | `0.2504%` | `1` |
+| pullback_vol_adj_top2 | `-1.1594%` | `79.6%` | `0.3194%` | `1` |
+| oversold_reversion_top1 | `-1.0296%` | `76.6%` | `0.5913%` | `7` |
+| hybrid_state_source | `-1.1327%` | `60.6%` | `0.6823%` | `9` |
+
+Diagnosis:
+
+- The dominant failure is not one thing. Momentum-like sources often improved
+  drawdown versus `rank_top2`, but they mostly did it by going cash too often;
+  the sparse exposure then left too little edge to overcome fees and bad picks.
+- `rank_top2` stayed active, but frequently held the wrong pair mix and showed
+  slow-exit/negative-momentum holds in losing windows.
+- The defensive/oversold family exposed possible pair-level edges in isolated
+  windows, but allocation timing was not good enough: selected pairs still
+  trailed the best available pair by about one percentage point per rebalance
+  on average.
+- Hidden pair-edge windows mean the universe sometimes contains useful
+  single-pair behavior, but the tested allocation rules are too crude to
+  harvest it reliably.
+
+Decision:
+
+- Still no runtime wiring.
+- Do not continue with more top-N momentum variants as the next serious source.
+- If strategy-source work continues, the next source should be pair-local first:
+  score each pair's own setup/exit quality and only allocate after that edge is
+  proven, instead of ranking weak global momentum snapshots.

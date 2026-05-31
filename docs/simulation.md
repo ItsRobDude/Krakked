@@ -100,12 +100,19 @@ poetry run krakked target-source-research \
 
 This is research-only. It evaluates explicit dynamic target-weight adapters
 against cached `4h` starter-universe OHLC and writes one report per
-window/scenario/allocation plus `aggregate.json`. It does not change runtime
-config, strategy defaults, risk behavior, order routing, paper/live execution,
-or operator UI behavior. `rank_top2` is the comparison baseline; no source is a
-runtime candidate unless the aggregate gate beats that baseline on return and
-drawdown across the requested window sets while preserving adequate exposure
-and strict data coverage.
+window/scenario/allocation plus `aggregate.json`. Each run report includes
+`rebalance_trace` rows with the rebalance timestamp, selected pairs, per-pair
+scores/features, target weights, equity/exposure before and after rebalance,
+fees, forward returns to the next rebalance, and whether the source targeted
+cash. Each run also includes a `diagnostics` block that buckets likely failure
+modes: wrong asset selection, late/chasing entries, slow exits, sparse exposure,
+fee/churn drag, and pair-level edge hidden inside bad allocation rules.
+
+It does not change runtime config, strategy defaults, risk behavior, order
+routing, paper/live execution, or operator UI behavior. `rank_top2` is the
+comparison baseline; no source is a runtime candidate unless the aggregate gate
+beats that baseline on return and drawdown across the requested window sets
+while preserving adequate exposure and strict data coverage.
 
 Saved report highlights:
 

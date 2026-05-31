@@ -237,10 +237,31 @@ def select_target_source_weights(
     """Return scenario target weights for one rebalance point."""
 
     params = params or TargetSourceResearchParams()
+    decision = _target_source_decision(
+        scenario_id,
+        pairs=pairs,
+        price_maps=price_maps,
+        timeline=timeline,
+        index=index,
+        params=params,
+    )
+    return copy.deepcopy(decision["target_weights"])
+
+
+def _target_source_decision(
+    scenario_id: str,
+    *,
+    pairs: Sequence[str],
+    price_maps: Mapping[str, Mapping[int, float]],
+    timeline: Sequence[int],
+    index: int,
+    params: TargetSourceResearchParams,
+) -> dict[str, Any]:
     _validate_target_source_scenarios([scenario_id])
-    selected: list[str]
+    scenario_state = "default"
+    selection_rule = scenario_id
     if scenario_id == "rank_top2":
-        selected = _rank_top_momentum_pairs(
+        candidates = _momentum_candidate_rows(
             pairs,
             price_maps=price_maps,
             timeline=timeline,
@@ -253,7 +274,7 @@ def select_target_source_weights(
             allow_partial_long_lookback=True,
         )
     elif scenario_id == "dual_momentum_top2":
-        selected = _rank_top_momentum_pairs(
+        candidates = _momentum_candidate_rows(
             pairs,
             price_maps=price_maps,
             timeline=timeline,
@@ -266,7 +287,7 @@ def select_target_source_weights(
             allow_partial_long_lookback=False,
         )
     elif scenario_id == "vol_adj_dual_momentum_top2":
-        selected = _rank_top_momentum_pairs(
+        candidates = _momentum_candidate_rows(
             pairs,
             price_maps=price_maps,
             timeline=timeline,
@@ -279,7 +300,7 @@ def select_target_source_weights(
             allow_partial_long_lookback=False,
         )
     elif scenario_id == "pullback_vol_adj_top2":
-        selected = _rank_top_momentum_pairs(
+        candidates = _momentum_candidate_rows(
             pairs,
             price_maps=price_maps,
             timeline=timeline,
@@ -292,7 +313,7 @@ def select_target_source_weights(
             allow_partial_long_lookback=False,
         )
     elif scenario_id == "oversold_reversion_top1":
-        selected = _oversold_reversion_pairs(
+        candidates = _oversold_candidate_rows(
             pairs,
             price_maps=price_maps,
             timeline=timeline,
@@ -307,7 +328,9 @@ def select_target_source_weights(
             index=index,
             params=params,
         ):
-            selected = _rank_top_momentum_pairs(
+            scenario_state = "risk_on_momentum"
+            selection_rule = "vol_adj_dual_momentum_top2"
+            candidates = _momentum_candidate_rows(
                 pairs,
                 price_maps=price_maps,
                 timeline=timeline,
@@ -320,7 +343,9 @@ def select_target_source_weights(
                 allow_partial_long_lookback=False,
             )
         else:
-            selected = _oversold_reversion_pairs(
+            scenario_state = "non_risk_on_oversold_or_cash"
+            selection_rule = "oversold_reversion_top1"
+            candidates = _oversold_candidate_rows(
                 pairs,
                 price_maps=price_maps,
                 timeline=timeline,
@@ -330,9 +355,41 @@ def select_target_source_weights(
     else:
         raise ValueError(f"Unsupported scenario: {scenario_id}")
 
+    eligible = [row for row in candidates if bool(row["eligible"])]
+    if selection_rule == "oversold_reversion_top1":
+        eligible.sort(
+            key=lambda item: (float(item["pullback_momentum_bps"]), item["pair"])
+        )
+        selected = [row["pair"] for row in eligible[:1]]
+    else:
+        eligible.sort(
+            key=lambda item: (
+                -float(item["score"]),
+                -float(item["long_momentum_bps"]),
+                item["pair"],
+            )
+        )
+        selected = [row["pair"] for row in eligible[: int(params.max_target_pairs)]]
+
+    target_weights: dict[str, float]
     if not selected:
-        return {}
-    return _equal_target_weights(selected, allocation_pct=params.allocation_pct)
+        target_weights = {}
+    else:
+        target_weights = _equal_target_weights(
+            selected,
+            allocation_pct=params.allocation_pct,
+        )
+    return {
+        "scenario_id": scenario_id,
+        "scenario_state": scenario_state,
+        "selection_rule": selection_rule,
+        "cash_target": not bool(selected),
+        "selected_pairs": selected,
+        "target_weights": target_weights,
+        "candidate_scores": {
+            row["pair"]: _candidate_trace_payload(row) for row in candidates
+        },
+    }
 
 
 def aggregate_target_source_research_reports(
@@ -446,13 +503,18 @@ def _simulate_target_source_run(
     rebalance_count = 0
     cash_target_rebalances = 0
     target_selection_counts: Counter[str] = Counter()
+    rebalance_trace: list[dict[str, Any]] = []
 
     for index, ts in enumerate(timeline):
         prices = {pair: float(price_maps[pair][ts]) for pair in pairs}
         if index % int(params.rebalance_interval_bars) == 0:
             rebalance_count += 1
-            equity = _portfolio_equity(portfolio, prices)
-            target_weights = select_target_source_weights(
+            held_pairs_before = [
+                pair for pair, base in portfolio.holdings.items() if float(base) > 1e-12
+            ]
+            equity_before = _portfolio_equity(portfolio, prices)
+            exposure_before = _portfolio_exposure(portfolio, prices)
+            decision = _target_source_decision(
                 scenario_id,
                 pairs=pairs,
                 price_maps=price_maps,
@@ -460,6 +522,7 @@ def _simulate_target_source_run(
                 index=index,
                 params=params,
             )
+            target_weights = decision["target_weights"]
             if not target_weights:
                 cash_target_rebalances += 1
             target_selection_counts.update(target_weights.keys())
@@ -469,11 +532,44 @@ def _simulate_target_source_run(
                 portfolio=portfolio,
                 prices=prices,
                 target_weights=target_weights,
-                equity_usd=equity,
+                equity_usd=equity_before,
             )
             executed = _execute_plan(portfolio, plan, prices, fee_bps=params.fee_bps)
             trades += int(executed["trades"])
             fees_usd += float(executed["fees_usd"])
+            equity_after = _portfolio_equity(portfolio, prices)
+            exposure_after = _portfolio_exposure(portfolio, prices)
+            rebalance_trace.append(
+                _rebalance_trace_row(
+                    scenario_id=scenario_id,
+                    rebalance_index=rebalance_count - 1,
+                    cycle_index=index,
+                    timestamp=ts,
+                    pairs=pairs,
+                    price_maps=price_maps,
+                    timeline=timeline,
+                    prices=prices,
+                    decision=decision,
+                    held_pairs_before=held_pairs_before,
+                    holdings_after=portfolio.holdings,
+                    equity_before_usd=equity_before,
+                    equity_after_usd=equity_after,
+                    exposure_before_pct=(
+                        (exposure_before / equity_before) * 100.0
+                        if equity_before > 0.0
+                        else 0.0
+                    ),
+                    exposure_after_pct=(
+                        (exposure_after / equity_after) * 100.0
+                        if equity_after > 0.0
+                        else 0.0
+                    ),
+                    trades=int(executed["trades"]),
+                    fees_usd=float(executed["fees_usd"]),
+                    cumulative_fees_usd=fees_usd,
+                    params=params,
+                )
+            )
 
         equity = _portfolio_equity(portfolio, prices)
         exposure = _portfolio_exposure(portfolio, prices)
@@ -483,7 +579,7 @@ def _simulate_target_source_run(
     ending_equity = equity_curve[-1]
     active_cycles = sum(1 for exposure in exposure_curve if exposure > 0.01)
     cash_cycles = len(exposure_curve) - active_cycles
-    return {
+    run = {
         "scenario_id": scenario_id,
         "research_only": True,
         "runtime_wiring_approved": False,
@@ -513,10 +609,303 @@ def _simulate_target_source_run(
         "max_exposure_pct": max(exposure_curve) if exposure_curve else 0.0,
         "target_selection_counts": dict(sorted(target_selection_counts.items())),
         "strict_data_ready": strict_data_ready,
+        "rebalance_trace": rebalance_trace,
+    }
+    run["diagnostics"] = _target_source_diagnostics(run, rebalance_trace, params)
+    return run
+
+
+def _rebalance_trace_row(
+    *,
+    scenario_id: str,
+    rebalance_index: int,
+    cycle_index: int,
+    timestamp: int,
+    pairs: Sequence[str],
+    price_maps: Mapping[str, Mapping[int, float]],
+    timeline: Sequence[int],
+    prices: Mapping[str, float],
+    decision: Mapping[str, Any],
+    held_pairs_before: Sequence[str],
+    holdings_after: Mapping[str, float],
+    equity_before_usd: float,
+    equity_after_usd: float,
+    exposure_before_pct: float,
+    exposure_after_pct: float,
+    trades: int,
+    fees_usd: float,
+    cumulative_fees_usd: float,
+    params: TargetSourceResearchParams,
+) -> dict[str, Any]:
+    period_end_index = min(
+        cycle_index + int(params.rebalance_interval_bars),
+        len(timeline) - 1,
+    )
+    pair_forward_returns = {
+        pair: _forward_return_pct(
+            price_maps[pair],
+            start_ts=timestamp,
+            end_ts=timeline[period_end_index],
+        )
+        for pair in pairs
+    }
+    selected_pairs = list(decision["selected_pairs"])
+    selected_returns = [
+        float(pair_forward_returns[pair])
+        for pair in selected_pairs
+        if pair_forward_returns.get(pair) is not None
+    ]
+    basket_returns = [
+        float(value) for value in pair_forward_returns.values() if value is not None
+    ]
+    best_pair = None
+    best_pair_return = None
+    if basket_returns:
+        best_pair = max(
+            (
+                (pair, value)
+                for pair, value in pair_forward_returns.items()
+                if value is not None
+            ),
+            key=lambda item: (float(item[1]), item[0]),
+        )[0]
+        best_pair_return = pair_forward_returns[best_pair]
+    selected_forward_return = _mean_or_none(selected_returns)
+    basket_forward_return = _mean_or_none(basket_returns)
+    target_forward_return = selected_forward_return if selected_pairs else 0.0
+    candidate_scores = copy.deepcopy(decision["candidate_scores"])
+    selected_avg_long = _selected_candidate_mean(
+        selected_pairs, candidate_scores, "long_momentum_bps"
+    )
+    selected_avg_short = _selected_candidate_mean(
+        selected_pairs, candidate_scores, "short_momentum_bps"
+    )
+    selected_avg_pullback = _selected_candidate_mean(
+        selected_pairs, candidate_scores, "pullback_momentum_bps"
+    )
+    held_after = [pair for pair, base in holdings_after.items() if float(base) > 1e-12]
+    held_selected_overlap = bool(set(held_pairs_before).intersection(selected_pairs))
+    return {
+        "scenario_id": scenario_id,
+        "rebalance_index": int(rebalance_index),
+        "cycle_index": int(cycle_index),
+        "timestamp": int(timestamp),
+        "time": datetime.fromtimestamp(int(timestamp), tz=UTC).isoformat(),
+        "period_end_timestamp": int(timeline[period_end_index]),
+        "period_end_time": datetime.fromtimestamp(
+            int(timeline[period_end_index]), tz=UTC
+        ).isoformat(),
+        "scenario_state": decision["scenario_state"],
+        "selection_rule": decision["selection_rule"],
+        "cash_target": bool(decision["cash_target"]),
+        "selected_pairs": selected_pairs,
+        "held_pairs_before": list(held_pairs_before),
+        "held_pairs_after": held_after,
+        "held_selected_overlap": held_selected_overlap,
+        "target_weights": copy.deepcopy(decision["target_weights"]),
+        "prices": {pair: float(prices[pair]) for pair in pairs},
+        "candidate_scores": candidate_scores,
+        "pair_forward_returns_pct": pair_forward_returns,
+        "selected_forward_return_pct": selected_forward_return,
+        "target_forward_return_pct": target_forward_return,
+        "basket_forward_return_pct": basket_forward_return,
+        "best_pair": best_pair,
+        "best_pair_forward_return_pct": best_pair_return,
+        "selected_vs_best_forward_return_pct": (
+            float(selected_forward_return) - float(best_pair_return)
+            if selected_forward_return is not None and best_pair_return is not None
+            else None
+        ),
+        "selected_vs_basket_forward_return_pct": (
+            float(selected_forward_return) - float(basket_forward_return)
+            if selected_forward_return is not None and basket_forward_return is not None
+            else None
+        ),
+        "selected_avg_long_momentum_bps": selected_avg_long,
+        "selected_avg_short_momentum_bps": selected_avg_short,
+        "selected_avg_pullback_momentum_bps": selected_avg_pullback,
+        "equity_before_usd": float(equity_before_usd),
+        "equity_after_usd": float(equity_after_usd),
+        "exposure_before_pct": float(exposure_before_pct),
+        "exposure_after_pct": float(exposure_after_pct),
+        "trades": int(trades),
+        "fees_usd": float(fees_usd),
+        "cumulative_fees_usd": float(cumulative_fees_usd),
     }
 
 
-def _rank_top_momentum_pairs(
+def _target_source_diagnostics(
+    run: Mapping[str, Any],
+    traces: Sequence[Mapping[str, Any]],
+    params: TargetSourceResearchParams,
+) -> dict[str, Any]:
+    active_traces = [trace for trace in traces if not bool(trace["cash_target"])]
+    cash_target_rebalance_pct = (
+        (len(traces) - len(active_traces)) / len(traces) * 100.0 if traces else 0.0
+    )
+    selected_forward_returns = [
+        float(trace["selected_forward_return_pct"])
+        for trace in active_traces
+        if trace.get("selected_forward_return_pct") is not None
+    ]
+    target_forward_returns = [
+        float(trace["target_forward_return_pct"])
+        for trace in traces
+        if trace.get("target_forward_return_pct") is not None
+    ]
+    selection_gaps = [
+        float(trace["selected_vs_best_forward_return_pct"])
+        for trace in active_traces
+        if trace.get("selected_vs_best_forward_return_pct") is not None
+    ]
+    wrong_asset_traces = [
+        trace
+        for trace in active_traces
+        if trace.get("selected_vs_best_forward_return_pct") is not None
+        and float(trace["selected_vs_best_forward_return_pct"]) <= -0.50
+        and trace.get("selected_forward_return_pct") is not None
+        and float(trace["selected_forward_return_pct"]) < 0.0
+    ]
+    late_chase_traces = [
+        trace
+        for trace in active_traces
+        if trace.get("selected_avg_pullback_momentum_bps") is not None
+        and float(trace["selected_avg_pullback_momentum_bps"])
+        >= float(params.pullback_overextension_bps)
+        and trace.get("selected_forward_return_pct") is not None
+        and float(trace["selected_forward_return_pct"]) < 0.0
+    ]
+    slow_exit_traces = [
+        trace
+        for trace in active_traces
+        if bool(trace.get("held_selected_overlap"))
+        and trace.get("selected_avg_short_momentum_bps") is not None
+        and float(trace["selected_avg_short_momentum_bps"]) < 0.0
+        and trace.get("selected_forward_return_pct") is not None
+        and float(trace["selected_forward_return_pct"]) < 0.0
+    ]
+    return_pct = float(run["return_pct"])
+    fee_drag_pct_of_starting_cash = (
+        float(run["fees_usd"]) / float(params.starting_cash_usd) * 100.0
+    )
+    loss_magnitude_pct = abs(min(return_pct, 0.0))
+    fees_to_abs_loss_ratio = (
+        fee_drag_pct_of_starting_cash / loss_magnitude_pct
+        if loss_magnitude_pct > 0.0
+        else None
+    )
+    pair_edge_summary = _pair_edge_summary(traces)
+    hidden_pair_edges = [
+        row
+        for row in pair_edge_summary
+        if (
+            int(row["selected_count"]) >= 2
+            and row.get("selected_avg_forward_return_pct") is not None
+            and float(row["selected_avg_forward_return_pct"]) > 0.10
+        )
+        or (
+            int(row["eligible_count"]) >= 3
+            and row.get("eligible_avg_forward_return_pct") is not None
+            and float(row["eligible_avg_forward_return_pct"]) > 0.10
+        )
+    ]
+    active_count = len(active_traces)
+    wrong_asset_ratio = len(wrong_asset_traces) / active_count if active_count else 0.0
+    late_chase_ratio = len(late_chase_traces) / active_count if active_count else 0.0
+    slow_exit_ratio = len(slow_exit_traces) / active_count if active_count else 0.0
+    sparse_exposure = (
+        float(run["active_cycle_pct"]) < 50.0
+        or cash_target_rebalance_pct >= 50.0
+        or (
+            not bool(run["defensive_only"])
+            and float(run["avg_exposure_pct"]) < float(params.allocation_pct) * 0.25
+        )
+    )
+    fee_churn = return_pct < 0.0 and fee_drag_pct_of_starting_cash >= max(
+        loss_magnitude_pct * 0.50, 0.05
+    )
+    failure_reasons: list[str] = []
+    if return_pct < 0.0:
+        if wrong_asset_ratio >= 0.25 or (
+            _mean_or_none(selection_gaps) is not None
+            and float(_mean_or_none(selection_gaps)) <= -0.50
+        ):
+            failure_reasons.append("wrong_asset_selection")
+        if late_chase_ratio >= 0.20:
+            failure_reasons.append("late_or_chasing_entries")
+        if slow_exit_ratio >= 0.20:
+            failure_reasons.append("slow_exit_or_negative_momentum_hold")
+        if sparse_exposure:
+            failure_reasons.append("sparse_exposure")
+        if fee_churn:
+            failure_reasons.append("fee_churn_drag")
+        if hidden_pair_edges:
+            failure_reasons.append("pair_edge_hidden_inside_bad_allocation")
+        if not failure_reasons:
+            failure_reasons.append("weak_or_negative_source_edge")
+
+    return {
+        "failure_reasons": failure_reasons,
+        "cash_target_rebalance_pct": cash_target_rebalance_pct,
+        "active_rebalance_count": active_count,
+        "cash_rebalance_count": len(traces) - active_count,
+        "wrong_asset_rebalance_count": len(wrong_asset_traces),
+        "wrong_asset_rebalance_pct": wrong_asset_ratio * 100.0,
+        "late_chase_rebalance_count": len(late_chase_traces),
+        "late_chase_rebalance_pct": late_chase_ratio * 100.0,
+        "slow_exit_rebalance_count": len(slow_exit_traces),
+        "slow_exit_rebalance_pct": slow_exit_ratio * 100.0,
+        "avg_selected_forward_return_pct": _mean_or_none(selected_forward_returns),
+        "avg_target_forward_return_pct": _mean_or_none(target_forward_returns),
+        "avg_selected_vs_best_forward_return_pct": _mean_or_none(selection_gaps),
+        "fee_drag_pct_of_starting_cash": fee_drag_pct_of_starting_cash,
+        "fees_to_abs_loss_ratio": fees_to_abs_loss_ratio,
+        "sparse_exposure": sparse_exposure,
+        "pair_level_edge_hidden": bool(hidden_pair_edges) and return_pct <= 0.0,
+        "pair_edge_candidates": hidden_pair_edges,
+        "pair_edge_summary": pair_edge_summary,
+    }
+
+
+def _pair_edge_summary(traces: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    pairs = sorted(
+        {
+            pair
+            for trace in traces
+            for pair in (trace.get("pair_forward_returns_pct") or {})
+        }
+    )
+    rows: list[dict[str, Any]] = []
+    for pair in pairs:
+        selected_returns: list[float] = []
+        eligible_returns: list[float] = []
+        available_returns: list[float] = []
+        for trace in traces:
+            pair_returns = trace.get("pair_forward_returns_pct") or {}
+            forward_return = pair_returns.get(pair)
+            if forward_return is None:
+                continue
+            available_returns.append(float(forward_return))
+            candidate = (trace.get("candidate_scores") or {}).get(pair) or {}
+            if bool(candidate.get("eligible")):
+                eligible_returns.append(float(forward_return))
+            if pair in (trace.get("selected_pairs") or []):
+                selected_returns.append(float(forward_return))
+        rows.append(
+            {
+                "pair": pair,
+                "selected_count": len(selected_returns),
+                "eligible_count": len(eligible_returns),
+                "available_count": len(available_returns),
+                "selected_avg_forward_return_pct": _mean_or_none(selected_returns),
+                "eligible_avg_forward_return_pct": _mean_or_none(eligible_returns),
+                "available_avg_forward_return_pct": _mean_or_none(available_returns),
+            }
+        )
+    return rows
+
+
+def _momentum_candidate_rows(
     pairs: Sequence[str],
     *,
     price_maps: Mapping[str, Mapping[int, float]],
@@ -528,81 +917,129 @@ def _rank_top_momentum_pairs(
     use_vol_adjusted_score: bool,
     reject_overextension: bool,
     allow_partial_long_lookback: bool,
-) -> list[str]:
-    scored: list[tuple[str, float, float]] = []
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
     for pair in pairs:
-        long_momentum = _momentum_bps_at(
-            price_maps.get(pair, {}),
+        row = _candidate_feature_row(
+            pair,
+            price_maps=price_maps,
             timeline=timeline,
             index=index,
-            lookback=int(params.long_lookback_bars),
-            allow_partial_lookback=allow_partial_long_lookback,
+            params=params,
+            allow_partial_long_lookback=allow_partial_long_lookback,
         )
-        short_momentum = _momentum_bps_at(
-            price_maps.get(pair, {}),
-            timeline=timeline,
-            index=index,
-            lookback=int(params.short_lookback_bars),
-            allow_partial_lookback=False,
-        )
+        long_momentum = row["long_momentum_bps"]
+        short_momentum = row["short_momentum_bps"]
+        reject_reasons: list[str] = []
         if long_momentum is None:
-            continue
-        if require_positive_long and long_momentum <= 0.0:
-            continue
+            reject_reasons.append("insufficient_long_momentum_lookback")
+        elif require_positive_long and long_momentum <= 0.0:
+            reject_reasons.append("non_positive_long_momentum")
         if require_positive_short and (short_momentum is None or short_momentum <= 0.0):
-            continue
+            reject_reasons.append("non_positive_short_momentum")
         if reject_overextension:
-            pullback_momentum = _momentum_bps_at(
-                price_maps.get(pair, {}),
-                timeline=timeline,
-                index=index,
-                lookback=int(params.pullback_lookback_bars),
-                allow_partial_lookback=False,
-            )
+            pullback_momentum = row["pullback_momentum_bps"]
             if pullback_momentum is not None and pullback_momentum > float(
                 params.pullback_overextension_bps
             ):
-                continue
+                reject_reasons.append("short_term_overextension")
 
-        score = long_momentum
+        score = long_momentum if long_momentum is not None else None
         if use_vol_adjusted_score:
-            volatility = _realized_volatility_bps_at(
-                price_maps.get(pair, {}),
-                timeline=timeline,
-                index=index,
-                lookback=int(params.short_lookback_bars),
-            )
+            volatility = row["realized_volatility_bps"]
             if volatility is None or volatility <= 0.0:
-                continue
-            score = long_momentum / volatility
-        scored.append((pair, score, long_momentum))
+                reject_reasons.append("missing_or_zero_realized_volatility")
+            elif long_momentum is not None:
+                score = long_momentum / volatility
 
-    scored.sort(key=lambda item: (-item[1], -item[2], item[0]))
-    return [pair for pair, _, _ in scored[: int(params.max_target_pairs)]]
+        row["score"] = score
+        row["eligible"] = score is not None and not reject_reasons
+        row["reject_reasons"] = reject_reasons
+        rows.append(row)
+    return rows
 
 
-def _oversold_reversion_pairs(
+def _oversold_candidate_rows(
     pairs: Sequence[str],
     *,
     price_maps: Mapping[str, Mapping[int, float]],
     timeline: Sequence[int],
     index: int,
     params: TargetSourceResearchParams,
-) -> list[str]:
-    scored: list[tuple[str, float]] = []
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
     for pair in pairs:
-        momentum = _momentum_bps_at(
-            price_maps.get(pair, {}),
+        row = _candidate_feature_row(
+            pair,
+            price_maps=price_maps,
+            timeline=timeline,
+            index=index,
+            params=params,
+            allow_partial_long_lookback=False,
+        )
+        momentum = row["pullback_momentum_bps"]
+        reject_reasons: list[str] = []
+        if momentum is None or momentum > -float(params.oversold_threshold_bps):
+            reject_reasons.append("oversold_threshold_not_met")
+        row["score"] = -momentum if momentum is not None else None
+        row["eligible"] = row["score"] is not None and not reject_reasons
+        row["reject_reasons"] = reject_reasons
+        rows.append(row)
+    return rows
+
+
+def _candidate_feature_row(
+    pair: str,
+    *,
+    price_maps: Mapping[str, Mapping[int, float]],
+    timeline: Sequence[int],
+    index: int,
+    params: TargetSourceResearchParams,
+    allow_partial_long_lookback: bool,
+) -> dict[str, Any]:
+    price_map = price_maps.get(pair, {})
+    return {
+        "pair": pair,
+        "long_momentum_bps": _momentum_bps_at(
+            price_map,
+            timeline=timeline,
+            index=index,
+            lookback=int(params.long_lookback_bars),
+            allow_partial_lookback=allow_partial_long_lookback,
+        ),
+        "short_momentum_bps": _momentum_bps_at(
+            price_map,
+            timeline=timeline,
+            index=index,
+            lookback=int(params.short_lookback_bars),
+            allow_partial_lookback=False,
+        ),
+        "pullback_momentum_bps": _momentum_bps_at(
+            price_map,
             timeline=timeline,
             index=index,
             lookback=int(params.pullback_lookback_bars),
             allow_partial_lookback=False,
-        )
-        if momentum is None or momentum > -float(params.oversold_threshold_bps):
-            continue
-        scored.append((pair, momentum))
-    scored.sort(key=lambda item: (item[1], item[0]))
-    return [pair for pair, _ in scored[:1]]
+        ),
+        "realized_volatility_bps": _realized_volatility_bps_at(
+            price_map,
+            timeline=timeline,
+            index=index,
+            lookback=int(params.short_lookback_bars),
+        ),
+    }
+
+
+def _candidate_trace_payload(row: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "score": row.get("score"),
+        "eligible": bool(row.get("eligible")),
+        "reject_reasons": list(row.get("reject_reasons") or []),
+        "long_momentum_bps": row.get("long_momentum_bps"),
+        "short_momentum_bps": row.get("short_momentum_bps"),
+        "pullback_momentum_bps": row.get("pullback_momentum_bps"),
+        "realized_volatility_bps": row.get("realized_volatility_bps"),
+    }
 
 
 def _hybrid_state_is_risk_on(
@@ -820,6 +1257,36 @@ def _portfolio_exposure(
     )
 
 
+def _forward_return_pct(
+    price_map: Mapping[int, float],
+    *,
+    start_ts: int,
+    end_ts: int,
+) -> float | None:
+    start_price = float(price_map.get(int(start_ts), 0.0) or 0.0)
+    end_price = float(price_map.get(int(end_ts), 0.0) or 0.0)
+    if start_price <= 0.0 or end_price <= 0.0:
+        return None
+    return ((end_price - start_price) / start_price) * 100.0
+
+
+def _mean_or_none(values: Sequence[float]) -> float | None:
+    return mean(values) if values else None
+
+
+def _selected_candidate_mean(
+    selected_pairs: Sequence[str],
+    candidate_scores: Mapping[str, Mapping[str, Any]],
+    key: str,
+) -> float | None:
+    values = [
+        float(candidate_scores[pair][key])
+        for pair in selected_pairs
+        if pair in candidate_scores and candidate_scores[pair].get(key) is not None
+    ]
+    return _mean_or_none(values)
+
+
 def _max_drawdown_pct(equity_curve: Sequence[float]) -> float:
     peak = 0.0
     max_drawdown = 0.0
@@ -849,6 +1316,7 @@ def _target_source_rows(
         preflight = report.get("preflight") or {}
         strict_data_ready = _strict_data_ready(preflight)
         for run in report.get("runs", []):
+            diagnostics = run.get("diagnostics") or {}
             rows.append(
                 {
                     "window_set": summary["window_set"],
@@ -872,6 +1340,40 @@ def _target_source_rows(
                     "research_only": bool(run.get("research_only")),
                     "runtime_wiring_approved": bool(run.get("runtime_wiring_approved")),
                     "defensive_only": bool(run.get("defensive_only")),
+                    "failure_reasons": list(diagnostics.get("failure_reasons") or []),
+                    "primary_failure_reason": (
+                        list(diagnostics.get("failure_reasons") or [None])[0]
+                    ),
+                    "cash_target_rebalance_pct": float(
+                        diagnostics.get("cash_target_rebalance_pct", 0.0) or 0.0
+                    ),
+                    "wrong_asset_rebalance_pct": float(
+                        diagnostics.get("wrong_asset_rebalance_pct", 0.0) or 0.0
+                    ),
+                    "late_chase_rebalance_pct": float(
+                        diagnostics.get("late_chase_rebalance_pct", 0.0) or 0.0
+                    ),
+                    "slow_exit_rebalance_pct": float(
+                        diagnostics.get("slow_exit_rebalance_pct", 0.0) or 0.0
+                    ),
+                    "avg_selected_forward_return_pct": diagnostics.get(
+                        "avg_selected_forward_return_pct"
+                    ),
+                    "avg_target_forward_return_pct": diagnostics.get(
+                        "avg_target_forward_return_pct"
+                    ),
+                    "avg_selected_vs_best_forward_return_pct": diagnostics.get(
+                        "avg_selected_vs_best_forward_return_pct"
+                    ),
+                    "fee_drag_pct_of_starting_cash": float(
+                        diagnostics.get("fee_drag_pct_of_starting_cash", 0.0) or 0.0
+                    ),
+                    "pair_level_edge_hidden": bool(
+                        diagnostics.get("pair_level_edge_hidden", False)
+                    ),
+                    "pair_edge_candidates": copy.deepcopy(
+                        diagnostics.get("pair_edge_candidates") or []
+                    ),
                 }
             )
 
@@ -964,6 +1466,12 @@ def _target_source_groups(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, A
         primary_allocation = abs(float(allocation_pct) - 20.0) <= 1e-9
         required_avg_exposure_pct = float(allocation_pct) * 0.25
         exposure_adequate = defensive_only or avg_exposure >= required_avg_exposure_pct
+        failure_reason_counts: Counter[str] = Counter()
+        pair_edge_candidate_counts: Counter[str] = Counter()
+        for row in items:
+            failure_reason_counts.update(row.get("failure_reasons") or [])
+            for candidate in row.get("pair_edge_candidates") or []:
+                pair_edge_candidate_counts[str(candidate["pair"])] += 1
         gate = {
             "primary_allocation_20_pct": primary_allocation,
             "beats_rank_top2_avg_return": (
@@ -1010,6 +1518,10 @@ def _target_source_groups(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, A
                 "positive_or_near_flat_windows": positive_or_near_flat_windows,
                 "avg_exposure_pct": avg_exposure,
                 "required_avg_exposure_pct": required_avg_exposure_pct,
+                "failure_reason_counts": dict(failure_reason_counts.most_common()),
+                "pair_edge_candidate_counts": dict(
+                    pair_edge_candidate_counts.most_common()
+                ),
                 "current_window_result": current_result,
                 "promotion_gate": gate,
             }
