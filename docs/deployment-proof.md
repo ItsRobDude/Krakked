@@ -27,9 +27,16 @@ See [`unraid.md`](./unraid.md) for the low-terminal install path and
 
 Record the build under test:
 
-- Commit / image tag: `__________`
-- Date run: `__________`
-- Unraid version / Docker + Compose version: `__________`
+- Commit / image tag: `40c21ea` / `krakked:local`
+- Date run: `2026-05-31 10:50:49-10:52:02 America/Los_Angeles`
+- Unraid version / Docker + Compose version: Unraid `7.2.4`, Docker
+  `27.5.1`, Docker Compose `v5.1.4`
+- Host URL: `http://192.168.50.78:8088`
+- Proof log:
+  `/mnt/user/appdata/krakked/state/deployment-proof-20260531-105049.log`
+- Proof summary:
+  `pass=13`, `fail=0`, `warn=0`, `proof_rc=0`,
+  `DEPLOYMENT_PROOF_RESULT=PASS`
 
 ## Prerequisites
 
@@ -47,27 +54,29 @@ Run top to bottom. Each step lists the command/check and what "pass" looks like.
 
 | # | Step | Command / check | Pass condition | Result | Notes |
 |---|------|-----------------|----------------|--------|-------|
-| 1 | First boot | `bash scripts/unraid_bootstrap.sh --start` | Helper seeds appdata config, writes `compose.unraid.yaml` + `.env`, builds, and starts the container with no errors | | |
-| 2 | Container healthy | `docker compose -f compose.unraid.yaml ps` | `krakked` is `running` and reports `healthy` (after the ~20s start period) | | |
-| 3 | Mounts created & populated | `ls /mnt/user/appdata/krakked/config /mnt/user/appdata/krakked/state` | `config.yaml` / `config.paper.yaml` present in config; state dir writable | | |
-| 4 | Health endpoint | `curl -fsS http://<unraid-ip>:8088/api/health` | Returns a healthy response (HTTP 200) | | |
-| 5 | UI reachable | Open `http://<unraid-ip>:8088` in a browser | Dashboard loads; startup/unlock state is legible (warmup is clearly distinguishable from a fault) | | |
-| 6 | Paper safety cycle | `docker compose -f compose.unraid.yaml run --rm krakked run-once` | One forced-safe paper cycle completes; no live order submission; orders/results recorded to the synthetic store | | |
-| 7 | Live gates closed by default | Inspect runtime/config (UI mode indicator and `config.paper.yaml`) | `execution.mode=paper`, `allow_live_trading=false`; UI shows paper mode | | |
-| 8 | Restart persistence | `docker compose -f compose.unraid.yaml down` then `up -d` | Container comes back healthy; `state/portfolio.db` and config survive the restart (state from step 6 still present) | | |
-| 9 | First backup / export | `export-install` (see command below) | Backup archive lands at `/mnt/user/appdata/krakked/state/krakked-first-backup.zip` | | |
-| 10 | Restore round-trip | `import-install` of the archive into a scratch location | Import succeeds and reports the restored config/state | | |
-| 11 | Recreate after change | `bash scripts/unraid_bootstrap.sh --recreate --start` | Container rebuilds/recreates while keeping existing appdata config (no `--force`) | | |
+| 1 | First boot | `bash scripts/unraid_bootstrap.sh --start` | Helper seeds appdata config, writes `compose.unraid.yaml` + `.env`, builds, and starts the container with no errors | PASS | Final proof rebuilt `krakked:local` and started the Compose service. |
+| 2 | Container healthy | `docker compose -f compose.unraid.yaml ps` | `krakked` is `running` and reports `healthy` (after the ~20s start period) | PASS | Final status: `krakked-src-krakked-1` running and healthy. |
+| 3 | Mounts created & populated | `ls /mnt/user/appdata/krakked/config /mnt/user/appdata/krakked/state` | `config.yaml` / `config.paper.yaml` present in config; state dir writable | PASS | Config and state folders were present; state write probe succeeded. |
+| 4 | Health endpoint | `curl -fsS http://<unraid-ip>:8088/api/health` | Returns a healthy response (HTTP 200) | PASS | Returned `{"data":{"status":"ok"},"error":null}`. |
+| 5 | UI reachable | Open `http://<unraid-ip>:8088` in a browser | Dashboard loads; startup/unlock state is legible (warmup is clearly distinguishable from a fault) | PASS | HTTP UI check returned the built HTML; browser check reached the operator UI after unlock. |
+| 6 | Paper safety cycle | `docker compose -f compose.unraid.yaml run -T --rm krakked run-once < /dev/null` | One forced-safe paper cycle completes; no live order submission; orders/results recorded to the synthetic store | PASS | Completed after the `run-once` stub/cleanup fix. It logged two order-routing rejections, but the forced-safe paper command returned successfully and no live submission occurred. |
+| 6b | Synthetic store activity evidence | Query `/krakked/state/portfolio.db` | Synthetic store exists and has decision/execution rows from paper activity | PASS | Counts included `decisions=368`, `execution_plans=39967`, `execution_orders=6`, `execution_results=184`, `snapshots=704`, `trades=6`. |
+| 7 | Live gates closed by default | Inspect runtime/config (UI mode indicator and `config.paper.yaml`) | `execution.mode=paper`, `allow_live_trading=false`; UI shows paper mode | PASS | `mode: "paper"`, `validate_only: true`, `allow_live_trading: false`, `paper_tests_completed: false`. |
+| 8 | Restart persistence | `docker compose -f compose.unraid.yaml down` then `up -d` | Container comes back healthy; `state/portfolio.db` and config survive the restart (state from step 6 still present) | PASS | `portfolio.db` remained present across restart; service returned healthy. |
+| 9 | First backup / export | `export-install` (see command below) | Backup archive lands at `/mnt/user/appdata/krakked/state/krakked-first-backup.zip` | PASS | Archive created at `/krakked/state/krakked-first-backup.zip`, about `5.3M`. |
+| 10 | Restore round-trip | `import-install` of the archive into a scratch location | Import succeeds and reports the restored config/state | PASS | Scratch restore succeeded under `/krakked/state/restore-check/*`; `--force` was used because scratch data already existed from earlier proof attempts. |
+| 11 | Recreate after change | `bash scripts/unraid_bootstrap.sh --recreate --start` | Container rebuilds/recreates while keeping existing appdata config (no `--force`) | PASS | Recreate kept existing appdata config and restarted cleanly. |
+| 11b | Final container status | `docker compose -f compose.unraid.yaml ps` plus inspect | Final service is running and healthy | PASS | Final container id `1da074e227df...`; `health=healthy`, `status=running`, `0.0.0.0:8088->8080`. |
 
 ### Step 9 backup command
 
 ```bash
-docker compose -f compose.unraid.yaml run --rm krakked export-install \
+docker compose -f compose.unraid.yaml run -T --rm krakked export-install \
   --config-dir /krakked/config \
   --db-path /krakked/state/portfolio.db \
   --data-dir /krakked/data \
   --include-data \
-  --output /krakked/state/krakked-first-backup.zip
+  --output /krakked/state/krakked-first-backup.zip < /dev/null
 ```
 
 ### Step 10 restore check (non-destructive)
@@ -77,19 +86,19 @@ untouched. Add `--force` only if the scratch target already has files (existing
 targets are backed up first).
 
 ```bash
-docker compose -f compose.unraid.yaml run --rm krakked import-install \
+docker compose -f compose.unraid.yaml run -T --rm krakked import-install \
   --input /krakked/state/krakked-first-backup.zip \
   --config-dir /krakked/state/restore-check/config \
   --db-path /krakked/state/restore-check/portfolio.db \
-  --data-dir /krakked/state/restore-check/data
+  --data-dir /krakked/state/restore-check/data < /dev/null
 ```
 
 ## Overall result
 
-- [ ] All acceptance steps pass → Deployment Proof V1 achieved.
+- [x] All acceptance steps pass → Deployment Proof V1 achieved.
 - [ ] Partial → record blockers in Findings and open narrow follow-ups.
 
-Status: `__________`
+Status: `PASS` (`13` pass, `0` fail, `0` warn).
 
 ## Findings / fixes needed
 
@@ -105,7 +114,12 @@ gaps, not just to get a green checklist. Likely candidates to watch:
 
 | Finding | Severity | Proposed fix / follow-up |
 |---------|----------|--------------------------|
-| | | |
+| Compose was missing on the Unraid host. | Medium | Installed Docker Compose CLI plugin `v5.1.4` at `/usr/local/lib/docker/cli-plugins/docker-compose`. Follow up by making the Compose install persistent across Unraid reboots. |
+| Windows-written `.env` files can introduce CRLF and corrupt Compose image references. | Medium | Keep `.env` LF-only on the Unraid checkout. Consider normalizing `.env` in the bootstrap helper when preserving an existing file. |
+| `krakked run-once` initially failed because the one-shot WebSocket stub did not expose every field expected by market-data status checks. | High | Fixed locally and mirrored to the Unraid source under test: `_WsStub` now exposes `subscription_status` and instance-owned cache fields. |
+| `krakked run-once` needed explicit one-shot resource cleanup. | Medium | Fixed locally and mirrored to the Unraid source under test: `run_strategy_once()` now closes the portfolio store and shuts down market data in `finally`. |
+| Compose one-shot commands can hang in Unraid `ttyd` unless stdin/TTY are detached. | Medium | Use `docker compose run -T ... < /dev/null` for proof-runner one-shots and documented backup/restore examples. |
+| Final paper cycle logged two order-routing rejections. | Low | Not a deployment blocker: the forced-safe paper command returned successfully, live gates stayed closed, and synthetic store evidence was present. Track separately only if strategy/operator wording should be improved. |
 
 ## Out of scope for V1
 

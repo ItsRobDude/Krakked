@@ -30,10 +30,16 @@ logger = logging.getLogger(__name__)
 class _WsStub:
     """Minimal stand-in to satisfy connectivity checks without starting a loop."""
 
-    is_connected: bool = True
-    last_ticker_update_ts: dict = {}
-    ohlc_cache: dict = {}
-    last_ohlc_update_ts: dict = {}
+    def __init__(self) -> None:
+        self.is_connected: bool = True
+        self.last_ticker_update_ts: dict = {}
+        self.ohlc_cache: dict = {}
+        self.last_ohlc_update_ts: dict = {}
+        self.subscription_status: dict = {}
+        self._running: bool = False
+
+    def stop(self) -> None:
+        self.is_connected = False
 
 
 def _ensure_safe_execution(config: AppConfig) -> AppConfig:
@@ -60,75 +66,100 @@ def _backfill_pairs(
                 logger.warning("Failed to backfill %s %s: %s", pair, timeframe, exc)
 
 
+def _call_lifecycle_method(resource: Any, method_name: str) -> None:
+    method = getattr(resource, method_name, None)
+    if not callable(method):
+        return
+    try:
+        method()
+    except Exception as exc:  # pragma: no cover - defensive cleanup only
+        logger.warning(
+            "Failed to call %s on %s: %s",
+            method_name,
+            type(resource).__name__,
+            exc,
+        )
+
+
 def run_strategy_once() -> None:
     """Run a synchronous strategy + execution cycle in a safe, non-live mode."""
 
-    client, config, rate_limiter = bootstrap(allow_interactive_setup=False)
-    safe_config = _ensure_safe_execution(config)
+    market_data: MarketDataAPI | None = None
+    portfolio: PortfolioService | None = None
 
     try:
-        params = signature(MarketDataAPI).parameters
-        if "rate_limiter" in params:
-            market_data = MarketDataAPI(safe_config, rate_limiter=rate_limiter)
-        else:
+        client, config, rate_limiter = bootstrap(allow_interactive_setup=False)
+        safe_config = _ensure_safe_execution(config)
+
+        try:
+            params = signature(MarketDataAPI).parameters
+            if "rate_limiter" in params:
+                market_data = MarketDataAPI(safe_config, rate_limiter=rate_limiter)
+            else:
+                market_data = MarketDataAPI(safe_config)
+        except (ValueError, TypeError):
             market_data = MarketDataAPI(safe_config)
-    except (ValueError, TypeError):
-        market_data = MarketDataAPI(safe_config)
-    market_data.refresh_universe()
-    _backfill_pairs(
-        market_data,
-        market_data.get_universe(),
-        safe_config.market_data.backfill_timeframes,
-    )
 
-    # Avoid spinning up the websocket loop while still satisfying connectivity checks
-    market_data._ws_client = _WsStub()  # type: ignore[assignment]
-
-    try:
-        params = signature(PortfolioService).parameters
-        kwargs: dict[str, Any] = {}
-        if "rest_client" in params:
-            kwargs["rest_client"] = client
-        if "rate_limiter" in params:
-            kwargs["rate_limiter"] = rate_limiter
-        portfolio = PortfolioService(safe_config, market_data, **kwargs)
-    except (ValueError, TypeError):
-        portfolio = PortfolioService(safe_config, market_data)
-    portfolio.initialize()
-
-    strategy_engine = StrategyEngine(safe_config, market_data, portfolio)
-    strategy_engine.initialize()
-    plan = strategy_engine.run_cycle()
-
-    try:
-        es_params = signature(ExecutionService).parameters
-        es_kwargs: dict[str, Any] = {}
-        if "client" in es_params:
-            es_kwargs["client"] = client
-        if "config" in es_params:
-            es_kwargs["config"] = safe_config.execution
-        if "market_data" in es_params:
-            es_kwargs["market_data"] = market_data
-        if "rate_limiter" in es_params:
-            es_kwargs["rate_limiter"] = rate_limiter
-        if "risk_status_provider" in es_params:
-            es_kwargs["risk_status_provider"] = strategy_engine.get_risk_status
-        execution_service = ExecutionService(**es_kwargs)
-    except (ValueError, TypeError):
-        execution_service = ExecutionService(
-            client=client,
-            config=safe_config.execution,
-            market_data=market_data,
-            risk_status_provider=strategy_engine.get_risk_status,
+        market_data.refresh_universe()
+        _backfill_pairs(
+            market_data,
+            market_data.get_universe(),
+            safe_config.market_data.backfill_timeframes,
         )
-    result = execution_service.execute_plan(plan)
 
-    logger.info(
-        "Plan %s executed. success=%s errors=%s",
-        plan.plan_id,
-        result.success,
-        result.errors,
-    )
+        # Avoid spinning up the websocket loop while still satisfying connectivity checks
+        market_data._ws_client = _WsStub()  # type: ignore[assignment]
+
+        try:
+            params = signature(PortfolioService).parameters
+            kwargs: dict[str, Any] = {}
+            if "rest_client" in params:
+                kwargs["rest_client"] = client
+            if "rate_limiter" in params:
+                kwargs["rate_limiter"] = rate_limiter
+            portfolio = PortfolioService(safe_config, market_data, **kwargs)
+        except (ValueError, TypeError):
+            portfolio = PortfolioService(safe_config, market_data)
+        portfolio.initialize()
+
+        strategy_engine = StrategyEngine(safe_config, market_data, portfolio)
+        strategy_engine.initialize()
+        plan = strategy_engine.run_cycle()
+
+        try:
+            es_params = signature(ExecutionService).parameters
+            es_kwargs: dict[str, Any] = {}
+            if "client" in es_params:
+                es_kwargs["client"] = client
+            if "config" in es_params:
+                es_kwargs["config"] = safe_config.execution
+            if "market_data" in es_params:
+                es_kwargs["market_data"] = market_data
+            if "rate_limiter" in es_params:
+                es_kwargs["rate_limiter"] = rate_limiter
+            if "risk_status_provider" in es_params:
+                es_kwargs["risk_status_provider"] = strategy_engine.get_risk_status
+            execution_service = ExecutionService(**es_kwargs)
+        except (ValueError, TypeError):
+            execution_service = ExecutionService(
+                client=client,
+                config=safe_config.execution,
+                market_data=market_data,
+                risk_status_provider=strategy_engine.get_risk_status,
+            )
+        result = execution_service.execute_plan(plan)
+
+        logger.info(
+            "Plan %s executed. success=%s errors=%s",
+            plan.plan_id,
+            result.success,
+            result.errors,
+        )
+    finally:
+        if portfolio is not None:
+            _call_lifecycle_method(getattr(portfolio, "store", None), "close")
+        if market_data is not None:
+            _call_lifecycle_method(market_data, "shutdown")
 
 
 if __name__ == "__main__":

@@ -271,6 +271,106 @@ def test_run_once_wires_risk_provider(monkeypatch: pytest.MonkeyPatch) -> None:
     assert captured["risk_status_provider"] is not None
 
 
+def test_run_once_shuts_down_transient_resources(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_config = load_config()
+    market_data_instances: list[Any] = []
+    stores: list[Any] = []
+
+    def fake_bootstrap(*_: Any, **__: Any) -> tuple[object, Any, object]:
+        class _DummyClient:
+            def __init__(self) -> None:
+                self.rest_client = None
+
+        return _DummyClient(), original_config, None
+
+    class _DummyMarketData:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:  # noqa: ARG002
+            self.shutdown_called = False
+            market_data_instances.append(self)
+
+        def refresh_universe(self) -> None:
+            return None
+
+        def get_universe(self) -> list[str]:
+            return []
+
+        def backfill_ohlc(self, pair: str, timeframe: str) -> None:  # noqa: ARG002
+            return None
+
+        def shutdown(self) -> None:
+            self.shutdown_called = True
+
+    class _DummyStore:
+        def __init__(self) -> None:
+            self.close_called = False
+
+        def close(self) -> None:
+            self.close_called = True
+
+    class _DummyPortfolio:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:  # noqa: ARG002
+            self.store = _DummyStore()
+            stores.append(self.store)
+
+        def initialize(self) -> None:
+            return None
+
+    class _DummyPlan:
+        plan_id = "plan-1"
+
+    class _DummyStrategyEngine:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:  # noqa: ARG002
+            pass
+
+        def initialize(self) -> None:
+            return None
+
+        def run_cycle(self) -> _DummyPlan:
+            return _DummyPlan()
+
+        def get_risk_status(self) -> Any:
+            return object()
+
+    class _DummyResult:
+        success = True
+        errors: list[str] = []
+
+    class _DummyExecutionService:
+        def __init__(self, **_: Any) -> None:
+            pass
+
+        def execute_plan(self, plan: Any) -> _DummyResult:  # noqa: ARG002
+            return _DummyResult()
+
+    monkeypatch.setattr(cli.run_strategy_once, "bootstrap", fake_bootstrap)
+    monkeypatch.setattr(cli.run_strategy_once, "MarketDataAPI", _DummyMarketData)
+    monkeypatch.setattr(cli.run_strategy_once, "PortfolioService", _DummyPortfolio)
+    monkeypatch.setattr(cli.run_strategy_once, "StrategyEngine", _DummyStrategyEngine)
+    monkeypatch.setattr(
+        cli.run_strategy_once, "ExecutionService", _DummyExecutionService
+    )
+
+    exit_code = cli.main(["run-once"])
+
+    assert exit_code == 0
+    assert market_data_instances[0].shutdown_called is True
+    assert stores[0].close_called is True
+
+
+def test_run_once_ws_stub_exposes_data_status_fields() -> None:
+    stub = cli.run_strategy_once._WsStub()
+
+    assert stub.is_connected is True
+    assert stub.last_ticker_update_ts == {}
+    assert stub.ohlc_cache == {}
+    assert stub.last_ohlc_update_ts == {}
+    assert stub.subscription_status == {}
+    stub.stop()
+    assert stub.is_connected is False
+
+
 def test_run_subcommand_defaults_to_non_interactive_setup(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
