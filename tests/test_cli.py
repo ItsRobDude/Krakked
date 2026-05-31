@@ -1709,6 +1709,192 @@ def test_market_regime_exposure_sweep_writes_reports_and_aggregate(
     )
 
 
+def test_target_source_research_writes_reports_and_aggregate(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: Any
+) -> None:
+    captured: list[dict[str, Any]] = []
+
+    class _FakeTargetSourceResult:
+        def __init__(
+            self,
+            *,
+            start: datetime,
+            end: datetime,
+            allocation_pct: float,
+            scenario_id: str,
+        ) -> None:
+            self.start = start
+            self.end = end
+            self.allocation_pct = allocation_pct
+            self.scenario_id = scenario_id
+
+        def to_report_dict(self) -> dict[str, Any]:
+            is_baseline = self.scenario_id == "rank_top2"
+            return {
+                "report_version": 1,
+                "report_type": "target_source_research",
+                "generated_at": self.start.isoformat(),
+                "summary": {
+                    "research_only": True,
+                    "runtime_wiring_approved": False,
+                    "start": self.start.isoformat(),
+                    "end": self.end.isoformat(),
+                    "scenarios": [self.scenario_id],
+                    "params": {"allocation_pct": self.allocation_pct},
+                    "strict_data_ready": True,
+                },
+                "preflight": {
+                    "status": "ready",
+                    "missing_series": [],
+                    "partial_series": [],
+                },
+                "runs": [
+                    {
+                        "scenario_id": self.scenario_id,
+                        "research_only": True,
+                        "runtime_wiring_approved": False,
+                        "defensive_only": False,
+                        "return_pct": 0.0 if is_baseline else 0.2,
+                        "max_drawdown_pct": 1.0 if is_baseline else 0.5,
+                        "trades": 2,
+                        "fees_usd": 1.0,
+                        "cash_target_rebalances": 0,
+                        "active_cycle_pct": 100.0,
+                        "avg_exposure_pct": 10.0,
+                        "target_selection_counts": {"BTC/USD": 1},
+                        "strict_data_ready": True,
+                    }
+                ],
+            }
+
+    def _fake_run_target_source_research(
+        config: Any,
+        *,
+        start: datetime,
+        end: datetime,
+        pairs: list[str] | None,
+        params: Any,
+        scenarios: list[str] | None,
+        strict_data: bool,
+    ) -> _FakeTargetSourceResult:
+        captured.append(
+            {
+                "config": config,
+                "start": start,
+                "end": end,
+                "pairs": pairs,
+                "params": params,
+                "scenarios": scenarios,
+                "strict_data": strict_data,
+            }
+        )
+        assert scenarios is not None
+        return _FakeTargetSourceResult(
+            start=start,
+            end=end,
+            allocation_pct=float(params.allocation_pct),
+            scenario_id=scenarios[0],
+        )
+
+    monkeypatch.setitem(
+        cli.MARKET_REGIME_EXPOSURE_WINDOW_SETS,
+        "tiny",
+        [("20260510-20260530", "2026-05-10T00:00:00Z", "2026-05-30T00:00:00Z")],
+    )
+    monkeypatch.setattr(cli, "_load_backtest_config", lambda args: object())
+    monkeypatch.setattr(
+        cli,
+        "run_target_source_research",
+        _fake_run_target_source_research,
+    )
+
+    save_dir = tmp_path / "target-source"
+    exit_code = cli.main(
+        [
+            "target-source-research",
+            "--window-set",
+            "tiny",
+            "--scenario",
+            "rank_top2",
+            "--scenario",
+            "dual_momentum_top2",
+            "--allocation-pct",
+            "20",
+            "--timeframe",
+            "4h",
+            "--rebalance-interval-bars",
+            "6",
+            "--fee-bps",
+            "25",
+            "--save-dir",
+            str(save_dir),
+            "--strict-data",
+            "--json",
+        ]
+    )
+
+    assert exit_code == 0
+    assert len(captured) == 2
+    assert all(call["strict_data"] is True for call in captured)
+    assert all(call["params"].allocation_pct == 20.0 for call in captured)
+    assert [call["scenarios"][0] for call in captured] == [
+        "rank_top2",
+        "dual_momentum_top2",
+    ]
+    aggregate = json.loads((save_dir / "aggregate.json").read_text(encoding="utf-8"))
+    output = json.loads(capsys.readouterr().out)
+    assert output["report_type"] == "target_source_research_sweep"
+    assert aggregate["summary"]["report_count"] == 2
+    assert len(aggregate["summary"]["rows"]) == 2
+    assert (
+        save_dir
+        / "tiny"
+        / "allocation-20"
+        / "dual_momentum_top2"
+        / "20260510-20260530.json"
+    ).exists()
+
+
+def test_target_source_research_invalid_args_exit_nonzero(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setitem(
+        cli.MARKET_REGIME_EXPOSURE_WINDOW_SETS,
+        "tiny",
+        [("w1", "2026-05-01T00:00:00Z", "2026-05-02T00:00:00Z")],
+    )
+    monkeypatch.setattr(cli, "_load_backtest_config", lambda args: object())
+
+    exit_code = cli.main(
+        [
+            "target-source-research",
+            "--window-set",
+            "tiny",
+            "--timeframe",
+            "1h",
+            "--save-dir",
+            str(tmp_path / "bad-timeframe"),
+        ]
+    )
+
+    assert exit_code == 1
+
+    with pytest.raises(SystemExit) as excinfo:
+        cli.main(
+            [
+                "target-source-research",
+                "--window-set",
+                "tiny",
+                "--scenario",
+                "not_a_source",
+                "--save-dir",
+                str(tmp_path / "bad-scenario"),
+            ]
+        )
+    assert excinfo.value.code == 2
+
+
 def test_strategy_activity_sweep_writes_reports_and_aggregate(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: Any
 ) -> None:

@@ -18,12 +18,15 @@ from krakked.backtest import (
     DEFAULT_EXPOSURE_OVERLAY_MODES,
     DEFAULT_EXPOSURE_SCENARIOS,
     DEFAULT_STRATEGY_ACTIVITY_GROUP_IDS,
+    DEFAULT_TARGET_SOURCE_SCENARIOS,
     STRATEGY_ACTIVITY_WINDOW_SETS,
     BacktestPreflightResult,
     BacktestResult,
     MarketRegimeExposureScenarioParams,
     MarketRegimeOverlayParams,
     RSRotationV2ResearchParams,
+    TargetSourceResearchParams,
+    aggregate_target_source_research_reports,
     backtest_strict_data_details,
     build_backtest_preflight,
     default_rs_rotation_v2_allocation_pct,
@@ -42,6 +45,7 @@ from krakked.backtest import (
     run_rs_rotation_v2_research,
     run_strategy_action_diagnostics,
     run_strategy_activity_sweep,
+    run_target_source_research,
     run_trend_core_signal_quality,
     write_backtest_report,
     write_ml_walk_forward_report,
@@ -1034,6 +1038,26 @@ def _market_regime_exposure_scenario_params_from_args(
     )
 
 
+def _target_source_research_params_from_args(
+    args: argparse.Namespace,
+    *,
+    allocation_pct: float,
+) -> TargetSourceResearchParams:
+    return TargetSourceResearchParams(
+        allocation_pct=float(allocation_pct),
+        timeframe=str(args.timeframe),
+        rebalance_interval_bars=int(args.rebalance_interval_bars),
+        starting_cash_usd=float(args.starting_cash_usd),
+        fee_bps=float(args.fee_bps),
+        long_lookback_bars=int(args.long_lookback_bars),
+        short_lookback_bars=int(args.short_lookback_bars),
+        pullback_lookback_bars=int(args.pullback_lookback_bars),
+        max_target_pairs=int(args.max_target_pairs),
+        pullback_overextension_bps=float(args.pullback_overextension_bps),
+        oversold_threshold_bps=float(args.oversold_threshold_bps),
+    )
+
+
 def _print_market_regime_research_summary(
     payload: dict[str, Any], report_path: str | None
 ) -> None:
@@ -1277,6 +1301,113 @@ def _add_market_regime_exposure_sweep_arguments(
     )
 
 
+def _add_target_source_research_arguments(subparser: argparse.ArgumentParser) -> None:
+    subparser.add_argument(
+        "--window-set",
+        action="append",
+        required=True,
+        choices=sorted(MARKET_REGIME_EXPOSURE_WINDOW_SETS),
+        help="Window set to run; repeat to include multiple sets",
+    )
+    subparser.add_argument(
+        "--config",
+        help="Optional path to the base config.yaml to use",
+    )
+    subparser.add_argument(
+        "--pair",
+        action="append",
+        help="Limit to one pair; repeat to include multiple pairs",
+    )
+    subparser.add_argument(
+        "--scenario",
+        action="append",
+        choices=sorted(DEFAULT_TARGET_SOURCE_SCENARIOS),
+        default=None,
+        help="Target-source scenario to run; repeat to include multiple",
+    )
+    subparser.add_argument(
+        "--allocation-pct",
+        action="append",
+        type=float,
+        default=None,
+        help="Total synthetic allocation percentage; repeat to include multiple",
+    )
+    subparser.add_argument(
+        "--timeframe",
+        default="4h",
+        help="Cached OHLC timeframe for target-source features; only 4h is supported",
+    )
+    subparser.add_argument(
+        "--rebalance-interval-bars",
+        type=int,
+        default=6,
+        help="Rebalance cadence in bars for target-source scenarios",
+    )
+    subparser.add_argument(
+        "--starting-cash-usd",
+        type=float,
+        default=10_000.0,
+        help="Synthetic starting USD wallet balance for target-source scenarios",
+    )
+    subparser.add_argument(
+        "--fee-bps",
+        type=float,
+        default=25.0,
+        help="Flat taker fee in basis points applied to simulated scenario trades",
+    )
+    subparser.add_argument(
+        "--long-lookback-bars",
+        type=int,
+        default=63,
+        help="Long momentum lookback bars used by trend scenarios",
+    )
+    subparser.add_argument(
+        "--short-lookback-bars",
+        type=int,
+        default=21,
+        help="Short momentum and volatility lookback bars used by trend scenarios",
+    )
+    subparser.add_argument(
+        "--pullback-lookback-bars",
+        type=int,
+        default=6,
+        help="Short pullback/overextension lookback bars",
+    )
+    subparser.add_argument(
+        "--max-target-pairs",
+        type=int,
+        default=2,
+        help="Maximum number of momentum pairs to target",
+    )
+    subparser.add_argument(
+        "--pullback-overextension-bps",
+        type=float,
+        default=350.0,
+        help="Reject momentum entries with pullback-lookback momentum above this",
+    )
+    subparser.add_argument(
+        "--oversold-threshold-bps",
+        type=float,
+        default=250.0,
+        help="Minimum pullback magnitude for oversold reversion entries",
+    )
+    subparser.add_argument(
+        "--save-dir",
+        required=True,
+        help="Directory for per-window reports plus aggregate.json",
+    )
+    subparser.add_argument(
+        "--strict-data",
+        action="store_true",
+        help="Fail if any requested pair/timeframe is missing or partially covered",
+    )
+    subparser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print the target-source aggregate as JSON",
+    )
+
+
 def _add_strategy_activity_sweep_arguments(
     subparser: argparse.ArgumentParser,
 ) -> None:
@@ -1514,6 +1645,38 @@ def _print_market_regime_exposure_sweep_summary(payload: dict[str, Any]) -> None
     print(f"Saved aggregate: {payload['summary']['aggregate_path']}")
 
 
+def _print_target_source_research_summary(payload: dict[str, Any]) -> None:
+    summary = payload["summary"]
+    print("Target-source research completed.")
+    print(
+        f"Window sets: {', '.join(summary['window_sets'])} | "
+        f"Reports: {summary['report_count']} | "
+        f"Groups: {len(summary['groups'])}"
+    )
+    for group in summary["groups"]:
+        print(
+            f"- {group['window_set']} {group['scenario_id']} "
+            f"alloc {float(group['allocation_pct']):g}%: "
+            f"avg return {float(group['avg_return_pct']):+.4f}, "
+            f"near-flat {group['positive_or_near_flat_windows']}/"
+            f"{group['window_count']}, "
+            f"avg dd {float(group['avg_max_drawdown_pct']):.4f}, "
+            f"passed={group['promotion_gate']['passed']}"
+        )
+    candidates = summary.get("candidate_scenarios") or []
+    if candidates:
+        print(
+            "Candidate scenarios: "
+            + ", ".join(
+                f"{item['scenario_id']} {float(item['allocation_pct']):g}%"
+                for item in candidates
+            )
+        )
+    else:
+        print("Candidate scenarios: none")
+    print(f"Saved aggregate: {summary['aggregate_path']}")
+
+
 def _print_strategy_activity_sweep_summary(payload: dict[str, Any]) -> None:
     summary = payload["summary"]
     print("Strategy activity sweep completed.")
@@ -1608,8 +1771,7 @@ def _print_trend_core_signal_quality_summary(
         f"hit {_format_optional_rate(primary_stats.get('hit_rate'))}"
     )
     print(
-        "Round-trip fee hurdle: "
-        f"{float(summary['round_trip_fee_hurdle_pct']):.4f}%"
+        "Round-trip fee hurdle: " f"{float(summary['round_trip_fee_hurdle_pct']):.4f}%"
     )
     if summary.get("gate_reasons"):
         print("Gate reasons:")
@@ -2538,6 +2700,96 @@ def _market_regime_exposure_sweep_command(args: argparse.Namespace) -> int:
         print(json.dumps(aggregate, indent=2))
     else:
         _print_market_regime_exposure_sweep_summary(aggregate)
+    return 0
+
+
+def _target_source_research_command(args: argparse.Namespace) -> int:
+    """Run research-only target-source scenarios across cached OHLC windows."""
+
+    try:
+        config = _load_backtest_config(args)
+        allocations = [float(value) for value in (args.allocation_pct or [20.0])]
+        selected_scenarios = _unique_strings(
+            args.scenario or list(DEFAULT_TARGET_SOURCE_SCENARIOS)
+        )
+        save_dir = Path(args.save_dir).expanduser().resolve()
+        save_dir.mkdir(parents=True, exist_ok=True)
+    except Exception as exc:  # noqa: BLE001
+        return _print_error(f"Target-source research setup failed: {exc}")
+
+    reports: list[dict[str, Any]] = []
+    report_paths: list[str] = []
+    try:
+        for window_set in _unique_strings(args.window_set):
+            for allocation_pct in allocations:
+                params = _target_source_research_params_from_args(
+                    args,
+                    allocation_pct=allocation_pct,
+                )
+                for scenario_id in selected_scenarios:
+                    for (
+                        window_id,
+                        start_text,
+                        end_text,
+                    ) in MARKET_REGIME_EXPOSURE_WINDOW_SETS[window_set]:
+                        result = run_target_source_research(
+                            config,
+                            start=_parse_datetime_arg(start_text),
+                            end=_parse_datetime_arg(end_text),
+                            pairs=args.pair,
+                            params=params,
+                            scenarios=[scenario_id],
+                            strict_data=bool(args.strict_data),
+                        )
+                        payload = result.to_report_dict()
+                        payload["summary"]["config_path"] = (
+                            str(Path(args.config).expanduser().resolve())
+                            if args.config
+                            else None
+                        )
+                        payload["summary"]["window_set"] = window_set
+                        payload["summary"]["window_id"] = window_id
+                        payload["summary"]["allocation_pct"] = allocation_pct
+                        payload["summary"]["scenario_id"] = scenario_id
+                        payload["provenance"] = {
+                            "app_version": APP_VERSION,
+                            "config_path": (
+                                str(Path(args.config).expanduser().resolve())
+                                if args.config
+                                else None
+                            ),
+                            "generated_by": "krakked target-source-research",
+                        }
+                        report_path = (
+                            save_dir
+                            / window_set
+                            / f"allocation-{allocation_pct:g}"
+                            / scenario_id
+                            / f"{window_id}.json"
+                        )
+                        saved = _write_backtest_report(payload, str(report_path))
+                        reports.append(payload)
+                        report_paths.append(saved)
+    except Exception as exc:  # noqa: BLE001
+        return _print_error(f"Target-source research failed: {exc}")
+
+    aggregate = aggregate_target_source_research_reports(
+        reports,
+        report_paths=report_paths,
+        save_dir=str(save_dir),
+    )
+    aggregate_path = save_dir / "aggregate.json"
+    try:
+        saved_aggregate_path = _write_backtest_report(aggregate, str(aggregate_path))
+    except Exception as exc:  # noqa: BLE001
+        return _print_error(f"Target-source aggregate write failed: {exc}")
+    aggregate["summary"]["aggregate_path"] = saved_aggregate_path
+    _write_backtest_report(aggregate, str(aggregate_path))
+
+    if args.json:
+        print(json.dumps(aggregate, indent=2))
+    else:
+        _print_target_source_research_summary(aggregate)
     return 0
 
 
@@ -3854,6 +4106,13 @@ def _build_parser() -> argparse.ArgumentParser:
     market_regime_exposure_sweep_parser.set_defaults(
         func=_market_regime_exposure_sweep_command
     )
+
+    target_source_research_parser = subparsers.add_parser(
+        "target-source-research",
+        help="Evaluate research-only target-weight adapters over cached 4h OHLC",
+    )
+    _add_target_source_research_arguments(target_source_research_parser)
+    target_source_research_parser.set_defaults(func=_target_source_research_command)
 
     strategy_activity_sweep_parser = subparsers.add_parser(
         "strategy-activity-sweep",

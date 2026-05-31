@@ -78,6 +78,35 @@ poetry run krakked trend-core-signal-quality \
 
 This is research-only. It evaluates cached `trend_core` long entry/increase signals against forward returns at one or more bar horizons and reports whether the raw signal clears a fee-aware quality gate. Use `--fresh-bars-only` when comparing against the runtime/replay engine behavior that evaluates each strategy timeframe only once per new closed bar; omit it only when intentionally measuring the old stale-context behavior.
 
+Target-source research:
+
+```bash
+poetry run krakked target-source-research \
+  --window-set recent_20d \
+  --window-set long_4h \
+  --scenario rank_top2 \
+  --scenario dual_momentum_top2 \
+  --scenario vol_adj_dual_momentum_top2 \
+  --scenario pullback_vol_adj_top2 \
+  --scenario oversold_reversion_top1 \
+  --scenario hybrid_state_source \
+  --allocation-pct 20 \
+  --timeframe 4h \
+  --rebalance-interval-bars 6 \
+  --fee-bps 25 \
+  --strict-data \
+  --save-dir target-source-research
+```
+
+This is research-only. It evaluates explicit dynamic target-weight adapters
+against cached `4h` starter-universe OHLC and writes one report per
+window/scenario/allocation plus `aggregate.json`. It does not change runtime
+config, strategy defaults, risk behavior, order routing, paper/live execution,
+or operator UI behavior. `rank_top2` is the comparison baseline; no source is a
+runtime candidate unless the aggregate gate beats that baseline on return and
+drawdown across the requested window sets while preserving adequate exposure
+and strict data coverage.
+
 Saved report highlights:
 
 - requested window, pairs, timeframes, and bankroll

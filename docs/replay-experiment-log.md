@@ -1143,3 +1143,85 @@ Decision:
   promote a cap-aligned proxy from this result.
 - The next strategy-quality work should improve the target source itself, not
   continue wrapping the current trend_core signal.
+
+### 2026-05-30 Target-Source Research Harness
+
+Purpose:
+
+- Stop tuning the failed `trend_core` target source and test explicit
+  target-weight adapters directly against cached `4h` OHLC.
+- Keep the work research-only: no runtime config, strategy defaults, risk
+  behavior, order routing, paper/live execution, or operator UI behavior change.
+
+Command shape:
+
+```bash
+poetry run krakked target-source-research \
+  --window-set recent_20d \
+  --window-set long_4h \
+  --scenario rank_top2 \
+  --scenario dual_momentum_top2 \
+  --scenario vol_adj_dual_momentum_top2 \
+  --scenario pullback_vol_adj_top2 \
+  --scenario oversold_reversion_top1 \
+  --scenario hybrid_state_source \
+  --allocation-pct 20 \
+  --timeframe 4h \
+  --rebalance-interval-bars 6 \
+  --fee-bps 25 \
+  --strict-data \
+  --save-dir C:\Users\Rob\AppData\Local\krakked\krakked\reports\backtests\target-source-research-20260530
+```
+
+Gate:
+
+- A target source must beat `rank_top2` on average return and average max
+  drawdown in each requested window set.
+- It must be positive or near-flat in at least `3 / 5` recent windows and
+  `4 / 6` long windows.
+- The current rolling `2026-05-10 -> 2026-05-30` window must not be an obvious
+  failure at 20 percent allocation.
+- Average exposure must remain adequate unless the scenario is explicitly
+  defensive-only.
+- Strict data must pass and reports must state `research_only=true` and
+  `runtime_wiring_approved=false`.
+
+Verification artifact:
+
+- `C:\Users\Rob\AppData\Local\krakked\krakked\reports\backtests\target-source-research-20260530\aggregate.json`
+
+Run result:
+
+- Strict data passed for every requested window.
+- Reports written: `132` (`2` window sets, `11` windows, `6` scenarios, `2`
+  allocations).
+- Candidate scenarios at the primary 20 percent allocation: none.
+
+20 percent allocation summary:
+
+| Window set | Scenario | Avg return | Avg max DD | Near-flat windows | Gate |
+| --- | --- | ---: | ---: | ---: | --- |
+| recent_20d | rank_top2 | `-1.0187%` | `2.7242%` | `0 / 5` | fail |
+| recent_20d | dual_momentum_top2 | `-0.4598%` | `0.8431%` | `3 / 5` | fail |
+| recent_20d | vol_adj_dual_momentum_top2 | `-0.3740%` | `0.7983%` | `3 / 5` | fail |
+| recent_20d | pullback_vol_adj_top2 | `-0.3387%` | `0.7895%` | `3 / 5` | fail |
+| recent_20d | oversold_reversion_top1 | `-0.2250%` | `1.3590%` | `2 / 5` | fail |
+| recent_20d | hybrid_state_source | `-0.9374%` | `1.8715%` | `1 / 5` | fail |
+| long_4h | rank_top2 | `-1.7436%` | `3.5772%` | `1 / 6` | fail |
+| long_4h | dual_momentum_top2 | `-0.8388%` | `1.8207%` | `2 / 6` | fail |
+| long_4h | vol_adj_dual_momentum_top2 | `-0.6685%` | `1.7685%` | `2 / 6` | fail |
+| long_4h | pullback_vol_adj_top2 | `-0.2718%` | `1.5460%` | `3 / 6` | fail |
+| long_4h | oversold_reversion_top1 | `-0.0433%` | `2.0533%` | `4 / 6` | pass |
+| long_4h | hybrid_state_source | `-0.6456%` | `2.8276%` | `1 / 6` | fail |
+
+Decision:
+
+- The source edge is not proven. Do not wire any of these sources into runtime
+  strategy/risk behavior.
+- The top-2 momentum baseline is bad enough to remain useful as a rejection
+  baseline, not as a candidate.
+- The defensive oversold source is the only scenario with a partial pass: it
+  passed the long-window gate at 20 percent, but failed the recent-window gate
+  and therefore remains operator/research evidence only.
+- 5 percent allocation is scale-sensitivity evidence only; it is intentionally
+  not a promotion candidate.
