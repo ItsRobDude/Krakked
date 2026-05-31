@@ -158,6 +158,9 @@ The next milestones are product-facing rather than architecture-facing:
    - Run Krakked end-to-end on a real Docker host.
    - Validate first boot, persistence, upgrades, backups, and restore.
    - Confirm the published-image path works cleanly for a non-developer operator.
+   - This is the current first deliverable. Drill checklist and acceptance
+     criteria live in [`deployment-proof.md`](./deployment-proof.md) (Unraid,
+     paper mode).
 
 2. Operator UX
    - Improve strategy toggles, weights, and per-strategy attribution in the UI without implying proven production edge.

@@ -75,3 +75,42 @@ Avoid additional bounded source gates that only re-test the same families
 without changing the hypothesis. The next useful strategy-research path is
 regime-diverse unified evidence and minimal ML exposure-scaling research, not a
 large meta-labeling harness over sparse strategy events.
+
+## 2026-05-31 Update: Regime-Diverse Cross-Regime Negative (lane closed)
+
+The minimal ML exposure-scaling research from the line above was run and
+instrumented (commit `efb65d0`; see
+[`regime-diverse-evidence-plan.md`](./regime-diverse-evidence-plan.md)). The
+result strengthens this decision from "current evidence frame" to a closed lane:
+
+- The `regime_diverse_4h` set is genuinely regime-diverse by benchmark/basket
+  return: ~2 uptrend / 1 downtrend / 2 chop windows (`regime_coverage_sufficient
+  = true`). An earlier read that it was "down/chop only, no uptrend" was wrong —
+  it came from reading the `trend_rank_proxy` strategy return instead of the
+  market return. Acquiring prior-cycle data is therefore **not** the blocker; the
+  cached data already spans regimes.
+- The minimal ML exposure overlay failed to beat the simple hand-coded top-2 soft
+  `target_scale` baseline on a regime-diverse set (avg return delta `-0.2356%`,
+  avg max-drawdown delta `+0.1867%`). This is a legitimate cross-regime negative,
+  not a downtrend-only artifact.
+- Sharper diagnosis: the `trend_rank_proxy` source under-captures available
+  upside even in up-regimes (e.g. `20251221-20260120` market basket `+4.60%` vs
+  unscaled source `-1.60%` after fees/timing). The problem is source quality, not
+  the data, the regime sample, or the ML framing.
+
+Narrow scope of this closeout (do not overgeneralize): the **current 4h-majors
+momentum / trend / mean-reversion / breakout source families failed after costs
+across a regime-diverse set.** This is not a claim that no trading source can
+ever work.
+
+Forward path:
+
+- Pivot engineering to the product (operator visibility, paper-mode safety and
+  observability, deployment proof, live-readiness). Strategy sources stay
+  research-stage.
+- Reopen source research only as an opt-in program behind a written hypothesis
+  and a written gate. The one genuinely-different candidate is wider-universe
+  cross-sectional selection with different horizon/liquidity rules, measured on
+  the regime-aware unified scoreboard — a future program, not another small gate.
+- Do not iterate ML overlay features on the `trend_rank_proxy` source; a
+  defensive rule already beats it across regimes.
