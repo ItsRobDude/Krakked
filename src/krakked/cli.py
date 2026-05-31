@@ -26,6 +26,7 @@ from krakked.backtest import (
     BacktestResult,
     MarketRegimeExposureScenarioParams,
     MarketRegimeOverlayParams,
+    MLRegimeOverlayResearchParams,
     PairLocalSourceResearchParams,
     RSRotationV2ResearchParams,
     aggregate_pair_local_source_research_reports,
@@ -48,6 +49,7 @@ from krakked.backtest import (
     run_market_regime_overlay_backtest,
     run_market_regime_research,
     run_market_regime_throttle_backtest,
+    run_ml_regime_overlay_research,
     run_ml_walk_forward,
     run_pair_local_source_research,
     run_rs_rotation_v2_research,
@@ -58,6 +60,7 @@ from krakked.backtest import (
     write_backtest_report,
     write_ml_walk_forward_report,
 )
+from krakked.backtest.evidence_windows import summarize_regime_coverage
 from krakked.backtest.ml_feature_ablation_summary import (
     render_ml_feature_ablation_summary,
     summarize_ml_feature_ablation,
@@ -103,67 +106,7 @@ DEFAULT_DB_PATH = "portfolio.db"
 EXPORT_MANIFEST_NAME = "manifest.json"
 WINDOWS_FILE_RETRY_ATTEMPTS = 30
 WINDOWS_FILE_RETRY_DELAY_SECONDS = 0.2
-MARKET_REGIME_EXPOSURE_WINDOW_SETS = {
-    "recent_20d": [
-        (
-            "20260321-20260410",
-            "2026-03-21T00:00:00Z",
-            "2026-04-10T00:00:00Z",
-        ),
-        (
-            "20260410-20260430",
-            "2026-04-10T00:00:00Z",
-            "2026-04-30T00:00:00Z",
-        ),
-        (
-            "20260430-20260520",
-            "2026-04-30T00:00:00Z",
-            "2026-05-20T00:00:00Z",
-        ),
-        (
-            "20260505-20260525",
-            "2026-05-05T00:00:00Z",
-            "2026-05-25T00:00:00Z",
-        ),
-        (
-            "20260510-20260530",
-            "2026-05-10T00:00:00Z",
-            "2026-05-30T00:00:00Z",
-        ),
-    ],
-    "long_4h": [
-        (
-            "20251221-20260120",
-            "2025-12-21T00:00:00Z",
-            "2026-01-20T00:00:00Z",
-        ),
-        (
-            "20260120-20260219",
-            "2026-01-20T00:00:00Z",
-            "2026-02-19T00:00:00Z",
-        ),
-        (
-            "20260219-20260321",
-            "2026-02-19T00:00:00Z",
-            "2026-03-21T00:00:00Z",
-        ),
-        (
-            "20260321-20260420",
-            "2026-03-21T00:00:00Z",
-            "2026-04-20T00:00:00Z",
-        ),
-        (
-            "20260420-20260520",
-            "2026-04-20T00:00:00Z",
-            "2026-05-20T00:00:00Z",
-        ),
-        (
-            "20260430-20260530",
-            "2026-04-30T00:00:00Z",
-            "2026-05-30T00:00:00Z",
-        ),
-    ],
-}
+MARKET_REGIME_EXPOSURE_WINDOW_SETS = STRATEGY_ACTIVITY_WINDOW_SETS
 
 
 def _add_db_path_argument(subparser: argparse.ArgumentParser) -> None:
@@ -1728,6 +1671,96 @@ def _add_strategy_evidence_scoreboard_arguments(
     )
 
 
+def _add_ml_regime_overlay_research_arguments(
+    subparser: argparse.ArgumentParser,
+) -> None:
+    subparser.add_argument(
+        "--window-set",
+        action="append",
+        required=True,
+        choices=sorted(STRATEGY_ACTIVITY_WINDOW_SETS),
+        help="Evidence window set to run; repeat to include multiple sets",
+    )
+    subparser.add_argument(
+        "--config",
+        help="Optional path to the base config.yaml to use",
+    )
+    subparser.add_argument(
+        "--pair",
+        action="append",
+        help="Limit to one pair; repeat to include multiple pairs",
+    )
+    subparser.add_argument(
+        "--baseline",
+        choices=("top2_soft_target_scale",),
+        default="top2_soft_target_scale",
+        help="Hand-coded controlled-overlay baseline the ML model must beat",
+    )
+    subparser.add_argument(
+        "--allocation-pct",
+        action="append",
+        type=float,
+        default=None,
+        help="Total synthetic allocation percentage; repeat to include multiple",
+    )
+    subparser.add_argument(
+        "--timeframe",
+        default="4h",
+        help="Cached OHLC timeframe for market-regime and target features",
+    )
+    subparser.add_argument(
+        "--rebalance-interval-bars",
+        type=int,
+        default=6,
+        help="Rebalance cadence in bars for the target source",
+    )
+    subparser.add_argument(
+        "--target-lookback-bars",
+        type=int,
+        default=63,
+        help="Bars used by the top-2 trend-rank target source",
+    )
+    subparser.add_argument(
+        "--max-target-pairs",
+        type=int,
+        default=2,
+        help="Maximum number of ranked target pairs",
+    )
+    subparser.add_argument(
+        "--starting-cash-usd",
+        type=float,
+        default=10_000.0,
+        help="Synthetic starting USD wallet balance",
+    )
+    subparser.add_argument(
+        "--fee-bps",
+        type=float,
+        default=25.0,
+        help="Flat taker fee in basis points applied to simulated trades",
+    )
+    subparser.add_argument(
+        "--min-training-examples",
+        type=int,
+        default=20,
+        help="Minimum prior rebalance examples before ML evaluation starts",
+    )
+    subparser.add_argument(
+        "--save-dir",
+        required=True,
+        help="Directory where per-window reports and aggregate.json are written",
+    )
+    subparser.add_argument(
+        "--strict-data",
+        action="store_true",
+        help="Fail if any requested pair/timeframe is missing or partially covered",
+    )
+    subparser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print the ML regime overlay aggregate as JSON",
+    )
+
+
 def _add_strategy_action_diagnostics_arguments(
     subparser: argparse.ArgumentParser,
 ) -> None:
@@ -2017,6 +2050,32 @@ def _print_strategy_evidence_scoreboard_summary(payload: dict[str, Any]) -> None
             f"avg dd {_format_optional_pct(buy_hold.get('avg_max_drawdown_pct'))}"
         )
     print("Cash baseline: +0.0000%")
+    print(f"Saved aggregate: {summary['aggregate_path']}")
+
+
+def _print_ml_regime_overlay_research_summary(payload: dict[str, Any]) -> None:
+    summary = payload["summary"]
+    print("ML regime overlay research completed.")
+    print(
+        f"Reports: {summary['report_count']} | "
+        f"Groups: {len(summary['groups'])} | "
+        f"Baseline: {summary['baseline_profile']}"
+    )
+    for group in summary["groups"]:
+        gate = group["promotion_gate"]
+        print(
+            f"- alloc {float(group['allocation_pct']):g}%: "
+            f"ml ready {group['ml_ready_windows']}/{group['window_count']}, "
+            f"avg delta return {_format_optional_pct(group.get('avg_ml_delta_return_pct'))}, "
+            f"avg delta dd {_format_optional_pct(group.get('avg_ml_delta_max_drawdown_pct'))}, "
+            f"passed={gate['passed']}"
+        )
+        if not gate.get("regime_coverage_sufficient", True):
+            print(
+                "  warning: insufficient_regime_coverage "
+                f"(buckets={group.get('evidence_bucket_counts') or {}}); "
+                "ML verdict is inconclusive until windows span up/down/chop."
+            )
     print(f"Saved aggregate: {summary['aggregate_path']}")
 
 
@@ -3419,6 +3478,86 @@ def _strategy_evidence_scoreboard_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _ml_regime_overlay_research_command(args: argparse.Namespace) -> int:
+    """Run minimal ML exposure-scale research against the top-2 soft baseline."""
+
+    try:
+        config = _load_backtest_config(args)
+        selected_window_sets = _unique_strings(args.window_set)
+        window_sets = {
+            window_set: STRATEGY_ACTIVITY_WINDOW_SETS[window_set]
+            for window_set in selected_window_sets
+        }
+        allocations = [float(value) for value in (args.allocation_pct or [20.0])]
+        save_dir = Path(args.save_dir).expanduser().resolve()
+        save_dir.mkdir(parents=True, exist_ok=True)
+    except Exception as exc:  # noqa: BLE001
+        return _print_error(f"ML regime overlay research setup failed: {exc}")
+
+    reports: list[dict[str, Any]] = []
+    report_paths: list[str] = []
+    try:
+        for allocation_pct in allocations:
+            params = MLRegimeOverlayResearchParams(
+                allocation_pct=allocation_pct,
+                starting_cash_usd=float(args.starting_cash_usd),
+                fee_bps=float(args.fee_bps),
+                rebalance_interval_bars=int(args.rebalance_interval_bars),
+                target_lookback_bars=int(args.target_lookback_bars),
+                max_target_pairs=int(args.max_target_pairs),
+                min_training_examples=int(args.min_training_examples),
+            )
+            result = run_ml_regime_overlay_research(
+                config,
+                window_sets=window_sets,
+                pairs=args.pair,
+                timeframe=str(args.timeframe),
+                params=params,
+                strict_data=bool(args.strict_data),
+            )
+            payload = result.to_report_dict()
+            payload["summary"]["config_path"] = (
+                str(Path(args.config).expanduser().resolve()) if args.config else None
+            )
+            payload["summary"]["save_dir"] = str(save_dir)
+            payload["summary"]["window_sets"] = selected_window_sets
+            payload["summary"]["allocation_pct"] = allocation_pct
+            payload["provenance"] = {
+                "app_version": APP_VERSION,
+                "config_path": (
+                    str(Path(args.config).expanduser().resolve())
+                    if args.config
+                    else None
+                ),
+                "generated_by": "krakked ml-regime-overlay-research",
+            }
+            report_path = save_dir / f"allocation-{allocation_pct:g}.json"
+            saved = _write_backtest_report(payload, str(report_path))
+            reports.append(payload)
+            report_paths.append(saved)
+    except Exception as exc:  # noqa: BLE001
+        return _print_error(f"ML regime overlay research failed: {exc}")
+
+    aggregate = _ml_regime_overlay_research_aggregate(
+        reports,
+        report_paths=report_paths,
+        save_dir=save_dir,
+    )
+    aggregate_path = save_dir / "aggregate.json"
+    try:
+        saved_aggregate_path = _write_backtest_report(aggregate, str(aggregate_path))
+    except Exception as exc:  # noqa: BLE001
+        return _print_error(f"ML regime overlay aggregate write failed: {exc}")
+    aggregate["summary"]["aggregate_path"] = saved_aggregate_path
+    _write_backtest_report(aggregate, str(aggregate_path))
+
+    if args.json:
+        print(json.dumps(aggregate, indent=2))
+    else:
+        _print_ml_regime_overlay_research_summary(aggregate)
+    return 0
+
+
 def _strategy_action_diagnostics_command(args: argparse.Namespace) -> int:
     """Run one cache-only replay and emit action-quality diagnostics."""
 
@@ -3665,6 +3804,155 @@ def _market_regime_exposure_sweep_aggregate(
             "groups": groups,
         },
     }
+
+
+def _ml_regime_overlay_research_aggregate(
+    reports: list[dict[str, Any]],
+    *,
+    report_paths: list[str],
+    save_dir: Path,
+) -> dict[str, Any]:
+    rows: list[dict[str, Any]] = []
+    for report, report_path in zip(reports, report_paths):
+        summary = report["summary"]
+        for window in report.get("windows", []):
+            comparison = (window.get("comparisons") or {}).get("ml_vs_handcoded")
+            window_rows = window.get("rows") or {}
+            ml_row = window_rows.get("ml_scale_overlay") or {}
+            handcoded_row = (
+                window_rows.get("handcoded_top2_soft_target_scale") or {}
+            )
+            rows.append(
+                {
+                    "allocation_pct": float(summary["allocation_pct"]),
+                    "window_set": window["window_set"],
+                    "window_id": window["window_id"],
+                    "status": window["status"],
+                    "strict_data_ready": bool(window.get("strict_data_ready")),
+                    "evidence_bucket": window.get("evidence_bucket"),
+                    "training_examples_before": int(
+                        window.get("training_examples_before", 0) or 0
+                    ),
+                    "training_examples_added": int(
+                        window.get("training_examples_added", 0) or 0
+                    ),
+                    "delta_return_pct": (
+                        float(comparison["delta_return_pct"])
+                        if comparison is not None
+                        else None
+                    ),
+                    "delta_max_drawdown_pct": (
+                        float(comparison["delta_max_drawdown_pct"])
+                        if comparison is not None
+                        else None
+                    ),
+                    "ml_avg_exposure_pct": _float_or_none(
+                        ml_row.get("avg_exposure_pct")
+                    ),
+                    "handcoded_avg_exposure_pct": _float_or_none(
+                        handcoded_row.get("avg_exposure_pct")
+                    ),
+                    "report_path": report_path,
+                }
+            )
+
+    groups: list[dict[str, Any]] = []
+    for allocation_pct in sorted({row["allocation_pct"] for row in rows}):
+        items = [row for row in rows if row["allocation_pct"] == allocation_pct]
+        ready = [row for row in items if row["delta_return_pct"] is not None]
+        avg_return_delta = _avg_optional(
+            [row["delta_return_pct"] for row in ready]
+        )
+        avg_drawdown_delta = _avg_optional(
+            [row["delta_max_drawdown_pct"] for row in ready]
+        )
+        avg_ml_exposure = _avg_optional(
+            [row["ml_avg_exposure_pct"] for row in ready]
+        )
+        avg_handcoded_exposure = _avg_optional(
+            [row["handcoded_avg_exposure_pct"] for row in ready]
+        )
+        min_required_ml_exposure = (
+            avg_handcoded_exposure * 0.35
+            if avg_handcoded_exposure is not None
+            else None
+        )
+        bucket_counts, regime_coverage_sufficient = summarize_regime_coverage(
+            row.get("evidence_bucket") for row in items
+        )
+        gate = {
+            "strict_data_ready": all(row["strict_data_ready"] for row in items),
+            "has_ml_windows": bool(ready),
+            "regime_coverage_sufficient": regime_coverage_sufficient,
+            "beats_handcoded_return": (
+                avg_return_delta is not None and avg_return_delta > 0.0
+            ),
+            "beats_handcoded_drawdown": (
+                avg_drawdown_delta is not None and avg_drawdown_delta < 0.0
+            ),
+            "not_cash_only": (
+                avg_ml_exposure is not None
+                and (
+                    min_required_ml_exposure is None
+                    or avg_ml_exposure >= min_required_ml_exposure
+                )
+            ),
+        }
+        gate["passed"] = all(gate.values())
+        groups.append(
+            {
+                "allocation_pct": allocation_pct,
+                "window_count": len(items),
+                "ml_ready_windows": len(ready),
+                "evidence_bucket_counts": bucket_counts,
+                "avg_ml_delta_return_pct": avg_return_delta,
+                "positive_delta_windows": sum(
+                    1 for row in ready if float(row["delta_return_pct"]) > 0.0
+                ),
+                "avg_ml_delta_max_drawdown_pct": avg_drawdown_delta,
+                "drawdown_improved_windows": sum(
+                    1
+                    for row in ready
+                    if float(row["delta_max_drawdown_pct"]) < 0.0
+                ),
+                "avg_ml_exposure_pct": avg_ml_exposure,
+                "avg_handcoded_exposure_pct": avg_handcoded_exposure,
+                "min_required_ml_exposure_pct": min_required_ml_exposure,
+                "promotion_gate": gate,
+            }
+        )
+
+    return {
+        "report_version": 1,
+        "report_type": "ml_regime_overlay_research",
+        "generated_at": datetime.now(UTC).isoformat(),
+        "summary": {
+            "research_only": True,
+            "runtime_wiring_approved": False,
+            "baseline_profile": "top2_soft_target_scale",
+            "save_dir": str(save_dir),
+            "aggregate_path": str(save_dir / "aggregate.json"),
+            "report_count": len(reports),
+            "rows": rows,
+            "groups": groups,
+        },
+    }
+
+
+def _avg_optional(values: list[Any]) -> float | None:
+    floats = [float(value) for value in values if value is not None]
+    if not floats:
+        return None
+    return sum(floats) / len(floats)
+
+
+def _float_or_none(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _ml_walk_forward_command(args: argparse.Namespace) -> int:
@@ -4696,6 +4984,13 @@ def _build_parser() -> argparse.ArgumentParser:
     trend_core_signal_quality_parser.set_defaults(
         func=_trend_core_signal_quality_command
     )
+
+    ml_regime_overlay_parser = subparsers.add_parser(
+        "ml-regime-overlay-research",
+        help="Research a minimal ML exposure-scale overlay against top-2 target_scale",
+    )
+    _add_ml_regime_overlay_research_arguments(ml_regime_overlay_parser)
+    ml_regime_overlay_parser.set_defaults(func=_ml_regime_overlay_research_command)
 
     ml_walk_forward_parser = subparsers.add_parser(
         "ml-walk-forward",

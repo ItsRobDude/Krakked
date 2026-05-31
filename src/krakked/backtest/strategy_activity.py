@@ -10,6 +10,13 @@ from typing import Any, Mapping, Sequence
 
 from krakked.config import AppConfig
 
+from .evidence_windows import (
+    EVIDENCE_WINDOW_SET_TUPLES,
+    build_evidence_window_context,
+    context_by_window_key,
+    parse_evidence_datetime,
+)
+from .market_regime_exposure import build_top2_soft_target_scale_baseline
 from .runner import BacktestMarketData, BacktestResult, run_backtest
 
 REPORT_TYPE_STRATEGY_ACTIVITY_SWEEP = "strategy_activity_sweep"
@@ -23,67 +30,7 @@ DEFAULT_STRATEGY_ACTIVITY_GROUP_IDS = (
     "majors_mean_rev",
 )
 DEFAULT_STRATEGY_EVIDENCE_GROUP_IDS = ("configured", "starter_all")
-STRATEGY_ACTIVITY_WINDOW_SETS = {
-    "recent_20d": [
-        (
-            "20260321-20260410",
-            "2026-03-21T00:00:00Z",
-            "2026-04-10T00:00:00Z",
-        ),
-        (
-            "20260410-20260430",
-            "2026-04-10T00:00:00Z",
-            "2026-04-30T00:00:00Z",
-        ),
-        (
-            "20260430-20260520",
-            "2026-04-30T00:00:00Z",
-            "2026-05-20T00:00:00Z",
-        ),
-        (
-            "20260505-20260525",
-            "2026-05-05T00:00:00Z",
-            "2026-05-25T00:00:00Z",
-        ),
-        (
-            "20260510-20260530",
-            "2026-05-10T00:00:00Z",
-            "2026-05-30T00:00:00Z",
-        ),
-    ],
-    "long_4h": [
-        (
-            "20251221-20260120",
-            "2025-12-21T00:00:00Z",
-            "2026-01-20T00:00:00Z",
-        ),
-        (
-            "20260120-20260219",
-            "2026-01-20T00:00:00Z",
-            "2026-02-19T00:00:00Z",
-        ),
-        (
-            "20260219-20260321",
-            "2026-02-19T00:00:00Z",
-            "2026-03-21T00:00:00Z",
-        ),
-        (
-            "20260321-20260420",
-            "2026-03-21T00:00:00Z",
-            "2026-04-20T00:00:00Z",
-        ),
-        (
-            "20260420-20260520",
-            "2026-04-20T00:00:00Z",
-            "2026-05-20T00:00:00Z",
-        ),
-        (
-            "20260430-20260530",
-            "2026-04-30T00:00:00Z",
-            "2026-05-30T00:00:00Z",
-        ),
-    ],
-}
+STRATEGY_ACTIVITY_WINDOW_SETS = EVIDENCE_WINDOW_SET_TUPLES
 
 
 @dataclass(frozen=True)
@@ -302,6 +249,8 @@ def _activity_run_payload(
         "execution_errors": int(summary.get("execution_errors", 0) or 0),
         "return_pct": float(summary.get("return_pct", 0.0) or 0.0),
         "max_drawdown_pct": float(summary.get("max_drawdown_pct", 0.0) or 0.0),
+        "starting_cash_usd": float(summary.get("starting_cash_usd", 0.0) or 0.0),
+        "filled_notional_usd": _filled_notional_usd(result),
         "missing_series": list(summary.get("missing_series") or []),
         "partial_series": list(summary.get("partial_series") or []),
         "blocked_reason_counts": copy.deepcopy(
@@ -340,6 +289,8 @@ def _activity_error_payload(
         "execution_errors": 1 if stage == "run_failed" else 0,
         "return_pct": 0.0,
         "max_drawdown_pct": 0.0,
+        "starting_cash_usd": 0.0,
+        "filled_notional_usd": 0.0,
         "missing_series": [],
         "partial_series": [],
         "blocked_reason_counts": {},
@@ -366,6 +317,20 @@ def _activity_error_payload(
         },
         "error": error_text,
     }
+
+
+def _filled_notional_usd(result: BacktestResult) -> float:
+    total = 0.0
+    for execution in getattr(result, "executions", []) or []:
+        for order in execution.orders:
+            if order.status != "filled":
+                continue
+            base_size = float(order.cumulative_base_filled or order.requested_base_size)
+            price = order.avg_fill_price or order.requested_price
+            if base_size <= 0.0 or price is None or float(price) <= 0.0:
+                continue
+            total += abs(base_size) * float(price)
+    return total
 
 
 def _activity_sweep_summary(
@@ -448,6 +413,12 @@ def build_strategy_evidence_scoreboard(
     """Summarize strategy replay runs as one comparable evidence table."""
 
     rows: list[dict[str, Any]] = []
+    baseline_payload = copy.deepcopy(dict(baselines or {}))
+    window_contexts = context_by_window_key(
+        baseline_payload.get("window_context")
+        if isinstance(baseline_payload, Mapping)
+        else None
+    )
     for group in groups:
         group_runs = [run for run in runs if run.get("group_id") == group.group_id]
         if not group_runs:
@@ -467,7 +438,33 @@ def build_strategy_evidence_scoreboard(
         ready_drawdowns = [
             float(run.get("max_drawdown_pct", 0.0) or 0.0) for run in ready_runs
         ]
+        ready_actions = [
+            float(run.get("total_actions", 0) or 0) for run in ready_runs
+        ]
+        ready_fills = [
+            float(run.get("filled_orders", 0) or 0) for run in ready_runs
+        ]
+        filled_notional = [
+            float(run.get("filled_notional_usd", 0.0) or 0.0)
+            for run in ready_runs
+        ]
+        starting_cash = [
+            float(run.get("starting_cash_usd", 0.0) or 0.0)
+            for run in ready_runs
+        ]
         positive_ready = [value for value in ready_returns if value > 0.0]
+        current_recent = _scoreboard_window_snapshot(
+            group_runs,
+            window_set="recent_20d",
+            window_id="20260510-20260530",
+            context_by_key=window_contexts,
+        )
+        current_long = _scoreboard_window_snapshot(
+            group_runs,
+            window_set="long_4h",
+            window_id="20260430-20260530",
+            context_by_key=window_contexts,
+        )
         row = {
             "group_id": group.group_id,
             "strategies": list(group.strategies),
@@ -475,9 +472,19 @@ def build_strategy_evidence_scoreboard(
             "ready_windows": len(ready_runs),
             "filled_windows": len(filled_runs),
             "positive_ready_windows": len(positive_ready),
+            "positive_ready_window_rate": _rate(
+                len(positive_ready), len(ready_runs)
+            ),
+            "filled_window_rate": _rate(len(filled_runs), len(group_runs)),
             "avg_return_ready_pct": _mean_or_none(ready_returns),
             "avg_return_filled_pct": _mean_or_none(filled_returns),
             "avg_max_drawdown_ready_pct": _mean_or_none(ready_drawdowns),
+            "avg_return_over_drawdown_ready": _return_over_drawdown(
+                _mean_or_none(ready_returns), _mean_or_none(ready_drawdowns)
+            ),
+            "avg_actions_per_ready_window": _mean_or_none(ready_actions),
+            "avg_fills_per_ready_window": _mean_or_none(ready_fills),
+            "turnover_proxy": _turnover_proxy(filled_notional, starting_cash),
             "total_actions": sum(
                 int(run.get("total_actions", 0) or 0) for run in group_runs
             ),
@@ -488,27 +495,27 @@ def build_strategy_evidence_scoreboard(
                 Counter(str(run.get("stage") or "unknown") for run in group_runs)
             ),
             "beats_cash_ready_windows": len(positive_ready),
-            "current_recent_20d": _scoreboard_window_snapshot(
-                group_runs,
-                window_set="recent_20d",
-                window_id="20260510-20260530",
+            "current_recent_20d": current_recent,
+            "current_long_4h": current_long,
+            "current_return_over_drawdown": _best_current_ratio(
+                current_recent, current_long
             ),
-            "current_long_4h": _scoreboard_window_snapshot(
-                group_runs,
-                window_set="long_4h",
-                window_id="20260430-20260530",
+            "regime_breakdown": _scoreboard_regime_breakdown(
+                ready_runs,
+                context_by_key=window_contexts,
             ),
         }
         row["evidence_status"] = _strategy_evidence_status(row)
         rows.append(row)
 
+    baseline_payload = _annotate_scoreboard_baselines(baseline_payload)
     return {
         "research_only": True,
         "runtime_config_changed": False,
         "same_replay_engine": True,
         "cash_baseline_return_pct": 0.0,
         "rows": rows,
-        "baselines": copy.deepcopy(dict(baselines or {})),
+        "baselines": baseline_payload,
     }
 
 
@@ -521,11 +528,13 @@ def build_strategy_evidence_baselines(
     starting_cash_usd: float = 10_000.0,
     fee_bps: float = 25.0,
 ) -> dict[str, Any]:
-    """Build cash and equal-weight buy-hold context over the scoreboard windows."""
+    """Build cash, buy-hold, regime, and controlled-overlay context."""
 
     baseline_pairs = _clean_pairs(
         pairs if pairs is not None else config.universe.include_pairs
     )
+    if not baseline_pairs:
+        baseline_pairs = ["BTC/USD", "ETH/USD", "SOL/USD", "ADA/USD"]
     windows: list[dict[str, Any]] = []
     for window_set, rows in window_sets.items():
         for window_id, start_text, end_text in rows:
@@ -548,11 +557,12 @@ def build_strategy_evidence_baselines(
     usable = [window for window in windows if window.get("return_pct") is not None]
     returns = [float(window["return_pct"]) for window in usable]
     drawdowns = [float(window["max_drawdown_pct"]) for window in usable]
-    return {
+    baselines = {
         "cash": {
             "return_pct": 0.0,
             "max_drawdown_pct": 0.0,
             "window_count": len(windows),
+            "return_over_drawdown": 0.0,
         },
         "buy_hold_equal_weight": {
             "pairs": baseline_pairs,
@@ -565,7 +575,23 @@ def build_strategy_evidence_baselines(
             "avg_max_drawdown_pct": _mean_or_none(drawdowns),
             "windows": windows,
         },
+        "window_context": build_evidence_window_context(
+            config,
+            window_sets=window_sets,
+            pairs=baseline_pairs,
+            timeframe=timeframe,
+        ),
+        "controlled_exposure_baselines": {
+            "top2_soft_target_scale": build_top2_soft_target_scale_baseline(
+                config,
+                window_sets=window_sets,
+                pairs=baseline_pairs,
+                timeframe=timeframe,
+                starting_cash_usd=starting_cash_usd,
+            )
+        },
     }
+    return _annotate_scoreboard_baselines(baselines)
 
 
 def _best_activity_group(groups: Sequence[Mapping[str, Any]]) -> str | None:
@@ -591,23 +617,135 @@ def _mean_or_none(values: Sequence[float]) -> float | None:
     return sum(values) / len(values)
 
 
+def _float_or_none(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _rate(numerator: int, denominator: int) -> float | None:
+    if denominator <= 0:
+        return None
+    return float(numerator) / float(denominator)
+
+
+def _return_over_drawdown(
+    return_pct: float | None,
+    drawdown_pct: float | None,
+) -> float | None:
+    if return_pct is None or drawdown_pct is None:
+        return None
+    if drawdown_pct <= 0.0:
+        return 0.0 if abs(return_pct) <= 1e-12 else None
+    return float(return_pct) / float(drawdown_pct)
+
+
+def _turnover_proxy(
+    filled_notional: Sequence[float],
+    starting_cash: Sequence[float],
+) -> float | None:
+    denominator = sum(value for value in starting_cash if value > 0.0)
+    if denominator <= 0.0:
+        return None
+    return sum(max(value, 0.0) for value in filled_notional) / denominator
+
+
+def _best_current_ratio(*snapshots: Mapping[str, Any] | None) -> float | None:
+    ratios = [
+        float(snapshot["return_over_drawdown"])
+        for snapshot in snapshots
+        if snapshot is not None and snapshot.get("return_over_drawdown") is not None
+    ]
+    if not ratios:
+        return None
+    return max(ratios)
+
+
+def _scoreboard_regime_breakdown(
+    runs: Sequence[Mapping[str, Any]],
+    *,
+    context_by_key: Mapping[tuple[str, str], Mapping[str, Any]],
+) -> dict[str, Any]:
+    buckets: dict[str, list[Mapping[str, Any]]] = {}
+    for run in runs:
+        key = (str(run.get("window_set")), str(run.get("window_id")))
+        context = context_by_key.get(key)
+        bucket = str(context.get("evidence_bucket") if context else "unlabeled")
+        buckets.setdefault(bucket, []).append(run)
+
+    payload: dict[str, Any] = {}
+    for bucket, items in sorted(buckets.items()):
+        returns = [float(item.get("return_pct", 0.0) or 0.0) for item in items]
+        drawdowns = [
+            float(item.get("max_drawdown_pct", 0.0) or 0.0) for item in items
+        ]
+        payload[bucket] = {
+            "window_count": len(items),
+            "positive_windows": sum(1 for value in returns if value > 0.0),
+            "filled_windows": sum(
+                1 for item in items if str(item.get("stage")) == "filled"
+            ),
+            "avg_return_pct": _mean_or_none(returns),
+            "avg_max_drawdown_pct": _mean_or_none(drawdowns),
+            "avg_return_over_drawdown": _return_over_drawdown(
+                _mean_or_none(returns), _mean_or_none(drawdowns)
+            ),
+        }
+    return payload
+
+
+def _annotate_scoreboard_baselines(payload: dict[str, Any]) -> dict[str, Any]:
+    buy_hold = payload.get("buy_hold_equal_weight")
+    if isinstance(buy_hold, dict):
+        avg_return = _float_or_none(buy_hold.get("avg_return_pct"))
+        avg_drawdown = _float_or_none(buy_hold.get("avg_max_drawdown_pct"))
+        buy_hold["avg_return_over_drawdown"] = _return_over_drawdown(
+            avg_return,
+            avg_drawdown,
+        )
+        window_count = int(buy_hold.get("window_count", 0) or 0)
+        positive_windows = int(buy_hold.get("positive_windows", 0) or 0)
+        payload["negative_benchmark_context"] = bool(
+            avg_return is not None
+            and avg_return < 0.0
+            and positive_windows < max(1, window_count / 2)
+        )
+    else:
+        payload["negative_benchmark_context"] = False
+    return payload
+
+
 def _scoreboard_window_snapshot(
     runs: Sequence[Mapping[str, Any]],
     *,
     window_set: str,
     window_id: str,
+    context_by_key: Mapping[tuple[str, str], Mapping[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
     for run in runs:
         if run.get("window_set") == window_set and run.get("window_id") == window_id:
+            return_pct = run.get("return_pct") if not run.get("error") else None
+            drawdown_pct = (
+                run.get("max_drawdown_pct") if not run.get("error") else None
+            )
+            context = (context_by_key or {}).get((window_set, window_id))
             return {
                 "window_set": window_set,
                 "window_id": window_id,
                 "stage": run.get("stage"),
-                "return_pct": run.get("return_pct") if not run.get("error") else None,
-                "max_drawdown_pct": (
-                    run.get("max_drawdown_pct") if not run.get("error") else None
+                "return_pct": return_pct,
+                "max_drawdown_pct": drawdown_pct,
+                "return_over_drawdown": _return_over_drawdown(
+                    _float_or_none(return_pct), _float_or_none(drawdown_pct)
                 ),
                 "filled_orders": run.get("filled_orders"),
+                "evidence_bucket": (
+                    context.get("evidence_bucket") if context else None
+                ),
+                "market_bucket": context.get("market_bucket") if context else None,
                 "error": run.get("error"),
             }
     return None
@@ -817,10 +955,4 @@ def _clean_strategy_ids(values: Sequence[str]) -> list[str]:
 
 
 def _parse_utc(value: str) -> datetime:
-    text = str(value).strip()
-    if text.endswith("Z"):
-        text = text[:-1] + "+00:00"
-    parsed = datetime.fromisoformat(text)
-    if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=UTC)
-    return parsed.astimezone(UTC)
+    return parse_evidence_datetime(value)

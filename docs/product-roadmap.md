@@ -51,6 +51,9 @@ This is a product and engineering constraint, not a claim that California law ca
      cash/buy-hold baselines before any runtime wiring discussion.
    - Cross-strategy claims should use the unified evidence scoreboard, not an
      ML-only report in isolation.
+   - The next ML hypothesis is exposure/risk scaling under regime-diverse
+     evidence, benchmarked against the simple hand-coded top-2 `target_scale`
+     overlay, not standalone trade prediction from sparse events.
 
 5. Live-trading readiness
    - Paper mode remains the proving ground.
@@ -94,7 +97,7 @@ Krakked is now closer to an operator-facing control room than a hobby bot shell,
 - Paper mode is a local persistent synthetic wallet that can exercise the strategy, risk, OMS, and portfolio loops without transmitting live orders.
 - Exchange balances are now optional reference context in paper mode, not the paper account baseline.
 - Current strategy-source evidence does not yet support runtime promotion of `rs_rotation`, `rs_rotation_v2`, `trend_core` signal-quality claims, global top-N momentum proxies, or pair-local source variants.
-- ML remains in scope, but current models stay research-only until unified evidence beats cash and buy-hold baselines under explicit cost semantics.
+- ML remains in scope, but current models stay research-only until unified evidence beats cash, buy-hold baselines, and the simple hand-coded market-state overlay baseline under explicit cost semantics.
 - The active dashboard now has cockpit snapshot V1 for coherent active-session refreshes, operator-safe section degradation, and visible snapshot freshness. Remaining cockpit work is mostly around startup/setup fan-out and clearer first-run lifecycle states.
 - Startup, unlock, and session-start flows have improved significantly, but they still need a tighter lifecycle model before the product feels fully polished for a first-time operator.
 
@@ -132,6 +135,9 @@ Continuous learning is in scope, but it should be implemented as a crash-safe pi
 - Interrupted training must resume cleanly after restart.
 - Inference should keep using the last known-good model if training is interrupted.
 - New model versions must pass cross-window, cost-aware, cash/buy-hold baseline proof before any active-trading plan is written.
+- The next research target is a minimal regime/exposure-scale model. It should
+  be compared against the hand-coded top-2 soft `target_scale` overlay before
+  any richer meta-labeling or runtime-control plan is considered.
 
 ## Distribution Recommendation
 

@@ -324,6 +324,13 @@ the multi-window gate in
 [`docs/market-regime-overlay-plan.md`](docs/market-regime-overlay-plan.md)
 passes.
 
+Evidence framing note: this top-2 soft `target_scale` result is a research
+baseline, not a production strategy approval. The ML lane also remains in scope:
+future ML work should be compared under the unified scoreboard and
+regime-diverse evidence plan in
+[`docs/regime-diverse-evidence-plan.md`](docs/regime-diverse-evidence-plan.md),
+not judged from an ML-only report in isolation.
+
 ### ▶️ Running the bot
 
 * **Full orchestrator**: `poetry run krakked run` starts the WebSocket loop, scheduler, strategies, execution, and FastAPI UI.

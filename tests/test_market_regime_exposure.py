@@ -6,6 +6,7 @@ import pytest
 
 from krakked.backtest.market_regime_exposure import (
     MarketRegimeExposureScenarioParams,
+    build_top2_soft_target_scale_baseline,
     evaluate_market_regime_exposure_scenarios,
 )
 from krakked.backtest.market_regime_overlay import MarketRegimeOverlayParams
@@ -257,3 +258,63 @@ def test_trend_rank_proxy_uses_partial_lookback_after_two_bars() -> None:
     baseline = next(run for run in result.runs if run["overlay_mode"] == "none")
     assert baseline["target_selection_counts"] == {"BTC/USD": 2}
     assert baseline["cash_target_rebalances"] == 1
+
+
+def test_top2_soft_target_scale_baseline_profiles_controlled_proxy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class _FakeResult:
+        comparisons = [
+            {
+                "baseline": {
+                    "return_pct": -1.0,
+                    "max_drawdown_pct": 2.0,
+                },
+                "overlay": {
+                    "return_pct": -0.5,
+                    "max_drawdown_pct": 1.0,
+                    "active_cycle_pct": 80.0,
+                    "avg_exposure_pct": 10.0,
+                },
+                "delta": {
+                    "return_pct": 0.5,
+                    "max_drawdown_pct": -1.0,
+                },
+            }
+        ]
+
+    def _fake_run(*_args: object, **kwargs: object) -> _FakeResult:
+        captured["regime_params"] = kwargs["regime_params"]
+        captured["scenario_params"] = kwargs["scenario_params"]
+        captured["scenarios"] = kwargs["scenarios"]
+        captured["overlay_modes"] = kwargs["overlay_modes"]
+        return _FakeResult()
+
+    monkeypatch.setattr(
+        "krakked.backtest.market_regime_exposure.run_market_regime_exposure_research",
+        _fake_run,
+    )
+
+    baseline = build_top2_soft_target_scale_baseline(
+        object(),  # type: ignore[arg-type]
+        window_sets={
+            "tiny": [("w1", "2026-05-01T00:00:00Z", "2026-05-02T00:00:00Z")]
+        },
+        pairs=["BTC/USD", "ETH/USD"],
+        allocations=[20.0],
+    )
+
+    scenario_params = captured["scenario_params"]
+    regime_params = captured["regime_params"]
+    assert baseline["profile_id"] == "top2_soft_target_scale"
+    assert baseline["baseline_type"] == "controlled_exposure_proxy"
+    assert baseline["runtime_wiring_approved"] is False
+    assert baseline["rows"][0]["delta_return_pct"] == pytest.approx(0.5)
+    assert getattr(scenario_params, "max_target_pairs") == 2
+    assert getattr(regime_params, "neutral_allocation_multiplier") == pytest.approx(
+        0.75
+    )
+    assert captured["scenarios"] == ["trend_rank_proxy"]
+    assert captured["overlay_modes"] == ["target_scale"]

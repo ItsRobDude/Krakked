@@ -10,6 +10,9 @@ Date: 2026-05-30
   hypothesis.
 - Treat tested bundled/source candidates as research-stage, not yet validated
   production strategy edge.
+- This is not an ML removal decision and not a permanent claim that no source
+  can work. It closes only the tested source families under the current evidence
+  frame.
 
 ## Evidence
 
@@ -50,17 +53,25 @@ Do not wire any of these sources into runtime strategy, risk behavior, order
 routing, paper/live execution, or operator UI defaults based on the current
 evidence.
 
+The corrected forward path is not another small source gate over the same
+signals. It is a shared evidence frame with regime-diverse windows, explicit
+risk-adjusted metrics, and a simple hand-coded market-state overlay baseline
+that future ML exposure-scaling work must beat. See
+[`regime-diverse-evidence-plan.md`](./regime-diverse-evidence-plan.md).
+
 Near-term Krakked work should move back to:
 
 - replay/data reliability
 - operator visibility
 - market/risk-state reporting
 - paper-mode safety and observability
+- unified strategy evidence and ML overlay research under one comparable
+  regime-diverse frame
 
 Resume strategy-source work only with a genuinely new hypothesis and a written
 promotion gate before implementation.
 
 Avoid additional bounded source gates that only re-test the same families
-without changing the hypothesis. The next useful path is operator trust,
-replay/data reliability, risk-state visibility, and unified strategy evidence
-using the scoreboard documented in `docs/replay-experiment-log.md`.
+without changing the hypothesis. The next useful strategy-research path is
+regime-diverse unified evidence and minimal ML exposure-scaling research, not a
+large meta-labeling harness over sparse strategy events.

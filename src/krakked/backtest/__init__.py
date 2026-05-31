@@ -11,8 +11,16 @@ from .market_regime_exposure import (
     DEFAULT_EXPOSURE_SCENARIOS,
     MarketRegimeExposureResearchResult,
     MarketRegimeExposureScenarioParams,
+    build_top2_soft_target_scale_baseline,
     evaluate_market_regime_exposure_scenarios,
     run_market_regime_exposure_research,
+)
+from .evidence_windows import (
+    EVIDENCE_WINDOW_SET_TUPLES,
+    EVIDENCE_WINDOWS,
+    EvidenceWindow,
+    build_evidence_window_context,
+    evidence_window_tuples,
 )
 from .market_regime_overlay import (
     MarketRegimeOverlayBacktestResult,
@@ -44,6 +52,11 @@ from .ml_walk_forward import (
     MLWalkForwardResult,
     MLWalkForwardSummary,
     run_ml_walk_forward,
+)
+from .ml_regime_overlay_research import (
+    MLRegimeOverlayResearchParams,
+    MLRegimeOverlayResearchResult,
+    run_ml_regime_overlay_research,
 )
 from .pair_local_source_research import (
     DEFAULT_PAIR_LOCAL_SOURCE_SCENARIOS,
@@ -119,6 +132,9 @@ __all__ = [
     "DEFAULT_EXPOSURE_SCENARIOS",
     "DEFAULT_PAIR_LOCAL_SOURCE_SCENARIOS",
     "DEFAULT_STRATEGY_EVIDENCE_GROUP_IDS",
+    "EVIDENCE_WINDOW_SET_TUPLES",
+    "EVIDENCE_WINDOWS",
+    "EvidenceWindow",
     "MarketRegimeExposureResearchResult",
     "MarketRegimeExposureScenarioParams",
     "MarketRegimeOverlayBacktestResult",
@@ -130,6 +146,8 @@ __all__ = [
     "MLWalkForwardPrediction",
     "MLWalkForwardResult",
     "MLWalkForwardSummary",
+    "MLRegimeOverlayResearchParams",
+    "MLRegimeOverlayResearchResult",
     "PairLocalSourceResearchParams",
     "PairLocalSourceResearchResult",
     "RSRotationV2ResearchParams",
@@ -149,11 +167,13 @@ __all__ = [
     "aggregate_target_source_research_reports",
     "backtest_strict_data_details",
     "build_backtest_preflight",
+    "build_evidence_window_context",
     "build_strategy_action_diagnostics",
     "build_strategy_evidence_baselines",
     "build_strategy_evidence_groups",
     "build_strategy_evidence_scoreboard",
     "build_strategy_activity_groups",
+    "build_top2_soft_target_scale_baseline",
     "build_trend_core_signal_quality_report",
     "classify_market_regime_snapshot",
     "DEFAULT_STRATEGY_ACTIVITY_GROUP_IDS",
@@ -165,6 +185,7 @@ __all__ = [
     "evaluate_market_regime_bars",
     "evaluate_pair_local_source_scenarios",
     "evaluate_rs_rotation_v2_bars",
+    "evidence_window_tuples",
     "evaluate_target_source_scenarios",
     "get_latest_backtest_report_path",
     "get_latest_ml_walk_forward_report_path",
@@ -181,6 +202,7 @@ __all__ = [
     "run_market_regime_overlay_backtest",
     "run_market_regime_research",
     "run_market_regime_throttle_backtest",
+    "run_ml_regime_overlay_research",
     "run_rs_rotation_v2_research",
     "run_ml_walk_forward",
     "run_pair_local_source_research",

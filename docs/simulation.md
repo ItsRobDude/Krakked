@@ -84,6 +84,38 @@ context instead of stitching separate research reports together. It does not
 change runtime config, strategy defaults, risk behavior, order routing, or
 paper/live execution.
 
+Current evidence correction: the ML walk-forward result is not an
+apples-to-apples project verdict by itself. Future ML work should be judged
+against this unified scoreboard plus the simple hand-coded top-2
+`trend_rank_proxy` soft `target_scale` overlay documented in
+[`regime-diverse-evidence-plan.md`](./regime-diverse-evidence-plan.md). The next
+scoreboard extension should add regime-diverse window labels and risk-adjusted
+metrics before any broad strategy or ML verdict is made.
+
+Minimal ML regime-overlay research:
+
+```bash
+poetry run krakked ml-regime-overlay-research \
+  --window-set regime_diverse_4h \
+  --allocation-pct 20 \
+  --timeframe 4h \
+  --strict-data \
+  --save-dir ml-regime-overlay-research
+```
+
+This is research-only. It trains a small online classifier on prior-window
+rebalance examples and asks whether ML can choose exposure scale
+(`0.25`, `0.75`, or `1.0`) better than the hand-coded top-2 soft
+`target_scale` baseline. Reports remain `runtime_wiring_approved=false`.
+
+The report now also records each window's computed `market_bucket` (uptrend,
+downtrend, chop_or_transition, or current_rolling) from benchmark/basket returns,
+and the promotion gate includes `regime_coverage_sufficient`: a window set that
+does not span uptrend, downtrend, and chop fails as `insufficient_regime_coverage`
+rather than trusting the set name. The `regime_diverse_4h` set does span those
+regimes on the current cached data, so always read the computed buckets rather
+than assuming a set is or is not diverse from its name.
+
 trend_core signal-quality research:
 
 ```bash

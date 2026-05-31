@@ -126,6 +126,64 @@ def test_strategy_evidence_scoreboard_compares_cash_on_ready_windows() -> None:
     )
 
 
+def test_strategy_evidence_scoreboard_adds_regime_and_risk_metrics() -> None:
+    groups = [
+        strategy_activity.StrategyActivityGroup("trend_core", ("trend_core",)),
+    ]
+    runs = [
+        {
+            "window_set": "recent_20d",
+            "window_id": "20260510-20260530",
+            "group_id": "trend_core",
+            "stage": "filled",
+            "return_pct": -0.5,
+            "max_drawdown_pct": 1.0,
+            "total_actions": 4,
+            "filled_orders": 2,
+            "filled_notional_usd": 2_000.0,
+            "starting_cash_usd": 10_000.0,
+        }
+    ]
+    baselines = {
+        "buy_hold_equal_weight": {
+            "window_count": 1,
+            "positive_windows": 0,
+            "avg_return_pct": -4.0,
+            "avg_max_drawdown_pct": 12.0,
+        },
+        "window_context": {
+            "windows": [
+                {
+                    "window_set": "recent_20d",
+                    "window_id": "20260510-20260530",
+                    "evidence_bucket": "current_rolling",
+                    "market_bucket": "downtrend",
+                }
+            ]
+        },
+    }
+
+    scoreboard = strategy_activity.build_strategy_evidence_scoreboard(
+        runs,
+        groups,
+        baselines=baselines,
+    )
+
+    row = scoreboard["rows"][0]
+    assert row["positive_ready_window_rate"] == pytest.approx(0.0)
+    assert row["filled_window_rate"] == pytest.approx(1.0)
+    assert row["avg_return_over_drawdown_ready"] == pytest.approx(-0.5)
+    assert row["avg_actions_per_ready_window"] == pytest.approx(4.0)
+    assert row["avg_fills_per_ready_window"] == pytest.approx(2.0)
+    assert row["turnover_proxy"] == pytest.approx(0.2)
+    assert row["current_recent_20d"]["evidence_bucket"] == "current_rolling"
+    assert row["current_recent_20d"]["market_bucket"] == "downtrend"
+    assert row["regime_breakdown"]["current_rolling"]["avg_return_pct"] == pytest.approx(
+        -0.5
+    )
+    assert scoreboard["baselines"]["negative_benchmark_context"] is True
+
+
 def test_strategy_activity_sweep_summarizes_gate2_candidate(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

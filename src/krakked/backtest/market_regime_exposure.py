@@ -39,6 +39,7 @@ DEFAULT_EXPOSURE_SCENARIOS = (
 DEFAULT_EXPOSURE_OVERLAY_MODES = ("entry_guard", "target_scale")
 SUPPORTED_EXPOSURE_SCENARIOS = frozenset(DEFAULT_EXPOSURE_SCENARIOS)
 SUPPORTED_EXPOSURE_OVERLAY_MODES = frozenset(("entry_guard", "target_scale"))
+TOP2_SOFT_TARGET_SCALE_PROFILE_ID = "top2_soft_target_scale"
 
 
 @dataclass(frozen=True)
@@ -150,6 +151,135 @@ def run_market_regime_exposure_research(
         shutdown = getattr(market_data, "shutdown", None)
         if callable(shutdown):
             shutdown()
+
+
+def build_top2_soft_target_scale_baseline(
+    config: AppConfig,
+    *,
+    window_sets: Mapping[str, Sequence[tuple[str, str, str]]],
+    pairs: Sequence[str] | None = None,
+    timeframe: str = "4h",
+    allocations: Sequence[float] = (5.0, 20.0),
+    starting_cash_usd: float = 10_000.0,
+) -> dict[str, Any]:
+    """Build the hand-coded top-2 soft target-scale comparison baseline."""
+
+    rows: list[dict[str, Any]] = []
+    for window_set, windows in window_sets.items():
+        for allocation_pct in allocations:
+            regime_params = MarketRegimeOverlayParams(
+                timeframe=timeframe,
+                neutral_allocation_multiplier=0.75,
+                risk_off_allocation_multiplier=0.25,
+                momentum_lookback_bars=63,
+                basket_momentum_lookback_bars=63,
+                volatility_lookback_bars=63,
+                drawdown_lookback_bars=63,
+            )
+            scenario_params = MarketRegimeExposureScenarioParams(
+                allocation_pct=float(allocation_pct),
+                rebalance_interval_bars=6,
+                starting_cash_usd=float(starting_cash_usd),
+                fee_bps=25.0,
+                target_lookback_bars=63,
+                max_target_pairs=2,
+            )
+            for window_id, start_text, end_text in windows:
+                try:
+                    result = run_market_regime_exposure_research(
+                        config,
+                        start=_parse_utc(start_text),
+                        end=_parse_utc(end_text),
+                        pairs=pairs,
+                        regime_params=regime_params,
+                        scenario_params=scenario_params,
+                        scenarios=["trend_rank_proxy"],
+                        overlay_modes=["target_scale"],
+                        strict_data=True,
+                    )
+                    comparison = result.comparisons[0]
+                    baseline = comparison["baseline"]
+                    overlay = comparison["overlay"]
+                    rows.append(
+                        {
+                            "window_set": window_set,
+                            "window_id": window_id,
+                            "allocation_pct": float(allocation_pct),
+                            "status": "ready",
+                            "baseline_return_pct": baseline["return_pct"],
+                            "baseline_max_drawdown_pct": baseline[
+                                "max_drawdown_pct"
+                            ],
+                            "overlay_return_pct": overlay["return_pct"],
+                            "overlay_max_drawdown_pct": overlay[
+                                "max_drawdown_pct"
+                            ],
+                            "delta_return_pct": comparison["delta"]["return_pct"],
+                            "delta_max_drawdown_pct": comparison["delta"][
+                                "max_drawdown_pct"
+                            ],
+                            "overlay_active_cycle_pct": overlay[
+                                "active_cycle_pct"
+                            ],
+                            "overlay_avg_exposure_pct": overlay[
+                                "avg_exposure_pct"
+                            ],
+                            "report_type": "controlled_exposure_proxy",
+                        }
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    rows.append(
+                        {
+                            "window_set": window_set,
+                            "window_id": window_id,
+                            "allocation_pct": float(allocation_pct),
+                            "status": "failed",
+                            "error": str(exc),
+                            "report_type": "controlled_exposure_proxy",
+                        }
+                    )
+
+    groups: list[dict[str, Any]] = []
+    for allocation_pct in sorted({float(row["allocation_pct"]) for row in rows}):
+        items = [
+            row
+            for row in rows
+            if float(row["allocation_pct"]) == allocation_pct
+            and row.get("status") == "ready"
+        ]
+        returns = [float(row["delta_return_pct"]) for row in items]
+        drawdowns = [float(row["delta_max_drawdown_pct"]) for row in items]
+        groups.append(
+            {
+                "allocation_pct": allocation_pct,
+                "ready_windows": len(items),
+                "window_count": sum(
+                    1 for row in rows if float(row["allocation_pct"]) == allocation_pct
+                ),
+                "avg_delta_return_pct": _mean_or_none(returns),
+                "positive_return_windows": sum(1 for value in returns if value > 0.0),
+                "avg_delta_max_drawdown_pct": _mean_or_none(drawdowns),
+                "drawdown_improved_windows": sum(
+                    1 for value in drawdowns if value < 0.0
+                ),
+            }
+        )
+
+    return {
+        "profile_id": TOP2_SOFT_TARGET_SCALE_PROFILE_ID,
+        "baseline_type": "controlled_exposure_proxy",
+        "research_only": True,
+        "runtime_wiring_approved": False,
+        "scenario_id": "trend_rank_proxy",
+        "overlay_mode": "target_scale",
+        "max_target_pairs": 2,
+        "neutral_allocation_multiplier": 0.75,
+        "risk_off_allocation_multiplier": 0.25,
+        "fee_bps": 25.0,
+        "timeframe": timeframe,
+        "rows": rows,
+        "groups": groups,
+    }
 
 
 def evaluate_market_regime_exposure_scenarios(
@@ -847,3 +977,19 @@ def _best_comparison(
         "overlay_interventions": copy.deepcopy(best["overlay_interventions"]),
         "promotion_checks": copy.deepcopy(best["promotion_checks"]),
     }
+
+
+def _parse_utc(value: str) -> datetime:
+    text = str(value).strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    parsed = datetime.fromisoformat(text)
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
+def _mean_or_none(values: Sequence[float]) -> float | None:
+    if not values:
+        return None
+    return sum(values) / len(values)

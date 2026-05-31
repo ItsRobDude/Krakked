@@ -555,6 +555,24 @@ Decision:
   explicit operator-facing config boundary, a default-disabled rollout path,
   and replay proof against actual strategy intents before enabling anything.
 
+## Evidence Framing Correction
+
+The top-2 soft `target_scale` result is the strongest surviving positive
+strategy-research baseline, but it must stay in the right box:
+
+- It used a dense controlled target-source proxy, not actual production strategy
+  intents.
+- It is a hand-coded market-state/risk overlay baseline, not runtime approval.
+- It should be the comparison target for future ML overlay work.
+- It does not prove standalone source edge or justify enabling a runtime
+  throttle by default.
+
+The next ML step should not be rich meta-labeling over sparse strategy events.
+The next useful question is whether a minimal model can predict exposure scale
+better than this simple rule under regime-diverse windows and risk-adjusted
+metrics. The implementation plan is documented in
+[`regime-diverse-evidence-plan.md`](./regime-diverse-evidence-plan.md).
+
 ## Gate 1 Runtime Plumbing
 
 Gate 1 adds the runtime path without promoting the research candidate:

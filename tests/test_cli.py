@@ -2275,6 +2275,123 @@ def test_strategy_evidence_scoreboard_writes_shared_aggregate(
     assert (save_dir / "tiny" / "ai_regression" / "w1.json").exists()
 
 
+def test_ml_regime_overlay_research_writes_reports_and_aggregate(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: Any
+) -> None:
+    captured: dict[str, Any] = {}
+
+    class _FakeMLRegimeOverlayResult:
+        def to_report_dict(self) -> dict[str, Any]:
+            return {
+                "report_version": 1,
+                "report_type": "ml_regime_overlay_research",
+                "generated_at": "2026-05-31T00:00:00+00:00",
+                "summary": {
+                    "research_only": True,
+                    "runtime_wiring_approved": False,
+                    "baseline_profile": "top2_soft_target_scale",
+                    "window_count": 3,
+                    "ml_ready_windows": 3,
+                },
+                "windows": [
+                    {
+                        "window_set": "tiny",
+                        "window_id": f"w{index}",
+                        "status": "ready",
+                        "strict_data_ready": True,
+                        "evidence_bucket": bucket,
+                        "training_examples_before": 20,
+                        "training_examples_added": 5,
+                        "rows": {
+                            "handcoded_top2_soft_target_scale": {
+                                "avg_exposure_pct": 10.0,
+                            },
+                            "ml_scale_overlay": {
+                                "avg_exposure_pct": 7.5,
+                            },
+                        },
+                        "comparisons": {
+                            "ml_vs_handcoded": {
+                                "delta_return_pct": 0.1,
+                                "delta_max_drawdown_pct": -0.2,
+                            }
+                        },
+                    }
+                    for index, bucket in enumerate(
+                        ("uptrend", "downtrend", "chop_or_transition"), start=1
+                    )
+                ],
+            }
+
+    def _fake_run_ml_regime_overlay_research(
+        config: Any,
+        *,
+        window_sets: Any,
+        pairs: Any,
+        timeframe: str,
+        params: Any,
+        strict_data: bool,
+    ) -> _FakeMLRegimeOverlayResult:
+        captured["config"] = config
+        captured["window_sets"] = window_sets
+        captured["pairs"] = pairs
+        captured["timeframe"] = timeframe
+        captured["allocation_pct"] = params.allocation_pct
+        captured["strict_data"] = strict_data
+        return _FakeMLRegimeOverlayResult()
+
+    monkeypatch.setitem(
+        cli.STRATEGY_ACTIVITY_WINDOW_SETS,
+        "tiny",
+        [("w1", "2026-05-01T00:00:00Z", "2026-05-02T00:00:00Z")],
+    )
+    monkeypatch.setattr(
+        cli,
+        "_load_backtest_config",
+        lambda args: SimpleNamespace(universe=SimpleNamespace(include_pairs=["BTC/USD"])),
+    )
+    monkeypatch.setattr(
+        cli,
+        "run_ml_regime_overlay_research",
+        _fake_run_ml_regime_overlay_research,
+    )
+
+    save_dir = tmp_path / "ml-regime"
+    exit_code = cli.main(
+        [
+            "ml-regime-overlay-research",
+            "--window-set",
+            "tiny",
+            "--allocation-pct",
+            "20",
+            "--save-dir",
+            str(save_dir),
+            "--strict-data",
+            "--json",
+        ]
+    )
+
+    assert exit_code == 0
+    assert captured["window_sets"] == {
+        "tiny": [("w1", "2026-05-01T00:00:00Z", "2026-05-02T00:00:00Z")]
+    }
+    assert captured["allocation_pct"] == pytest.approx(20.0)
+    assert captured["strict_data"] is True
+    output = json.loads(capsys.readouterr().out)
+    aggregate = json.loads((save_dir / "aggregate.json").read_text(encoding="utf-8"))
+    assert output["report_type"] == "ml_regime_overlay_research"
+    group = aggregate["summary"]["groups"][0]
+    assert group["promotion_gate"]["passed"] is True
+    assert group["promotion_gate"]["not_cash_only"] is True
+    assert group["promotion_gate"]["regime_coverage_sufficient"] is True
+    assert group["evidence_bucket_counts"] == {
+        "chop_or_transition": 1,
+        "downtrend": 1,
+        "uptrend": 1,
+    }
+    assert (save_dir / "allocation-20.json").exists()
+
+
 def test_strategy_action_diagnostics_subcommand_writes_report(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

@@ -234,3 +234,82 @@ Decision:
 - Cross-strategy judgment should use the unified runtime scoreboard in
   [`replay-experiment-log.md`](./replay-experiment-log.md#2026-05-31-unified-strategy-evidence-scoreboard);
   the ML walk-forward report alone is not an apples-to-apples strategy verdict.
+
+## 2026-05-31: Evidence Framing Correction
+
+Correction:
+
+- Do not describe the ML lane as closed or removed. The `ohlc_v5` proof pass
+  failed its current promotion gate, but it was a model diagnostic, not a final
+  project verdict.
+- The unified runtime scoreboard showed ML as one unproven strategy row among
+  several unproven or inactive rows. That is materially different from saying
+  ML is uniquely invalid.
+- The current scoreboard window mix is negative-biased: cash beat the active
+  strategy rows and equal-weight buy-and-hold was deeply negative. Future
+  evidence should include explicit regime-diverse windows before making broad
+  strategy or ML claims.
+- The next ML hypothesis should be risk/exposure scaling first. Rich
+  meta-labeling on sparse strategy events is deferred until the event stream is
+  dense enough to support it.
+
+Next implementation research lives in
+[`regime-diverse-evidence-plan.md`](./regime-diverse-evidence-plan.md). The
+baseline ML must beat is the simple hand-coded top-2 `trend_rank_proxy`
+`target_scale` overlay, not cash alone and not an ML-only walk-forward table.
+
+Implemented follow-up:
+
+- Added shared evidence-window plumbing and a `regime_diverse_4h` window set.
+- Extended the unified strategy scoreboard with risk-adjusted metrics, computed
+  regime context, negative benchmark context, and the controlled top-2 soft
+  `target_scale` baseline.
+- Added `krakked ml-regime-overlay-research` as the first minimal ML
+  exposure-scale command. It is research-only and leaves
+  `runtime_wiring_approved=false`.
+- The research classifier uses a fixed seed so repeated strict runs are
+  comparable.
+
+Initial strict run:
+
+```bash
+poetry run krakked ml-regime-overlay-research \
+  --window-set regime_diverse_4h \
+  --allocation-pct 20 \
+  --timeframe 4h \
+  --strict-data \
+  --save-dir reports/ml-regime-overlay-regime-diverse-20260531 \
+  --json
+```
+
+Artifact:
+
+- `reports/ml-regime-overlay-regime-diverse-20260531/aggregate.json`
+
+Result:
+
+- strict data passed for all requested windows
+- ML-ready windows: `5 / 6`
+- average ML return delta versus hand-coded top-2 soft `target_scale`: `-0.2356%`
+- positive return-delta windows: `3 / 5`
+- average max-drawdown delta: `+0.1867%`
+- drawdown-improved windows: `4 / 5`
+- average ML exposure: `11.46%` versus hand-coded baseline `12.41%`
+- required minimum ML exposure for the non-cash gate: `4.34%`
+- `promotion_gate.passed=false`
+
+Decision:
+
+- Keep the command as useful research infrastructure.
+- Do not promote ML overlay behavior or write a runtime-controls plan from this
+  first strict regime-diverse result.
+- Correction (same day): regime-coverage instrumentation was added to the ML
+  overlay report (`market_bucket`/benchmark returns per window plus a
+  `regime_coverage_sufficient` gate). It showed `regime_diverse_4h` actually
+  spans ~2 uptrend / 1 downtrend / 2 chop windows by benchmark return, so the
+  earlier "no uptrend / data is the blocker" read was wrong. The overlay's gate
+  failure is a legitimate negative across regimes (failed return and drawdown vs
+  the hand-coded baseline), and the `trend_rank_proxy` source under-captures
+  upside even in up-windows. Do **not** diagnose ML scale features on this
+  source; see [`regime-diverse-evidence-plan.md`](./regime-diverse-evidence-plan.md)
+  for the verified composition and corrected next steps.
