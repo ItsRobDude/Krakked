@@ -893,3 +893,66 @@ Decision:
   state and as research input.
 - Runtime throttling needs either a less sparse target source or a deliberately
   softer scaling rule before it is worth testing again.
+
+### 2026-05-30 Dense Trend-Rank Proxy Follow-Up
+
+Implemented:
+
+- `trend_rank_proxy` scenario for `krakked market-regime-exposure-research`
+- Existing `market-regime-exposure-sweep` support for the new scenario
+
+`trend_rank_proxy` rules:
+
+- Uses cached `4h` OHLC only.
+- Ranks starter pairs by momentum using up to the configured lookback.
+- Starts after a two-bar warmup instead of waiting for the full `63` bars.
+- Does not require positive absolute momentum.
+- Targets the top `4` pairs equally inside the configured allocation.
+- Does not use the market-regime classifier for baseline target selection.
+
+Primary sweep artifacts:
+
+- Hard scale:
+  `C:\Users\Rob\AppData\Local\krakked\krakked\reports\backtests\market-regime-exposure-trend-rank-proxy-sweep-20260530\aggregate.json`
+- Soft scale:
+  `C:\Users\Rob\AppData\Local\krakked\krakked\reports\backtests\market-regime-exposure-trend-rank-proxy-soft-scale-sweep-20260530\aggregate.json`
+
+Hard-scale result, `neutral=0.5`, `risk_off=0.0`:
+
+| Window set | Allocation | Avg return delta | Positive windows | Drawdown improved | Min overlay active cycles | Min exposure ratio | Gate |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| `recent_20d` | `5%` | `+0.1609%` | `4 / 5` | `5 / 5` | `49.6%` | `0.2606` | fail |
+| `recent_20d` | `20%` | `+0.6441%` | `4 / 5` | `5 / 5` | `49.6%` | `0.2606` | fail |
+| `long_4h` | `5%` | `+0.1087%` | `4 / 6` | `4 / 6` | `36.5%` | `0.1892` | fail |
+| `long_4h` | `20%` | `+0.4320%` | `4 / 6` | `4 / 6` | `36.5%` | `0.1891` | fail |
+
+Soft-scale result, `neutral=0.75`, `risk_off=0.25`:
+
+| Window set | Allocation | Avg return delta | Positive windows | Drawdown improved | Min overlay active cycles | Min exposure ratio | Gate |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| `recent_20d` | `5%` | `+0.1111%` | `3 / 5` | `5 / 5` | `95.0%` | `0.5106` | pass |
+| `recent_20d` | `20%` | `+0.4436%` | `3 / 5` | `5 / 5` | `95.0%` | `0.5106` | pass |
+| `long_4h` | `5%` | `+0.0795%` | `3 / 6` | `4 / 6` | `96.7%` | `0.4391` | fail |
+| `long_4h` | `20%` | `+0.3125%` | `3 / 6` | `4 / 6` | `96.7%` | `0.4389` | fail |
+
+Adjacent soft-scale checks:
+
+- `neutral=0.80`, `risk_off=0.35`: recent passed, long failed with `3 / 6`
+  positive return windows.
+- `neutral=0.85`, `risk_off=0.50`: recent passed, long failed with `3 / 6`
+  positive return windows.
+
+Readout:
+
+- The denser rank-only source fixed the obvious cash-only failure from
+  `trend_proxy`.
+- Hard zero-exposure risk-off scaling still cuts too deeply.
+- Softer scaling fixes exposure quality and recent-window behavior, but long
+  out-of-sample breadth remains short of the `4 / 6` promotion gate.
+
+Decision:
+
+- Do not runtime-wire the market-regime target-scale overlay.
+- Keep `trend_rank_proxy` as a research-only target-source scenario.
+- The next research pass should improve signal quality before trying more
+  runtime-adjacent wiring.

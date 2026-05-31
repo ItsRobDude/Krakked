@@ -337,7 +337,10 @@ def _add_market_regime_research_arguments(
             "--target-lookback-bars",
             type=int,
             default=63,
-            help="Bars used by dynamic target scenarios such as trend_proxy",
+            help=(
+                "Bars used by dynamic target scenarios such as trend_proxy "
+                "and trend_rank_proxy"
+            ),
         )
         subparser.add_argument(
             "--min-momentum-bps",
@@ -349,7 +352,7 @@ def _add_market_regime_research_arguments(
             "--max-target-pairs",
             type=int,
             default=4,
-            help="Maximum number of trend_proxy pairs to target",
+            help="Maximum number of dynamic target-scenario pairs to target",
         )
     subparser.add_argument(
         "--save-report",
@@ -1050,7 +1053,10 @@ def _add_market_regime_exposure_sweep_arguments(
         "--target-lookback-bars",
         type=int,
         default=63,
-        help="Bars used by dynamic target scenarios such as trend_proxy",
+        help=(
+            "Bars used by dynamic target scenarios such as trend_proxy "
+            "and trend_rank_proxy"
+        ),
     )
     subparser.add_argument(
         "--min-momentum-bps",
@@ -1062,7 +1068,7 @@ def _add_market_regime_exposure_sweep_arguments(
         "--max-target-pairs",
         type=int,
         default=4,
-        help="Maximum number of trend_proxy pairs to target",
+        help="Maximum number of dynamic target-scenario pairs to target",
     )
     subparser.add_argument(
         "--strict-data",

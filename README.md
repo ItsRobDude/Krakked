@@ -299,7 +299,7 @@ poetry run krakked market-regime-exposure-research \
 poetry run krakked market-regime-exposure-sweep \
   --window-set recent_20d \
   --window-set long_4h \
-  --scenario trend_proxy \
+  --scenario trend_rank_proxy \
   --overlay-mode target_scale \
   --allocation-pct 5 \
   --allocation-pct 20 \
@@ -311,8 +311,10 @@ These commands may reduce or block new risk during weak regimes in replay
 comparison only. `market-regime-exposure-research` uses controlled synthetic
 exposure scenarios so the overlay can be evaluated even when starter strategy
 replay is too sparse. `market-regime-exposure-sweep` aggregates those research
-runs across documented windows. Runtime wiring stays out of scope unless the
-multi-window gate in
+runs across documented windows. `trend_proxy` is the strict positive-momentum
+adapter; `trend_rank_proxy` is the denser rank-only adapter used to separate
+target-source sparsity from overlay scaling. Runtime wiring stays out of scope
+unless the multi-window gate in
 [`docs/market-regime-overlay-plan.md`](docs/market-regime-overlay-plan.md)
 passes.
 

@@ -34,6 +34,7 @@ DEFAULT_EXPOSURE_SCENARIOS = (
     "btc_only",
     "alt_equal_weight",
     "trend_proxy",
+    "trend_rank_proxy",
 )
 DEFAULT_EXPOSURE_OVERLAY_MODES = ("entry_guard", "target_scale")
 SUPPORTED_EXPOSURE_SCENARIOS = frozenset(DEFAULT_EXPOSURE_SCENARIOS)
@@ -317,7 +318,7 @@ def _scenario_target_pairs(
         target_pairs = [benchmark_pair]
     elif scenario_id == "alt_equal_weight":
         target_pairs = [pair for pair in cleaned_pairs if pair != benchmark_pair]
-    elif scenario_id == "trend_proxy":
+    elif scenario_id in {"trend_proxy", "trend_rank_proxy"}:
         target_pairs = cleaned_pairs
     else:
         raise ValueError(f"Unsupported scenario: {scenario_id}")
@@ -372,7 +373,7 @@ def _simulate_exposure_run(
             )
             if not base_weights:
                 cash_target_rebalances += 1
-            target_selection_counts.update(base_weights)
+            target_selection_counts.update(base_weights.keys())
             target_weights = dict(base_weights)
             if overlay_mode == "target_scale":
                 multiplier = float(snapshot.allocation_multiplier)
@@ -484,6 +485,14 @@ def _scenario_target_weights(
             index=index,
             scenario_params=scenario_params,
         )
+    if scenario_id == "trend_rank_proxy":
+        return _trend_rank_proxy_target_weights(
+            target_pairs,
+            price_maps=price_maps,
+            timeline=timeline,
+            index=index,
+            scenario_params=scenario_params,
+        )
     return _equal_target_weights(
         target_pairs,
         allocation_pct=scenario_params.allocation_pct,
@@ -505,8 +514,40 @@ def _trend_proxy_target_weights(
             timeline=timeline,
             index=index,
             lookback=int(scenario_params.target_lookback_bars),
+            allow_partial_lookback=False,
         )
         if momentum is None or momentum < float(scenario_params.min_momentum_bps):
+            continue
+        scored.append((pair, momentum))
+
+    scored.sort(key=lambda item: (-item[1], item[0]))
+    selected = [pair for pair, _ in scored[: int(scenario_params.max_target_pairs)]]
+    if not selected:
+        return {}
+    return _equal_target_weights(
+        selected,
+        allocation_pct=scenario_params.allocation_pct,
+    )
+
+
+def _trend_rank_proxy_target_weights(
+    target_pairs: Sequence[str],
+    *,
+    price_maps: Mapping[str, Mapping[int, float]],
+    timeline: Sequence[int],
+    index: int,
+    scenario_params: MarketRegimeExposureScenarioParams,
+) -> dict[str, float]:
+    scored: list[tuple[str, float]] = []
+    for pair in target_pairs:
+        momentum = _momentum_bps_at(
+            price_maps.get(pair, {}),
+            timeline=timeline,
+            index=index,
+            lookback=int(scenario_params.target_lookback_bars),
+            allow_partial_lookback=True,
+        )
+        if momentum is None:
             continue
         scored.append((pair, momentum))
 
@@ -526,10 +567,14 @@ def _momentum_bps_at(
     timeline: Sequence[int],
     index: int,
     lookback: int,
+    allow_partial_lookback: bool,
 ) -> float | None:
-    if index < lookback - 1:
+    actual_lookback = (
+        min(int(lookback), index + 1) if allow_partial_lookback else int(lookback)
+    )
+    if actual_lookback < 2 or index < actual_lookback - 1:
         return None
-    start_ts = timeline[index - lookback + 1]
+    start_ts = timeline[index - actual_lookback + 1]
     end_ts = timeline[index]
     start_price = float(price_map.get(start_ts, 0.0) or 0.0)
     end_price = float(price_map.get(end_ts, 0.0) or 0.0)

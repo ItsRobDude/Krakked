@@ -200,3 +200,60 @@ def test_trend_proxy_targets_cash_when_no_pair_qualifies() -> None:
     assert baseline["active_cycles"] == 0
     assert baseline["trades"] == 0
     assert baseline["cash_target_rebalances"] > 0
+
+
+def test_trend_rank_proxy_selects_ranked_pairs_without_positive_threshold() -> None:
+    bars = {
+        "BTC/USD": _bars_from_prices(_compound_prices(100.0, -0.010, 12)),
+        "ETH/USD": _bars_from_prices(_compound_prices(100.0, -0.003, 12)),
+        "SOL/USD": _bars_from_prices(_compound_prices(100.0, -0.005, 12)),
+        "ADA/USD": _bars_from_prices(_compound_prices(100.0, -0.020, 12)),
+    }
+    result = evaluate_market_regime_exposure_scenarios(
+        bars,
+        start=datetime.fromtimestamp(bars["BTC/USD"][0].timestamp, tz=UTC),
+        end=datetime.fromtimestamp(bars["BTC/USD"][-1].timestamp, tz=UTC),
+        pairs=["BTC/USD", "ETH/USD", "SOL/USD", "ADA/USD"],
+        regime_params=_regime_params(),
+        scenario_params=MarketRegimeExposureScenarioParams(
+            allocation_pct=20.0,
+            rebalance_interval_bars=1,
+            fee_bps=0.0,
+            target_lookback_bars=4,
+            min_momentum_bps=10_000.0,
+            max_target_pairs=2,
+        ),
+        scenarios=["trend_rank_proxy"],
+        overlay_modes=["target_scale"],
+    )
+
+    baseline = next(run for run in result.runs if run["overlay_mode"] == "none")
+    assert set(baseline["target_selection_counts"]) == {"ETH/USD", "SOL/USD"}
+    assert baseline["active_cycles"] > 0
+
+
+def test_trend_rank_proxy_uses_partial_lookback_after_two_bars() -> None:
+    bars = {
+        "BTC/USD": _bars_from_prices([100.0, 101.0, 102.0]),
+        "ETH/USD": _bars_from_prices([100.0, 100.5, 101.0]),
+    }
+    result = evaluate_market_regime_exposure_scenarios(
+        bars,
+        start=datetime.fromtimestamp(bars["BTC/USD"][0].timestamp, tz=UTC),
+        end=datetime.fromtimestamp(bars["BTC/USD"][-1].timestamp, tz=UTC),
+        pairs=["BTC/USD", "ETH/USD"],
+        regime_params=_regime_params(),
+        scenario_params=MarketRegimeExposureScenarioParams(
+            allocation_pct=20.0,
+            rebalance_interval_bars=1,
+            fee_bps=0.0,
+            target_lookback_bars=63,
+            max_target_pairs=1,
+        ),
+        scenarios=["trend_rank_proxy"],
+        overlay_modes=["target_scale"],
+    )
+
+    baseline = next(run for run in result.runs if run["overlay_mode"] == "none")
+    assert baseline["target_selection_counts"] == {"BTC/USD": 2}
+    assert baseline["cash_target_rebalances"] == 1

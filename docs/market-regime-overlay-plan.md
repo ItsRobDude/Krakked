@@ -428,3 +428,65 @@ Decision:
 - The next implementation should either stop at an operator-facing market-state
   indicator or design a less sparse target source before revisiting runtime
   throttling.
+
+## Dense Trend-Rank Proxy Follow-Up
+
+Implemented on `2026-05-30` after the first `trend_proxy` sweep showed that
+the target source was too sparse to support a runtime decision.
+
+`trend_rank_proxy` is a denser strategy-proxy target adapter:
+
+- Uses cached `4h` OHLC only.
+- Ranks starter pairs by momentum using up to the configured lookback.
+- Starts after a two-bar warmup instead of waiting for a full `63` bars.
+- Does not require positive absolute momentum.
+- Targets the top `4` pairs equally inside the configured allocation.
+- Does not use the market-regime classifier for baseline target selection.
+
+Artifacts:
+
+- Hard scale, `neutral=0.5`, `risk_off=0.0`:
+  `C:\Users\Rob\AppData\Local\krakked\krakked\reports\backtests\market-regime-exposure-trend-rank-proxy-sweep-20260530\aggregate.json`
+- Soft scale, `neutral=0.75`, `risk_off=0.25`:
+  `C:\Users\Rob\AppData\Local\krakked\krakked\reports\backtests\market-regime-exposure-trend-rank-proxy-soft-scale-sweep-20260530\aggregate.json`
+- Adjacent soft scales, `neutral=0.80`, `risk_off=0.35` and
+  `neutral=0.85`, `risk_off=0.50`, under matching `soft-scale-n080-r035` and
+  `soft-scale-n085-r050` report directories.
+
+Hard-scale result:
+
+| Window set | Allocation | Avg return delta | Positive windows | Drawdown improved | Min overlay active cycles | Min exposure ratio | Gate |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| `recent_20d` | `5%` | `+0.1609%` | `4 / 5` | `5 / 5` | `49.6%` | `0.2606` | fail |
+| `recent_20d` | `20%` | `+0.6441%` | `4 / 5` | `5 / 5` | `49.6%` | `0.2606` | fail |
+| `long_4h` | `5%` | `+0.1087%` | `4 / 6` | `4 / 6` | `36.5%` | `0.1892` | fail |
+| `long_4h` | `20%` | `+0.4320%` | `4 / 6` | `4 / 6` | `36.5%` | `0.1891` | fail |
+
+Soft-scale result, `neutral=0.75`, `risk_off=0.25`:
+
+| Window set | Allocation | Avg return delta | Positive windows | Drawdown improved | Min overlay active cycles | Min exposure ratio | Gate |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| `recent_20d` | `5%` | `+0.1111%` | `3 / 5` | `5 / 5` | `95.0%` | `0.5106` | pass |
+| `recent_20d` | `20%` | `+0.4436%` | `3 / 5` | `5 / 5` | `95.0%` | `0.5106` | pass |
+| `long_4h` | `5%` | `+0.0795%` | `3 / 6` | `4 / 6` | `96.7%` | `0.4391` | fail |
+| `long_4h` | `20%` | `+0.3125%` | `3 / 6` | `4 / 6` | `96.7%` | `0.4389` | fail |
+
+Adjacent soft-scale checks did not repair the long-window breadth failure:
+
+| Scale | Long avg return delta (`5%` / `20%`) | Long positive windows | Long drawdown improved | Recent gate | Long gate |
+| --- | ---: | ---: | ---: | --- | --- |
+| `neutral=0.80`, `risk_off=0.35` | `+0.0689% / +0.2698%` | `3 / 6` | `5 / 6` | pass | fail |
+| `neutral=0.85`, `risk_off=0.50` | `+0.0536% / +0.2086%` | `3 / 6` | `5 / 6` | pass | fail |
+
+Decision:
+
+- `trend_rank_proxy` fixed the target-source sparsity enough to make the
+  exposure-quality gate informative.
+- Hard `risk_off=0.0` target-scale is too aggressive for this target source.
+- Softer scaling passes the recent set but still fails long-window breadth.
+- Runtime wiring remains blocked.
+- The next useful research should improve the target source itself, not keep
+  tuning the same broad scale knobs. Candidate directions are signal-quality
+  filters, volatility-adjusted ranking, or a simple cash/benchmark fallback
+  whose baseline exposure remains stable enough for the overlay test to be
+  meaningful.

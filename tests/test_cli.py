@@ -1442,7 +1442,7 @@ def test_market_regime_exposure_sweep_writes_reports_and_aggregate(
                 "runs": [],
                 "comparisons": [
                     {
-                        "scenario_id": "trend_proxy",
+                        "scenario_id": "trend_rank_proxy",
                         "overlay_mode": "target_scale",
                         "baseline": {
                             "return_pct": 1.0,
@@ -1521,7 +1521,7 @@ def test_market_regime_exposure_sweep_writes_reports_and_aggregate(
             "--window-set",
             "tiny",
             "--scenario",
-            "trend_proxy",
+            "trend_rank_proxy",
             "--overlay-mode",
             "target_scale",
             "--allocation-pct",
@@ -1541,7 +1541,7 @@ def test_market_regime_exposure_sweep_writes_reports_and_aggregate(
         5.0,
         20.0,
     }
-    assert all(call["scenarios"] == ["trend_proxy"] for call in captured)
+    assert all(call["scenarios"] == ["trend_rank_proxy"] for call in captured)
     assert all(call["overlay_modes"] == ["target_scale"] for call in captured)
     aggregate = json.loads((save_dir / "aggregate.json").read_text(encoding="utf-8"))
     output = json.loads(capsys.readouterr().out)
