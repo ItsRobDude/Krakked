@@ -84,13 +84,17 @@ Keep image tags pinned. Do not rely on `latest` for a home server you want to tr
 After the UI boots successfully, make one export before experimenting:
 
 ```bash
-docker compose -f compose.unraid.yaml run --rm krakked export-install \
+docker compose -f compose.unraid.yaml run -T --rm krakked export-install \
   --config-dir /krakked/config \
   --db-path /krakked/state/portfolio.db \
   --data-dir /krakked/data \
   --include-data \
-  --output /krakked/state/krakked-first-backup.zip
+  --output /krakked/state/krakked-first-backup.zip < /dev/null
 ```
+
+Use `run -T ... < /dev/null` for any one-shot `docker compose run` on Unraid:
+without detaching the TTY/stdin, one-shot commands can hang in the Unraid web
+terminal (`ttyd`).
 
 The export lands under:
 
@@ -103,4 +107,11 @@ The export lands under:
 - Start in paper mode on the server. Live mode is a later operational decision.
 - The helper will not overwrite existing config unless you pass `--force`.
 - If the helper warns that the git remote does not look like `ItsRobDude/krakked`, stop and check the folder before continuing.
-- This streamlines the Unraid terminal path, but the actual Unraid host smoke test still needs to be run on your box.
+- The bootstrap now normalizes `.env` to LF on each run. If you hand-edit `.env`
+  from Windows, keep it LF-only — a trailing CR on `KRAKKED_IMAGE` corrupts the
+  Compose image reference.
+- If Docker Compose was installed manually (the CLI plugin under
+  `/usr/local/lib/docker/cli-plugins/`), it may not survive an Unraid reboot.
+  Make that install persistent (e.g. via a `go`/User Scripts boot step) or
+  reinstall after reboots.
+- This streamlines the Unraid terminal path, but the actual Unraid host smoke test still needs to be run on your box. The first run is recorded in [`deployment-proof.md`](./deployment-proof.md).

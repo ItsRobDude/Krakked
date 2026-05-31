@@ -141,6 +141,25 @@ env_value() {
   printf '%s' "$default"
 }
 
+normalize_env_line_endings() {
+  # Windows-written or copied .env files can carry CRLF, and a trailing CR on
+  # KRAKKED_IMAGE/KRAKKED_IMAGE_TAG corrupts the Compose image reference. Strip
+  # CR so the file is LF-only. tr is busybox-safe on Unraid.
+  if [ ! -f .env ]; then
+    return
+  fi
+  if tr -d '\r' < .env | cmp -s - .env; then
+    return
+  fi
+  local tmp
+  tmp="$(mktemp)"
+  if tr -d '\r' < .env > "$tmp" && mv "$tmp" .env; then
+    echo "Normalized .env to LF line endings (stripped CR) to avoid Compose image-reference corruption."
+  else
+    rm -f "$tmp"
+  fi
+}
+
 ensure_unraid_port() {
   if [ ! -f .env ]; then
     return
@@ -383,6 +402,7 @@ KRAKKED_SECRET_PW=
 KRAKEN_API_KEY=
 KRAKEN_API_SECRET="
 
+normalize_env_line_endings
 ensure_unraid_port
 detect_runtime
 
@@ -430,8 +450,8 @@ Next checks:
 Open the UI:
   http://<your-unraid-ip>:8088
 
-Back up after first successful boot:
-  $COMPOSE_DISPLAY -f $COMPOSE_FILE run --rm krakked export-install --config-dir /krakked/config --db-path /krakked/state/portfolio.db --data-dir /krakked/data --include-data --output /krakked/state/krakked-first-backup.zip
+Back up after first successful boot (use -T and </dev/null so one-shot run does not hang in the Unraid terminal):
+  $COMPOSE_DISPLAY -f $COMPOSE_FILE run -T --rm krakked export-install --config-dir /krakked/config --db-path /krakked/state/portfolio.db --data-dir /krakked/data --include-data --output /krakked/state/krakked-first-backup.zip </dev/null
 EOF
 else
 cat <<EOF
