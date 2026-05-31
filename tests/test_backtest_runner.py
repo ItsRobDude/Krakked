@@ -176,6 +176,7 @@ def test_run_backtest_wires_risk_provider(monkeypatch: pytest.MonkeyPatch) -> No
             frames: list[str],
             start: datetime,
             end: datetime,
+            **_kwargs: Any,
         ) -> None:  # noqa: ARG002
             self._timeline = [int(start.timestamp())]
 
@@ -293,9 +294,13 @@ def test_run_backtest_replays_cached_ohlc_with_starting_cash(tmp_path: Path) -> 
     )
     assert result.summary.usable_series_count == 1
     assert result.summary.coverage[0].status == "ok"
+    assert result.summary.warmup_status == "unusable"
     assert result.summary.trust_level == "decision_helpful"
     assert "filled trades" in result.summary.trust_note
-    assert result.summary.notable_warnings == []
+    assert (
+        "No usable warmup series were found before the requested replay start."
+        in result.summary.notable_warnings
+    )
     assert "config_path" not in result.summary.replay_inputs
     strategy_summary = result.summary.per_strategy["majors_mean_rev"]
     assert strategy_summary["cycles_evaluated"] == len(timestamps)
@@ -309,6 +314,97 @@ def test_run_backtest_replays_cached_ohlc_with_starting_cash(tmp_path: Path) -> 
     assert "filtered_low_score_entries" in strategy_summary
     assert strategy_summary["min_score"] is not None
     assert strategy_summary["max_score"] >= strategy_summary["min_score"]
+
+
+def test_backtest_market_data_uses_warmup_without_extra_replay_cycles(
+    tmp_path: Path,
+) -> None:
+    config = _build_backtest_config(tmp_path)
+    _seed_pair_metadata(config)
+    timestamps = [1_700_000_000 + (idx * 3600) for idx in range(14)]
+    closes = [100.0 + idx for idx in range(len(timestamps))]
+    _write_ohlc_series(tmp_path, timestamps=timestamps, closes=closes)
+
+    start = datetime.fromtimestamp(timestamps[10], tz=UTC)
+    end = datetime.fromtimestamp(timestamps[-1], tz=UTC)
+    warmup_start = datetime.fromtimestamp(timestamps[0], tz=UTC)
+
+    market_data = runner.BacktestMarketData(
+        config,
+        ["BTC/USD"],
+        ["1h"],
+        start,
+        end,
+        warmup_start=warmup_start,
+        warmup_timeframes=["1h"],
+        warmup_days=1.0,
+    )
+
+    try:
+        assert list(market_data.iter_timestamps()) == timestamps[10:]
+        market_data.set_time(start)
+        bars = market_data.get_ohlc("BTC/USD", "1h", lookback=5)
+        assert [bar.timestamp for bar in bars] == timestamps[6:11]
+
+        preflight = market_data.get_preflight()
+        assert preflight.coverage[0].bar_count == 4
+        assert preflight.coverage[0].status == "ok"
+        assert preflight.warmup_status == "ready"
+        assert preflight.warmup_coverage[0].bar_count == 10
+    finally:
+        shutdown = getattr(market_data, "shutdown", None)
+        if callable(shutdown):
+            shutdown()
+
+
+def test_run_backtest_strict_data_fails_on_missing_warmup(
+    tmp_path: Path,
+) -> None:
+    config = _build_backtest_config(tmp_path)
+    _seed_pair_metadata(config)
+    timestamps = [1_700_000_000 + (idx * 3600) for idx in range(40)]
+    closes = _mean_reverting_breakdown_closes()
+    _write_ohlc_series(tmp_path, timestamps=timestamps, closes=closes)
+
+    start = datetime.fromtimestamp(timestamps[0], tz=UTC)
+    end = datetime.fromtimestamp(timestamps[-1], tz=UTC)
+
+    with pytest.raises(ValueError, match="warmup missing: BTC/USD@1h"):
+        runner.run_backtest(
+            config,
+            start=start,
+            end=end,
+            timeframes=["1h"],
+            starting_cash_usd=10_000.0,
+            strict_data=True,
+        )
+
+
+def test_run_backtest_warmup_zero_preserves_exact_window_mode(
+    tmp_path: Path,
+) -> None:
+    config = _build_backtest_config(tmp_path)
+    _seed_pair_metadata(config)
+    timestamps = [1_700_000_000 + (idx * 3600) for idx in range(40)]
+    closes = _mean_reverting_breakdown_closes()
+    _write_ohlc_series(tmp_path, timestamps=timestamps, closes=closes)
+
+    start = datetime.fromtimestamp(timestamps[0], tz=UTC)
+    end = datetime.fromtimestamp(timestamps[-1], tz=UTC)
+
+    result = runner.run_backtest(
+        config,
+        start=start,
+        end=end,
+        timeframes=["1h"],
+        starting_cash_usd=10_000.0,
+        strict_data=True,
+        warmup_days=0,
+    )
+
+    assert result.summary is not None
+    assert result.summary.warmup_status == "disabled"
+    assert result.summary.warmup_missing_series == []
 
 
 def test_resolve_simulated_fill_price_applies_slippage_by_side() -> None:
@@ -940,5 +1036,5 @@ def test_build_trend_core_warmup_warnings_for_short_daily_window(
     )  # noqa: SLF001
 
     assert warnings == [
-        "Strategy trend_core may be under-warmed on 1d: requires 20 closed bars, but BTC/USD only have 19 inside the requested window."
+        "Strategy trend_core may be under-warmed on 1d: requires 30 closed bars, but BTC/USD only have 19 inside the requested window."
     ]

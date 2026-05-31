@@ -24,6 +24,7 @@ from krakked.backtest import (
     MarketRegimeExposureScenarioParams,
     MarketRegimeOverlayParams,
     RSRotationV2ResearchParams,
+    backtest_strict_data_details,
     build_backtest_preflight,
     default_rs_rotation_v2_allocation_pct,
     default_rs_rotation_v2_lookback_bars,
@@ -526,6 +527,15 @@ def _add_market_regime_throttle_backtest_arguments(
         help="Flat taker fee in basis points applied to simulated fills",
     )
     subparser.add_argument(
+        "--warmup-days",
+        type=float,
+        default=None,
+        help=(
+            "Days of cached OHLC before --start to expose for replay warmup; "
+            "defaults to the configured strategy/risk lookback requirement"
+        ),
+    )
+    subparser.add_argument(
         "--save-report",
         help="Optional JSON path for a durable runtime-throttle report artifact",
     )
@@ -863,6 +873,10 @@ def _print_backtest_summary(
         f"Pairs: {', '.join(summary.pairs)} | Timeframes: {', '.join(summary.timeframes)}"
     )
     print(
+        f"Warmup: {summary.warmup_status} "
+        f"({summary.warmup_days:g} days before replay start)"
+    )
+    print(
         f"Wallet: start ${summary.starting_cash_usd:,.2f} -> "
         f"end ${summary.ending_equity_usd:,.2f} "
         f"({summary.absolute_pnl_usd:+,.2f}, {summary.return_pct:+.2f}%)"
@@ -894,6 +908,14 @@ def _print_backtest_summary(
     if summary.partial_series:
         print("Partial-window OHLC series:")
         for series in summary.partial_series:
+            print(f"- {series}")
+    if summary.warmup_missing_series:
+        print("Missing warmup OHLC series:")
+        for series in summary.warmup_missing_series:
+            print(f"- {series}")
+    if summary.warmup_partial_series:
+        print("Partial warmup OHLC series:")
+        for series in summary.warmup_partial_series:
             print(f"- {series}")
     if summary.notable_warnings:
         print("Important warnings:")
@@ -1298,6 +1320,15 @@ def _add_strategy_activity_sweep_arguments(
         help="Flat taker fee in basis points applied to simulated fills",
     )
     subparser.add_argument(
+        "--warmup-days",
+        type=float,
+        default=None,
+        help=(
+            "Days of cached OHLC before each window start to expose for replay warmup; "
+            "defaults to the configured strategy/risk lookback requirement"
+        ),
+    )
+    subparser.add_argument(
         "--save-dir",
         required=True,
         help="Directory where per-run reports and aggregate.json are written",
@@ -1553,6 +1584,10 @@ def _print_backtest_preflight(result: BacktestPreflightResult) -> None:
         f"({preflight.usable_series_count} usable, "
         f"{len(preflight.partial_series)} partial, {len(preflight.missing_series)} missing)"
     )
+    print(
+        f"Warmup status: {preflight.warmup_status} "
+        f"({preflight.warmup_days:g} days before replay start)"
+    )
     print(f"Replay readiness: {preflight.summary_note}")
     if preflight.warnings:
         print("Warnings:")
@@ -1566,6 +1601,15 @@ def _print_backtest_preflight(result: BacktestPreflightResult) -> None:
             f"- {item.series_key}: {item.status}, {item.bar_count} bars, "
             f"first {first_bar}, last {last_bar}"
         )
+    if preflight.warmup_coverage:
+        print("Warmup coverage:")
+        for item in preflight.warmup_coverage:
+            first_bar = item.first_bar_at.isoformat() if item.first_bar_at else "none"
+            last_bar = item.last_bar_at.isoformat() if item.last_bar_at else "none"
+            print(
+                f"- {item.series_key}: {item.status}, {item.bar_count} bars, "
+                f"first {first_bar}, last {last_bar}"
+            )
 
 
 def _format_delta(
@@ -1732,32 +1776,17 @@ def _backtest_preflight_command(args: argparse.Namespace) -> int:
             start=start,
             end=end,
             timeframes=args.timeframe,
+            warmup_days=args.warmup_days,
             **config_provenance,
         )
     except Exception as exc:  # noqa: BLE001
         return _print_error(f"Backtest preflight failed: {exc}")
 
-    if args.strict_data and (
-        result.preflight.missing_series or result.preflight.partial_series
-    ):
+    strict_details = backtest_strict_data_details(result.preflight)
+    if args.strict_data and strict_details:
         return _print_error(
             "Backtest preflight failed in strict mode: "
-            + "; ".join(
-                part
-                for part in [
-                    (
-                        "missing: " + ", ".join(result.preflight.missing_series)
-                        if result.preflight.missing_series
-                        else ""
-                    ),
-                    (
-                        "partial: " + ", ".join(result.preflight.partial_series)
-                        if result.preflight.partial_series
-                        else ""
-                    ),
-                ]
-                if part
-            )
+            + "; ".join(strict_details)
         )
 
     payload = result.to_dict()
@@ -1789,6 +1818,7 @@ def _backtest_command(args: argparse.Namespace) -> int:
             fee_bps=float(args.fee_bps),
             db_path=args.db_path,
             strict_data=bool(args.strict_data),
+            warmup_days=args.warmup_days,
             **config_provenance,
         )
     except Exception as exc:  # noqa: BLE001
@@ -1829,6 +1859,18 @@ def _backtest_command(args: argparse.Namespace) -> int:
             return _print_error(
                 "Backtest latest-report publish refused: preflight status is "
                 f"{status_text!r}. Repair replay coverage or pass "
+                "--allow-non-ready-publish to publish intentionally."
+            )
+        warmup_status = (
+            preflight_payload.get("warmup_status")
+            if isinstance(preflight_payload, dict)
+            else None
+        )
+        if warmup_status not in {"ready", "disabled"} and not args.allow_non_ready_publish:
+            status_text = str(warmup_status or "unknown")
+            return _print_error(
+                "Backtest latest-report publish refused: warmup status is "
+                f"{status_text!r}. Repair replay warmup coverage or pass "
                 "--allow-non-ready-publish to publish intentionally."
             )
         try:
@@ -2069,6 +2111,7 @@ def _market_regime_throttle_backtest_command(args: argparse.Namespace) -> int:
             starting_cash_usd=float(args.starting_cash_usd),
             fee_bps=float(args.fee_bps),
             strict_data=bool(args.strict_data),
+            warmup_days=args.warmup_days,
             unavailable_policy=args.unavailable_policy,
         )
     except Exception as exc:  # noqa: BLE001
@@ -2283,6 +2326,7 @@ def _strategy_activity_sweep_command(args: argparse.Namespace) -> int:
             starting_cash_usd=float(args.starting_cash_usd),
             fee_bps=float(args.fee_bps),
             strict_data=bool(args.strict_data),
+            warmup_days=args.warmup_days,
         )
     except Exception as exc:  # noqa: BLE001
         return _print_error(f"Strategy activity sweep failed: {exc}")
@@ -3169,6 +3213,15 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Limit the preflight to one timeframe; repeat to include multiple timeframes",
     )
     backtest_preflight_parser.add_argument(
+        "--warmup-days",
+        type=float,
+        default=None,
+        help=(
+            "Days of cached OHLC before --start to expose for indicator warmup; "
+            "defaults to the configured strategy/risk lookback requirement, use 0 for exact-window replay"
+        ),
+    )
+    backtest_preflight_parser.add_argument(
         "--strict-data",
         action="store_true",
         help="Fail if any requested pair/timeframe is missing or only partially covered",
@@ -3223,6 +3276,15 @@ def _build_parser() -> argparse.ArgumentParser:
     backtest_parser.add_argument(
         "--db-path",
         help="Optional SQLite path to persist decisions, orders, and execution results",
+    )
+    backtest_parser.add_argument(
+        "--warmup-days",
+        type=float,
+        default=None,
+        help=(
+            "Days of cached OHLC before --start to expose for indicator warmup; "
+            "defaults to the configured strategy/risk lookback requirement, use 0 for exact-window replay"
+        ),
     )
     backtest_parser.add_argument(
         "--save-report",

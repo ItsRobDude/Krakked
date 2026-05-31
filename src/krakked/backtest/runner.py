@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import copy
+import math
 import logging
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, cast
@@ -72,6 +73,13 @@ class BacktestPreflight:
     usable_series_count: int = 0
     missing_series: List[str] = field(default_factory=list)
     partial_series: List[str] = field(default_factory=list)
+    warmup_start: Optional[datetime] = None
+    warmup_days: float = 0.0
+    warmup_coverage: List[BacktestCoverageItem] = field(default_factory=list)
+    warmup_usable_series_count: int = 0
+    warmup_missing_series: List[str] = field(default_factory=list)
+    warmup_partial_series: List[str] = field(default_factory=list)
+    warmup_status: str = "disabled"
     strategy_coverage_gaps: List[Dict[str, Any]] = field(default_factory=list)
     status: str = "ready"
     summary_note: str = ""
@@ -80,9 +88,21 @@ class BacktestPreflight:
     def to_dict(self) -> Dict[str, Any]:
         return {
             "coverage": [item.to_dict() for item in self.coverage],
+            "execution_coverage": [item.to_dict() for item in self.coverage],
             "usable_series_count": self.usable_series_count,
             "missing_series": list(self.missing_series),
             "partial_series": list(self.partial_series),
+            "warmup_start": (
+                self.warmup_start.astimezone(UTC).isoformat()
+                if self.warmup_start is not None
+                else None
+            ),
+            "warmup_days": self.warmup_days,
+            "warmup_coverage": [item.to_dict() for item in self.warmup_coverage],
+            "warmup_usable_series_count": self.warmup_usable_series_count,
+            "warmup_missing_series": list(self.warmup_missing_series),
+            "warmup_partial_series": list(self.warmup_partial_series),
+            "warmup_status": self.warmup_status,
             "strategy_coverage_gaps": copy.deepcopy(self.strategy_coverage_gaps),
             "status": self.status,
             "summary_note": self.summary_note,
@@ -118,6 +138,11 @@ class BacktestSummary:
     missing_series: List[str] = field(default_factory=list)
     partial_series: List[str] = field(default_factory=list)
     coverage: List[BacktestCoverageItem] = field(default_factory=list)
+    warmup_status: str = "disabled"
+    warmup_days: float = 0.0
+    warmup_start: Optional[datetime] = None
+    warmup_missing_series: List[str] = field(default_factory=list)
+    warmup_partial_series: List[str] = field(default_factory=list)
     strategy_coverage_gaps: List[Dict[str, Any]] = field(default_factory=list)
     blocked_reason_counts: Dict[str, int] = field(default_factory=dict)
     clamped_reason_counts: Dict[str, int] = field(default_factory=dict)
@@ -156,6 +181,16 @@ class BacktestSummary:
             "missing_series": list(self.missing_series),
             "partial_series": list(self.partial_series),
             "coverage": [item.to_dict() for item in self.coverage],
+            "execution_coverage": [item.to_dict() for item in self.coverage],
+            "warmup_status": self.warmup_status,
+            "warmup_days": self.warmup_days,
+            "warmup_start": (
+                self.warmup_start.astimezone(UTC).isoformat()
+                if self.warmup_start is not None
+                else None
+            ),
+            "warmup_missing_series": list(self.warmup_missing_series),
+            "warmup_partial_series": list(self.warmup_partial_series),
             "strategy_coverage_gaps": copy.deepcopy(self.strategy_coverage_gaps),
             "blocked_reason_counts": dict(self.blocked_reason_counts),
             "clamped_reason_counts": dict(self.clamped_reason_counts),
@@ -289,6 +324,10 @@ class BacktestMarketData(MarketDataAPI):
         timeframes: Iterable[str],
         start: datetime,
         end: datetime,
+        *,
+        warmup_start: Optional[datetime] = None,
+        warmup_timeframes: Optional[Iterable[str]] = None,
+        warmup_days: float = 0.0,
     ):
         super().__init__(config, rest_client=None, rate_limiter=None)
         self._rest_client: Optional[KrakenRESTClient] = None
@@ -298,6 +337,14 @@ class BacktestMarketData(MarketDataAPI):
         self._timeframes = list(timeframes)
         self._start_ts = int(start.replace(tzinfo=UTC).timestamp())
         self._end_ts = int(end.replace(tzinfo=UTC).timestamp())
+        warmup_start_utc = (
+            warmup_start.replace(tzinfo=UTC) if warmup_start is not None else None
+        )
+        self._warmup_start_ts = (
+            int(warmup_start_utc.timestamp()) if warmup_start_utc is not None else None
+        )
+        load_start_ts = self._warmup_start_ts or self._start_ts
+        warmup_frame_set = {str(frame) for frame in (warmup_timeframes or []) if frame}
         self._current_time = start.replace(tzinfo=UTC)
         self._alias_map = {}
         self._asset_map = {}
@@ -312,34 +359,40 @@ class BacktestMarketData(MarketDataAPI):
 
         self._bar_cache: Dict[Tuple[str, str], List[OHLCBar]] = {}
         coverage: List[BacktestCoverageItem] = []
+        warmup_coverage: List[BacktestCoverageItem] = []
         for pair_meta in self._universe:
             for timeframe in self._timeframes:
                 bars = self._ohlc_store.get_bars(
                     pair_meta.canonical, timeframe, lookback=1_000_000
                 )
-                bounded = [
+                loaded = [
                     bar
                     for bar in bars
+                    if load_start_ts <= int(bar.timestamp) <= self._end_ts
+                ]
+                execution_bounded = [
+                    bar
+                    for bar in loaded
                     if self._start_ts <= int(bar.timestamp) <= self._end_ts
                 ]
-                self._bar_cache[(pair_meta.canonical, timeframe)] = bounded
-                if not bounded:
+                self._bar_cache[(pair_meta.canonical, timeframe)] = loaded
+                if not execution_bounded:
                     status = "missing"
                     first_bar_at = None
                     last_bar_at = None
                 else:
                     first_bar_at = datetime.fromtimestamp(
-                        int(bounded[0].timestamp), tz=UTC
+                        int(execution_bounded[0].timestamp), tz=UTC
                     )
                     last_bar_at = datetime.fromtimestamp(
-                        int(bounded[-1].timestamp), tz=UTC
+                        int(execution_bounded[-1].timestamp), tz=UTC
                     )
-                    coverage_end_ts = int(bounded[-1].timestamp) + _timeframe_seconds(
-                        timeframe
-                    )
+                    coverage_end_ts = int(
+                        execution_bounded[-1].timestamp
+                    ) + _timeframe_seconds(timeframe)
                     status = (
                         "partial_window"
-                        if int(bounded[0].timestamp) > self._start_ts
+                        if int(execution_bounded[0].timestamp) > self._start_ts
                         or coverage_end_ts < self._end_ts
                         else "ok"
                     )
@@ -347,12 +400,53 @@ class BacktestMarketData(MarketDataAPI):
                     BacktestCoverageItem(
                         pair=pair_meta.ws_symbol,
                         timeframe=timeframe,
-                        bar_count=len(bounded),
+                        bar_count=len(execution_bounded),
                         first_bar_at=first_bar_at,
                         last_bar_at=last_bar_at,
                         status=status,
                     )
                 )
+                if self._warmup_start_ts is not None and timeframe in warmup_frame_set:
+                    warmup_bounded = [
+                        bar
+                        for bar in loaded
+                        if self._warmup_start_ts <= int(bar.timestamp) < self._start_ts
+                    ]
+                    if not warmup_bounded:
+                        warmup_status = "missing"
+                        warmup_first_at = None
+                        warmup_last_at = None
+                    else:
+                        warmup_first_ts = int(warmup_bounded[0].timestamp)
+                        warmup_last_ts = int(warmup_bounded[-1].timestamp)
+                        warmup_first_at = datetime.fromtimestamp(
+                            warmup_first_ts, tz=UTC
+                        )
+                        warmup_last_at = datetime.fromtimestamp(
+                            warmup_last_ts, tz=UTC
+                        )
+                        frame_seconds = _timeframe_seconds(timeframe)
+                        start_ok = (
+                            frame_seconds <= 0
+                            or warmup_first_ts <= self._warmup_start_ts + frame_seconds
+                        )
+                        end_ok = (
+                            frame_seconds <= 0
+                            or warmup_last_ts + frame_seconds >= self._start_ts
+                        )
+                        warmup_status = (
+                            "ok" if start_ok and end_ok else "partial_window"
+                        )
+                    warmup_coverage.append(
+                        BacktestCoverageItem(
+                            pair=pair_meta.ws_symbol,
+                            timeframe=timeframe,
+                            bar_count=len(warmup_bounded),
+                            first_bar_at=warmup_first_at,
+                            last_bar_at=warmup_last_at,
+                            status=warmup_status,
+                        )
+                    )
 
         timestamps: set[int] = set()
         for bars in self._bar_cache.values():
@@ -369,6 +463,17 @@ class BacktestMarketData(MarketDataAPI):
             for item in self._coverage
             if item.status == "partial_window"
         ]
+        self._warmup_coverage = warmup_coverage
+        self._warmup_missing_series = [
+            item.series_key
+            for item in self._warmup_coverage
+            if item.status == "missing"
+        ]
+        self._warmup_partial_series = [
+            item.series_key
+            for item in self._warmup_coverage
+            if item.status == "partial_window"
+        ]
         self._preflight = BacktestPreflight(
             coverage=list(self._coverage),
             usable_series_count=sum(
@@ -376,6 +481,14 @@ class BacktestMarketData(MarketDataAPI):
             ),
             missing_series=list(self._missing_series),
             partial_series=list(self._partial_series),
+            warmup_start=warmup_start_utc,
+            warmup_days=float(warmup_days),
+            warmup_coverage=list(self._warmup_coverage),
+            warmup_usable_series_count=sum(
+                1 for item in self._warmup_coverage if item.status != "missing"
+            ),
+            warmup_missing_series=list(self._warmup_missing_series),
+            warmup_partial_series=list(self._warmup_partial_series),
             status="ready",
             summary_note="",
             warnings=[],
@@ -561,6 +674,13 @@ class BacktestMarketData(MarketDataAPI):
             usable_series_count=self._preflight.usable_series_count,
             missing_series=list(self._preflight.missing_series),
             partial_series=list(self._preflight.partial_series),
+            warmup_start=self._preflight.warmup_start,
+            warmup_days=self._preflight.warmup_days,
+            warmup_coverage=list(self._preflight.warmup_coverage),
+            warmup_usable_series_count=self._preflight.warmup_usable_series_count,
+            warmup_missing_series=list(self._preflight.warmup_missing_series),
+            warmup_partial_series=list(self._preflight.warmup_partial_series),
+            warmup_status=self._preflight.warmup_status,
             strategy_coverage_gaps=copy.deepcopy(
                 self._preflight.strategy_coverage_gaps
             ),
@@ -675,7 +795,11 @@ def _assess_preflight(preflight: BacktestPreflight) -> BacktestPreflight:
     usable_items = [item for item in coverage if item.status != "missing"]
     missing_series = list(preflight.missing_series)
     partial_series = list(preflight.partial_series)
+    warmup_coverage = list(preflight.warmup_coverage)
+    warmup_missing_series = list(preflight.warmup_missing_series)
+    warmup_partial_series = list(preflight.warmup_partial_series)
     warnings: List[str] = []
+    warmup_status = "disabled"
 
     if preflight.usable_series_count <= 0:
         status = "unusable"
@@ -709,11 +833,37 @@ def _assess_preflight(preflight: BacktestPreflight) -> BacktestPreflight:
         status = "ready"
         summary_note = "Coverage looks complete for the requested replay window."
 
+    if preflight.warmup_days > 0:
+        if not warmup_coverage or preflight.warmup_usable_series_count <= 0:
+            warmup_status = "unusable"
+            warnings.append(
+                "No usable warmup series were found before the requested replay start."
+            )
+        elif warmup_missing_series or warmup_partial_series:
+            warmup_status = "limited"
+            if warmup_missing_series:
+                warnings.append(
+                    f"{len(warmup_missing_series)} warmup series are missing before the requested replay start."
+                )
+            if warmup_partial_series:
+                warnings.append(
+                    f"{len(warmup_partial_series)} warmup series only partially cover the configured warmup window."
+                )
+        else:
+            warmup_status = "ready"
+
     return BacktestPreflight(
         coverage=coverage,
         usable_series_count=preflight.usable_series_count,
         missing_series=missing_series,
         partial_series=partial_series,
+        warmup_start=preflight.warmup_start,
+        warmup_days=preflight.warmup_days,
+        warmup_coverage=warmup_coverage,
+        warmup_usable_series_count=preflight.warmup_usable_series_count,
+        warmup_missing_series=warmup_missing_series,
+        warmup_partial_series=warmup_partial_series,
+        warmup_status=warmup_status,
         strategy_coverage_gaps=copy.deepcopy(preflight.strategy_coverage_gaps),
         status=status,
         summary_note=summary_note,
@@ -1105,6 +1255,13 @@ def _with_strategy_coverage_warnings(
         usable_series_count=preflight.usable_series_count,
         missing_series=list(preflight.missing_series),
         partial_series=list(preflight.partial_series),
+        warmup_start=preflight.warmup_start,
+        warmup_days=preflight.warmup_days,
+        warmup_coverage=list(preflight.warmup_coverage),
+        warmup_usable_series_count=preflight.warmup_usable_series_count,
+        warmup_missing_series=list(preflight.warmup_missing_series),
+        warmup_partial_series=list(preflight.warmup_partial_series),
+        warmup_status=preflight.warmup_status,
         strategy_coverage_gaps=strategy_coverage_gaps,
         status=preflight.status,
         summary_note=preflight.summary_note,
@@ -1118,6 +1275,7 @@ def build_backtest_preflight(
     end: datetime,
     timeframes: Optional[Iterable[str]] = None,
     *,
+    warmup_days: Optional[float] = None,
     config_source: str = "provided_config",
     resolved_config_path: Optional[str] = None,
     config_arg_supplied: bool = False,
@@ -1129,8 +1287,20 @@ def build_backtest_preflight(
     frames = (
         list(timeframes) if timeframes else _default_backtest_timeframes(config_copy)
     )
+    resolved_warmup_days, warmup_start, warmup_timeframes = _resolve_backtest_warmup(
+        config_copy, start, frames, warmup_days
+    )
     pairs = _configured_backtest_pairs(config_copy)
-    market_data = BacktestMarketData(config_copy, pairs, frames, start, end)
+    market_data = BacktestMarketData(
+        config_copy,
+        pairs,
+        frames,
+        start,
+        end,
+        warmup_start=warmup_start,
+        warmup_timeframes=warmup_timeframes,
+        warmup_days=resolved_warmup_days,
+    )
     try:
         strategy_inputs = _build_strategy_inputs(
             config_copy,
@@ -1167,6 +1337,7 @@ def run_backtest(
     fee_bps: float = 25.0,
     db_path: Optional[str] = None,
     strict_data: bool = False,
+    warmup_days: Optional[float] = None,
     config_source: str = "provided_config",
     resolved_config_path: Optional[str] = None,
     config_arg_supplied: bool = False,
@@ -1192,9 +1363,21 @@ def run_backtest(
     frames = (
         list(timeframes) if timeframes else _default_backtest_timeframes(config_copy)
     )
+    resolved_warmup_days, warmup_start, warmup_timeframes = _resolve_backtest_warmup(
+        config_copy, start, frames, warmup_days
+    )
     pairs = _configured_backtest_pairs(config_copy)
 
-    market_data = BacktestMarketData(config_copy, pairs, frames, start, end)
+    market_data = BacktestMarketData(
+        config_copy,
+        pairs,
+        frames,
+        start,
+        end,
+        warmup_start=warmup_start,
+        warmup_timeframes=warmup_timeframes,
+        warmup_days=resolved_warmup_days,
+    )
     strategy_inputs = _build_strategy_inputs(
         config_copy,
         config_source=config_source,
@@ -1213,14 +1396,11 @@ def run_backtest(
             "No historical OHLC bars found for the requested replay window. "
             f"Checked: {requested}"
         )
-    if strict_data and (preflight.missing_series or preflight.partial_series):
-        details: List[str] = []
-        if preflight.missing_series:
-            details.append("missing: " + ", ".join(preflight.missing_series))
-        if preflight.partial_series:
-            details.append("partial: " + ", ".join(preflight.partial_series))
+    strict_details = backtest_strict_data_details(preflight)
+    if strict_data and strict_details:
         raise ValueError(
-            "Historical data coverage failed in strict mode: " + "; ".join(details)
+            "Historical data coverage failed in strict mode: "
+            + "; ".join(strict_details)
         )
     if not list(market_data.iter_timestamps()):
         raise ValueError(
@@ -1372,6 +1552,174 @@ def _configured_backtest_pairs(config: AppConfig) -> List[str]:
     return sorted(requested_pairs)
 
 
+def _int_param(params: Dict[str, Any], key: str, default: int, minimum: int) -> int:
+    try:
+        parsed = int(params.get(key, default))
+    except (TypeError, ValueError):
+        parsed = default
+    return max(parsed, minimum)
+
+
+def _add_warmup_requirement(
+    requirements: Dict[str, int],
+    timeframe: str,
+    bars: int,
+    selected_timeframes: set[str],
+) -> None:
+    timeframe = str(timeframe or "").strip()
+    if not timeframe or timeframe not in selected_timeframes:
+        return
+    requirements[timeframe] = max(requirements.get(timeframe, 0), int(bars))
+
+
+def _backtest_warmup_requirements(
+    config: AppConfig,
+    timeframes: Iterable[str],
+) -> Dict[str, int]:
+    """Return required pre-window bars by timeframe for live-like replay context."""
+
+    selected_timeframes = {str(timeframe) for timeframe in timeframes if timeframe}
+    requirements: Dict[str, int] = {}
+
+    for strategy_id in config.strategies.enabled:
+        strat_cfg = config.strategies.configs.get(strategy_id)
+        if strat_cfg is None or not getattr(strat_cfg, "enabled", False):
+            continue
+        params = strat_cfg.params or {}
+        strategy_type = str(getattr(strat_cfg, "type", "") or "")
+        timeframes_for_strategy = _strategy_timeframes_from_params(params)
+
+        risk_bars = int(getattr(config.risk, "volatility_lookback_bars", 20)) + 10
+        for timeframe in timeframes_for_strategy:
+            _add_warmup_requirement(
+                requirements, timeframe, risk_bars, selected_timeframes
+            )
+
+        if strategy_type == "trend_following" or strategy_id == "trend_core":
+            ma_slow = _int_param(params, "ma_slow", 20, 2)
+            bars = ma_slow + 10
+            for timeframe in timeframes_for_strategy:
+                _add_warmup_requirement(
+                    requirements, timeframe, bars, selected_timeframes
+                )
+            _add_warmup_requirement(
+                requirements,
+                str(params.get("regime_timeframe") or "1d"),
+                bars,
+                selected_timeframes,
+            )
+            continue
+
+        if strategy_type == "mean_reversion":
+            _add_warmup_requirement(
+                requirements,
+                str(params.get("timeframe") or "1h"),
+                _int_param(params, "lookback_bars", 50, 5),
+                selected_timeframes,
+            )
+            continue
+
+        if strategy_type == "vol_breakout":
+            bars = _int_param(params, "lookback_bars", 20, 5) + 10
+            for timeframe in timeframes_for_strategy:
+                _add_warmup_requirement(
+                    requirements, timeframe, bars, selected_timeframes
+                )
+            continue
+
+        if strategy_type == "relative_strength":
+            _add_warmup_requirement(
+                requirements,
+                str(params.get("timeframe") or "4h"),
+                _int_param(params, "lookback_bars", 24, 2),
+                selected_timeframes,
+            )
+            continue
+
+        if "lookback_bars" in params:
+            bars = _int_param(params, "lookback_bars", 20, 2)
+            for timeframe in timeframes_for_strategy:
+                _add_warmup_requirement(
+                    requirements, timeframe, bars, selected_timeframes
+                )
+
+    _add_warmup_requirement(requirements, "1h", 200, selected_timeframes)
+
+    throttle = getattr(config.risk, "market_regime_throttle", None)
+    if throttle is not None and getattr(throttle, "enabled", False):
+        throttle_bars = max(
+            int(getattr(throttle, "momentum_lookback_bars", 63) or 63),
+            int(getattr(throttle, "basket_momentum_lookback_bars", 63) or 63),
+            int(getattr(throttle, "volatility_lookback_bars", 63) or 63),
+            int(getattr(throttle, "drawdown_lookback_bars", 63) or 63),
+        )
+        _add_warmup_requirement(
+            requirements,
+            str(getattr(throttle, "timeframe", "") or "4h"),
+            throttle_bars,
+            selected_timeframes,
+        )
+
+    return requirements
+
+
+def _default_backtest_warmup_days(
+    config: AppConfig,
+    timeframes: Iterable[str],
+) -> float:
+    requirements = _backtest_warmup_requirements(config, timeframes)
+    if not requirements:
+        return 0.0
+    seconds = [
+        bars * _timeframe_seconds(timeframe)
+        for timeframe, bars in requirements.items()
+        if _timeframe_seconds(timeframe) > 0
+    ]
+    if not seconds:
+        return 0.0
+    max_seconds = max(seconds)
+    if max_seconds <= 0:
+        return 0.0
+    return float(math.ceil(max_seconds / 86_400))
+
+
+def _resolve_backtest_warmup(
+    config: AppConfig,
+    start: datetime,
+    timeframes: Iterable[str],
+    warmup_days: Optional[float],
+) -> tuple[float, Optional[datetime], List[str]]:
+    resolved_days = (
+        _default_backtest_warmup_days(config, timeframes)
+        if warmup_days is None
+        else float(warmup_days)
+    )
+    if resolved_days < 0:
+        raise ValueError("warmup_days must be greater than or equal to 0")
+    warmup_timeframes = sorted(_backtest_warmup_requirements(config, timeframes))
+    if resolved_days <= 0:
+        return 0.0, None, warmup_timeframes
+    warmup_start = start.replace(tzinfo=UTC) - timedelta(days=resolved_days)
+    return resolved_days, warmup_start, warmup_timeframes
+
+
+def backtest_strict_data_details(preflight: BacktestPreflight) -> List[str]:
+    details: List[str] = []
+    if preflight.missing_series:
+        details.append("missing: " + ", ".join(preflight.missing_series))
+    if preflight.partial_series:
+        details.append("partial: " + ", ".join(preflight.partial_series))
+    if preflight.warmup_missing_series:
+        details.append(
+            "warmup missing: " + ", ".join(preflight.warmup_missing_series)
+        )
+    if preflight.warmup_partial_series:
+        details.append(
+            "warmup partial: " + ", ".join(preflight.warmup_partial_series)
+        )
+    return details
+
+
 def _build_backtest_summary(
     *,
     start: datetime,
@@ -1433,6 +1781,13 @@ def _build_backtest_summary(
         "end": end.astimezone(UTC).isoformat(),
         "pairs": list(pairs),
         "timeframes": list(timeframes),
+        "warmup_days": preflight.warmup_days,
+        "warmup_start": (
+            preflight.warmup_start.astimezone(UTC).isoformat()
+            if preflight.warmup_start is not None
+            else None
+        ),
+        "warmup_status": preflight.warmup_status,
         "enabled_strategies": list(
             getattr(portfolio.app_config.strategies, "enabled", [])
         ),
@@ -1481,6 +1836,11 @@ def _build_backtest_summary(
         missing_series=list(preflight.missing_series),
         partial_series=list(preflight.partial_series),
         coverage=list(preflight.coverage),
+        warmup_status=preflight.warmup_status,
+        warmup_days=preflight.warmup_days,
+        warmup_start=preflight.warmup_start,
+        warmup_missing_series=list(preflight.warmup_missing_series),
+        warmup_partial_series=list(preflight.warmup_partial_series),
         strategy_coverage_gaps=copy.deepcopy(preflight.strategy_coverage_gaps),
         blocked_reason_counts=blocked_reason_counts,
         clamped_reason_counts=clamped_reason_counts,
@@ -1660,7 +2020,7 @@ def _build_trend_core_warmup_warnings(
         return []
 
     params = TrendFollowingStrategy(trend_cfg).params
-    required_bars = int(params.ma_slow)
+    required_bars = int(params.ma_slow) + 10
     if required_bars <= 0:
         return []
 
@@ -1669,6 +2029,43 @@ def _build_trend_core_warmup_warnings(
         if isinstance(params.pairs, list) and params.pairs
         else _configured_backtest_pairs(config)
     )
+    if preflight.warmup_days > 0:
+        warmup_by_key = {
+            (item.pair, item.timeframe): item for item in preflight.warmup_coverage
+        }
+        deficits = [
+            (
+                pair,
+                warmup_by_key.get((pair, params.regime_timeframe)).status
+                if warmup_by_key.get((pair, params.regime_timeframe)) is not None
+                else "missing",
+                warmup_by_key.get((pair, params.regime_timeframe)).bar_count
+                if warmup_by_key.get((pair, params.regime_timeframe)) is not None
+                else 0,
+            )
+            for pair in strategy_pairs
+            if (
+                warmup_by_key.get((pair, params.regime_timeframe)) is None
+                or warmup_by_key.get((pair, params.regime_timeframe)).status != "ok"
+                or warmup_by_key.get((pair, params.regime_timeframe)).bar_count
+                < required_bars
+            )
+        ]
+        if not deficits:
+            return []
+        pair_list = ", ".join(pair for pair, _, _ in deficits)
+        statuses = sorted({status for _, status, _ in deficits})
+        counts = sorted({count for _, _, count in deficits})
+        count_text = (
+            str(counts[0]) if len(counts) == 1 else f"{counts[0]}-{counts[-1]}"
+        )
+        return [
+            "Strategy trend_core may be under-warmed on "
+            f"{params.regime_timeframe}: requires about {required_bars} pre-window "
+            f"closed bars for full-window signal evaluation, but {pair_list} "
+            f"warmup coverage is {', '.join(statuses)} with {count_text} bars."
+        ]
+
     coverage_by_key = {
         (item.pair, item.timeframe): item.bar_count for item in preflight.coverage
     }

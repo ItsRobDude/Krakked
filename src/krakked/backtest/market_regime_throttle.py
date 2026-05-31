@@ -54,6 +54,7 @@ def run_market_regime_throttle_backtest(
     starting_cash_usd: float = 10_000.0,
     fee_bps: float = 25.0,
     strict_data: bool = False,
+    warmup_days: float | None = None,
     unavailable_policy: str = "block_new_risk",
 ) -> MarketRegimeThrottleBacktestResult:
     """Compare normal replay against the real runtime throttle risk plumbing."""
@@ -94,6 +95,7 @@ def run_market_regime_throttle_backtest(
         starting_cash_usd=starting_cash_usd,
         fee_bps=fee_bps,
         strict_data=strict_data,
+        warmup_days=warmup_days,
     )
     throttle = run_backtest(
         throttle_config,
@@ -103,6 +105,7 @@ def run_market_regime_throttle_backtest(
         starting_cash_usd=starting_cash_usd,
         fee_bps=fee_bps,
         strict_data=strict_data,
+        warmup_days=warmup_days,
     )
 
     if baseline.summary is None or throttle.summary is None:

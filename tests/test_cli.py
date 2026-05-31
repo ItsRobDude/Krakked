@@ -489,6 +489,7 @@ def test_backtest_subcommand_prints_summary(
         fee_bps: float,
         db_path: str | None = None,
         strict_data: bool = False,
+        warmup_days: float | None = None,
         config_source: str = "provided_config",
         resolved_config_path: str | None = None,
         config_arg_supplied: bool = False,
@@ -501,6 +502,7 @@ def test_backtest_subcommand_prints_summary(
         captured["fee_bps"] = fee_bps
         captured["db_path"] = db_path
         captured["strict_data"] = strict_data
+        captured["warmup_days"] = warmup_days
         captured["config_source"] = config_source
         captured["resolved_config_path"] = resolved_config_path
         captured["config_arg_supplied"] = config_arg_supplied
@@ -609,6 +611,8 @@ def test_backtest_subcommand_prints_summary(
             "1h",
             "--starting-cash-usd",
             "10000",
+            "--warmup-days",
+            "7",
         ]
     )
 
@@ -616,6 +620,7 @@ def test_backtest_subcommand_prints_summary(
     assert captured["starting_cash_usd"] == 10_000.0
     assert captured["fee_bps"] == 25.0
     assert captured["timeframes"] == ["1h"]
+    assert captured["warmup_days"] == pytest.approx(7.0)
     output = capsys.readouterr().out
     assert "Backtest completed." in output
     assert "Wallet: start $10,000.00 -> end $10,250.00 (+250.00, +2.50%)" in output
@@ -1347,6 +1352,7 @@ def test_market_regime_throttle_backtest_subcommand_writes_json_report(
         starting_cash_usd: float,
         fee_bps: float,
         strict_data: bool,
+        warmup_days: float | None,
         unavailable_policy: str,
     ) -> _FakeThrottleBacktestResult:
         captured["config"] = config
@@ -1358,6 +1364,7 @@ def test_market_regime_throttle_backtest_subcommand_writes_json_report(
         captured["starting_cash_usd"] = starting_cash_usd
         captured["fee_bps"] = fee_bps
         captured["strict_data"] = strict_data
+        captured["warmup_days"] = warmup_days
         captured["unavailable_policy"] = unavailable_policy
         return _FakeThrottleBacktestResult()
 
@@ -1387,6 +1394,8 @@ def test_market_regime_throttle_backtest_subcommand_writes_json_report(
             "12000",
             "--fee-bps",
             "10",
+            "--warmup-days",
+            "5",
             "--save-report",
             str(report_path),
             "--strict-data",
@@ -1402,6 +1411,7 @@ def test_market_regime_throttle_backtest_subcommand_writes_json_report(
     assert captured["timeframes"] == ["1h"]
     assert captured["starting_cash_usd"] == 12_000.0
     assert captured["fee_bps"] == 10.0
+    assert captured["warmup_days"] == pytest.approx(5.0)
     assert captured["strict_data"] is True
     assert captured["unavailable_policy"] == "allow"
     payload = json.loads(capsys.readouterr().out)
@@ -1759,6 +1769,7 @@ def test_strategy_activity_sweep_writes_reports_and_aggregate(
         starting_cash_usd: float,
         fee_bps: float,
         strict_data: bool,
+        warmup_days: float | None,
     ) -> _FakeStrategyActivityResult:
         captured["config"] = config
         captured["window_sets"] = window_sets
@@ -1766,6 +1777,7 @@ def test_strategy_activity_sweep_writes_reports_and_aggregate(
         captured["starting_cash_usd"] = starting_cash_usd
         captured["fee_bps"] = fee_bps
         captured["strict_data"] = strict_data
+        captured["warmup_days"] = warmup_days
         return _FakeStrategyActivityResult()
 
     monkeypatch.setitem(
@@ -1795,6 +1807,8 @@ def test_strategy_activity_sweep_writes_reports_and_aggregate(
             "tiny",
             "--group",
             "configured",
+            "--warmup-days",
+            "3",
             "--save-dir",
             str(save_dir),
             "--strict-data",
@@ -1805,6 +1819,7 @@ def test_strategy_activity_sweep_writes_reports_and_aggregate(
     assert exit_code == 0
     assert list(captured["window_sets"]) == ["tiny"]
     assert captured["groups"][0].group_id == "configured"
+    assert captured["warmup_days"] == pytest.approx(3.0)
     assert captured["strict_data"] is True
     output = json.loads(capsys.readouterr().out)
     aggregate = json.loads((save_dir / "aggregate.json").read_text(encoding="utf-8"))

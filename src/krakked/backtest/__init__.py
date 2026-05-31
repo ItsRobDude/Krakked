@@ -62,6 +62,7 @@ from .runner import (
     BacktestPreflightResult,
     BacktestResult,
     BacktestSummary,
+    backtest_strict_data_details,
     build_backtest_preflight,
     run_backtest,
 )
@@ -102,6 +103,7 @@ __all__ = [
     "StrategyActivitySweepResult",
     "apply_market_regime_overlay_to_plan",
     "apply_strategy_activity_override",
+    "backtest_strict_data_details",
     "build_backtest_preflight",
     "build_strategy_activity_groups",
     "classify_market_regime_snapshot",

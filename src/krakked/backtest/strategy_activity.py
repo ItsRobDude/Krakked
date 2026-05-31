@@ -150,6 +150,7 @@ def run_strategy_activity_sweep(
     starting_cash_usd: float = 10_000.0,
     fee_bps: float = 25.0,
     strict_data: bool = False,
+    warmup_days: float | None = None,
 ) -> StrategyActivitySweepResult:
     runs: list[dict[str, Any]] = []
     for window_set, windows in window_sets.items():
@@ -166,6 +167,7 @@ def run_strategy_activity_sweep(
                         starting_cash_usd=starting_cash_usd,
                         fee_bps=fee_bps,
                         strict_data=strict_data,
+                        warmup_days=warmup_days,
                     )
                     runs.append(
                         _activity_run_payload(
@@ -222,6 +224,7 @@ def _run_group_backtest(
     starting_cash_usd: float,
     fee_bps: float,
     strict_data: bool,
+    warmup_days: float | None,
 ) -> BacktestResult:
     config_copy = apply_strategy_activity_override(config, group.strategies)
     return run_backtest(
@@ -231,6 +234,7 @@ def _run_group_backtest(
         starting_cash_usd=starting_cash_usd,
         fee_bps=fee_bps,
         strict_data=strict_data,
+        warmup_days=warmup_days,
     )
 
 

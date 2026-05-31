@@ -31,10 +31,11 @@ Current assumptions and limits:
 
 - The replay starts from a synthetic USD-only wallet. The bankroll is explicit via `--starting-cash-usd`.
 - It uses cached OHLC bars only. It does not fetch Kraken REST or WebSocket data during the run.
+- By default, the replay exposes cached pre-window OHLC for indicator, regime, and risk warmup, while only generating decision cycles inside the requested `--start` / `--end` window.
 - Fills are immediate and priced from the latest available candle close, then adjusted by `execution.max_slippage_bps`.
 - A flat taker fee is applied per fill via `--fee-bps` and defaults to `25`.
 - It does not model order book depth, spread dynamics, latency queueing, partial fills, liquidation logic, or exchange rejects beyond the repo's local guardrails.
-- Missing or partial pair/timeframe series are reported by a preflight pass. The run continues if at least one requested series has usable data unless `--strict-data` is enabled.
+- Missing or partial pair/timeframe series are reported by a preflight pass. Warmup coverage is reported separately from execution-window coverage. The run continues if at least one requested execution-window series has usable data unless `--strict-data` is enabled.
 - This is a learning / strategy-validation seam, not a brokerage-accurate fills simulator.
 
 Useful flags:
@@ -44,7 +45,8 @@ Useful flags:
 - `--pair BTC/USD --pair ETH/USD`: clamp the replay to specific pairs
 - `--timeframe 1h --timeframe 4h`: clamp the replay to specific stored timeframes
 - `--fee-bps 25`: apply a flat taker fee assumption to simulated fills
-- `--strict-data`: fail if any requested pair/timeframe is missing or only partially covered
+- `--warmup-days <days>`: override the automatic pre-window warmup length; use `--warmup-days 0` for the old exact-window behavior
+- `--strict-data`: fail if any requested execution-window or warmup pair/timeframe is missing or only partially covered
 - `--save-report backtest-report.json`: save one durable JSON report with coverage, PnL, drawdown, and per-strategy totals
 - `--publish-latest`: publish the validated replay summary to the canonical operator path at `<config_dir>/reports/backtests/latest.json`
 - `--db-path backtest.db`: keep the SQLite decisions/orders/results for inspection after the run
