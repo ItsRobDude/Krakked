@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import logging
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
@@ -16,6 +17,7 @@ from krakked.execution.router import classify_volume, dust_reason
 from krakked.logging_config import structured_log_extra
 from krakked.market_data.api import MarketDataAPI
 from krakked.market_data.exceptions import DataStaleError
+from krakked.market_regime import MarketRegimeSnapshot
 from krakked.portfolio.manager import PortfolioService
 from krakked.portfolio.models import DriftStatus, SpotPosition
 
@@ -26,6 +28,7 @@ from .pair_keys import pair_key
 Series = Any
 
 logger = logging.getLogger(__name__)
+MARKET_REGIME_THROTTLE_REASON_PREFIX = "Market regime throttle"
 
 
 def compute_atr(ohlc_df: pd.DataFrame, window: int) -> float:
@@ -103,12 +106,18 @@ class RiskEngine:
         self.strategy_tags = strategy_tags or {}
         self._kill_switch_active = False
         self._manual_kill_switch_active = False
+        self._last_market_regime_throttle: Optional[Dict[str, Any]] = None
 
     def set_manual_kill_switch(self, active: bool) -> None:
         self._manual_kill_switch_active = active
 
     def clear_manual_kill_switch(self) -> None:
         self._manual_kill_switch_active = False
+
+    def get_last_market_regime_throttle(self) -> Optional[Dict[str, Any]]:
+        if self._last_market_regime_throttle is None:
+            return None
+        return copy.deepcopy(self._last_market_regime_throttle)
 
     def build_risk_context(
         self, pending_orders: Optional[List[LocalOrder]] = None
@@ -304,7 +313,12 @@ class RiskEngine:
         intents: List[StrategyIntent],
         weights: StrategyWeights | None = None,
         pending_orders: Optional[List[LocalOrder]] = None,
+        market_regime_snapshot: MarketRegimeSnapshot | None = None,
     ) -> List[RiskAdjustedAction]:
+        throttle_payload = self._build_market_regime_throttle_payload(
+            market_regime_snapshot
+        )
+        self._last_market_regime_throttle = throttle_payload
         ctx = self.build_risk_context(pending_orders=pending_orders)
 
         per_strategy_caps = self._build_effective_caps(weights)
@@ -345,7 +359,9 @@ class RiskEngine:
                 if kill_switch_reasons
                 else "Kill Switch Active"
             )
-            return self._block_all_opens(intents, ctx, reason)
+            actions = self._block_all_opens(intents, ctx, reason)
+            self._record_market_regime_throttle_results(actions)
+            return actions
 
         intents_by_pair: Dict[str, List[StrategyIntent]] = {}
         for intent in intents:
@@ -362,6 +378,7 @@ class RiskEngine:
                 per_strategy_caps=per_strategy_caps,
                 projected_strategy_exposure_usd=projected_strategy_exposure_usd,
                 projected_total_exposure_usd=projected_total_exposure_usd,
+                market_regime_throttle=throttle_payload,
             )
             actions.append(result.action)
             projected_total_exposure_usd = max(
@@ -378,6 +395,7 @@ class RiskEngine:
                     projected_strategy_exposure_usd.get(strategy_id, 0.0) + target_usd
                 )
 
+        self._record_market_regime_throttle_results(actions)
         return actions
 
     def _resolve_userref(
@@ -556,6 +574,7 @@ class RiskEngine:
         per_strategy_caps: Dict[str, float],
         projected_strategy_exposure_usd: Dict[str, float],
         projected_total_exposure_usd: float,
+        market_regime_throttle: Optional[Dict[str, Any]] = None,
     ) -> _PairRiskResult:
 
         # Fetch metadata ONCE
@@ -653,6 +672,14 @@ class RiskEngine:
         current_base = sum(p.base_size for p in pair_positions)
         current_usd = current_base * price
 
+        throttle_reasons = self._apply_market_regime_throttle(
+            target_usd_by_strategy,
+            current_by_strategy,
+            current_usd,
+            market_regime_throttle,
+        )
+        blocked_reasons.extend(throttle_reasons)
+
         liquidity_threshold = self.config.min_liquidity_24h_usd
         total_target_usd = sum(target_usd_by_strategy.values())
         if (
@@ -696,7 +723,10 @@ class RiskEngine:
 
         target_base = target_usd / price if price else 0.0
 
-        blocked = bool(blocked_reasons) and target_usd == 0
+        is_risk_reducing_action = target_usd < current_usd - 10.0
+        blocked = (
+            bool(blocked_reasons) and target_usd == 0 and not is_risk_reducing_action
+        )
         clamped = bool(blocked_reasons) and not blocked
 
         if not blocked_reasons:
@@ -834,6 +864,133 @@ class RiskEngine:
                 caps[strategy_id] = pct
         return caps
 
+    def _build_market_regime_throttle_payload(
+        self,
+        snapshot: MarketRegimeSnapshot | None,
+    ) -> Optional[Dict[str, Any]]:
+        throttle_config = getattr(self.config, "market_regime_throttle", None)
+        if throttle_config is None or not throttle_config.enabled:
+            return None
+
+        base_payload: Dict[str, Any] = {
+            "enabled": True,
+            "mode": throttle_config.mode,
+            "timeframe": throttle_config.timeframe,
+            "benchmark_pair": throttle_config.benchmark_pair,
+            "configured_pairs": list(throttle_config.pairs),
+            "unavailable_policy": throttle_config.unavailable_policy,
+            "throttled_actions": 0,
+            "blocked_actions": 0,
+            "clamped_actions": 0,
+        }
+        if snapshot is None:
+            return {
+                **base_payload,
+                "available": False,
+                "regime": "unavailable",
+                "allocation_multiplier": 0.0,
+                "reason_codes": ["market_regime_unavailable"],
+                "features": {},
+            }
+
+        return {
+            **base_payload,
+            "available": True,
+            **snapshot.to_dict(),
+        }
+
+    def _apply_market_regime_throttle(
+        self,
+        target_by_strategy: Dict[str, float],
+        current_by_strategy: Dict[str, float],
+        current_usd: float,
+        throttle_payload: Optional[Dict[str, Any]],
+    ) -> List[str]:
+        if not throttle_payload:
+            return []
+
+        if self._is_de_risking_target(
+            target_by_strategy, current_by_strategy, current_usd
+        ):
+            return []
+
+        available = bool(throttle_payload.get("available"))
+        reason = self._market_regime_throttle_reason(throttle_payload)
+        changed = False
+
+        if not available:
+            if throttle_payload.get("unavailable_policy") != "block_new_risk":
+                return []
+            for strategy_id in list(target_by_strategy):
+                if strategy_id == "manual":
+                    continue
+                original_target = float(target_by_strategy[strategy_id])
+                capped_target = min(
+                    original_target,
+                    float(current_by_strategy.get(strategy_id, 0.0) or 0.0),
+                )
+                if capped_target < original_target - 1e-9:
+                    target_by_strategy[strategy_id] = max(capped_target, 0.0)
+                    changed = True
+            return [reason] if changed else []
+
+        regime = str(throttle_payload.get("regime") or "unknown")
+        multiplier = float(throttle_payload.get("allocation_multiplier", 1.0) or 0.0)
+        if regime == "risk_on" or multiplier >= 1.0:
+            return []
+
+        for strategy_id in list(target_by_strategy):
+            if strategy_id == "manual":
+                continue
+            original_target = float(target_by_strategy[strategy_id])
+            current_target = float(current_by_strategy.get(strategy_id, 0.0) or 0.0)
+            if original_target <= current_target + 1e-9:
+                continue
+            scaled_target = max(original_target * multiplier, 0.0)
+            if scaled_target < original_target - 1e-9:
+                target_by_strategy[strategy_id] = scaled_target
+                changed = True
+
+        return [reason] if changed else []
+
+    @staticmethod
+    def _market_regime_throttle_reason(throttle_payload: Dict[str, Any]) -> str:
+        regime = str(throttle_payload.get("regime") or "unknown")
+        reason_codes = [
+            str(reason)
+            for reason in (throttle_payload.get("reason_codes") or [])
+            if str(reason)
+        ]
+        detail = ", ".join(reason_codes) if reason_codes else "no reason codes"
+        return f"{MARKET_REGIME_THROTTLE_REASON_PREFIX} {regime}: {detail}"
+
+    def _record_market_regime_throttle_results(
+        self,
+        actions: List[RiskAdjustedAction],
+    ) -> None:
+        if self._last_market_regime_throttle is None:
+            return
+
+        throttled = 0
+        blocked = 0
+        clamped = 0
+        for action in actions:
+            reasons = list(action.blocked_reasons or [])
+            if not any(
+                str(reason).startswith(MARKET_REGIME_THROTTLE_REASON_PREFIX)
+                for reason in reasons
+            ):
+                continue
+            throttled += 1
+            if action.blocked:
+                blocked += 1
+            if action.clamped:
+                clamped += 1
+
+        self._last_market_regime_throttle["throttled_actions"] = throttled
+        self._last_market_regime_throttle["blocked_actions"] = blocked
+        self._last_market_regime_throttle["clamped_actions"] = clamped
+
     def _apply_limits(
         self,
         target_by_strategy: Dict[str, float],
@@ -927,9 +1084,7 @@ class RiskEngine:
         projected_asset_total = total_target_usd
         if projected_asset_total > max_asset_usd:
             available = max(max_asset_usd, 0.0)
-            reason = (
-                f"Max per asset limit ({projected_asset_total:.2f} > {max_asset_usd:.2f})"
-            )
+            reason = f"Max per asset limit ({projected_asset_total:.2f} > {max_asset_usd:.2f})"
             target_by_strategy = clamp_total(available, reason, target_by_strategy)
             total_target_usd = sum(target_by_strategy.values())
 
@@ -1127,4 +1282,5 @@ class RiskEngine:
             manual_exposure_pct=ctx.manual_exposure_pct,
             per_asset_exposure_pct=per_asset,
             per_strategy_exposure_pct=ctx.per_strategy_exposure_pct,
+            market_regime_throttle=self.get_last_market_regime_throttle(),
         )

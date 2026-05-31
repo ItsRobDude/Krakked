@@ -50,6 +50,12 @@ Krakked now boots with a conservative operator-first starter profile unless you 
 * Historical backfill defaults to `1h`, `4h`, and `1d`.
 * Long-running sessions refresh configured OHLC tails hourly by default (`market_data.ohlc_tail_refresh_interval_seconds: 3600`); set it to `0` to disable.
 * Live websocket OHLC defaults to a single `1m` stream.
+* The runtime market-regime throttle exists as default-disabled risk plumbing:
+  `risk.market_regime_throttle.enabled: false`. If deliberately enabled, it
+  uses cached `4h` OHLC, the 63-bar classifier, and target-scale multipliers
+  of `1.0` in risk-on, `0.75` in neutral, and `0.25` in risk-off. Missing
+  classifier data blocks new/increasing risk by default while allowing
+  reductions.
 * The enabled starter strategy pack is:
   * `trend_core`
   * `vol_breakout`
@@ -87,3 +93,42 @@ krakked refresh-ohlc
 ```
 
 Use `--pair`, `--timeframe`, `--since`, and `--json` for targeted replay prep or automation. The command uses public Kraken market-data endpoints only; it does not require private credentials and does not change live-trading gates.
+
+## Proving the runtime market-regime throttle
+
+`risk.market_regime_throttle` is not enabled by default. Before any operator
+chooses to enable it, compare the current strategy replay against the same
+replay with the runtime throttle forced on:
+
+```bash
+krakked market-regime-throttle-backtest \
+  --start 2026-05-10T00:00:00Z \
+  --end 2026-05-30T00:00:00Z \
+  --strict-data \
+  --json
+```
+
+This command is cache-only and uses the real strategy, risk, order router, and
+simulation execution path. It does not use the older research-only
+post-processing overlay and does not change config defaults. The report includes
+baseline versus throttled replay summaries, runtime throttle intervention
+counts, regime/reason counts, and Gate 2 checks that require real strategy
+actions, filled orders, clean data, no execution errors, no trust regression,
+and non-empty reasons when the throttle intervenes.
+
+If a current rolling replay has ready data but zero strategy actions, diagnose
+strategy activity before drawing conclusions from Gate 2:
+
+```bash
+krakked strategy-activity-sweep \
+  --window-set recent_20d \
+  --window-set long_4h \
+  --strict-data \
+  --save-dir strategy-activity-sweep
+```
+
+The sweep runs normal cache-only backtests across configured and starter
+strategy groups, then classifies each window as `filled`, `no_intents`,
+`score_filtered`, `risk_blocked`, `data_not_ready`, or another explicit stage.
+Use it to find a real action/fill window before rerunning
+`market-regime-throttle-backtest`.

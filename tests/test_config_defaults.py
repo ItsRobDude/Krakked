@@ -125,6 +125,10 @@ def test_load_config_applies_default_starter_strategies_when_missing(
     )
     assert app_config.risk.max_open_positions == 4
     assert app_config.risk.max_per_strategy_pct["trend_core"] == 5.0
+    assert app_config.risk.market_regime_throttle.enabled is False
+    assert app_config.risk.market_regime_throttle.timeframe == "4h"
+    assert app_config.risk.market_regime_throttle.momentum_lookback_bars == 63
+    assert app_config.risk.market_regime_throttle.neutral_allocation_multiplier == 0.75
 
 
 def test_load_config_allows_disabling_ohlc_tail_refresh(monkeypatch, tmp_path: Path):
@@ -146,6 +150,43 @@ market_data:
     app_config = load_config()
 
     assert app_config.market_data.ohlc_tail_refresh_interval_seconds == 0
+
+
+def test_load_config_parses_market_regime_throttle(monkeypatch, tmp_path: Path):
+    config_dir = tmp_path / "config"
+    data_dir = tmp_path / "data"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    (config_dir / "config.yaml").write_text(
+        """
+risk:
+  market_regime_throttle:
+    enabled: true
+    mode: target_scale
+    timeframe: 4h
+    benchmark_pair: BTC/USD
+    pairs:
+      - BTC/USD
+      - ETH/USD
+    neutral_allocation_multiplier: 0.7
+    risk_off_allocation_multiplier: 0.2
+    unavailable_policy: block_new_risk
+""".strip()
+    )
+
+    monkeypatch.setattr(appdirs, "user_config_dir", lambda appname: config_dir)
+    monkeypatch.setattr(appdirs, "user_data_dir", lambda appname: data_dir)
+
+    app_config = load_config()
+
+    throttle = app_config.risk.market_regime_throttle
+    assert throttle.enabled is True
+    assert throttle.mode == "target_scale"
+    assert throttle.timeframe == "4h"
+    assert throttle.pairs == ["BTC/USD", "ETH/USD"]
+    assert throttle.neutral_allocation_multiplier == 0.7
+    assert throttle.risk_off_allocation_multiplier == 0.2
 
 
 def test_load_config_unwraps_strategy_params(monkeypatch, tmp_path: Path):

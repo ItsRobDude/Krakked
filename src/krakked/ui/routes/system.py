@@ -556,7 +556,7 @@ def _build_risk_status_payload(ctx) -> RiskStatusPayload:
 
 
 def _build_risk_config_payload(ctx) -> RiskConfigPayload:
-    return RiskConfigPayload(**ctx.config.risk.__dict__)
+    return RiskConfigPayload.model_validate(asdict(ctx.config.risk))
 
 
 def _build_strategy_state_payload(ctx) -> list[StrategyStatePayload]:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
-from dataclasses import asdict
+from dataclasses import asdict, fields
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -13,6 +13,7 @@ from krakked.config_models import (
     AppConfig,
     ExecutionConfig,
     MarketDataConfig,
+    MarketRegimeThrottleConfig,
     MLConfig,
     PortfolioConfig,
     ProfileConfig,
@@ -155,6 +156,23 @@ def get_default_starter_risk_config() -> Dict[str, Any]:
         "volatility_lookback_bars": 20,
         "min_liquidity_24h_usd": 100000.0,
     }
+
+
+def _market_regime_throttle_config_from_data(
+    data: Any,
+) -> MarketRegimeThrottleConfig:
+    if data is None:
+        return MarketRegimeThrottleConfig()
+    if not isinstance(data, dict):
+        raise ValueError("risk.market_regime_throttle must be a mapping")
+
+    allowed_fields = {field.name for field in fields(MarketRegimeThrottleConfig)}
+    unknown_fields = sorted(set(data) - allowed_fields)
+    if unknown_fields:
+        joined = ", ".join(unknown_fields)
+        raise ValueError(f"Unknown risk.market_regime_throttle field(s): {joined}")
+
+    return MarketRegimeThrottleConfig(**dict(data))
 
 
 def _has_nonempty_strategy_config(config_data: dict[str, Any]) -> bool:
@@ -1200,6 +1218,9 @@ def parse_app_config(
         ),
         min_strategy_weight_pct=risk_data.get("min_strategy_weight_pct", 0.0),
         max_strategy_weight_pct=risk_data.get("max_strategy_weight_pct", 50.0),
+        market_regime_throttle=_market_regime_throttle_config_from_data(
+            risk_data.get("market_regime_throttle")
+        ),
     )
 
     profiles_data = raw_config.get("profiles") or {}

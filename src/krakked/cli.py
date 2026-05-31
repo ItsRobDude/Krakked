@@ -17,6 +17,8 @@ from krakked import APP_VERSION, secrets
 from krakked.backtest import (
     DEFAULT_EXPOSURE_OVERLAY_MODES,
     DEFAULT_EXPOSURE_SCENARIOS,
+    DEFAULT_STRATEGY_ACTIVITY_GROUP_IDS,
+    STRATEGY_ACTIVITY_WINDOW_SETS,
     BacktestPreflightResult,
     BacktestResult,
     MarketRegimeExposureScenarioParams,
@@ -34,8 +36,10 @@ from krakked.backtest import (
     run_market_regime_exposure_research,
     run_market_regime_overlay_backtest,
     run_market_regime_research,
+    run_market_regime_throttle_backtest,
     run_ml_walk_forward,
     run_rs_rotation_v2_research,
+    run_strategy_activity_sweep,
     write_backtest_report,
     write_ml_walk_forward_report,
 )
@@ -46,6 +50,10 @@ from krakked.backtest.ml_feature_ablation_summary import (
 from krakked.backtest.ml_report_compare import (
     compare_ml_reports,
     render_ml_report_comparison,
+)
+from krakked.backtest.strategy_activity import (
+    apply_strategy_activity_override,
+    build_strategy_activity_groups,
 )
 from krakked.config import (
     AppConfig,
@@ -367,6 +375,169 @@ def _add_market_regime_research_arguments(
         "--json",
         action="store_true",
         help="Print the market-regime report as JSON",
+    )
+
+
+def _add_market_regime_throttle_backtest_arguments(
+    subparser: argparse.ArgumentParser,
+) -> None:
+    subparser.add_argument(
+        "--start",
+        required=True,
+        help="Replay window start time in ISO-8601 form",
+    )
+    subparser.add_argument(
+        "--end",
+        required=True,
+        help="Replay window end time in ISO-8601 form",
+    )
+    subparser.add_argument(
+        "--config",
+        help="Optional path to the base config.yaml to use",
+    )
+    subparser.add_argument(
+        "--pair",
+        action="append",
+        help="Limit the replay and throttle universe to one pair; repeat to include multiple pairs",
+    )
+    subparser.add_argument(
+        "--strategy",
+        action="append",
+        help=(
+            "Temporarily limit replay to one strategy; repeat to test a candidate "
+            "strategy pack without changing config"
+        ),
+    )
+    subparser.add_argument(
+        "--timeframe",
+        default="4h",
+        help="OHLC timeframe for runtime market-regime throttle features",
+    )
+    subparser.add_argument(
+        "--benchmark-pair",
+        default="BTC/USD",
+        help="Benchmark pair used for market-state decisions",
+    )
+    subparser.add_argument(
+        "--momentum-lookback-bars",
+        type=int,
+        default=63,
+        help="Benchmark momentum lookback bars",
+    )
+    subparser.add_argument(
+        "--basket-momentum-lookback-bars",
+        type=int,
+        default=63,
+        help="Starter-basket momentum lookback bars",
+    )
+    subparser.add_argument(
+        "--volatility-lookback-bars",
+        type=int,
+        default=63,
+        help="Benchmark realized-volatility lookback bars",
+    )
+    subparser.add_argument(
+        "--drawdown-lookback-bars",
+        type=int,
+        default=63,
+        help="Benchmark drawdown lookback bars",
+    )
+    subparser.add_argument(
+        "--neutral-allocation-multiplier",
+        type=float,
+        default=0.75,
+        help="Runtime target multiplier for neutral states",
+    )
+    subparser.add_argument(
+        "--risk-off-allocation-multiplier",
+        type=float,
+        default=0.25,
+        help="Runtime target multiplier for risk-off states",
+    )
+    subparser.add_argument(
+        "--neutral-benchmark-momentum-bps",
+        type=float,
+        default=150.0,
+        help="Benchmark momentum below this value marks neutral",
+    )
+    subparser.add_argument(
+        "--neutral-basket-momentum-bps",
+        type=float,
+        default=100.0,
+        help="Basket momentum below this value marks neutral",
+    )
+    subparser.add_argument(
+        "--risk-off-benchmark-momentum-bps",
+        type=float,
+        default=0.0,
+        help="Benchmark momentum below this value can mark risk-off",
+    )
+    subparser.add_argument(
+        "--risk-off-basket-momentum-bps",
+        type=float,
+        default=0.0,
+        help="Basket momentum below this value can mark risk-off",
+    )
+    subparser.add_argument(
+        "--neutral-benchmark-drawdown-pct",
+        type=float,
+        default=4.0,
+        help="Benchmark drawdown percentage that marks neutral",
+    )
+    subparser.add_argument(
+        "--risk-off-benchmark-drawdown-pct",
+        type=float,
+        default=8.0,
+        help="Benchmark drawdown percentage that marks risk-off",
+    )
+    subparser.add_argument(
+        "--neutral-volatility-pct",
+        type=float,
+        default=2.5,
+        help="Benchmark realized volatility percentage that marks neutral",
+    )
+    subparser.add_argument(
+        "--risk-off-volatility-pct",
+        type=float,
+        default=4.0,
+        help="Benchmark realized volatility percentage that marks risk-off",
+    )
+    subparser.add_argument(
+        "--unavailable-policy",
+        choices=["block_new_risk", "allow"],
+        default="block_new_risk",
+        help="Runtime throttle behavior when market-regime data is unavailable",
+    )
+    subparser.add_argument(
+        "--replay-timeframe",
+        action="append",
+        help="Limit replay to one timeframe; repeat to include multiple",
+    )
+    subparser.add_argument(
+        "--starting-cash-usd",
+        type=float,
+        default=10_000.0,
+        help="Synthetic starting USD wallet balance for the comparison",
+    )
+    subparser.add_argument(
+        "--fee-bps",
+        type=float,
+        default=25.0,
+        help="Flat taker fee in basis points applied to simulated fills",
+    )
+    subparser.add_argument(
+        "--save-report",
+        help="Optional JSON path for a durable runtime-throttle report artifact",
+    )
+    subparser.add_argument(
+        "--strict-data",
+        action="store_true",
+        help="Fail if any requested pair/timeframe is missing or partially covered",
+    )
+    subparser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print the runtime-throttle report as JSON",
     )
 
 
@@ -1082,6 +1253,67 @@ def _add_market_regime_exposure_sweep_arguments(
     )
 
 
+def _add_strategy_activity_sweep_arguments(
+    subparser: argparse.ArgumentParser,
+) -> None:
+    subparser.add_argument(
+        "--config",
+        help="Optional path to the base config.yaml to use",
+    )
+    subparser.add_argument(
+        "--pair",
+        action="append",
+        help="Limit the replay universe to one pair; repeat to include multiple pairs",
+    )
+    subparser.add_argument(
+        "--window-set",
+        action="append",
+        choices=sorted(STRATEGY_ACTIVITY_WINDOW_SETS),
+        help="Activity window set to run; repeat to include multiple sets",
+    )
+    subparser.add_argument(
+        "--group",
+        action="append",
+        choices=sorted(DEFAULT_STRATEGY_ACTIVITY_GROUP_IDS),
+        help=(
+            "Strategy group to run; repeat to include multiple groups "
+            f"(defaults to {', '.join(DEFAULT_STRATEGY_ACTIVITY_GROUP_IDS)})"
+        ),
+    )
+    subparser.add_argument(
+        "--strategy",
+        action="append",
+        help="Optional custom strategy id; repeat to create one custom group",
+    )
+    subparser.add_argument(
+        "--starting-cash-usd",
+        type=float,
+        default=10_000.0,
+        help="Synthetic starting USD wallet balance for each replay",
+    )
+    subparser.add_argument(
+        "--fee-bps",
+        type=float,
+        default=25.0,
+        help="Flat taker fee in basis points applied to simulated fills",
+    )
+    subparser.add_argument(
+        "--save-dir",
+        required=True,
+        help="Directory where per-run reports and aggregate.json are written",
+    )
+    subparser.add_argument(
+        "--strict-data",
+        action="store_true",
+        help="Fail if any requested pair/timeframe is missing or partially covered",
+    )
+    subparser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print the strategy activity aggregate as JSON",
+    )
+
+
 def _print_market_regime_exposure_sweep_summary(payload: dict[str, Any]) -> None:
     summary = payload["summary"]
     print("Market regime exposure sweep completed.")
@@ -1100,6 +1332,34 @@ def _print_market_regime_exposure_sweep_summary(payload: dict[str, Any]) -> None
             f"passed={group['promotion_gate']['passed']}"
         )
     print(f"Saved aggregate: {payload['summary']['aggregate_path']}")
+
+
+def _print_strategy_activity_sweep_summary(payload: dict[str, Any]) -> None:
+    summary = payload["summary"]
+    print("Strategy activity sweep completed.")
+    print(
+        f"Window sets: {', '.join(summary['window_sets'])} | "
+        f"Runs: {summary['run_count']} | Groups: {summary['group_count']}"
+    )
+    for group in summary["groups"]:
+        candidate = "yes" if group["gate2_candidate"] else "no"
+        print(
+            f"- {group['group_id']} ({', '.join(group['strategies'])}): "
+            f"ready {group['ready_windows']}/{group['window_count']}, "
+            f"actions {group['action_windows']}/{group['window_count']}, "
+            f"fills {group['fill_windows']}/{group['window_count']}, "
+            f"gate2_candidate={candidate}"
+        )
+        if group.get("stage_counts"):
+            stages = ", ".join(
+                f"{stage} {count}" for stage, count in group["stage_counts"].items()
+            )
+            print(f"  stages: {stages}")
+    if summary.get("best_gate2_candidate_group"):
+        print(f"Best Gate 2 candidate: {summary['best_gate2_candidate_group']}")
+    else:
+        print("Best Gate 2 candidate: none")
+    print(f"Saved aggregate: {summary['aggregate_path']}")
 
 
 def _print_market_regime_overlay_backtest_summary(
@@ -1138,6 +1398,64 @@ def _print_market_regime_overlay_backtest_summary(
         print("Top overlay reasons:")
         for reason, count in list(interventions["reason_counts"].items())[:5]:
             print(f"- {reason}: {count}")
+    if report_path:
+        print(f"Saved report: {report_path}")
+
+
+def _print_market_regime_throttle_backtest_summary(
+    payload: dict[str, Any], report_path: str | None
+) -> None:
+    summary = payload["summary"]
+    baseline = summary["baseline"]
+    throttle = summary["throttle"]
+    delta = summary["delta"]
+    interventions = summary["throttle_interventions"]
+    checks = summary.get("promotion_checks") or {}
+    print("Market regime throttle backtest completed.")
+    print(f"Window: {summary['start']} -> {summary['end']}")
+    print(
+        "Return: "
+        f"baseline {float(baseline['return_pct']):+.2f}% -> "
+        f"throttle {float(throttle['return_pct']):+.2f}% "
+        f"({float(delta['return_pct']):+.2f} pct pts)"
+    )
+    print(
+        "Max drawdown: "
+        f"baseline {float(baseline['max_drawdown_pct']):.2f}% -> "
+        f"throttle {float(throttle['max_drawdown_pct']):.2f}% "
+        f"({float(delta['max_drawdown_pct']):+.2f} pct pts)"
+    )
+    print(
+        "Actions: "
+        f"baseline {int(baseline['total_actions'])} -> "
+        f"throttle {int(throttle['total_actions'])}; "
+        f"fills {int(baseline['filled_orders'])} -> "
+        f"{int(throttle['filled_orders'])}"
+    )
+    print(
+        "Runtime throttle interventions: "
+        f"{interventions['throttled_actions']} throttled "
+        f"({interventions['blocked_actions']} blocked, "
+        f"{interventions['clamped_actions']} clamped) across "
+        f"{interventions['intervention_cycles']} cycles"
+    )
+    if interventions.get("state_counts"):
+        states = ", ".join(
+            f"{state} {count}" for state, count in interventions["state_counts"].items()
+        )
+        print(f"Regime cycles: {states}")
+    if interventions.get("reason_counts"):
+        print("Top throttle reasons:")
+        for reason, count in list(interventions["reason_counts"].items())[:5]:
+            print(f"- {reason}: {count}")
+    if checks:
+        outcome = "passed" if checks.get("passed") else "not passed"
+        print(f"Gate 2 checks: {outcome}")
+        for name, payload_item in checks.items():
+            if name == "passed" or not isinstance(payload_item, dict):
+                continue
+            if not payload_item.get("passed"):
+                print(f"- {name}: not passed")
     if report_path:
         print(f"Saved report: {report_path}")
 
@@ -1727,6 +2045,65 @@ def _market_regime_overlay_backtest_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _market_regime_throttle_backtest_command(args: argparse.Namespace) -> int:
+    """Compare normal replay against the real runtime market-regime throttle."""
+
+    try:
+        start = _parse_datetime_arg(args.start)
+        end = _parse_datetime_arg(args.end)
+    except ValueError as exc:
+        return _print_error(f"Invalid runtime throttle backtest datetime: {exc}")
+
+    try:
+        config = _load_backtest_config(args)
+        if args.strategy:
+            config = apply_strategy_activity_override(config, args.strategy)
+        params = _market_regime_params_from_args(args)
+        result = run_market_regime_throttle_backtest(
+            config,
+            start=start,
+            end=end,
+            pairs=args.pair,
+            params=params,
+            timeframes=args.replay_timeframe,
+            starting_cash_usd=float(args.starting_cash_usd),
+            fee_bps=float(args.fee_bps),
+            strict_data=bool(args.strict_data),
+            unavailable_policy=args.unavailable_policy,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _print_error(f"Market regime throttle backtest failed: {exc}")
+
+    payload = result.to_report_dict()
+    payload["summary"]["config_path"] = (
+        str(Path(args.config).expanduser().resolve()) if args.config else None
+    )
+    payload["summary"]["strategy_override"] = list(args.strategy or [])
+    payload["provenance"] = {
+        "app_version": APP_VERSION,
+        "config_path": (
+            str(Path(args.config).expanduser().resolve()) if args.config else None
+        ),
+        "generated_by": "krakked market-regime-throttle-backtest",
+    }
+
+    saved_report_path: str | None = None
+    if args.save_report:
+        try:
+            saved_report_path = _write_backtest_report(payload, args.save_report)
+        except Exception as exc:  # noqa: BLE001
+            return _print_error(f"Market regime throttle report write failed: {exc}")
+
+    if args.json:
+        print(json.dumps(payload, indent=2))
+    else:
+        _print_market_regime_throttle_backtest_summary(
+            payload,
+            saved_report_path,
+        )
+    return 0
+
+
 def _market_regime_exposure_payload(
     result: Any,
     args: argparse.Namespace,
@@ -1873,6 +2250,91 @@ def _market_regime_exposure_sweep_command(args: argparse.Namespace) -> int:
         print(json.dumps(aggregate, indent=2))
     else:
         _print_market_regime_exposure_sweep_summary(aggregate)
+    return 0
+
+
+def _strategy_activity_sweep_command(args: argparse.Namespace) -> int:
+    """Run cache-only strategy activity diagnostics across replay windows."""
+
+    try:
+        config = _load_backtest_config(args)
+        groups = build_strategy_activity_groups(
+            config,
+            group_ids=args.group,
+            custom_strategies=args.strategy,
+        )
+        if not groups:
+            return _print_error("Strategy activity sweep has no groups to run.")
+        selected_window_sets = _unique_strings(args.window_set or ["recent_20d"])
+        window_sets = {
+            window_set: STRATEGY_ACTIVITY_WINDOW_SETS[window_set]
+            for window_set in selected_window_sets
+        }
+        save_dir = Path(args.save_dir).expanduser().resolve()
+        save_dir.mkdir(parents=True, exist_ok=True)
+    except Exception as exc:  # noqa: BLE001
+        return _print_error(f"Strategy activity sweep setup failed: {exc}")
+
+    try:
+        result = run_strategy_activity_sweep(
+            config,
+            window_sets=window_sets,
+            groups=groups,
+            starting_cash_usd=float(args.starting_cash_usd),
+            fee_bps=float(args.fee_bps),
+            strict_data=bool(args.strict_data),
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _print_error(f"Strategy activity sweep failed: {exc}")
+
+    payload = result.to_report_dict()
+    payload["summary"]["config_path"] = (
+        str(Path(args.config).expanduser().resolve()) if args.config else None
+    )
+    payload["summary"]["save_dir"] = str(save_dir)
+    payload["provenance"] = {
+        "app_version": APP_VERSION,
+        "config_path": (
+            str(Path(args.config).expanduser().resolve()) if args.config else None
+        ),
+        "generated_by": "krakked strategy-activity-sweep",
+    }
+
+    report_paths: list[str] = []
+    try:
+        for run in payload["runs"]:
+            report_path = (
+                save_dir
+                / str(run["window_set"])
+                / str(run["group_id"])
+                / f"{run['window_id']}.json"
+            )
+            saved_path = _write_backtest_report(
+                {
+                    "report_version": payload["report_version"],
+                    "report_type": "strategy_activity_run",
+                    "generated_at": payload["generated_at"],
+                    "summary": run,
+                    "provenance": payload["provenance"],
+                },
+                str(report_path),
+            )
+            run["report_path"] = saved_path
+            report_paths.append(saved_path)
+
+        aggregate_path = save_dir / "aggregate.json"
+        payload["summary"]["aggregate_path"] = str(aggregate_path)
+        payload["summary"]["report_paths"] = report_paths
+        saved_aggregate_path = _write_backtest_report(payload, str(aggregate_path))
+        payload["summary"]["aggregate_path"] = saved_aggregate_path
+        _write_backtest_report(payload, str(aggregate_path))
+    except Exception as exc:  # noqa: BLE001
+        return _print_error(f"Strategy activity sweep report write failed: {exc}")
+
+    if args.json:
+        print(json.dumps(payload, indent=2))
+    else:
+        _print_strategy_activity_sweep_summary(payload)
     return 0
 
 
@@ -2959,6 +3421,15 @@ def _build_parser() -> argparse.ArgumentParser:
         func=_market_regime_overlay_backtest_command
     )
 
+    market_regime_throttle_parser = subparsers.add_parser(
+        "market-regime-throttle-backtest",
+        help="Compare normal replay against the default-disabled runtime throttle",
+    )
+    _add_market_regime_throttle_backtest_arguments(market_regime_throttle_parser)
+    market_regime_throttle_parser.set_defaults(
+        func=_market_regime_throttle_backtest_command
+    )
+
     market_regime_exposure_parser = subparsers.add_parser(
         "market-regime-exposure-research",
         help="Run controlled exposure scenarios through market-regime overlays",
@@ -2979,6 +3450,13 @@ def _build_parser() -> argparse.ArgumentParser:
     market_regime_exposure_sweep_parser.set_defaults(
         func=_market_regime_exposure_sweep_command
     )
+
+    strategy_activity_sweep_parser = subparsers.add_parser(
+        "strategy-activity-sweep",
+        help="Diagnose where strategy replay activity dies across cached windows",
+    )
+    _add_strategy_activity_sweep_arguments(strategy_activity_sweep_parser)
+    strategy_activity_sweep_parser.set_defaults(func=_strategy_activity_sweep_command)
 
     ml_walk_forward_parser = subparsers.add_parser(
         "ml-walk-forward",

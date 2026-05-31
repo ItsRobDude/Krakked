@@ -554,3 +554,108 @@ Decision:
 - The next slice may plan runtime risk-throttle wiring, but that plan needs an
   explicit operator-facing config boundary, a default-disabled rollout path,
   and replay proof against actual strategy intents before enabling anything.
+
+## Gate 1 Runtime Plumbing
+
+Gate 1 adds the runtime path without promoting the research candidate:
+
+- `risk.market_regime_throttle` is present but default-disabled.
+- When enabled, runtime computes one cached-`4h` classifier snapshot per
+  decision cycle using the configured pairs, or the starter universe when no
+  throttle-specific pair list is set.
+- The only supported runtime mode is `target_scale`:
+  - `risk_on`: leaves non-manual targets unchanged.
+  - `neutral`: scales non-manual target exposure to `0.75`.
+  - `risk_off`: scales non-manual target exposure to `0.25`.
+- Manual exposure is not scaled.
+- Exits and already-reducing targets are not blocked or scaled.
+- If classifier data is unavailable, the default policy is `block_new_risk`,
+  which clamps new/increasing non-manual targets to current exposure while
+  still allowing reductions.
+- Plan metadata records the throttle snapshot, regime, reason codes, and
+  intervention counts when the throttle is enabled.
+
+This remains a wiring gate only. Strategy defaults, replay semantics,
+order routing, live/paper gates, and starter behavior are unchanged.
+
+## Gate 2 Runtime Replay Proof
+
+Gate 2 adds a cache-only replay comparison command around the actual runtime
+throttle plumbing:
+
+```bash
+poetry run krakked market-regime-throttle-backtest \
+  --start <iso> \
+  --end <iso> \
+  --strict-data \
+  --json
+```
+
+This is different from `market-regime-overlay-backtest`. The older overlay
+command transforms finished plans after strategy/risk sizing for research. The
+Gate 2 command runs two full offline replays through the normal strategy, risk,
+order router, OMS, and simulation layers:
+
+- baseline replay with `risk.market_regime_throttle.enabled=false`;
+- comparison replay with the same candidate throttle settings forced on.
+
+The report records:
+
+- baseline versus throttled return, drawdown, action, fill, and trust summaries;
+- throttle metadata from real `ExecutionPlan.metadata`;
+- regime and reason-code counts;
+- blocked/clamped/throttled action counts;
+- Gate 2 checks for real strategy activity, filled orders, clean data, no
+  execution errors, no trust regression, and non-empty reasons when the
+  throttle intervenes.
+
+Gate 2 is still evidence only. Passing the command does not enable the runtime
+throttle, change starter defaults, or change live/paper execution semantics.
+
+## Strategy Activity Diagnostic
+
+If Gate 2 fails because the baseline replay produced no strategy actions or
+fills, run the strategy activity sweep before tuning market-regime parameters:
+
+```bash
+poetry run krakked strategy-activity-sweep \
+  --window-set recent_20d \
+  --window-set long_4h \
+  --strict-data \
+  --save-dir <report-dir>
+```
+
+The sweep keeps runtime config unchanged, disables the runtime throttle in each
+diagnostic replay, and compares these groups by default:
+
+- current configured strategy pack;
+- starter pack (`trend_core`, `vol_breakout`, `majors_mean_rev`);
+- each starter strategy alone.
+
+The diagnostic classifies each replay as `filled`, `no_intents`,
+`score_filtered`, `risk_blocked`, `no_orders`, `no_fills`, `data_not_ready`, or
+`run_failed`. A Gate 2 rerun is meaningful only on windows where the baseline
+strategy group has clean data, actions, and fills.
+
+May 30 activity readout:
+
+| Group | Ready windows | Action windows | Fill windows | Dominant issue |
+| --- | ---: | ---: | ---: | --- |
+| configured (`trend_core`, `majors_mean_rev`) | `8 / 11` | `4 / 11` | `4 / 11` | recent rolling windows have `no_intents`; older long windows miss 1h cache |
+| starter_all | `0 / 11` | `0 / 11` | `0 / 11` | `vol_breakout` needs uncached `15m` lanes |
+| trend_core | `8 / 11` | `4 / 11` | `4 / 11` | same activity source as configured pack |
+| vol_breakout | `0 / 11` | `0 / 11` | `0 / 11` | missing `15m` replay coverage |
+| majors_mean_rev | `8 / 11` | `0 / 11` | `0 / 11` | `no_intents` |
+
+Gate 2 then passed on the four action/fill windows:
+
+| Window | Actions | Fills | Result |
+| --- | ---: | ---: | --- |
+| `2026-03-21 -> 2026-04-10` | `76` | `2` | pass |
+| `2026-04-10 -> 2026-04-30` | `12` | `4` | pass |
+| `2026-03-21 -> 2026-04-20` | `737` | `9` | pass |
+| `2026-04-20 -> 2026-05-20` | `388` | `4` | pass |
+
+This proves the runtime throttle path can operate against real strategy
+intents. It does not prove the current rolling window, which still has ready
+data but no configured-strategy intents.

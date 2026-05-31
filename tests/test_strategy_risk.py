@@ -5,9 +5,10 @@ from unittest.mock import MagicMock
 
 import pandas as pd
 
-from krakked.config import PortfolioConfig, RiskConfig
+from krakked.config import MarketRegimeThrottleConfig, PortfolioConfig, RiskConfig
 from krakked.market_data.api import MarketDataAPI
 from krakked.market_data.models import PairMetadata
+from krakked.market_regime import MarketRegimeSnapshot
 from krakked.portfolio.models import (
     AssetExposure,
     DriftMismatchedAsset,
@@ -1268,6 +1269,212 @@ def test_userref_falls_back_to_strategy_id_when_missing_mapping():
     action = engine.process_intents([intent])[0]
 
     assert action.userref.startswith("alpha")
+
+
+def _throttle_market():
+    market = MagicMock(spec=MarketDataAPI)
+    market.get_latest_price.return_value = 100.0
+    market.get_pair_metadata.return_value = PairMetadata(
+        canonical="XBTUSD",
+        base="XBT",
+        quote="USD",
+        rest_symbol="XXBTZUSD",
+        ws_symbol="BTC/USD",
+        raw_name="XXBTZUSD",
+        price_decimals=1,
+        volume_decimals=4,
+        lot_size=1,
+        min_order_size=0.0001,
+        status="online",
+        liquidity_24h_usd=1_000_000.0,
+    )
+    return market
+
+
+def _throttle_intent(
+    *,
+    strategy_id: str = "trend_core",
+    side: str = "long",
+    intent_type: str = "enter",
+    desired_exposure_usd: float = 1000.0,
+) -> StrategyIntent:
+    return StrategyIntent(
+        strategy_id=strategy_id,
+        pair="XBTUSD",
+        side=side,
+        intent_type=intent_type,
+        desired_exposure_usd=desired_exposure_usd,
+        confidence=1.0,
+        timeframe="4h",
+        generated_at=datetime.now(timezone.utc),
+    )
+
+
+def _throttle_snapshot(
+    regime: str = "neutral",
+    allocation_multiplier: float = 0.75,
+) -> MarketRegimeSnapshot:
+    return MarketRegimeSnapshot(
+        timestamp=1_700_000_000,
+        regime=regime,
+        allocation_multiplier=allocation_multiplier,
+        reason_codes=["btc_momentum_soft"],
+        features={},
+    )
+
+
+def _throttle_config(
+    *,
+    enabled: bool = True,
+    neutral_multiplier: float = 0.75,
+    risk_off_multiplier: float = 0.25,
+) -> RiskConfig:
+    return RiskConfig(
+        max_portfolio_risk_pct=100.0,
+        max_per_asset_pct=100.0,
+        max_open_positions=100,
+        min_liquidity_24h_usd=0.0,
+        max_per_strategy_pct={"trend_core": 100.0},
+        market_regime_throttle=MarketRegimeThrottleConfig(
+            enabled=enabled,
+            neutral_allocation_multiplier=neutral_multiplier,
+            risk_off_allocation_multiplier=risk_off_multiplier,
+        ),
+    )
+
+
+def _strategy_position(value_usd: float = 1000.0) -> SpotPosition:
+    return SpotPosition(
+        pair="XBTUSD",
+        base_asset="XBT",
+        quote_asset="USD",
+        base_size=value_usd / 100.0,
+        avg_entry_price=100.0,
+        realized_pnl_base=0.0,
+        fees_paid_base=0.0,
+        strategy_tag="trend_core",
+        current_value_base=value_usd,
+    )
+
+
+def _manual_position(value_usd: float = 1000.0) -> SpotPosition:
+    return SpotPosition(
+        pair="XBTUSD",
+        base_asset="XBT",
+        quote_asset="USD",
+        base_size=value_usd / 100.0,
+        avg_entry_price=100.0,
+        realized_pnl_base=0.0,
+        fees_paid_base=0.0,
+        strategy_tag=None,
+        current_value_base=value_usd,
+    )
+
+
+def test_market_regime_throttle_disabled_is_noop():
+    market = _throttle_market()
+    portfolio = make_portfolio_service_mock()
+    engine = RiskEngine(_throttle_config(enabled=False), market, portfolio)
+
+    action = engine.process_intents(
+        [_throttle_intent()],
+        market_regime_snapshot=_throttle_snapshot(),
+    )[0]
+
+    assert action.target_notional_usd == 1000.0
+    assert action.clamped is False
+    assert engine.get_last_market_regime_throttle() is None
+
+
+def test_market_regime_throttle_scales_new_target_exposure():
+    market = _throttle_market()
+    portfolio = make_portfolio_service_mock()
+    engine = RiskEngine(_throttle_config(), market, portfolio)
+
+    action = engine.process_intents(
+        [_throttle_intent()],
+        market_regime_snapshot=_throttle_snapshot("neutral", 0.75),
+    )[0]
+
+    assert action.action_type == "open"
+    assert action.target_notional_usd == 750.0
+    assert action.blocked is False
+    assert action.clamped is True
+    assert "Market regime throttle neutral" in action.reason
+    payload = engine.get_last_market_regime_throttle()
+    assert payload is not None
+    assert payload["regime"] == "neutral"
+    assert payload["clamped_actions"] == 1
+
+
+def test_market_regime_throttle_can_reduce_existing_position():
+    market = _throttle_market()
+    portfolio = make_portfolio_service_mock()
+    portfolio.get_positions.return_value = [_strategy_position(1000.0)]
+    engine = RiskEngine(_throttle_config(), market, portfolio)
+
+    action = engine.process_intents(
+        [_throttle_intent(desired_exposure_usd=1200.0)],
+        market_regime_snapshot=_throttle_snapshot("risk_off", 0.25),
+    )[0]
+
+    assert action.action_type == "reduce"
+    assert action.target_notional_usd == 300.0
+    assert action.blocked is False
+    assert action.clamped is True
+
+
+def test_market_regime_throttle_does_not_interfere_with_exit():
+    market = _throttle_market()
+    portfolio = make_portfolio_service_mock()
+    portfolio.get_positions.return_value = [_strategy_position(1000.0)]
+    engine = RiskEngine(_throttle_config(), market, portfolio)
+
+    action = engine.process_intents(
+        [_throttle_intent(side="flat", intent_type="exit", desired_exposure_usd=0.0)],
+        market_regime_snapshot=_throttle_snapshot("risk_off", 0.25),
+    )[0]
+
+    assert action.action_type == "close"
+    assert action.target_notional_usd == 0.0
+    assert action.blocked is False
+    assert action.clamped is False
+    assert "Market regime throttle" not in action.reason
+
+
+def test_market_regime_throttle_does_not_scale_manual_exposure():
+    market = _throttle_market()
+    portfolio = make_portfolio_service_mock()
+    portfolio.get_positions.return_value = [_manual_position(1000.0)]
+    engine = RiskEngine(_throttle_config(), market, portfolio)
+
+    action = engine.process_intents(
+        [_throttle_intent(desired_exposure_usd=1000.0)],
+        market_regime_snapshot=_throttle_snapshot("neutral", 0.75),
+    )[0]
+
+    assert action.target_notional_usd == 1750.0
+    assert action.clamped is True
+
+
+def test_market_regime_throttle_unavailable_blocks_new_risk():
+    market = _throttle_market()
+    portfolio = make_portfolio_service_mock()
+    engine = RiskEngine(_throttle_config(), market, portfolio)
+
+    action = engine.process_intents(
+        [_throttle_intent()],
+        market_regime_snapshot=None,
+    )[0]
+
+    assert action.action_type == "none"
+    assert action.target_notional_usd == 0.0
+    assert action.blocked is True
+    assert "Market regime throttle unavailable" in action.reason
+    payload = engine.get_last_market_regime_throttle()
+    assert payload is not None
+    assert payload["available"] is False
+    assert payload["blocked_actions"] == 1
 
 
 # --- New Dust Tests ---

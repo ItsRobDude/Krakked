@@ -1337,9 +1337,13 @@ def _default_backtest_timeframes(config: AppConfig) -> List[str]:
     for timeframe in getattr(config.market_data, "backfill_timeframes", []) or []:
         discovered.append(str(timeframe))
 
+    throttle = getattr(config.risk, "market_regime_throttle", None)
+    if throttle is not None and getattr(throttle, "enabled", False):
+        discovered.append(str(getattr(throttle, "timeframe", "") or ""))
+
     ordered: List[str] = []
     for timeframe in discovered or ["1h"]:
-        if timeframe not in ordered:
+        if timeframe and timeframe not in ordered:
             ordered.append(timeframe)
     return ordered
 
@@ -1354,6 +1358,17 @@ def _configured_backtest_pairs(config: AppConfig) -> List[str]:
         pair_values = params.get("pairs")
         if isinstance(pair_values, list):
             requested_pairs.update(str(pair) for pair in pair_values if pair)
+
+    throttle = getattr(config.risk, "market_regime_throttle", None)
+    if throttle is not None and getattr(throttle, "enabled", False):
+        benchmark_pair = str(getattr(throttle, "benchmark_pair", "") or "").strip()
+        if benchmark_pair:
+            requested_pairs.add(benchmark_pair)
+        requested_pairs.update(
+            str(pair).strip()
+            for pair in (getattr(throttle, "pairs", []) or [])
+            if str(pair).strip()
+        )
     return sorted(requested_pairs)
 
 

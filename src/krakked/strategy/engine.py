@@ -13,6 +13,11 @@ from krakked.execution.router import classify_volume, dust_reason
 from krakked.logging_config import structured_log_extra
 from krakked.market_data.api import MarketDataAPI
 from krakked.market_data.exceptions import DataStaleError
+from krakked.market_regime import (
+    MarketRegimeOverlayParams,
+    MarketRegimeSnapshot,
+    classify_market_regime_from_market_data,
+)
 from krakked.portfolio.manager import PortfolioService
 from krakked.portfolio.models import SpotPosition
 from krakked.strategy.regime import RegimeSnapshot, infer_regime
@@ -245,6 +250,13 @@ class StrategyEngine:
             if not state.enabled and state.effective_weight_pct is None:
                 state.effective_weight_pct = None
 
+    def _last_market_regime_throttle_payload(self) -> Dict[str, Any] | None:
+        getter = getattr(self.risk_engine, "get_last_market_regime_throttle", None)
+        if not callable(getter):
+            return None
+        payload = getter()
+        return payload if isinstance(payload, dict) else None
+
     def refresh_runtime_snapshots(self) -> None:
         self.refresh_strategy_weight_state()
         cached_equity = self.portfolio.get_cached_equity()
@@ -334,6 +346,7 @@ class StrategyEngine:
             },
             per_strategy_exposure_pct=per_strategy_exposure_pct,
             drift_info=drift_info,
+            market_regime_throttle=self._last_market_regime_throttle_payload(),
         )
         self._cached_strategy_state = [
             StrategyState(
@@ -486,6 +499,78 @@ class StrategyEngine:
             "close",
             "reduce",
         }
+
+    def _market_regime_throttle_snapshot(
+        self,
+        now: datetime,
+    ) -> MarketRegimeSnapshot | None:
+        throttle_config = self.config.risk.market_regime_throttle
+        if not throttle_config.enabled:
+            return None
+
+        pairs = list(throttle_config.pairs or self.config.universe.include_pairs or [])
+        if not pairs:
+            try:
+                pairs = list(self.market_data.get_universe() or [])
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.warning(
+                    "Failed to fetch market-regime throttle universe: %s",
+                    exc,
+                    extra=structured_log_extra(
+                        event="market_regime_throttle_universe_failed"
+                    ),
+                )
+                pairs = []
+
+        params = MarketRegimeOverlayParams(
+            timeframe=throttle_config.timeframe,
+            benchmark_pair=throttle_config.benchmark_pair,
+            momentum_lookback_bars=throttle_config.momentum_lookback_bars,
+            basket_momentum_lookback_bars=(
+                throttle_config.basket_momentum_lookback_bars
+            ),
+            volatility_lookback_bars=throttle_config.volatility_lookback_bars,
+            drawdown_lookback_bars=throttle_config.drawdown_lookback_bars,
+            neutral_allocation_multiplier=(
+                throttle_config.neutral_allocation_multiplier
+            ),
+            risk_off_allocation_multiplier=(
+                throttle_config.risk_off_allocation_multiplier
+            ),
+            neutral_benchmark_momentum_bps=(
+                throttle_config.neutral_benchmark_momentum_bps
+            ),
+            neutral_basket_momentum_bps=throttle_config.neutral_basket_momentum_bps,
+            risk_off_benchmark_momentum_bps=(
+                throttle_config.risk_off_benchmark_momentum_bps
+            ),
+            risk_off_basket_momentum_bps=(throttle_config.risk_off_basket_momentum_bps),
+            neutral_benchmark_drawdown_pct=(
+                throttle_config.neutral_benchmark_drawdown_pct
+            ),
+            risk_off_benchmark_drawdown_pct=(
+                throttle_config.risk_off_benchmark_drawdown_pct
+            ),
+            neutral_volatility_pct=throttle_config.neutral_volatility_pct,
+            risk_off_volatility_pct=throttle_config.risk_off_volatility_pct,
+        )
+
+        try:
+            return classify_market_regime_from_market_data(
+                self.market_data,
+                pairs=pairs,
+                params=params,
+                timestamp=int(now.timestamp()),
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "Failed to compute market-regime throttle snapshot: %s",
+                exc,
+                extra=structured_log_extra(
+                    event="market_regime_throttle_snapshot_failed"
+                ),
+            )
+            return None
 
     def _position_base_by_strategy_pair(
         self,
@@ -758,8 +843,12 @@ class StrategyEngine:
                     extra=structured_log_extra(event="pending_orders_fetch_error"),
                 )
 
+        market_regime_snapshot = self._market_regime_throttle_snapshot(now)
         risk_actions = self.risk_engine.process_intents(
-            filtered, weights=weights, pending_orders=pending_orders
+            filtered,
+            weights=weights,
+            pending_orders=pending_orders,
+            market_regime_snapshot=market_regime_snapshot,
         )
         conflict_summaries = self._build_conflict_summaries(filtered, risk_actions)
         for strategy_id, count in self._count_blocked_actions_by_strategy(
@@ -805,14 +894,19 @@ class StrategyEngine:
             state.last_intents = intent_summaries.get(strategy_id, [])
             state.conflict_summary = conflict_summaries.get(strategy_id, [])
 
+        plan_metadata = {
+            "risk_status": asdict(self.risk_engine.get_status()),
+            "strategy_evaluation": evaluation_summary,
+        }
+        throttle_payload = self._last_market_regime_throttle_payload()
+        if throttle_payload:
+            plan_metadata["market_regime_throttle"] = throttle_payload
+
         plan = ExecutionPlan(
             plan_id=plan_id,
             generated_at=now,
             actions=risk_actions,
-            metadata={
-                "risk_status": asdict(self.risk_engine.get_status()),
-                "strategy_evaluation": evaluation_summary,
-            },
+            metadata=plan_metadata,
         )
 
         self._persist_plan(plan)

@@ -4,9 +4,16 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-from krakked.config import AppConfig, RiskConfig, StrategiesConfig, StrategyConfig
+from krakked.config import (
+    AppConfig,
+    MarketRegimeThrottleConfig,
+    RiskConfig,
+    StrategiesConfig,
+    StrategyConfig,
+)
 from krakked.market_data.api import MarketDataAPI
 from krakked.market_data.exceptions import DataStaleError
+from krakked.market_data.models import OHLCBar
 from krakked.portfolio.models import SpotPosition
 from krakked.strategy.base import Strategy
 from krakked.strategy.engine import StrategyRiskEngine
@@ -97,6 +104,44 @@ def test_engine_cycle():
 
     # Execution plan should be persisted for downstream services
     assert portfolio.record_execution_plan.called
+
+
+def test_run_cycle_passes_market_regime_throttle_snapshot():
+    app_config = MagicMock(spec=AppConfig)
+    app_config.strategies = StrategiesConfig(enabled=[], configs={})
+    app_config.risk = RiskConfig(
+        market_regime_throttle=MarketRegimeThrottleConfig(enabled=True)
+    )
+    app_config.universe = SimpleNamespace(include_pairs=["BTC/USD", "ETH/USD"])
+
+    market = MagicMock(spec=MarketDataAPI)
+    market.get_data_status.return_value = MagicMock(
+        rest_api_reachable=True,
+        websocket_connected=True,
+        stale_pairs=0,
+    )
+    market.get_universe.return_value = ["BTC/USD", "ETH/USD"]
+    market.get_ohlc.return_value = [
+        OHLCBar(
+            timestamp=1_700_000_000 + (i * 14_400),
+            open=100.0 + i,
+            high=101.0 + i,
+            low=99.0 + i,
+            close=100.0 + i,
+            volume=1.0,
+        )
+        for i in range(80)
+    ]
+    portfolio = make_portfolio_service_mock()
+
+    engine = StrategyRiskEngine(app_config, market, portfolio)
+    plan = engine.run_cycle(datetime.now(timezone.utc))
+
+    payload = plan.metadata["market_regime_throttle"]
+    assert payload["enabled"] is True
+    assert payload["available"] is True
+    assert payload["mode"] == "target_scale"
+    assert payload["timeframe"] == "4h"
 
 
 def test_engine_stale_data():
@@ -252,7 +297,9 @@ def test_strategy_evaluation_heartbeat_updates_when_no_intents_generated():
     strat_config = StrategyConfig(
         name="quiet", type="quiet", enabled=True, params={"timeframes": ["1h"]}
     )
-    strategies_cfg = StrategiesConfig(enabled=["quiet"], configs={"quiet": strat_config})
+    strategies_cfg = StrategiesConfig(
+        enabled=["quiet"], configs={"quiet": strat_config}
+    )
 
     app_config = MagicMock(spec=AppConfig)
     app_config.strategies = strategies_cfg

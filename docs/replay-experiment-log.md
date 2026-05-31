@@ -1011,3 +1011,83 @@ Decision:
   while still fixing the broad equal-weight problem.
 - This is enough evidence to plan a runtime risk-throttle slice, but not enough
   to enable runtime behavior in this pass.
+
+### 2026-05-30 Gate 2 Runtime-Throttle Replay Proof
+
+Gate 2 adds the operator-facing comparison path needed before considering any
+runtime enablement:
+
+```bash
+poetry run krakked market-regime-throttle-backtest \
+  --start <iso> \
+  --end <iso> \
+  --strict-data \
+  --json
+```
+
+The command runs a baseline replay with the runtime throttle disabled and a
+second replay with the default-disabled throttle forced on. Both runs use the
+normal offline strategy, risk, order router, OMS, and simulation path. This is
+not the research-only post-plan overlay.
+
+The report is intentionally framed as research evidence. It records real
+strategy actions and fills, data readiness, execution errors, replay trust
+level, runtime throttle intervention counts, and the regime reason codes that
+caused any target-scale reductions.
+
+Decision:
+
+- Keep `risk.market_regime_throttle.enabled: false` by default.
+- Use the Gate 2 command to prove actual strategy-intent behavior on rolling
+  windows before any operator considers enabling the throttle.
+- Do not treat a passing Gate 2 report as live/paper approval by itself.
+
+### 2026-05-30 Strategy Activity Sweep And Gate 2 Rerun
+
+The current rolling Gate 2 window (`2026-05-10 -> 2026-05-30`) had ready data
+but produced `0` actions and `0` fills, so it could not prove throttle behavior.
+The follow-up diagnostic added:
+
+```bash
+poetry run krakked strategy-activity-sweep \
+  --window-set recent_20d \
+  --window-set long_4h \
+  --strict-data \
+  --save-dir C:\Users\Rob\AppData\Local\krakked\krakked\reports\backtests\strategy-activity-sweep-20260530
+```
+
+Artifact:
+
+- `C:\Users\Rob\AppData\Local\krakked\krakked\reports\backtests\strategy-activity-sweep-20260530\aggregate.json`
+
+Activity result:
+
+- Configured pack (`trend_core`, `majors_mean_rev`): ready `8 / 11`, actions
+  `4 / 11`, fills `4 / 11`.
+- `trend_core`: same activity as the configured pack, so it is the active
+  source.
+- `majors_mean_rev`: ready `8 / 11`, but `0 / 11` action/fill windows.
+- `vol_breakout` and starter-all: blocked by missing `15m` replay coverage in
+  all 11 windows.
+
+Gate 2 was then rerun on every action/fill window from the diagnostic:
+
+| Window | Baseline actions | Baseline fills | Throttle interventions | Gate 2 |
+| --- | ---: | ---: | ---: | --- |
+| `2026-03-21 -> 2026-04-10` | `76` | `2` | `0` | pass |
+| `2026-04-10 -> 2026-04-30` | `12` | `4` | `6` | pass |
+| `2026-03-21 -> 2026-04-20` | `737` | `9` | `0` | pass |
+| `2026-04-20 -> 2026-05-20` | `388` | `4` | `21` | pass |
+
+Representative report:
+
+- `C:\Users\Rob\AppData\Local\krakked\krakked\reports\backtests\market-regime-throttle-backtest-active-window-20260530.json`
+
+Decision:
+
+- Gate 2 runtime plumbing is proven against real strategy intents.
+- The current rolling default replay is still not promotion evidence because
+  the configured pack emitted no intents in that window.
+- Runtime throttle remains default-disabled pending an operator decision on
+  whether passing historical action windows are enough evidence for paper-only
+  enablement, or whether current-window activity must return first.

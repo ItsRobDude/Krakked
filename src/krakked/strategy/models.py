@@ -77,6 +77,7 @@ class RiskStatus:
     per_strategy_exposure_pct: Dict[str, float]
     # Optional extra detail about drift for logging / future UI
     drift_info: Optional[Dict[str, Any]] = None
+    market_regime_throttle: Optional[Dict[str, Any]] = None
 
 
 @dataclass

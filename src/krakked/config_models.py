@@ -117,6 +117,99 @@ class PortfolioConfig:
 
 
 @dataclass
+class MarketRegimeThrottleConfig:
+    """Default-disabled runtime market-state target exposure throttle."""
+
+    enabled: bool = False
+    mode: str = "target_scale"
+    timeframe: str = "4h"
+    benchmark_pair: str = "BTC/USD"
+    pairs: List[str] = field(default_factory=list)
+    momentum_lookback_bars: int = 63
+    basket_momentum_lookback_bars: int = 63
+    volatility_lookback_bars: int = 63
+    drawdown_lookback_bars: int = 63
+    neutral_allocation_multiplier: float = 0.75
+    risk_off_allocation_multiplier: float = 0.25
+    neutral_benchmark_momentum_bps: float = 150.0
+    neutral_basket_momentum_bps: float = 100.0
+    risk_off_benchmark_momentum_bps: float = 0.0
+    risk_off_basket_momentum_bps: float = 0.0
+    neutral_benchmark_drawdown_pct: float = 4.0
+    risk_off_benchmark_drawdown_pct: float = 8.0
+    neutral_volatility_pct: float = 2.5
+    risk_off_volatility_pct: float = 4.0
+    unavailable_policy: str = "block_new_risk"
+
+    def __post_init__(self) -> None:
+        self.enabled = bool(self.enabled)
+        self.mode = str(self.mode or "").strip()
+        if self.mode != "target_scale":
+            raise ValueError("market_regime_throttle.mode must be 'target_scale'")
+
+        self.timeframe = str(self.timeframe or "").strip()
+        if self.timeframe not in {"1m", "5m", "15m", "1h", "4h", "1d"}:
+            raise ValueError(
+                f"Unsupported market_regime_throttle.timeframe: {self.timeframe}"
+            )
+
+        self.benchmark_pair = str(self.benchmark_pair or "").strip()
+        if not self.benchmark_pair:
+            raise ValueError("market_regime_throttle.benchmark_pair is required")
+
+        self.pairs = [
+            str(pair).strip() for pair in (self.pairs or []) if str(pair).strip()
+        ]
+
+        for field_name in (
+            "momentum_lookback_bars",
+            "basket_momentum_lookback_bars",
+            "volatility_lookback_bars",
+            "drawdown_lookback_bars",
+        ):
+            value = int(getattr(self, field_name))
+            if value < 2:
+                raise ValueError(f"market_regime_throttle.{field_name} must be >= 2")
+            setattr(self, field_name, value)
+
+        for field_name in (
+            "neutral_allocation_multiplier",
+            "risk_off_allocation_multiplier",
+        ):
+            value = float(getattr(self, field_name))
+            if value < 0.0 or value > 1.0:
+                raise ValueError(
+                    f"market_regime_throttle.{field_name} must be between 0.0 and 1.0"
+                )
+            setattr(self, field_name, value)
+
+        if self.risk_off_allocation_multiplier > self.neutral_allocation_multiplier:
+            raise ValueError(
+                "market_regime_throttle.risk_off_allocation_multiplier cannot exceed "
+                "neutral_allocation_multiplier"
+            )
+
+        for field_name in (
+            "neutral_benchmark_momentum_bps",
+            "neutral_basket_momentum_bps",
+            "risk_off_benchmark_momentum_bps",
+            "risk_off_basket_momentum_bps",
+            "neutral_benchmark_drawdown_pct",
+            "risk_off_benchmark_drawdown_pct",
+            "neutral_volatility_pct",
+            "risk_off_volatility_pct",
+        ):
+            setattr(self, field_name, float(getattr(self, field_name)))
+
+        self.unavailable_policy = str(self.unavailable_policy or "").strip()
+        if self.unavailable_policy not in {"block_new_risk", "allow"}:
+            raise ValueError(
+                "market_regime_throttle.unavailable_policy must be "
+                "'block_new_risk' or 'allow'"
+            )
+
+
+@dataclass
 class RiskConfig:
     """Configuration for portfolio risk limits and safety guardrails.
 
@@ -167,6 +260,9 @@ class RiskConfig:
     dynamic_allocation_lookback_hours: int = 72
     min_strategy_weight_pct: float = 0.0
     max_strategy_weight_pct: float = 50.0
+    market_regime_throttle: MarketRegimeThrottleConfig = field(
+        default_factory=MarketRegimeThrottleConfig
+    )
 
 
 @dataclass

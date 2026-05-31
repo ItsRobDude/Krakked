@@ -23,6 +23,7 @@ def _build_backtest_config(tmp_path: Path) -> AppConfig:
     config.market_data.metadata_path = str(tmp_path / "pair_metadata.json")
     config.universe.include_pairs = ["BTC/USD"]
     config.market_data.backfill_timeframes = ["1h"]
+    config.risk.market_regime_throttle.enabled = False
     config.strategies.enabled = ["majors_mean_rev"]
     config.strategies.configs["majors_mean_rev"].params = {
         "pairs": ["BTC/USD"],
@@ -80,6 +81,23 @@ def test_backtest_reason_counts_separate_blocked_and_clamped_actions() -> None:
     }
 
 
+def test_default_backtest_inputs_include_enabled_market_regime_throttle(
+    tmp_path: Path,
+) -> None:
+    config = _build_backtest_config(tmp_path)
+    config.risk.market_regime_throttle.enabled = True
+    config.risk.market_regime_throttle.timeframe = "4h"
+    config.risk.market_regime_throttle.benchmark_pair = "ETH/USD"
+    config.risk.market_regime_throttle.pairs = ["SOL/USD"]
+
+    assert runner._default_backtest_timeframes(config) == ["1h", "4h"]
+    assert runner._configured_backtest_pairs(config) == [
+        "BTC/USD",
+        "ETH/USD",
+        "SOL/USD",
+    ]
+
+
 def _seed_pair_metadata(config: AppConfig) -> None:
     metadata_path = config.market_data.metadata_path
     assert metadata_path is not None
@@ -112,7 +130,7 @@ def _seed_pair_metadata(config: AppConfig) -> None:
                 min_order_size=0.0001,
                 status="online",
                 liquidity_24h_usd=1_000_000.0,
-            )
+            ),
         ]
     )
 
@@ -560,9 +578,7 @@ def test_backtest_reports_resolved_strategy_inputs_for_mixed_params(
     )
     assert strategy_inputs["strategies"]["rs_rotation"]["params"] == {}
     assert strategy_inputs["strategies"]["rs_rotation"]["configured_pairs"] == []
-    assert (
-        strategy_inputs["strategies"]["rs_rotation"]["configured_timeframes"] == []
-    )
+    assert strategy_inputs["strategies"]["rs_rotation"]["configured_timeframes"] == []
     assert strategy_inputs["strategies"]["rs_rotation"]["constructor_pairs"] == [
         "BTC/USD",
         "ETH/USD",
@@ -581,12 +597,8 @@ def test_backtest_reports_resolved_strategy_inputs_for_mixed_params(
         "BTC/USD",
         "ETH/USD",
     ]
-    assert strategy_inputs["strategies"]["rs_rotation"]["resolved_timeframes"] == [
-        "1h"
-    ]
-    assert strategy_inputs["strategies"]["rs_rotation"][
-        "requested_ohlc_series"
-    ] == [
+    assert strategy_inputs["strategies"]["rs_rotation"]["resolved_timeframes"] == ["1h"]
+    assert strategy_inputs["strategies"]["rs_rotation"]["requested_ohlc_series"] == [
         {"pair": "BTC/USD", "timeframe": "1h"},
         {"pair": "ETH/USD", "timeframe": "1h"},
     ]
@@ -867,14 +879,16 @@ def test_replay_diagnostics_reports_score_filtered_intents() -> None:
         }
     }
 
-    trust_level, trust_note, warnings = runner._build_replay_diagnostics(  # noqa: SLF001
-        total_actions=0,
-        blocked_actions=0,
-        total_orders=0,
-        filled_orders=0,
-        execution_errors=0,
-        preflight=preflight,
-        per_strategy=per_strategy,
+    trust_level, trust_note, warnings = (
+        runner._build_replay_diagnostics(  # noqa: SLF001
+            total_actions=0,
+            blocked_actions=0,
+            total_orders=0,
+            filled_orders=0,
+            execution_errors=0,
+            preflight=preflight,
+            per_strategy=per_strategy,
+        )
     )
 
     assert trust_level == "weak_signal"
@@ -883,8 +897,7 @@ def test_replay_diagnostics_reports_score_filtered_intents() -> None:
     )
     assert (
         "Strategy intents were emitted but all were filtered before risk checks "
-        "(2 no-position exits, 1 low-score entry)."
-        in warnings
+        "(2 no-position exits, 1 low-score entry)." in warnings
     )
 
 

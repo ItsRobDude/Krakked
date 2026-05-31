@@ -214,6 +214,7 @@ def test_get_risk_config_enveloped(client, risk_context):
         payload["data"]["max_open_positions"]
         == risk_context.config.risk.max_open_positions
     )
+    assert payload["data"]["market_regime_throttle"]["enabled"] is False
 
 
 def test_get_risk_decisions(client, risk_context):
@@ -256,6 +257,37 @@ def test_update_risk_config_mutates_context(client, risk_context):
     assert risk_context.config.risk.max_open_positions == 42
     assert risk_context.strategy_engine.risk_engine.config.max_daily_drawdown_pct == 3.0
     assert payload["data"]["max_daily_drawdown_pct"] == 3.0
+
+
+@pytest.mark.parametrize("ui_read_only", [False])
+def test_update_risk_config_updates_market_regime_throttle(client, risk_context):
+    body = {
+        "market_regime_throttle": {
+            "enabled": True,
+            "mode": "target_scale",
+            "timeframe": "4h",
+            "neutral_allocation_multiplier": 0.7,
+            "risk_off_allocation_multiplier": 0.2,
+            "unavailable_policy": "block_new_risk",
+        }
+    }
+
+    response = client.patch("/api/risk/config", json=body)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["error"] is None
+    throttle = risk_context.config.risk.market_regime_throttle
+    assert throttle.enabled is True
+    assert throttle.neutral_allocation_multiplier == 0.7
+    assert (
+        risk_context.strategy_engine.risk_engine.config.market_regime_throttle
+        is throttle
+    )
+    assert (
+        payload["data"]["market_regime_throttle"]["risk_off_allocation_multiplier"]
+        == 0.2
+    )
 
 
 @pytest.mark.parametrize("ui_read_only", [False])

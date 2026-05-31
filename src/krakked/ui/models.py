@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Dict, Generic, List, Literal, Optional, TypeVar
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 T = TypeVar("T")
 
@@ -70,6 +70,8 @@ class RiskStatusPayload(BaseModel):
     manual_exposure_pct: float
     per_asset_exposure_pct: Dict[str, float]
     per_strategy_exposure_pct: Dict[str, float]
+    drift_info: Optional[Dict[str, Any]] = None
+    market_regime_throttle: Optional[Dict[str, Any]] = None
 
 
 class RiskDecisionPayload(BaseModel):
@@ -96,6 +98,61 @@ class KillSwitchPayload(BaseModel):
     confirmation: Optional[str] = None
 
 
+class MarketRegimeThrottleConfigPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    mode: str = "target_scale"
+    timeframe: str = "4h"
+    benchmark_pair: str = Field(default="BTC/USD", min_length=1)
+    pairs: List[str] = Field(default_factory=list)
+    momentum_lookback_bars: int = Field(default=63, ge=2)
+    basket_momentum_lookback_bars: int = Field(default=63, ge=2)
+    volatility_lookback_bars: int = Field(default=63, ge=2)
+    drawdown_lookback_bars: int = Field(default=63, ge=2)
+    neutral_allocation_multiplier: float = Field(default=0.75, ge=0.0, le=1.0)
+    risk_off_allocation_multiplier: float = Field(default=0.25, ge=0.0, le=1.0)
+    neutral_benchmark_momentum_bps: float = 150.0
+    neutral_basket_momentum_bps: float = 100.0
+    risk_off_benchmark_momentum_bps: float = 0.0
+    risk_off_basket_momentum_bps: float = 0.0
+    neutral_benchmark_drawdown_pct: float = Field(default=4.0, ge=0.0)
+    risk_off_benchmark_drawdown_pct: float = Field(default=8.0, ge=0.0)
+    neutral_volatility_pct: float = Field(default=2.5, ge=0.0)
+    risk_off_volatility_pct: float = Field(default=4.0, ge=0.0)
+    unavailable_policy: str = "block_new_risk"
+
+    @field_validator("mode")
+    @classmethod
+    def _validate_mode(cls, value: str) -> str:
+        if value != "target_scale":
+            raise ValueError("mode must be 'target_scale'")
+        return value
+
+    @field_validator("timeframe")
+    @classmethod
+    def _validate_timeframe(cls, value: str) -> str:
+        if value not in {"1m", "5m", "15m", "1h", "4h", "1d"}:
+            raise ValueError("timeframe is unsupported")
+        return value
+
+    @field_validator("unavailable_policy")
+    @classmethod
+    def _validate_unavailable_policy(cls, value: str) -> str:
+        if value not in {"block_new_risk", "allow"}:
+            raise ValueError("unavailable_policy must be 'block_new_risk' or 'allow'")
+        return value
+
+    @model_validator(mode="after")
+    def _validate_multipliers(self) -> "MarketRegimeThrottleConfigPayload":
+        if self.risk_off_allocation_multiplier > self.neutral_allocation_multiplier:
+            raise ValueError(
+                "risk_off_allocation_multiplier cannot exceed "
+                "neutral_allocation_multiplier"
+            )
+        return self
+
+
 class RiskConfigPatchPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -113,6 +170,7 @@ class RiskConfigPatchPayload(BaseModel):
     dynamic_allocation_lookback_hours: Optional[int] = Field(None, ge=1)
     min_strategy_weight_pct: Optional[float] = Field(None, ge=0.0, le=100.0)
     max_strategy_weight_pct: Optional[float] = Field(None, ge=0.0, le=100.0)
+    market_regime_throttle: Optional[MarketRegimeThrottleConfigPayload] = None
 
     @field_validator("max_per_strategy_pct")
     @classmethod
@@ -144,6 +202,9 @@ class RiskConfigPayload(BaseModel):
     dynamic_allocation_lookback_hours: int
     min_strategy_weight_pct: float
     max_strategy_weight_pct: float
+    market_regime_throttle: MarketRegimeThrottleConfigPayload = Field(
+        default_factory=MarketRegimeThrottleConfigPayload
+    )
 
 
 class StrategyConfigParamsPatchPayload(BaseModel):

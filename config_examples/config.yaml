@@ -84,6 +84,29 @@ risk:
   include_manual_positions: true
   volatility_lookback_bars: 20
   min_liquidity_24h_usd: 100000.0
+  # Default-disabled research-derived target exposure throttle. Enabling this
+  # requires a deliberate operator/runtime decision; starter behavior is unchanged.
+  market_regime_throttle:
+    enabled: false
+    mode: "target_scale"
+    timeframe: "4h"
+    benchmark_pair: "BTC/USD"
+    pairs: []
+    momentum_lookback_bars: 63
+    basket_momentum_lookback_bars: 63
+    volatility_lookback_bars: 63
+    drawdown_lookback_bars: 63
+    neutral_allocation_multiplier: 0.75
+    risk_off_allocation_multiplier: 0.25
+    neutral_benchmark_momentum_bps: 150.0
+    neutral_basket_momentum_bps: 100.0
+    risk_off_benchmark_momentum_bps: 0.0
+    risk_off_basket_momentum_bps: 0.0
+    neutral_benchmark_drawdown_pct: 4.0
+    risk_off_benchmark_drawdown_pct: 8.0
+    neutral_volatility_pct: 2.5
+    risk_off_volatility_pct: 4.0
+    unavailable_policy: "block_new_risk"
 
 strategies:
   enabled:

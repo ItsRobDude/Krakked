@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import asdict
 from datetime import datetime, timezone
 from typing import Any, Dict, List
 
 from fastapi import APIRouter, Request
 from pydantic import ValidationError
 
-from krakked.config import dump_runtime_overrides
+from krakked.config import MarketRegimeThrottleConfig, dump_runtime_overrides
 from krakked.ui.logging import build_request_log_extra
 from krakked.ui.models import (
     ApiEnvelope,
@@ -134,6 +135,12 @@ def _serialize_decision(record) -> RiskDecisionPayload:
         block_reasons=block_reasons,
         kill_switch_active=record.kill_switch_active,
     )
+
+
+def _risk_config_payload(config) -> RiskConfigPayload:
+    return RiskConfigPayload.model_validate(asdict(config))
+
+
 def _validate_risk_invariants(current_config, patch: RiskConfigPatchPayload) -> None:
     for field in patch.model_fields_set:
         if getattr(patch, field) is None:
@@ -163,9 +170,13 @@ def _apply_risk_patch(ctx, patch: RiskConfigPatchPayload) -> dict[str, Any]:
     updated_fields: dict[str, Any] = {}
     for field in patch.model_fields_set:
         value = getattr(patch, field)
+        if field == "market_regime_throttle":
+            value = MarketRegimeThrottleConfig(**value.model_dump())
         setattr(ctx.config.risk, field, value)
         setattr(ctx.strategy_engine.risk_engine.config, field, value)
-        updated_fields[field] = value
+        updated_fields[field] = (
+            asdict(value) if field == "market_regime_throttle" else value
+        )
 
     return updated_fields
 
@@ -224,7 +235,7 @@ async def get_risk_config(request: Request) -> ApiEnvelope[RiskConfigPayload]:
     ctx = _context(request)
 
     def _read_config() -> RiskConfigPayload:
-        return RiskConfigPayload(**ctx.config.risk.__dict__)
+        return _risk_config_payload(ctx.config.risk)
 
     return await run_bounded_route_read(
         request,
@@ -273,9 +284,7 @@ async def update_risk_config(request: Request) -> ApiEnvelope[RiskConfigPayload]
                 ),
             )
 
-        return ApiEnvelope(
-            data=RiskConfigPayload(**ctx.config.risk.__dict__), error=None
-        )
+        return ApiEnvelope(data=_risk_config_payload(ctx.config.risk), error=None)
     except Exception as exc:  # pragma: no cover - defensive
         logger.exception(
             "Failed to update risk config",
@@ -346,9 +355,7 @@ async def apply_risk_preset(
                 request, event="risk_preset_applied", preset=name, fields=updated_fields
             ),
         )
-        return ApiEnvelope(
-            data=RiskConfigPayload(**ctx.config.risk.__dict__), error=None
-        )
+        return ApiEnvelope(data=_risk_config_payload(ctx.config.risk), error=None)
     except Exception as exc:  # pragma: no cover - defensive
         logger.exception(
             "Failed to apply risk preset",

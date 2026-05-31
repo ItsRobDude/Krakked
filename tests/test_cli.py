@@ -1290,6 +1290,151 @@ def test_market_regime_overlay_backtest_subcommand_writes_json_report(
     )
 
 
+def test_market_regime_throttle_backtest_subcommand_writes_json_report(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: Any
+) -> None:
+    captured: dict[str, Any] = {}
+    start = datetime(2026, 5, 1, tzinfo=UTC)
+    end = datetime(2026, 5, 2, tzinfo=UTC)
+
+    class _FakeThrottleBacktestResult:
+        def to_report_dict(self) -> dict[str, Any]:
+            return {
+                "report_version": 1,
+                "report_type": "market_regime_throttle_backtest",
+                "generated_at": start.isoformat(),
+                "summary": {
+                    "start": start.isoformat(),
+                    "end": end.isoformat(),
+                    "baseline": {
+                        "return_pct": -0.2,
+                        "max_drawdown_pct": 1.0,
+                        "total_actions": 2,
+                        "filled_orders": 1,
+                    },
+                    "throttle": {
+                        "return_pct": -0.1,
+                        "max_drawdown_pct": 0.5,
+                        "total_actions": 2,
+                        "filled_orders": 1,
+                    },
+                    "delta": {
+                        "return_pct": 0.1,
+                        "max_drawdown_pct": -0.5,
+                    },
+                    "throttle_interventions": {
+                        "throttled_actions": 1,
+                        "blocked_actions": 0,
+                        "clamped_actions": 1,
+                        "intervention_cycles": 1,
+                        "state_counts": {"neutral": 1},
+                        "reason_counts": {"btc_momentum_soft": 1},
+                    },
+                    "promotion_checks": {"passed": True},
+                },
+                "baseline": {"summary": {"return_pct": -0.2}},
+                "throttle": {"summary": {"return_pct": -0.1}},
+            }
+
+    def _fake_run_market_regime_throttle_backtest(
+        config: Any,
+        *,
+        start: datetime,
+        end: datetime,
+        pairs: list[str] | None,
+        params: Any,
+        timeframes: list[str] | None,
+        starting_cash_usd: float,
+        fee_bps: float,
+        strict_data: bool,
+        unavailable_policy: str,
+    ) -> _FakeThrottleBacktestResult:
+        captured["config"] = config
+        captured["start"] = start
+        captured["end"] = end
+        captured["pairs"] = pairs
+        captured["params"] = params
+        captured["timeframes"] = timeframes
+        captured["starting_cash_usd"] = starting_cash_usd
+        captured["fee_bps"] = fee_bps
+        captured["strict_data"] = strict_data
+        captured["unavailable_policy"] = unavailable_policy
+        return _FakeThrottleBacktestResult()
+
+    config = object()
+    monkeypatch.setattr(cli, "_load_backtest_config", lambda args: config)
+    monkeypatch.setattr(
+        cli,
+        "run_market_regime_throttle_backtest",
+        _fake_run_market_regime_throttle_backtest,
+    )
+
+    report_path = tmp_path / "market-regime-throttle.json"
+    exit_code = cli.main(
+        [
+            "market-regime-throttle-backtest",
+            "--start",
+            "2026-05-01T00:00:00Z",
+            "--end",
+            "2026-05-02T00:00:00Z",
+            "--pair",
+            "BTC/USD",
+            "--replay-timeframe",
+            "1h",
+            "--unavailable-policy",
+            "allow",
+            "--starting-cash-usd",
+            "12000",
+            "--fee-bps",
+            "10",
+            "--save-report",
+            str(report_path),
+            "--strict-data",
+            "--json",
+        ]
+    )
+
+    assert exit_code == 0
+    assert captured["pairs"] == ["BTC/USD"]
+    assert captured["params"].momentum_lookback_bars == 63
+    assert captured["params"].neutral_allocation_multiplier == pytest.approx(0.75)
+    assert captured["params"].risk_off_allocation_multiplier == pytest.approx(0.25)
+    assert captured["timeframes"] == ["1h"]
+    assert captured["starting_cash_usd"] == 12_000.0
+    assert captured["fee_bps"] == 10.0
+    assert captured["strict_data"] is True
+    assert captured["unavailable_policy"] == "allow"
+    payload = json.loads(capsys.readouterr().out)
+    saved = json.loads(report_path.read_text(encoding="utf-8"))
+    assert payload["report_type"] == "market_regime_throttle_backtest"
+    assert saved["provenance"]["generated_by"] == (
+        "krakked market-regime-throttle-backtest"
+    )
+
+
+def test_market_regime_throttle_backtest_rejects_invalid_timeframe(
+    monkeypatch: pytest.MonkeyPatch, capsys: Any
+) -> None:
+    monkeypatch.setattr(cli, "_load_backtest_config", lambda args: object())
+
+    exit_code = cli.main(
+        [
+            "market-regime-throttle-backtest",
+            "--start",
+            "2026-05-01T00:00:00Z",
+            "--end",
+            "2026-05-02T00:00:00Z",
+            "--timeframe",
+            "2h",
+        ]
+    )
+
+    assert exit_code == 1
+    output = capsys.readouterr().out
+    assert "Market regime throttle backtest failed" in output
+    assert "Unsupported market regime timeframe" in output
+
+
 def test_market_regime_exposure_research_subcommand_writes_json_report(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: Any
 ) -> None:
@@ -1552,6 +1697,120 @@ def test_market_regime_exposure_sweep_writes_reports_and_aggregate(
         group["promotion_gate"]["overlay_exposure_ratio"]
         for group in aggregate["summary"]["groups"]
     )
+
+
+def test_strategy_activity_sweep_writes_reports_and_aggregate(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: Any
+) -> None:
+    captured: dict[str, Any] = {}
+    start = datetime(2026, 5, 1, tzinfo=UTC)
+
+    class _FakeStrategyActivityResult:
+        def to_report_dict(self) -> dict[str, Any]:
+            return {
+                "report_version": 1,
+                "report_type": "strategy_activity_sweep",
+                "generated_at": start.isoformat(),
+                "summary": {
+                    "research_only": True,
+                    "runtime_config_changed": False,
+                    "group_count": 1,
+                    "run_count": 1,
+                    "window_sets": ["tiny"],
+                    "groups": [
+                        {
+                            "group_id": "configured",
+                            "strategies": ["trend_core"],
+                            "window_count": 1,
+                            "ready_windows": 1,
+                            "action_windows": 1,
+                            "fill_windows": 1,
+                            "execution_error_windows": 0,
+                            "stage_counts": {"filled": 1},
+                            "total_actions": 1,
+                            "total_filled_orders": 1,
+                            "avg_actions_per_window": 1.0,
+                            "avg_fills_per_window": 1.0,
+                            "gate2_candidate": True,
+                        }
+                    ],
+                    "gate2_candidate_groups": ["configured"],
+                    "best_gate2_candidate_group": "configured",
+                    "ready_for_gate2": True,
+                },
+                "runs": [
+                    {
+                        "window_set": "tiny",
+                        "window_id": "w1",
+                        "group_id": "configured",
+                        "strategies": ["trend_core"],
+                        "stage": "filled",
+                        "total_actions": 1,
+                        "filled_orders": 1,
+                    }
+                ],
+            }
+
+    def _fake_run_strategy_activity_sweep(
+        config: Any,
+        *,
+        window_sets: Any,
+        groups: Any,
+        starting_cash_usd: float,
+        fee_bps: float,
+        strict_data: bool,
+    ) -> _FakeStrategyActivityResult:
+        captured["config"] = config
+        captured["window_sets"] = window_sets
+        captured["groups"] = groups
+        captured["starting_cash_usd"] = starting_cash_usd
+        captured["fee_bps"] = fee_bps
+        captured["strict_data"] = strict_data
+        return _FakeStrategyActivityResult()
+
+    monkeypatch.setitem(
+        cli.STRATEGY_ACTIVITY_WINDOW_SETS,
+        "tiny",
+        [("w1", "2026-05-01T00:00:00Z", "2026-05-02T00:00:00Z")],
+    )
+    monkeypatch.setattr(cli, "_load_backtest_config", lambda args: object())
+    monkeypatch.setattr(
+        cli,
+        "build_strategy_activity_groups",
+        lambda config, group_ids=None, custom_strategies=None: [
+            SimpleNamespace(group_id="configured", strategies=("trend_core",))
+        ],
+    )
+    monkeypatch.setattr(
+        cli,
+        "run_strategy_activity_sweep",
+        _fake_run_strategy_activity_sweep,
+    )
+
+    save_dir = tmp_path / "activity"
+    exit_code = cli.main(
+        [
+            "strategy-activity-sweep",
+            "--window-set",
+            "tiny",
+            "--group",
+            "configured",
+            "--save-dir",
+            str(save_dir),
+            "--strict-data",
+            "--json",
+        ]
+    )
+
+    assert exit_code == 0
+    assert list(captured["window_sets"]) == ["tiny"]
+    assert captured["groups"][0].group_id == "configured"
+    assert captured["strict_data"] is True
+    output = json.loads(capsys.readouterr().out)
+    aggregate = json.loads((save_dir / "aggregate.json").read_text(encoding="utf-8"))
+    assert output["report_type"] == "strategy_activity_sweep"
+    assert aggregate["summary"]["ready_for_gate2"] is True
+    assert (save_dir / "tiny" / "configured" / "w1.json").exists()
 
 
 def test_market_regime_research_subcommand_returns_nonzero_on_failure(

@@ -19,6 +19,11 @@ from .market_regime_overlay import (
     run_market_regime_overlay_backtest,
     run_market_regime_research,
 )
+from .market_regime_throttle import (
+    MarketRegimeThrottleBacktestResult,
+    run_market_regime_throttle_backtest,
+    summarize_market_regime_throttle_plans,
+)
 from .ml_reporting import (
     get_latest_ml_walk_forward_report_path,
     load_ml_walk_forward_report,
@@ -60,6 +65,16 @@ from .runner import (
     build_backtest_preflight,
     run_backtest,
 )
+from .strategy_activity import (
+    DEFAULT_STRATEGY_ACTIVITY_GROUP_IDS,
+    STARTER_STRATEGIES,
+    STRATEGY_ACTIVITY_WINDOW_SETS,
+    StrategyActivityGroup,
+    StrategyActivitySweepResult,
+    apply_strategy_activity_override,
+    build_strategy_activity_groups,
+    run_strategy_activity_sweep,
+)
 
 __all__ = [
     "BacktestPreflight",
@@ -74,15 +89,23 @@ __all__ = [
     "MarketRegimeOverlayParams",
     "MarketRegimeResearchResult",
     "MarketRegimeSnapshot",
+    "MarketRegimeThrottleBacktestResult",
     "MLWalkForwardFold",
     "MLWalkForwardPrediction",
     "MLWalkForwardResult",
     "MLWalkForwardSummary",
     "RSRotationV2ResearchParams",
     "RSRotationV2ResearchResult",
+    "STARTER_STRATEGIES",
+    "STRATEGY_ACTIVITY_WINDOW_SETS",
+    "StrategyActivityGroup",
+    "StrategyActivitySweepResult",
     "apply_market_regime_overlay_to_plan",
+    "apply_strategy_activity_override",
     "build_backtest_preflight",
+    "build_strategy_activity_groups",
     "classify_market_regime_snapshot",
+    "DEFAULT_STRATEGY_ACTIVITY_GROUP_IDS",
     "default_rs_rotation_v2_allocation_pct",
     "default_rs_rotation_v2_lookback_bars",
     "default_rs_rotation_v2_timeframe",
@@ -100,8 +123,11 @@ __all__ = [
     "run_market_regime_exposure_research",
     "run_market_regime_overlay_backtest",
     "run_market_regime_research",
+    "run_market_regime_throttle_backtest",
     "run_rs_rotation_v2_research",
     "run_ml_walk_forward",
+    "run_strategy_activity_sweep",
+    "summarize_market_regime_throttle_plans",
     "summarize_latest_backtest_report",
     "summarize_latest_ml_walk_forward_report",
     "validate_backtest_report_payload",
