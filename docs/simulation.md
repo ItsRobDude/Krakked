@@ -65,6 +65,19 @@ poetry run krakked strategy-action-diagnostics \
 
 This is research-only. It reruns one cache-only replay and reports action stages, normalized guardrail reason buckets, per-pair activity, filled-order tape rows, and approximate fill-level realized PnL. It does not change runtime config, strategy defaults, risk behavior, or order routing.
 
+trend_core signal-quality research:
+
+```bash
+poetry run krakked trend-core-signal-quality \
+  --start 2026-05-10T00:00:00Z \
+  --end 2026-05-30T00:00:00Z \
+  --fresh-bars-only \
+  --strict-data \
+  --save-report trend-core-signal-quality.json
+```
+
+This is research-only. It evaluates cached `trend_core` long entry/increase signals against forward returns at one or more bar horizons and reports whether the raw signal clears a fee-aware quality gate. Use `--fresh-bars-only` when comparing against the runtime/replay engine behavior that evaluates each strategy timeframe only once per new closed bar; omit it only when intentionally measuring the old stale-context behavior.
+
 Saved report highlights:
 
 - requested window, pairs, timeframes, and bankroll

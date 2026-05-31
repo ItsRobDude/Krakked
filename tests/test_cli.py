@@ -1928,6 +1928,110 @@ def test_strategy_action_diagnostics_subcommand_writes_report(
     assert saved["summary"]["stage_assessment"] == "filled"
 
 
+def test_trend_core_signal_quality_subcommand_writes_report(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: Any,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    class _FakeSignalQualityResult:
+        def to_report_dict(self) -> dict[str, Any]:
+            return {
+                "report_version": 1,
+                "report_type": "trend_core_signal_quality",
+                "generated_at": "2026-05-31T00:00:00+00:00",
+                "summary": {
+                    "research_only": True,
+                    "runtime_config_changed": False,
+                    "start": "2026-05-10T00:00:00+00:00",
+                    "end": "2026-05-30T00:00:00+00:00",
+                    "pairs": ["BTC/USD"],
+                    "timeframes": ["4h"],
+                    "forward_horizon_bars": [6],
+                    "primary_horizon_bars": 6,
+                    "fee_bps": 25.0,
+                    "round_trip_fee_hurdle_pct": 0.5,
+                    "fresh_bars_only": True,
+                    "strict_data": True,
+                    "warmup_days": 30.0,
+                    "total_signals": 40,
+                    "status": "edge_not_proven",
+                    "status_note": "test",
+                    "promotion_ready": False,
+                    "gate_reasons": ["test reason"],
+                },
+                "overall": {
+                    "6": {
+                        "sample_count": 40,
+                        "mean_return_pct": 0.1,
+                        "median_return_pct": 0.1,
+                        "hit_rate": 0.5,
+                    }
+                },
+                "by_timeframe": [],
+                "by_pair": [],
+                "by_trend_strength_quartile": [],
+                "by_confidence_quartile": [],
+                "strongest_vs_weakest": {
+                    "strongest_minus_weakest_mean_return_pct": -0.1
+                },
+                "signals_sample": [],
+                "preflight": None,
+            }
+
+    def _fake_run_trend_core_signal_quality(config: Any, **kwargs: Any) -> Any:
+        captured["config"] = config
+        captured.update(kwargs)
+        return _FakeSignalQualityResult()
+
+    monkeypatch.setattr(cli, "_load_backtest_config", lambda args: object())
+    monkeypatch.setattr(
+        cli,
+        "run_trend_core_signal_quality",
+        _fake_run_trend_core_signal_quality,
+    )
+
+    report_path = tmp_path / "signal-quality.json"
+    exit_code = cli.main(
+        [
+            "trend-core-signal-quality",
+            "--start",
+            "2026-05-10T00:00:00Z",
+            "--end",
+            "2026-05-30T00:00:00Z",
+            "--pair",
+            "BTC/USD",
+            "--timeframe",
+            "4h",
+            "--forward-horizon-bars",
+            "6",
+            "--warmup-days",
+            "30",
+            "--fresh-bars-only",
+            "--max-signal-rows",
+            "25",
+            "--save-report",
+            str(report_path),
+            "--strict-data",
+            "--json",
+        ]
+    )
+
+    assert exit_code == 0
+    assert captured["pairs"] == ["BTC/USD"]
+    assert captured["timeframes"] == ["4h"]
+    assert captured["forward_horizon_bars"] == [6]
+    assert captured["fresh_bars_only"] is True
+    assert captured["strict_data"] is True
+    assert captured["warmup_days"] == pytest.approx(30.0)
+    assert captured["max_signal_rows"] == 25
+    output = json.loads(capsys.readouterr().out)
+    saved = json.loads(report_path.read_text(encoding="utf-8"))
+    assert output["report_type"] == "trend_core_signal_quality"
+    assert saved["summary"]["status"] == "edge_not_proven"
+
+
 def test_market_regime_research_subcommand_returns_nonzero_on_failure(
     monkeypatch: pytest.MonkeyPatch, capsys: Any
 ) -> None:

@@ -1091,3 +1091,55 @@ Decision:
 - Runtime throttle remains default-disabled pending an operator decision on
   whether passing historical action windows are enough evidence for paper-only
   enablement, or whether current-window activity must return first.
+
+### 2026-05-30 Fresh-Bar Hygiene And trend_core Signal Quality
+
+The current-window inactivity gap was partly a replay hygiene issue: multi-
+timeframe strategies were being evaluated on every replay timestamp even when a
+given strategy timeframe had no new closed bar. The strategy engine now records
+the latest evaluated bar timestamp per strategy/timeframe and skips duplicate
+timeframe contexts until a fresh bar appears.
+
+Current rolling proof window:
+
+- `2026-05-10T00:00:00Z -> 2026-05-30T00:00:00Z`
+
+Artifacts:
+
+- `C:\Users\Rob\AppData\Local\krakked\krakked\reports\backtests\strategy-action-diagnostics-trend-core-current-freshgate-20260530.json`
+- `C:\Users\Rob\AppData\Local\krakked\krakked\reports\backtests\trend-core-signal-quality-current-20260530.json`
+- `C:\Users\Rob\AppData\Local\krakked\krakked\reports\backtests\backtest-current-freshgate-20260530.json`
+
+Fresh-bar replay impact:
+
+| Metric | Before fresh gate | After fresh gate |
+| --- | ---: | ---: |
+| Actions | `314` | `204` |
+| Intents emitted | `2175` | `1344` |
+| Actions after scoring | `414` | `228` |
+| Skipped stale timeframe contexts | n/a | `360` |
+| Fills | `8` | `8` |
+| Return | `-0.6040%` | `-0.6040%` |
+
+The replay is now more truthful: it no longer counts stale 4h evaluations as
+new signal work on every 1h cycle. It still does not prove strategy quality.
+
+Signal-quality result:
+
+- Fresh-bar trend_core signals: `228`.
+- 6-bar mean forward return: `-0.8007%`.
+- 6-bar median forward return: `-0.7005%`.
+- 6-bar hit rate: `26.3%`.
+- 1h signals: `166`, 6-bar mean `-0.7555%`, hit rate `22.9%`.
+- 4h signals: `62`, 6-bar mean `-0.9217%`, hit rate `35.5%`.
+- Stronger trend-strength bucket still did not outperform the weakest bucket.
+
+Decision:
+
+- Keep the fresh-bar strategy evaluation gate.
+- Keep `trend_core` as unpromoted research evidence, not a strategy-quality
+  candidate.
+- Do not loosen caps, enable market-regime runtime throttle by default, or
+  promote a cap-aligned proxy from this result.
+- The next strategy-quality work should improve the target source itself, not
+  continue wrapping the current trend_core signal.

@@ -286,6 +286,133 @@ def test_data_stale_error_skips_timeframe():
     assert state.pnl_summary["realized_pnl_usd"] == 0.0
 
 
+def test_strategy_timeframe_contexts_wait_for_fresh_bar():
+    class TimestampStrategy(Strategy):
+        def warmup(self, market_data, portfolio):
+            return None
+
+        def generate_intents(self, ctx):
+            return [
+                StrategyIntent(
+                    strategy_id=self.id,
+                    pair="XBTUSD",
+                    side="long",
+                    intent_type="enter",
+                    desired_exposure_usd=1000.0,
+                    confidence=0.8,
+                    timeframe=ctx.timeframe,
+                    generated_at=ctx.now,
+                )
+            ]
+
+    strat_config = StrategyConfig(
+        name="timestamp",
+        type="timestamp",
+        enabled=True,
+        params={"timeframes": ["1h", "4h"]},
+    )
+    strategies_cfg = StrategiesConfig(
+        enabled=["timestamp"], configs={"timestamp": strat_config}
+    )
+
+    app_config = MagicMock(spec=AppConfig)
+    app_config.strategies = strategies_cfg
+    app_config.risk = RiskConfig()
+    app_config.universe = MagicMock()
+    app_config.universe.include_pairs = ["XBTUSD"]
+
+    market = MagicMock(spec=MarketDataAPI)
+    market.get_data_status.return_value = MagicMock(
+        rest_api_reachable=True,
+        websocket_connected=True,
+        stale_pairs=0,
+    )
+
+    def _bar(timestamp: int) -> OHLCBar:
+        return OHLCBar(
+            timestamp=timestamp,
+            open=100.0,
+            high=101.0,
+            low=99.0,
+            close=100.0,
+            volume=1.0,
+        )
+
+    def _get_ohlc(pair, timeframe, lookback):  # noqa: ARG001
+        now_ts = int(engine_now.timestamp())
+        if timeframe == "1h":
+            return [_bar(now_ts)]
+        if timeframe == "4h":
+            return [_bar((now_ts // 14_400) * 14_400)]
+        return []
+
+    market.get_ohlc.side_effect = _get_ohlc
+
+    portfolio = make_portfolio_service_mock()
+    portfolio.get_realized_pnl_by_strategy.return_value = {}
+
+    engine = StrategyRiskEngine(app_config, market, portfolio)
+    engine._data_ready = MagicMock(return_value=True)
+    engine.risk_engine = MagicMock()
+    engine.risk_engine.process_intents.return_value = []
+    engine.risk_engine.get_status.return_value = RiskStatus(
+        kill_switch_active=False,
+        daily_drawdown_pct=0.0,
+        drift_flag=False,
+        total_exposure_pct=0.0,
+        manual_exposure_pct=0.0,
+        per_asset_exposure_pct={},
+        per_strategy_exposure_pct={},
+    )
+    engine.risk_engine.build_risk_context.return_value = SimpleNamespace(
+        per_strategy_exposure_pct={}
+    )
+    engine.strategies = {"timestamp": TimestampStrategy(strat_config)}
+    engine.strategy_states = {
+        "timestamp": StrategyState(
+            strategy_id="timestamp",
+            enabled=True,
+            last_intents_at=None,
+            last_actions_at=None,
+            current_positions=[],
+            pnl_summary={},
+        )
+    }
+
+    engine_now = datetime(2026, 5, 10, 0, 0, tzinfo=timezone.utc)
+    first_plan = engine.run_cycle(engine_now)
+    first_intents = engine.risk_engine.process_intents.call_args[0][0]
+    assert [intent.timeframe for intent in first_intents] == ["1h", "4h"]
+    assert (
+        first_plan.metadata["strategy_evaluation"]["timestamp"][
+            "skipped_stale_timeframe_contexts"
+        ]
+        == 0
+    )
+
+    engine_now = datetime(2026, 5, 10, 1, 0, tzinfo=timezone.utc)
+    second_plan = engine.run_cycle(engine_now)
+    second_intents = engine.risk_engine.process_intents.call_args[0][0]
+    assert [intent.timeframe for intent in second_intents] == ["1h"]
+    assert (
+        second_plan.metadata["strategy_evaluation"]["timestamp"][
+            "skipped_stale_timeframe_contexts"
+        ]
+        == 1
+    )
+
+    engine_now = datetime(2026, 5, 10, 4, 0, tzinfo=timezone.utc)
+    third_plan = engine.run_cycle(engine_now)
+    third_intents = engine.risk_engine.process_intents.call_args[0][0]
+    assert [intent.timeframe for intent in third_intents] == ["1h", "4h"]
+    assert (
+        third_plan.metadata["strategy_evaluation"]["timestamp"][
+            "skipped_stale_timeframe_contexts"
+        ]
+        == 0
+    )
+
+
 def test_strategy_evaluation_heartbeat_updates_when_no_intents_generated():
     class QuietStrategy(Strategy):
         def warmup(self, market_data, portfolio):

@@ -101,6 +101,7 @@ class StrategyEngine:
         )
         self._cached_strategy_state: List[StrategyState] = []
         self.last_cycle_intents: List[StrategyIntent] = []
+        self._last_strategy_timeframe_bar_ts: Dict[tuple[str, str], int] = {}
 
     def initialize(self) -> None:
         logger.info(
@@ -453,6 +454,7 @@ class StrategyEngine:
             "blocked_actions": 0,
             "data_stale_contexts": 0,
             "skipped_no_pairs": 0,
+            "skipped_stale_timeframe_contexts": 0,
         }
 
     @staticmethod
@@ -572,6 +574,55 @@ class StrategyEngine:
             )
             return None
 
+    def _fresh_timeframe_bar_timestamp(
+        self,
+        strategy_id: str,
+        timeframe: str,
+        pairs: Sequence[str],
+    ) -> tuple[bool, Optional[int]]:
+        """Return whether this strategy/timeframe has a new closed bar to evaluate."""
+
+        latest_ts: Optional[int] = None
+        for pair in pairs:
+            try:
+                bars = self.market_data.get_ohlc(pair, timeframe, lookback=1)
+            except Exception:
+                continue
+            if not bars:
+                continue
+            try:
+                raw_timestamp = getattr(bars[-1], "timestamp", None)
+            except Exception:
+                continue
+            if raw_timestamp is None:
+                return True, None
+            try:
+                bar_ts = int(raw_timestamp)
+            except (TypeError, ValueError):
+                return True, None
+            latest_ts = bar_ts if latest_ts is None else max(latest_ts, bar_ts)
+
+        if latest_ts is None:
+            return True, None
+
+        key = (strategy_id, timeframe)
+        last_seen = self._last_strategy_timeframe_bar_ts.get(key)
+        if last_seen is not None and latest_ts <= last_seen:
+            return False, latest_ts
+        return True, latest_ts
+
+    def _mark_timeframe_bar_evaluated(
+        self,
+        strategy_id: str,
+        timeframe: str,
+        bar_timestamp: Optional[int],
+    ) -> None:
+        if bar_timestamp is None:
+            return
+        self._last_strategy_timeframe_bar_ts[(strategy_id, timeframe)] = int(
+            bar_timestamp
+        )
+
     def _position_base_by_strategy_pair(
         self,
         positions: Sequence[SpotPosition],
@@ -668,11 +719,18 @@ class StrategyEngine:
             for timeframe in timeframes:
                 evaluation["contexts_evaluated"] += 1
                 self._add_evaluated_timeframe(evaluation, timeframe)
+                is_fresh_context, fresh_bar_ts = self._fresh_timeframe_bar_timestamp(
+                    name, timeframe, strategy_pairs
+                )
+                if not is_fresh_context:
+                    evaluation["skipped_stale_timeframe_contexts"] += 1
+                    continue
                 context = self._build_context(
                     now, strategy.config, timeframe, regime, strategy_pairs
                 )
                 try:
                     intents = strategy.generate_intents(context)
+                    self._mark_timeframe_bar_evaluated(name, timeframe, fresh_bar_ts)
                     evaluation["intents_emitted"] += len(intents)
                     for intent in intents:
                         intent.strategy_id = name

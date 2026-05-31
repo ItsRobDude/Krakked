@@ -1889,6 +1889,7 @@ def _new_strategy_summary_entry() -> Dict[str, Any]:
         "blocked_actions": 0,
         "data_stale_contexts": 0,
         "skipped_no_pairs": 0,
+        "skipped_stale_timeframe_contexts": 0,
     }
 
 
@@ -1939,6 +1940,7 @@ def _build_strategy_summary(
         "blocked_actions",
         "data_stale_contexts",
         "skipped_no_pairs",
+        "skipped_stale_timeframe_contexts",
     ]
     for plan in plans:
         metadata = getattr(plan, "metadata", {}) or {}

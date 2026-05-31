@@ -322,6 +322,7 @@ def _activity_error_payload(
                 "blocked_actions": 0,
                 "data_stale_contexts": 0,
                 "skipped_no_pairs": 0,
+                "skipped_stale_timeframe_contexts": 0,
                 "min_score": None,
                 "max_score": None,
             }

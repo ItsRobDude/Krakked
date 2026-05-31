@@ -82,6 +82,11 @@ from .strategy_activity import (
     build_strategy_activity_groups,
     run_strategy_activity_sweep,
 )
+from .trend_core_signal_quality import (
+    TrendCoreSignalQualityResult,
+    build_trend_core_signal_quality_report,
+    run_trend_core_signal_quality,
+)
 
 __all__ = [
     "BacktestPreflight",
@@ -108,12 +113,14 @@ __all__ = [
     "STRATEGY_ACTIVITY_WINDOW_SETS",
     "StrategyActivityGroup",
     "StrategyActivitySweepResult",
+    "TrendCoreSignalQualityResult",
     "apply_market_regime_overlay_to_plan",
     "apply_strategy_activity_override",
     "backtest_strict_data_details",
     "build_backtest_preflight",
     "build_strategy_action_diagnostics",
     "build_strategy_activity_groups",
+    "build_trend_core_signal_quality_report",
     "classify_market_regime_snapshot",
     "DEFAULT_STRATEGY_ACTIVITY_GROUP_IDS",
     "default_rs_rotation_v2_allocation_pct",
@@ -132,6 +139,7 @@ __all__ = [
     "publish_latest_ml_walk_forward_report",
     "run_backtest",
     "run_strategy_action_diagnostics",
+    "run_trend_core_signal_quality",
     "run_market_regime_exposure_research",
     "run_market_regime_overlay_backtest",
     "run_market_regime_research",

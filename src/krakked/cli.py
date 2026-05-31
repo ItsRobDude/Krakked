@@ -42,6 +42,7 @@ from krakked.backtest import (
     run_rs_rotation_v2_research,
     run_strategy_action_diagnostics,
     run_strategy_activity_sweep,
+    run_trend_core_signal_quality,
     write_backtest_report,
     write_ml_walk_forward_report,
 )
@@ -1421,6 +1422,78 @@ def _add_strategy_action_diagnostics_arguments(
     )
 
 
+def _add_trend_core_signal_quality_arguments(
+    subparser: argparse.ArgumentParser,
+) -> None:
+    subparser.add_argument(
+        "--start",
+        required=True,
+        help="Research window start time in ISO-8601 form",
+    )
+    subparser.add_argument(
+        "--end",
+        required=True,
+        help="Research window end time in ISO-8601 form",
+    )
+    subparser.add_argument(
+        "--config",
+        help="Optional path to the base config.yaml to use",
+    )
+    subparser.add_argument(
+        "--pair",
+        action="append",
+        help="Limit the research universe to one pair; repeat to include multiple pairs",
+    )
+    subparser.add_argument(
+        "--timeframe",
+        action="append",
+        help="Limit signal evaluation to one timeframe; repeat to include multiple timeframes",
+    )
+    subparser.add_argument(
+        "--forward-horizon-bars",
+        action="append",
+        type=int,
+        help="Forward-return horizon in bars; repeat to include multiple horizons",
+    )
+    subparser.add_argument(
+        "--fee-bps",
+        type=float,
+        default=25.0,
+        help="One-way fee in basis points used for the round-trip hurdle",
+    )
+    subparser.add_argument(
+        "--warmup-days",
+        type=float,
+        default=30.0,
+        help="Days of cached OHLC before --start to expose for indicators",
+    )
+    subparser.add_argument(
+        "--fresh-bars-only",
+        action="store_true",
+        help="Evaluate a strategy timeframe only when that timeframe has a fresh closed bar",
+    )
+    subparser.add_argument(
+        "--max-signal-rows",
+        type=int,
+        default=50,
+        help="Maximum raw signal rows to include in the JSON report sample",
+    )
+    subparser.add_argument(
+        "--save-report",
+        help="Optional JSON path for a durable signal-quality report artifact",
+    )
+    subparser.add_argument(
+        "--strict-data",
+        action="store_true",
+        help="Fail if any requested pair/timeframe is missing or partially covered",
+    )
+    subparser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print the trend_core signal-quality report as JSON",
+    )
+
+
 def _print_market_regime_exposure_sweep_summary(payload: dict[str, Any]) -> None:
     summary = payload["summary"]
     print("Market regime exposure sweep completed.")
@@ -1513,6 +1586,54 @@ def _print_strategy_action_diagnostics_summary(
             )
     if report_path:
         print(f"Saved report: {report_path}")
+
+
+def _print_trend_core_signal_quality_summary(
+    payload: dict[str, Any],
+    report_path: str | None,
+) -> None:
+    summary = payload["summary"]
+    primary = str(summary["primary_horizon_bars"])
+    primary_stats = (payload.get("overall") or {}).get(primary) or {}
+    print("trend_core signal-quality research completed.")
+    print(f"Window: {summary['start']} -> {summary['end']}")
+    print(
+        f"Status: {summary['status']} | Signals: {summary['total_signals']} | "
+        f"Fresh bars only: {summary['fresh_bars_only']}"
+    )
+    print(
+        f"Primary horizon {primary} bars: mean "
+        f"{_format_optional_pct(primary_stats.get('mean_return_pct'))}, "
+        f"median {_format_optional_pct(primary_stats.get('median_return_pct'))}, "
+        f"hit {_format_optional_rate(primary_stats.get('hit_rate'))}"
+    )
+    print(
+        "Round-trip fee hurdle: "
+        f"{float(summary['round_trip_fee_hurdle_pct']):.4f}%"
+    )
+    if summary.get("gate_reasons"):
+        print("Gate reasons:")
+        for reason in summary["gate_reasons"][:5]:
+            print(f"- {reason}")
+    if payload.get("strongest_vs_weakest"):
+        delta = payload["strongest_vs_weakest"].get(
+            "strongest_minus_weakest_mean_return_pct"
+        )
+        print(f"Strongest minus weakest bucket: {_format_optional_pct(delta)}")
+    if report_path:
+        print(f"Saved report: {report_path}")
+
+
+def _format_optional_pct(value: Any) -> str:
+    if value is None:
+        return "n/a"
+    return f"{float(value):+.4f}%"
+
+
+def _format_optional_rate(value: Any) -> str:
+    if value is None:
+        return "n/a"
+    return f"{float(value) * 100.0:.1f}%"
 
 
 def _print_market_regime_overlay_backtest_summary(
@@ -2551,6 +2672,55 @@ def _strategy_action_diagnostics_command(args: argparse.Namespace) -> int:
         print(json.dumps(payload, indent=2))
     else:
         _print_strategy_action_diagnostics_summary(payload, saved_report_path)
+    return 0
+
+
+def _trend_core_signal_quality_command(args: argparse.Namespace) -> int:
+    """Run research-only forward-return diagnostics for trend_core signals."""
+
+    try:
+        config = _load_backtest_config(args)
+        result = run_trend_core_signal_quality(
+            config,
+            start=_parse_datetime_arg(args.start),
+            end=_parse_datetime_arg(args.end),
+            pairs=args.pair,
+            timeframes=args.timeframe,
+            forward_horizon_bars=args.forward_horizon_bars,
+            fee_bps=float(args.fee_bps),
+            fresh_bars_only=bool(args.fresh_bars_only),
+            strict_data=bool(args.strict_data),
+            warmup_days=float(args.warmup_days),
+            max_signal_rows=int(args.max_signal_rows),
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _print_error(f"trend_core signal-quality research failed: {exc}")
+
+    payload = result.to_report_dict()
+    payload["summary"]["config_path"] = (
+        str(Path(args.config).expanduser().resolve()) if args.config else None
+    )
+    payload["provenance"] = {
+        "app_version": APP_VERSION,
+        "config_path": (
+            str(Path(args.config).expanduser().resolve()) if args.config else None
+        ),
+        "generated_by": "krakked trend-core-signal-quality",
+    }
+
+    saved_report_path: str | None = None
+    if args.save_report:
+        try:
+            saved_report_path = _write_backtest_report(payload, args.save_report)
+        except Exception as exc:  # noqa: BLE001
+            return _print_error(f"trend_core signal-quality write failed: {exc}")
+        payload["summary"]["report_path"] = saved_report_path
+        _write_backtest_report(payload, saved_report_path)
+
+    if args.json:
+        print(json.dumps(payload, indent=2))
+    else:
+        _print_trend_core_signal_quality_summary(payload, saved_report_path)
     return 0
 
 
@@ -3699,6 +3869,15 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_strategy_action_diagnostics_arguments(strategy_action_diagnostics_parser)
     strategy_action_diagnostics_parser.set_defaults(
         func=_strategy_action_diagnostics_command
+    )
+
+    trend_core_signal_quality_parser = subparsers.add_parser(
+        "trend-core-signal-quality",
+        help="Run research-only forward-return diagnostics for trend_core entry signals",
+    )
+    _add_trend_core_signal_quality_arguments(trend_core_signal_quality_parser)
+    trend_core_signal_quality_parser.set_defaults(
+        func=_trend_core_signal_quality_command
     )
 
     ml_walk_forward_parser = subparsers.add_parser(
