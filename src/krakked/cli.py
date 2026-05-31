@@ -17,6 +17,7 @@ from krakked import APP_VERSION, secrets
 from krakked.backtest import (
     DEFAULT_EXPOSURE_OVERLAY_MODES,
     DEFAULT_EXPOSURE_SCENARIOS,
+    DEFAULT_PAIR_LOCAL_SOURCE_SCENARIOS,
     DEFAULT_STRATEGY_ACTIVITY_GROUP_IDS,
     DEFAULT_TARGET_SOURCE_SCENARIOS,
     STRATEGY_ACTIVITY_WINDOW_SETS,
@@ -24,7 +25,9 @@ from krakked.backtest import (
     BacktestResult,
     MarketRegimeExposureScenarioParams,
     MarketRegimeOverlayParams,
+    PairLocalSourceResearchParams,
     RSRotationV2ResearchParams,
+    aggregate_pair_local_source_research_reports,
     TargetSourceResearchParams,
     aggregate_target_source_research_reports,
     backtest_strict_data_details,
@@ -42,6 +45,7 @@ from krakked.backtest import (
     run_market_regime_research,
     run_market_regime_throttle_backtest,
     run_ml_walk_forward,
+    run_pair_local_source_research,
     run_rs_rotation_v2_research,
     run_strategy_action_diagnostics,
     run_strategy_activity_sweep,
@@ -1058,6 +1062,31 @@ def _target_source_research_params_from_args(
     )
 
 
+def _pair_local_source_research_params_from_args(
+    args: argparse.Namespace,
+    *,
+    allocation_pct: float,
+) -> PairLocalSourceResearchParams:
+    return PairLocalSourceResearchParams(
+        allocation_pct=float(allocation_pct),
+        timeframe=str(args.timeframe),
+        rebalance_interval_bars=int(args.rebalance_interval_bars),
+        starting_cash_usd=float(args.starting_cash_usd),
+        fee_bps=float(args.fee_bps),
+        long_lookback_bars=int(args.long_lookback_bars),
+        short_lookback_bars=int(args.short_lookback_bars),
+        pullback_lookback_bars=int(args.pullback_lookback_bars),
+        min_long_momentum_bps=float(args.min_long_momentum_bps),
+        min_short_momentum_bps=float(args.min_short_momentum_bps),
+        min_vol_adjusted_score=float(args.min_vol_adjusted_score),
+        pullback_min_bps=float(args.pullback_min_bps),
+        pullback_max_bps=float(args.pullback_max_bps),
+        oversold_threshold_bps=float(args.oversold_threshold_bps),
+        breakout_min_bps=float(args.breakout_min_bps),
+        breakout_max_bps=float(args.breakout_max_bps),
+    )
+
+
 def _print_market_regime_research_summary(
     payload: dict[str, Any], report_path: str | None
 ) -> None:
@@ -1408,6 +1437,145 @@ def _add_target_source_research_arguments(subparser: argparse.ArgumentParser) ->
     )
 
 
+def _add_pair_local_source_research_arguments(
+    subparser: argparse.ArgumentParser,
+) -> None:
+    subparser.add_argument(
+        "--window-set",
+        action="append",
+        required=True,
+        choices=sorted(MARKET_REGIME_EXPOSURE_WINDOW_SETS),
+        help="Window set to run; repeat to include multiple sets",
+    )
+    subparser.add_argument(
+        "--config",
+        help="Optional path to the base config.yaml to use",
+    )
+    subparser.add_argument(
+        "--pair",
+        action="append",
+        help="Limit to one pair; repeat to include multiple pairs",
+    )
+    subparser.add_argument(
+        "--scenario",
+        action="append",
+        choices=sorted(DEFAULT_PAIR_LOCAL_SOURCE_SCENARIOS),
+        default=None,
+        help="Pair-local source scenario to run; repeat to include multiple",
+    )
+    subparser.add_argument(
+        "--allocation-pct",
+        action="append",
+        type=float,
+        default=None,
+        help="Single-pair synthetic allocation percentage; repeat to include multiple",
+    )
+    subparser.add_argument(
+        "--timeframe",
+        default="4h",
+        help="Cached OHLC timeframe for pair-local features; only 4h is supported",
+    )
+    subparser.add_argument(
+        "--rebalance-interval-bars",
+        type=int,
+        default=6,
+        help="Rebalance cadence in bars for pair-local scenarios",
+    )
+    subparser.add_argument(
+        "--starting-cash-usd",
+        type=float,
+        default=10_000.0,
+        help="Synthetic starting USD wallet balance for pair-local scenarios",
+    )
+    subparser.add_argument(
+        "--fee-bps",
+        type=float,
+        default=25.0,
+        help="Flat taker fee in basis points applied to simulated scenario trades",
+    )
+    subparser.add_argument(
+        "--long-lookback-bars",
+        type=int,
+        default=63,
+        help="Long momentum lookback bars",
+    )
+    subparser.add_argument(
+        "--short-lookback-bars",
+        type=int,
+        default=21,
+        help="Short momentum and volatility lookback bars",
+    )
+    subparser.add_argument(
+        "--pullback-lookback-bars",
+        type=int,
+        default=6,
+        help="Pullback/overextension lookback bars",
+    )
+    subparser.add_argument(
+        "--min-long-momentum-bps",
+        type=float,
+        default=150.0,
+        help="Minimum long-lookback momentum for trend scenarios",
+    )
+    subparser.add_argument(
+        "--min-short-momentum-bps",
+        type=float,
+        default=0.0,
+        help="Minimum short-lookback momentum for momentum scenarios",
+    )
+    subparser.add_argument(
+        "--min-vol-adjusted-score",
+        type=float,
+        default=1.0,
+        help="Minimum long-momentum/volatility score for vol-adjusted momentum",
+    )
+    subparser.add_argument(
+        "--pullback-min-bps",
+        type=float,
+        default=50.0,
+        help="Minimum pullback magnitude for trend-pullback entries",
+    )
+    subparser.add_argument(
+        "--pullback-max-bps",
+        type=float,
+        default=350.0,
+        help="Maximum pullback magnitude for trend-pullback entries",
+    )
+    subparser.add_argument(
+        "--oversold-threshold-bps",
+        type=float,
+        default=250.0,
+        help="Minimum pullback magnitude for oversold reversion entries",
+    )
+    subparser.add_argument(
+        "--breakout-min-bps",
+        type=float,
+        default=150.0,
+        help="Minimum short-lookback momentum for breakout entries",
+    )
+    subparser.add_argument(
+        "--breakout-max-bps",
+        type=float,
+        default=500.0,
+        help="Maximum short-lookback momentum for breakout entries",
+    )
+    subparser.add_argument(
+        "--save-dir",
+        required=True,
+        help="Directory for per-window reports plus aggregate.json",
+    )
+    subparser.add_argument(
+        "--strict-data",
+        action="store_true",
+        help="Fail if any requested pair/timeframe is missing or partially covered",
+    )
+    subparser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print the pair-local aggregate as JSON",
+    )
+
+
 def _add_strategy_activity_sweep_arguments(
     subparser: argparse.ArgumentParser,
 ) -> None:
@@ -1674,6 +1842,41 @@ def _print_target_source_research_summary(payload: dict[str, Any]) -> None:
         )
     else:
         print("Candidate scenarios: none")
+    print(f"Saved aggregate: {summary['aggregate_path']}")
+
+
+def _print_pair_local_source_research_summary(payload: dict[str, Any]) -> None:
+    summary = payload["summary"]
+    print("Pair-local source research completed.")
+    print(
+        f"Window sets: {', '.join(summary['window_sets'])} | "
+        f"Reports: {summary['report_count']} | "
+        f"Groups: {len(summary['groups'])}"
+    )
+    for group in summary["groups"]:
+        print(
+            f"- {group['window_set']} {group['pair']} {group['scenario_id']} "
+            f"alloc {float(group['allocation_pct']):g}%: "
+            f"avg return {float(group['avg_return_pct']):+.4f}, "
+            f"near-flat {group['positive_or_near_flat_windows']}/"
+            f"{group['window_count']}, "
+            f"avg dd {float(group['avg_max_drawdown_pct']):.4f}, "
+            f"passed={group['promotion_gate']['passed']}"
+        )
+    candidates = summary.get("candidate_sources") or []
+    if candidates:
+        print(
+            "Candidate pair-local sources: "
+            + ", ".join(
+                f"{item['pair']} {item['scenario_id']} "
+                f"{float(item['allocation_pct']):g}%"
+                for item in candidates
+            )
+        )
+    else:
+        print("Candidate pair-local sources: none")
+    print(f"promote_pair_local_source={summary['promote_pair_local_source']}")
+    print(f"runtime_wiring_approved={summary['runtime_wiring_approved']}")
     print(f"Saved aggregate: {summary['aggregate_path']}")
 
 
@@ -2790,6 +2993,96 @@ def _target_source_research_command(args: argparse.Namespace) -> int:
         print(json.dumps(aggregate, indent=2))
     else:
         _print_target_source_research_summary(aggregate)
+    return 0
+
+
+def _pair_local_source_research_command(args: argparse.Namespace) -> int:
+    """Run research-only pair-local source proof across cached OHLC windows."""
+
+    try:
+        config = _load_backtest_config(args)
+        allocations = [float(value) for value in (args.allocation_pct or [20.0])]
+        selected_scenarios = _unique_strings(
+            args.scenario or list(DEFAULT_PAIR_LOCAL_SOURCE_SCENARIOS)
+        )
+        save_dir = Path(args.save_dir).expanduser().resolve()
+        save_dir.mkdir(parents=True, exist_ok=True)
+    except Exception as exc:  # noqa: BLE001
+        return _print_error(f"Pair-local source research setup failed: {exc}")
+
+    reports: list[dict[str, Any]] = []
+    report_paths: list[str] = []
+    try:
+        for window_set in _unique_strings(args.window_set):
+            for allocation_pct in allocations:
+                params = _pair_local_source_research_params_from_args(
+                    args,
+                    allocation_pct=allocation_pct,
+                )
+                for scenario_id in selected_scenarios:
+                    for (
+                        window_id,
+                        start_text,
+                        end_text,
+                    ) in MARKET_REGIME_EXPOSURE_WINDOW_SETS[window_set]:
+                        result = run_pair_local_source_research(
+                            config,
+                            start=_parse_datetime_arg(start_text),
+                            end=_parse_datetime_arg(end_text),
+                            pairs=args.pair,
+                            params=params,
+                            scenarios=[scenario_id],
+                            strict_data=bool(args.strict_data),
+                        )
+                        payload = result.to_report_dict()
+                        payload["summary"]["config_path"] = (
+                            str(Path(args.config).expanduser().resolve())
+                            if args.config
+                            else None
+                        )
+                        payload["summary"]["window_set"] = window_set
+                        payload["summary"]["window_id"] = window_id
+                        payload["summary"]["allocation_pct"] = allocation_pct
+                        payload["summary"]["scenario_id"] = scenario_id
+                        payload["provenance"] = {
+                            "app_version": APP_VERSION,
+                            "config_path": (
+                                str(Path(args.config).expanduser().resolve())
+                                if args.config
+                                else None
+                            ),
+                            "generated_by": "krakked pair-local-source-research",
+                        }
+                        report_path = (
+                            save_dir
+                            / window_set
+                            / f"allocation-{allocation_pct:g}"
+                            / scenario_id
+                            / f"{window_id}.json"
+                        )
+                        saved = _write_backtest_report(payload, str(report_path))
+                        reports.append(payload)
+                        report_paths.append(saved)
+    except Exception as exc:  # noqa: BLE001
+        return _print_error(f"Pair-local source research failed: {exc}")
+
+    aggregate = aggregate_pair_local_source_research_reports(
+        reports,
+        report_paths=report_paths,
+        save_dir=str(save_dir),
+    )
+    aggregate_path = save_dir / "aggregate.json"
+    try:
+        saved_aggregate_path = _write_backtest_report(aggregate, str(aggregate_path))
+    except Exception as exc:  # noqa: BLE001
+        return _print_error(f"Pair-local source aggregate write failed: {exc}")
+    aggregate["summary"]["aggregate_path"] = saved_aggregate_path
+    _write_backtest_report(aggregate, str(aggregate_path))
+
+    if args.json:
+        print(json.dumps(aggregate, indent=2))
+    else:
+        _print_pair_local_source_research_summary(aggregate)
     return 0
 
 
@@ -4113,6 +4406,15 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     _add_target_source_research_arguments(target_source_research_parser)
     target_source_research_parser.set_defaults(func=_target_source_research_command)
+
+    pair_local_source_research_parser = subparsers.add_parser(
+        "pair-local-source-research",
+        help="Evaluate pair-local source candidates over cached 4h OHLC",
+    )
+    _add_pair_local_source_research_arguments(pair_local_source_research_parser)
+    pair_local_source_research_parser.set_defaults(
+        func=_pair_local_source_research_command
+    )
 
     strategy_activity_sweep_parser = subparsers.add_parser(
         "strategy-activity-sweep",

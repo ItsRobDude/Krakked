@@ -1271,3 +1271,72 @@ Decision:
 - If strategy-source work continues, the next source should be pair-local first:
   score each pair's own setup/exit quality and only allocate after that edge is
   proven, instead of ranking weak global momentum snapshots.
+
+### 2026-05-30 Pair-Local Source Proof Gate
+
+Purpose:
+
+- Answer the terminal strategy-source question: does any individual starter pair
+  have repeatable setup/exit behavior that survives fees, drawdown, recent and
+  long windows, and the current rolling window?
+
+Command:
+
+```bash
+poetry run krakked pair-local-source-research \
+  --window-set recent_20d \
+  --window-set long_4h \
+  --scenario pair_dual_momentum \
+  --scenario pair_vol_adj_momentum \
+  --scenario pair_trend_pullback \
+  --scenario pair_oversold_reversion \
+  --scenario pair_breakout_continuation \
+  --allocation-pct 20 \
+  --allocation-pct 5 \
+  --timeframe 4h \
+  --rebalance-interval-bars 6 \
+  --fee-bps 25 \
+  --strict-data \
+  --save-dir C:\Users\Rob\AppData\Local\krakked\krakked\reports\backtests\pair-local-source-research-20260530
+```
+
+Artifact:
+
+- `C:\Users\Rob\AppData\Local\krakked\krakked\reports\backtests\pair-local-source-research-20260530\aggregate.json`
+
+Result:
+
+- Strict data passed for every requested window.
+- Reports written: `110` (`2` window sets, `11` windows, `5` scenarios, `2`
+  allocations).
+- `promote_pair_local_source=false`
+- `runtime_wiring_approved=false`
+
+Best 20 percent slices:
+
+| Window set | Pair | Scenario | Avg return | Near-flat windows | Avg max DD | Gate |
+| --- | --- | --- | ---: | ---: | ---: | --- |
+| long_4h | SOL/USD | pair_trend_pullback | `+0.3069%` | `4 / 6` | `0.4431%` | fail |
+| recent_20d | ETH/USD | pair_trend_pullback | `+0.1276%` | `4 / 5` | `0.1457%` | fail |
+| recent_20d | ETH/USD | pair_oversold_reversion | `+0.1031%` | `3 / 5` | `0.6878%` | pass |
+| recent_20d | ETH/USD | pair_breakout_continuation | `+0.0358%` | `3 / 5` | `0.3006%` | fail |
+| recent_20d | BTC/USD | pair_trend_pullback | `+0.0291%` | `5 / 5` | `0.0246%` | fail |
+| long_4h | ETH/USD | pair_trend_pullback | `+0.0258%` | `4 / 6` | `0.4183%` | fail |
+
+Diagnosis:
+
+- ETH/USD `pair_oversold_reversion` passed the recent-window gate but failed
+  long-window proof, so it is not promotable.
+- SOL/USD and ETH/USD trend-pullback showed the most interesting positive
+  slices, but their active exposure was too sparse and they missed too much
+  pair upside while cash.
+- The final pair-local gate did not find a repeatable source that survives both
+  recent and long out-of-sample sets.
+
+Decision:
+
+- Stop strategy-source development for this lane.
+- Do not wire any source into paper runtime.
+- Keep Krakked's near-term work focused on replay/data reliability, operator
+  visibility, risk-state reporting, and paper-mode safety/observability unless
+  a genuinely new strategy hypothesis is introduced.

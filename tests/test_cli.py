@@ -1895,6 +1895,146 @@ def test_target_source_research_invalid_args_exit_nonzero(
     assert excinfo.value.code == 2
 
 
+def test_pair_local_source_research_writes_reports_and_aggregate(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: Any
+) -> None:
+    captured: list[dict[str, Any]] = []
+
+    class _FakePairLocalSourceResult:
+        def __init__(
+            self,
+            *,
+            start: datetime,
+            end: datetime,
+            allocation_pct: float,
+            scenario_id: str,
+        ) -> None:
+            self.start = start
+            self.end = end
+            self.allocation_pct = allocation_pct
+            self.scenario_id = scenario_id
+
+        def to_report_dict(self) -> dict[str, Any]:
+            return {
+                "report_version": 1,
+                "report_type": "pair_local_source_research",
+                "generated_at": self.start.isoformat(),
+                "summary": {
+                    "research_only": True,
+                    "runtime_wiring_approved": False,
+                    "start": self.start.isoformat(),
+                    "end": self.end.isoformat(),
+                    "scenarios": [self.scenario_id],
+                    "params": {"allocation_pct": self.allocation_pct},
+                    "strict_data_ready": True,
+                },
+                "preflight": {
+                    "status": "ready",
+                    "missing_series": [],
+                    "partial_series": [],
+                },
+                "runs": [
+                    {
+                        "scenario_id": self.scenario_id,
+                        "pair": "BTC/USD",
+                        "research_only": True,
+                        "runtime_wiring_approved": False,
+                        "return_pct": 0.2,
+                        "gross_return_before_fees_pct": 0.3,
+                        "max_drawdown_pct": 0.5,
+                        "trades": 2,
+                        "fees_usd": 1.0,
+                        "fee_drag_pct_of_starting_cash": 0.01,
+                        "active_cycle_pct": 50.0,
+                        "active_rebalance_pct": 50.0,
+                        "avg_exposure_pct": 10.0,
+                        "strict_data_ready": True,
+                        "diagnostics": {"failure_reasons": []},
+                    }
+                ],
+            }
+
+    def _fake_run_pair_local_source_research(
+        config: Any,
+        *,
+        start: datetime,
+        end: datetime,
+        pairs: list[str] | None,
+        params: Any,
+        scenarios: list[str] | None,
+        strict_data: bool,
+    ) -> _FakePairLocalSourceResult:
+        captured.append(
+            {
+                "config": config,
+                "start": start,
+                "end": end,
+                "pairs": pairs,
+                "params": params,
+                "scenarios": scenarios,
+                "strict_data": strict_data,
+            }
+        )
+        assert scenarios is not None
+        return _FakePairLocalSourceResult(
+            start=start,
+            end=end,
+            allocation_pct=float(params.allocation_pct),
+            scenario_id=scenarios[0],
+        )
+
+    monkeypatch.setitem(
+        cli.MARKET_REGIME_EXPOSURE_WINDOW_SETS,
+        "tiny",
+        [("20260510-20260530", "2026-05-10T00:00:00Z", "2026-05-30T00:00:00Z")],
+    )
+    monkeypatch.setattr(cli, "_load_backtest_config", lambda args: object())
+    monkeypatch.setattr(
+        cli,
+        "run_pair_local_source_research",
+        _fake_run_pair_local_source_research,
+    )
+
+    save_dir = tmp_path / "pair-local"
+    exit_code = cli.main(
+        [
+            "pair-local-source-research",
+            "--window-set",
+            "tiny",
+            "--scenario",
+            "pair_dual_momentum",
+            "--allocation-pct",
+            "20",
+            "--timeframe",
+            "4h",
+            "--rebalance-interval-bars",
+            "6",
+            "--fee-bps",
+            "25",
+            "--save-dir",
+            str(save_dir),
+            "--strict-data",
+            "--json",
+        ]
+    )
+
+    assert exit_code == 0
+    assert len(captured) == 1
+    assert captured[0]["strict_data"] is True
+    assert captured[0]["params"].allocation_pct == 20.0
+    aggregate = json.loads((save_dir / "aggregate.json").read_text(encoding="utf-8"))
+    output = json.loads(capsys.readouterr().out)
+    assert output["report_type"] == "pair_local_source_research_sweep"
+    assert aggregate["summary"]["report_count"] == 1
+    assert (
+        save_dir
+        / "tiny"
+        / "allocation-20"
+        / "pair_dual_momentum"
+        / "20260510-20260530.json"
+    ).exists()
+
+
 def test_strategy_activity_sweep_writes_reports_and_aggregate(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: Any
 ) -> None:

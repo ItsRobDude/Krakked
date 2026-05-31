@@ -114,6 +114,27 @@ comparison baseline; no source is a runtime candidate unless the aggregate gate
 beats that baseline on return and drawdown across the requested window sets
 while preserving adequate exposure and strict data coverage.
 
+Pair-local source research:
+
+```bash
+poetry run krakked pair-local-source-research \
+  --window-set recent_20d \
+  --window-set long_4h \
+  --allocation-pct 20 \
+  --timeframe 4h \
+  --rebalance-interval-bars 6 \
+  --fee-bps 25 \
+  --strict-data \
+  --save-dir pair-local-source-research
+```
+
+This is the final source-edge proof gate before any runtime strategy wiring.
+It evaluates each starter pair independently against cached `4h` OHLC using
+pair-local setup/exit rules. The aggregate reports
+`promote_pair_local_source` and `runtime_wiring_approved`; runtime wiring stays
+blocked unless a pair/scenario passes both recent and long window-set gates at
+the primary 20 percent allocation.
+
 Saved report highlights:
 
 - requested window, pairs, timeframes, and bankroll
