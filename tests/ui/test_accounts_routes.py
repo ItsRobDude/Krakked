@@ -353,7 +353,10 @@ def test_select_account_clears_old_password(
     client = TestClient(app)
 
     # 1. Set password for current account
-    from krakked.secrets import get_session_master_password, set_session_master_password
+    from krakked.secrets import (
+        get_session_master_password,
+        set_session_master_password,
+    )
 
     set_session_master_password("default", "old_pw")
     assert get_session_master_password("default") == "old_pw"

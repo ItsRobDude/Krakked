@@ -32,6 +32,7 @@ from .evidence_windows import (
 )
 from .market_regime_exposure import (
     MarketRegimeExposureScenarioParams,
+    _ScenarioPortfolio,
     _common_timeline,
     _execute_plan,
     _max_drawdown_pct,
@@ -39,7 +40,6 @@ from .market_regime_exposure import (
     _portfolio_exposure,
     _price_maps,
     _scenario_target_weights,
-    _ScenarioPortfolio,
     _target_plan,
     evaluate_market_regime_exposure_scenarios,
 )
@@ -288,9 +288,7 @@ def _build_training_examples(
 ) -> list[dict[str, Any]]:
     cleaned = {pair: _sort_bars(bars) for pair, bars in bars_by_pair.items()}
     price_maps = _price_maps(cleaned)
-    timeline = _common_timeline(
-        price_maps, pairs=pairs, start=_as_utc(start), end=_as_utc(end)
-    )
+    timeline = _common_timeline(price_maps, pairs=pairs, start=_as_utc(start), end=_as_utc(end))
     snapshots = {
         ts: classify_market_regime_snapshot(cleaned, timestamp=ts, params=regime_params)
         for ts in timeline
@@ -350,9 +348,7 @@ def _simulate_ml_scale_overlay(
 ) -> dict[str, Any]:
     cleaned = {pair: _sort_bars(bars) for pair, bars in bars_by_pair.items()}
     price_maps = _price_maps(cleaned)
-    timeline = _common_timeline(
-        price_maps, pairs=pairs, start=_as_utc(start), end=_as_utc(end)
-    )
+    timeline = _common_timeline(price_maps, pairs=pairs, start=_as_utc(start), end=_as_utc(end))
     snapshots = {
         ts: classify_market_regime_snapshot(cleaned, timestamp=ts, params=regime_params)
         for ts in timeline
@@ -675,7 +671,9 @@ def _summary(
     deltas = [
         comparison
         for window in ready
-        if (comparison := (window.get("comparisons") or {}).get("ml_vs_handcoded"))
+        if (
+            comparison := (window.get("comparisons") or {}).get("ml_vs_handcoded")
+        )
         is not None
     ]
     avg_return_delta = _mean_or_none(
@@ -695,15 +693,15 @@ def _summary(
         "avg_exposure_pct",
     )
     min_required_ml_exposure = (
-        avg_handcoded_exposure * 0.35 if avg_handcoded_exposure is not None else None
+        avg_handcoded_exposure * 0.35
+        if avg_handcoded_exposure is not None
+        else None
     )
     bucket_counts, regime_coverage_sufficient = summarize_regime_coverage(
         window.get("evidence_bucket") for window in windows
     )
     gate = {
-        "strict_data_ready": all(
-            bool(window.get("strict_data_ready")) for window in windows
-        ),
+        "strict_data_ready": all(bool(window.get("strict_data_ready")) for window in windows),
         "has_ml_windows": len(deltas) > 0,
         "regime_coverage_sufficient": regime_coverage_sufficient,
         "beats_handcoded_return": (

@@ -83,10 +83,7 @@ class ExecutionService:
         if not isinstance(timeout_seconds, (int, float)) or timeout_seconds <= 0:
             return None
 
-        if (
-            self._execution_config.mode != "live"
-            or self._execution_config.validate_only
-        ):
+        if self._execution_config.mode != "live" or self._execution_config.validate_only:
             return None
 
         if not getattr(self._execution_config, "allow_live_trading", False):
@@ -127,9 +124,7 @@ class ExecutionService:
             return False
 
         try:
-            client.cancel_all_orders_after(
-                self._execution_config.dead_man_switch_seconds
-            )
+            client.cancel_all_orders_after(self._execution_config.dead_man_switch_seconds)
         except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "Failed to refresh dead man switch heartbeat",
@@ -158,9 +153,7 @@ class ExecutionService:
         plan_id = plan.plan_id if plan is not None else None
 
         if plan and plan.emergency_reduce_only:
-            if all(
-                action.action_type in {"reduce", "close"} for action in plan.actions
-            ):
+            if all(action.action_type in {"reduce", "close"} for action in plan.actions):
                 return False
             logger.error(
                 "Emergency reduce-only plan contained non-reducing actions; refusing kill-switch bypass",

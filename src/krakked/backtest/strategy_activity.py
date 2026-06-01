@@ -429,20 +429,28 @@ def build_strategy_evidence_scoreboard(
             if not run.get("error") and run.get("stage") != "data_not_ready"
         ]
         filled_runs = [run for run in ready_runs if run.get("stage") == "filled"]
-        ready_returns = [float(run.get("return_pct", 0.0) or 0.0) for run in ready_runs]
+        ready_returns = [
+            float(run.get("return_pct", 0.0) or 0.0) for run in ready_runs
+        ]
         filled_returns = [
             float(run.get("return_pct", 0.0) or 0.0) for run in filled_runs
         ]
         ready_drawdowns = [
             float(run.get("max_drawdown_pct", 0.0) or 0.0) for run in ready_runs
         ]
-        ready_actions = [float(run.get("total_actions", 0) or 0) for run in ready_runs]
-        ready_fills = [float(run.get("filled_orders", 0) or 0) for run in ready_runs]
+        ready_actions = [
+            float(run.get("total_actions", 0) or 0) for run in ready_runs
+        ]
+        ready_fills = [
+            float(run.get("filled_orders", 0) or 0) for run in ready_runs
+        ]
         filled_notional = [
-            float(run.get("filled_notional_usd", 0.0) or 0.0) for run in ready_runs
+            float(run.get("filled_notional_usd", 0.0) or 0.0)
+            for run in ready_runs
         ]
         starting_cash = [
-            float(run.get("starting_cash_usd", 0.0) or 0.0) for run in ready_runs
+            float(run.get("starting_cash_usd", 0.0) or 0.0)
+            for run in ready_runs
         ]
         positive_ready = [value for value in ready_returns if value > 0.0]
         current_recent = _scoreboard_window_snapshot(
@@ -464,7 +472,9 @@ def build_strategy_evidence_scoreboard(
             "ready_windows": len(ready_runs),
             "filled_windows": len(filled_runs),
             "positive_ready_windows": len(positive_ready),
-            "positive_ready_window_rate": _rate(len(positive_ready), len(ready_runs)),
+            "positive_ready_window_rate": _rate(
+                len(positive_ready), len(ready_runs)
+            ),
             "filled_window_rate": _rate(len(filled_runs), len(group_runs)),
             "avg_return_ready_pct": _mean_or_none(ready_returns),
             "avg_return_filled_pct": _mean_or_none(filled_returns),
@@ -669,7 +679,9 @@ def _scoreboard_regime_breakdown(
     payload: dict[str, Any] = {}
     for bucket, items in sorted(buckets.items()):
         returns = [float(item.get("return_pct", 0.0) or 0.0) for item in items]
-        drawdowns = [float(item.get("max_drawdown_pct", 0.0) or 0.0) for item in items]
+        drawdowns = [
+            float(item.get("max_drawdown_pct", 0.0) or 0.0) for item in items
+        ]
         payload[bucket] = {
             "window_count": len(items),
             "positive_windows": sum(1 for value in returns if value > 0.0),
@@ -716,7 +728,9 @@ def _scoreboard_window_snapshot(
     for run in runs:
         if run.get("window_set") == window_set and run.get("window_id") == window_id:
             return_pct = run.get("return_pct") if not run.get("error") else None
-            drawdown_pct = run.get("max_drawdown_pct") if not run.get("error") else None
+            drawdown_pct = (
+                run.get("max_drawdown_pct") if not run.get("error") else None
+            )
             context = (context_by_key or {}).get((window_set, window_id))
             return {
                 "window_set": window_set,

@@ -53,9 +53,7 @@ def test_portfolio_summary_reports_exchange_balance_baseline(client, portfolio_c
     assert payload["cash_usd"] == 10.0
 
 
-def test_portfolio_summary_includes_exchange_reference_details(
-    client, portfolio_context
-):
+def test_portfolio_summary_includes_exchange_reference_details(client, portfolio_context):
     portfolio_context.portfolio.get_cached_equity.return_value = EquityView(
         equity_base=10000.0,
         cash_base=10000.0,
@@ -128,8 +126,8 @@ def test_positions_shape_matches_payload(client, portfolio_context):
     portfolio_context.market_data.get_pair_metadata.return_value = mock_meta
 
     position.current_value_base = price * position.base_size
-    position.unrealized_pnl_base = position.current_value_base - (
-        position.base_size * position.avg_entry_price
+    position.unrealized_pnl_base = (
+        position.current_value_base - (position.base_size * position.avg_entry_price)
     )
     portfolio_context.portfolio.get_cached_positions.return_value = [position]
 

@@ -18,8 +18,8 @@ from krakked.backtest import (
     DEFAULT_EXPOSURE_OVERLAY_MODES,
     DEFAULT_EXPOSURE_SCENARIOS,
     DEFAULT_PAIR_LOCAL_SOURCE_SCENARIOS,
-    DEFAULT_STRATEGY_ACTIVITY_GROUP_IDS,
     DEFAULT_STRATEGY_EVIDENCE_GROUP_IDS,
+    DEFAULT_STRATEGY_ACTIVITY_GROUP_IDS,
     DEFAULT_TARGET_SOURCE_SCENARIOS,
     STRATEGY_ACTIVITY_WINDOW_SETS,
     BacktestPreflightResult,
@@ -29,8 +29,8 @@ from krakked.backtest import (
     MLRegimeOverlayResearchParams,
     PairLocalSourceResearchParams,
     RSRotationV2ResearchParams,
-    TargetSourceResearchParams,
     aggregate_pair_local_source_research_reports,
+    TargetSourceResearchParams,
     aggregate_target_source_research_reports,
     backtest_strict_data_details,
     build_backtest_preflight,
@@ -2314,7 +2314,11 @@ def _print_ml_walk_forward_summary(
     cost_semantics = summary.get("cost_semantics") or {}
     hurdle_source = cost_semantics.get("evaluation_hurdle_source", "unknown")
     hurdle_pct = cost_semantics.get("evaluation_hurdle_pct")
-    hurdle_text = "mixed" if hurdle_pct is None else f"{float(hurdle_pct) * 100.0:.2f}%"
+    hurdle_text = (
+        "mixed"
+        if hurdle_pct is None
+        else f"{float(hurdle_pct) * 100.0:.2f}%"
+    )
     print(f"Cost hurdle: {summary['round_trip_cost_bps']:.2f} bps estimated round trip")
     print(f"Evaluation hurdle: {hurdle_source} ({hurdle_text})")
     baselines = summary.get("baselines") or {}
@@ -3815,7 +3819,9 @@ def _ml_regime_overlay_research_aggregate(
             comparison = (window.get("comparisons") or {}).get("ml_vs_handcoded")
             window_rows = window.get("rows") or {}
             ml_row = window_rows.get("ml_scale_overlay") or {}
-            handcoded_row = window_rows.get("handcoded_top2_soft_target_scale") or {}
+            handcoded_row = (
+                window_rows.get("handcoded_top2_soft_target_scale") or {}
+            )
             rows.append(
                 {
                     "allocation_pct": float(summary["allocation_pct"]),
@@ -3854,11 +3860,15 @@ def _ml_regime_overlay_research_aggregate(
     for allocation_pct in sorted({row["allocation_pct"] for row in rows}):
         items = [row for row in rows if row["allocation_pct"] == allocation_pct]
         ready = [row for row in items if row["delta_return_pct"] is not None]
-        avg_return_delta = _avg_optional([row["delta_return_pct"] for row in ready])
+        avg_return_delta = _avg_optional(
+            [row["delta_return_pct"] for row in ready]
+        )
         avg_drawdown_delta = _avg_optional(
             [row["delta_max_drawdown_pct"] for row in ready]
         )
-        avg_ml_exposure = _avg_optional([row["ml_avg_exposure_pct"] for row in ready])
+        avg_ml_exposure = _avg_optional(
+            [row["ml_avg_exposure_pct"] for row in ready]
+        )
         avg_handcoded_exposure = _avg_optional(
             [row["handcoded_avg_exposure_pct"] for row in ready]
         )
@@ -3901,7 +3911,9 @@ def _ml_regime_overlay_research_aggregate(
                 ),
                 "avg_ml_delta_max_drawdown_pct": avg_drawdown_delta,
                 "drawdown_improved_windows": sum(
-                    1 for row in ready if float(row["delta_max_drawdown_pct"]) < 0.0
+                    1
+                    for row in ready
+                    if float(row["delta_max_drawdown_pct"]) < 0.0
                 ),
                 "avg_ml_exposure_pct": avg_ml_exposure,
                 "avg_handcoded_exposure_pct": avg_handcoded_exposure,

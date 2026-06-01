@@ -354,9 +354,7 @@ def _pair_return_pct(
         or float(end_bar.close) <= 0.0
     ):
         return None
-    return (
-        (float(end_bar.close) - float(start_bar.close)) / float(start_bar.close)
-    ) * 100.0
+    return ((float(end_bar.close) - float(start_bar.close)) / float(start_bar.close)) * 100.0
 
 
 def _pair_equity_curve(
@@ -394,7 +392,10 @@ def _basket_equity_curve(
     if not curves:
         return []
     min_length = min(len(curve) for curve in curves)
-    return [mean(curve[index] for curve in curves) for index in range(min_length)]
+    return [
+        mean(curve[index] for curve in curves)
+        for index in range(min_length)
+    ]
 
 
 def _max_drawdown_pct(equity_curve: Sequence[float]) -> float:
@@ -431,7 +432,8 @@ def _market_bucket(
     if benchmark_return >= 2.0 and basket_return >= 1.0:
         return "uptrend"
     if (
-        benchmark_return <= -2.0 and basket_return <= -1.0
+        benchmark_return <= -2.0
+        and basket_return <= -1.0
     ) or benchmark_max_drawdown_pct >= 8.0:
         return "downtrend"
     return "chop_or_transition"

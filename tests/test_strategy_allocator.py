@@ -78,7 +78,6 @@ def test_combine_weights_respects_manual_preference_and_dynamic_signal():
 
     combined = combine_weights(manual, dynamic)
 
-    assert (
-        combined.per_strategy_pct["trend_core"]
-        > combined.per_strategy_pct["mean_reversion"]
-    )
+    assert combined.per_strategy_pct["trend_core"] > combined.per_strategy_pct[
+        "mean_reversion"
+    ]

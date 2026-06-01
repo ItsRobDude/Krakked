@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import importlib.util
 import inspect
 import logging
 import math
-from dataclasses import dataclass
 from typing import Any, Iterable, Protocol
 
 logger = logging.getLogger(__name__)
@@ -17,7 +17,9 @@ DEFAULT_REGRESSION_EPSILON_PCT = 0.001
 DEFAULT_REGRESSION_MODEL_BACKEND = "pa"
 DEFAULT_SGD_L2_ALPHA = 0.0001
 DEFAULT_SGD_LEARNING_RATE_INITIAL = 0.001
-REGRESSION_MODEL_BACKENDS = frozenset({"pa", "sgd_huber", "sgd_squared_error"})
+REGRESSION_MODEL_BACKENDS = frozenset(
+    {"pa", "sgd_huber", "sgd_squared_error"}
+)
 REGRESSION_MODEL_FRAMEWORKS = {
     "pa": "sklearn_passive_aggressive_regressor",
     "sgd_huber": "sklearn_sgd_regressor_huber",
@@ -242,7 +244,9 @@ def regression_model_config_key(
 
 
 def regression_model_framework(model_backend: object) -> str:
-    return REGRESSION_MODEL_FRAMEWORKS[regression_model_backend(model_backend)]
+    return REGRESSION_MODEL_FRAMEWORKS[
+        regression_model_backend(model_backend)
+    ]
 
 
 def create_regression_model_bundle(

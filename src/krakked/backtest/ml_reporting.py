@@ -91,15 +91,11 @@ def validate_ml_walk_forward_report_payload(
     if not isinstance(summary.get("baselines"), dict):
         raise ValueError(f"ML report baselines are invalid in {resolved_path}")
     if not isinstance(summary.get("diagnostic_warnings"), list):
-        raise ValueError(
-            f"ML report diagnostic warnings are invalid in {resolved_path}"
-        )
+        raise ValueError(f"ML report diagnostic warnings are invalid in {resolved_path}")
     if not isinstance(summary.get("promotion_tier"), str):
         raise ValueError(f"ML report promotion tier is invalid in {resolved_path}")
     if not isinstance(summary.get("promotion_tiers"), dict):
-        raise ValueError(
-            f"ML report promotion tiers payload is invalid in {resolved_path}"
-        )
+        raise ValueError(f"ML report promotion tiers payload is invalid in {resolved_path}")
     for index, fold in enumerate(summary.get("folds") or [], start=1):
         if not isinstance(fold, dict):
             raise ValueError(f"ML report fold {index} is invalid in {resolved_path}")

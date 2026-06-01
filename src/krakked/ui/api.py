@@ -34,9 +34,7 @@ logger = logging.getLogger(__name__)
 def _resolve_ui_dist_dir() -> Path:
     """Locate the built frontend assets for local dev and packaged runtimes."""
 
-    explicit_dir = os.environ.get("KRAKKED_UI_DIST_DIR") or os.environ.get(
-        "UI_DIST_DIR"
-    )
+    explicit_dir = os.environ.get("KRAKKED_UI_DIST_DIR") or os.environ.get("UI_DIST_DIR")
     if explicit_dir:
         return Path(explicit_dir).expanduser()
 
@@ -152,11 +150,7 @@ def create_api(context: AppContext) -> FastAPI:
     # IMPORTANT: StaticFiles mount MUST remain the final route registration; do not add routers after this.
     if ui_dir.exists() and (ui_dir / "index.html").exists():
         if base_path:
-            app.mount(
-                base_path,
-                StaticFiles(directory=str(ui_dir), html=True),
-                name="ui-base-path",
-            )
+            app.mount(base_path, StaticFiles(directory=str(ui_dir), html=True), name="ui-base-path")
         app.mount("/", StaticFiles(directory=str(ui_dir), html=True), name="ui")
     else:
         logger.warning(

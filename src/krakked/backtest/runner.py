@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import copy
-import logging
 import math
+import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -422,7 +422,9 @@ class BacktestMarketData(MarketDataAPI):
                         warmup_first_at = datetime.fromtimestamp(
                             warmup_first_ts, tz=UTC
                         )
-                        warmup_last_at = datetime.fromtimestamp(warmup_last_ts, tz=UTC)
+                        warmup_last_at = datetime.fromtimestamp(
+                            warmup_last_ts, tz=UTC
+                        )
                         frame_seconds = _timeframe_seconds(timeframe)
                         start_ok = (
                             frame_seconds <= 0
@@ -1708,9 +1710,13 @@ def backtest_strict_data_details(preflight: BacktestPreflight) -> List[str]:
     if preflight.partial_series:
         details.append("partial: " + ", ".join(preflight.partial_series))
     if preflight.warmup_missing_series:
-        details.append("warmup missing: " + ", ".join(preflight.warmup_missing_series))
+        details.append(
+            "warmup missing: " + ", ".join(preflight.warmup_missing_series)
+        )
     if preflight.warmup_partial_series:
-        details.append("warmup partial: " + ", ".join(preflight.warmup_partial_series))
+        details.append(
+            "warmup partial: " + ", ".join(preflight.warmup_partial_series)
+        )
     return details
 
 
@@ -2032,16 +2038,12 @@ def _build_trend_core_warmup_warnings(
         deficits = [
             (
                 pair,
-                (
-                    warmup_by_key.get((pair, params.regime_timeframe)).status
-                    if warmup_by_key.get((pair, params.regime_timeframe)) is not None
-                    else "missing"
-                ),
-                (
-                    warmup_by_key.get((pair, params.regime_timeframe)).bar_count
-                    if warmup_by_key.get((pair, params.regime_timeframe)) is not None
-                    else 0
-                ),
+                warmup_by_key.get((pair, params.regime_timeframe)).status
+                if warmup_by_key.get((pair, params.regime_timeframe)) is not None
+                else "missing",
+                warmup_by_key.get((pair, params.regime_timeframe)).bar_count
+                if warmup_by_key.get((pair, params.regime_timeframe)) is not None
+                else 0,
             )
             for pair in strategy_pairs
             if (
@@ -2056,7 +2058,9 @@ def _build_trend_core_warmup_warnings(
         pair_list = ", ".join(pair for pair, _, _ in deficits)
         statuses = sorted({status for _, status, _ in deficits})
         counts = sorted({count for _, _, count in deficits})
-        count_text = str(counts[0]) if len(counts) == 1 else f"{counts[0]}-{counts[-1]}"
+        count_text = (
+            str(counts[0]) if len(counts) == 1 else f"{counts[0]}-{counts[-1]}"
+        )
         return [
             "Strategy trend_core may be under-warmed on "
             f"{params.regime_timeframe}: requires about {required_bars} pre-window "

@@ -8,7 +8,11 @@ import pytest
 import krakked.portfolio.store as store_module
 from krakked.execution.models import ExecutionResult, LocalOrder
 from krakked.portfolio.exceptions import PortfolioSchemaError
-from krakked.portfolio.models import AssetValuation, CashFlowRecord, PortfolioSnapshot
+from krakked.portfolio.models import (
+    AssetValuation,
+    CashFlowRecord,
+    PortfolioSnapshot,
+)
 from krakked.portfolio.store import CURRENT_SCHEMA_VERSION, SQLitePortfolioStore
 from krakked.strategy.models import DecisionRecord, ExecutionPlan, RiskAdjustedAction
 

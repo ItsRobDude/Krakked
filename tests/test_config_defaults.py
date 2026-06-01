@@ -237,7 +237,7 @@ def test_load_config_ignores_empty_runtime_strategy_override_when_bootstrapping(
     data_dir.mkdir(parents=True, exist_ok=True)
 
     (config_dir / "config.yaml").write_text(
-        "session:\n  profile_name: Rob\nprofiles:\n  Rob:\n    config_path: profiles\\Rob.yaml\n"
+        "session:\n  profile_name: Rob\nprofiles:\n  Rob:\n    config_path: profiles/Rob.yaml\n"
     )
     profile_dir = config_dir / "profiles" / "Rob"
     profile_dir.mkdir(parents=True, exist_ok=True)

@@ -299,7 +299,9 @@ def test_top2_soft_target_scale_baseline_profiles_controlled_proxy(
 
     baseline = build_top2_soft_target_scale_baseline(
         object(),  # type: ignore[arg-type]
-        window_sets={"tiny": [("w1", "2026-05-01T00:00:00Z", "2026-05-02T00:00:00Z")]},
+        window_sets={
+            "tiny": [("w1", "2026-05-01T00:00:00Z", "2026-05-02T00:00:00Z")]
+        },
         pairs=["BTC/USD", "ETH/USD"],
         allocations=[20.0],
     )

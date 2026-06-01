@@ -146,8 +146,7 @@ def test_update_strategy_config_mutates_config(client, strategy_context):
     assert payload["data"]["strategy_weight"] == 55
     assert payload["data"]["params"] == {"foo": "bar", "risk_profile": "aggressive"}
     assert (
-        strategy_context.strategy_engine.strategy_states["alpha"].configured_weight
-        == 55
+        strategy_context.strategy_engine.strategy_states["alpha"].configured_weight == 55
     )
 
 
@@ -177,7 +176,9 @@ def test_update_strategy_config_rejects_unknown_params(client, strategy_context)
         params={},
     )
 
-    response = client.patch("/api/strategies/alpha/config", json={"params": {"baz": 1}})
+    response = client.patch(
+        "/api/strategies/alpha/config", json={"params": {"baz": 1}}
+    )
 
     assert response.status_code == 200
     payload = response.json()

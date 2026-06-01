@@ -134,9 +134,7 @@ def render_ml_report_comparison(
         "tier",
         "warnings",
     ]
-    rows = [
-        [_format_cell(row, header) for header in headers] for row in comparison.rows
-    ]
+    rows = [[_format_cell(row, header) for header in headers] for row in comparison.rows]
     if output_format == "tsv":
         lines = ["\t".join(headers)]
         lines.extend("\t".join(row) for row in rows)
@@ -186,7 +184,9 @@ def _load_comparison_row(path: Path) -> MLReportComparisonRow:
         raise ValueError(f"Skipping non-ML report with invalid root: {path}")
     version = payload.get("report_version")
     if version not in SUPPORTED_ML_COMPARE_REPORT_VERSIONS:
-        raise ValueError(f"Skipping unsupported ML report version {version!r}: {path}")
+        raise ValueError(
+            f"Skipping unsupported ML report version {version!r}: {path}"
+        )
     provenance = payload.get("provenance") or {}
     if not isinstance(provenance, dict) or provenance.get("generated_by") != (
         "krakked ml-walk-forward"
@@ -216,20 +216,16 @@ def _load_comparison_row(path: Path) -> MLReportComparisonRow:
         fee_bps=_optional_float(summary.get("fee_bps")),
         slippage_bps=_optional_float(summary.get("slippage_bps")),
         prediction_count=int(metrics.get("prediction_count") or 0),
-        positive_edge_count=int(metrics.get("positive_edge_prediction_count") or 0),
+        positive_edge_count=int(
+            metrics.get("positive_edge_prediction_count") or 0
+        ),
         base_hit_rate=_base_hit_rate(calibration),
         precision_long=_optional_float(metrics.get("precision_long")),
         edge_accuracy=_optional_float(metrics.get("edge_prediction_accuracy")),
         directional_accuracy=_optional_float(metrics.get("directional_accuracy")),
-        p75_lift=_sweep_value(
-            calibration, "predicted_delta_p75", "lift_over_base_rate"
-        ),
-        p90_lift=_sweep_value(
-            calibration, "predicted_delta_p90", "lift_over_base_rate"
-        ),
-        p95_lift=_sweep_value(
-            calibration, "predicted_delta_p95", "lift_over_base_rate"
-        ),
+        p75_lift=_sweep_value(calibration, "predicted_delta_p75", "lift_over_base_rate"),
+        p90_lift=_sweep_value(calibration, "predicted_delta_p90", "lift_over_base_rate"),
+        p95_lift=_sweep_value(calibration, "predicted_delta_p95", "lift_over_base_rate"),
         selected_avg_realized_return=_selected_avg_realized_return(calibration),
         upper_half_monotonicity=_upper_half_monotonicity(calibration),
         promotion_tier=_optional_str(summary.get("promotion_tier")),
@@ -354,7 +350,9 @@ def _sweep_value(
     return _optional_float(row.get(value_name))
 
 
-def _sweep_row(calibration: dict[str, Any], row_name: str) -> Optional[dict[str, Any]]:
+def _sweep_row(
+    calibration: dict[str, Any], row_name: str
+) -> Optional[dict[str, Any]]:
     for row in calibration.get("threshold_sweeps") or []:
         if isinstance(row, dict) and row.get("name") == row_name:
             return row

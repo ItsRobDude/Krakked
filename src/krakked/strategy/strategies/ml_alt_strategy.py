@@ -21,15 +21,15 @@ from krakked.strategy.features import (
 from krakked.strategy.ml_labels import (
     FEE_ADJUSTED_CLASSIFICATION_LABEL_TYPE,
     FEE_ADJUSTED_EDGE_PREDICTION_TARGET,
+    FeeAdjustedLabelConfig,
     NO_POSITIVE_EDGE_PREDICTION,
     POSITIVE_EDGE_PREDICTION,
-    FeeAdjustedLabelConfig,
     classify_fee_adjusted_return,
     label_config_from_context,
 )
 from krakked.strategy.ml_models import (
-    ML_STANDARD_SCALER_SCHEMA_VERSION,
     MLOnlineModelBundle,
+    ML_STANDARD_SCALER_SCHEMA_VERSION,
     PassiveAggressiveClassifier,
     StandardScaler,
     classifier_model_config_key,
@@ -147,9 +147,7 @@ class AIPredictorAltStrategy(Strategy):
             "continuous_learning": self._learning_enabled(),
             "feature_schema_version": ML_FEATURE_SCHEMA_VERSION,
             "feature_profile": self.params.feature_profile,
-            "feature_names": list(
-                feature_names_for_profile(self.params.feature_profile)
-            ),
+            "feature_names": list(feature_names_for_profile(self.params.feature_profile)),
             "model_config_key": self._model_config_key(),
             "scaler_schema_version": ML_STANDARD_SCALER_SCHEMA_VERSION,
             "scaler_initialized": bool(
@@ -297,7 +295,9 @@ class AIPredictorAltStrategy(Strategy):
         vector = self._extract_feature_vector(ctx, pair, timeframe)
         return list(vector.values) if vector is not None else None
 
-    def _confidence(self, model: object, features: List[float]) -> float:
+    def _confidence(
+        self, model: object, features: List[float]
+    ) -> float:
         decision_function = getattr(model, "decision_function", None)
         if not callable(decision_function):
             return 0.5

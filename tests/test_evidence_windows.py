@@ -16,9 +16,9 @@ def test_evidence_windows_centralize_existing_and_regime_diverse_sets() -> None:
 
     tuples = evidence_window_tuples(["regime_diverse_4h"])
 
-    assert (
-        tuples["regime_diverse_4h"] == EVIDENCE_WINDOW_SET_TUPLES["regime_diverse_4h"]
-    )
+    assert tuples["regime_diverse_4h"] == EVIDENCE_WINDOW_SET_TUPLES[
+        "regime_diverse_4h"
+    ]
     assert any(
         window_id == "20260510-20260530"
         for window_id, _start, _end in tuples["regime_diverse_4h"]

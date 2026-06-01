@@ -332,7 +332,9 @@ def _signal_row(
     forward_returns: dict[str, float | None] = {}
     for horizon in horizons:
         target_ts = current_bar_ts + (frame_seconds * int(horizon))
-        future_bar = market_data.get_bar_at_or_after(intent.pair, timeframe, target_ts)
+        future_bar = market_data.get_bar_at_or_after(
+            intent.pair, timeframe, target_ts
+        )
         if future_bar is None or current_close <= 0.0:
             forward_returns[str(int(horizon))] = None
             continue
@@ -534,7 +536,9 @@ def _quartile_stats(
     round_trip_fee_hurdle_pct: float,
 ) -> list[dict[str, Any]]:
     scored = [
-        dict(row) for row in rows if _optional_float(row.get(metric_key)) is not None
+        dict(row)
+        for row in rows
+        if _optional_float(row.get(metric_key)) is not None
     ]
     scored.sort(key=lambda row: float(row[metric_key]))
     if not scored:
@@ -575,7 +579,9 @@ def _strongest_vs_weakest(
     *,
     primary_horizon: int,
 ) -> dict[str, Any]:
-    by_bucket = {str(row.get("trend_strength_quartile")): row for row in quartile_rows}
+    by_bucket = {
+        str(row.get("trend_strength_quartile")): row for row in quartile_rows
+    }
     weakest = by_bucket.get("q1_weakest")
     strongest = by_bucket.get("q4_strongest")
     horizon_key = str(primary_horizon)
@@ -620,7 +626,9 @@ def _assess_signal_quality(
     mean_return = horizon_stats.get("mean_return_pct")
     median_return = horizon_stats.get("median_return_pct")
     hit_rate = horizon_stats.get("hit_rate")
-    strength_delta = strongest_vs_weakest.get("strongest_minus_weakest_mean_return_pct")
+    strength_delta = strongest_vs_weakest.get(
+        "strongest_minus_weakest_mean_return_pct"
+    )
 
     if not rows:
         return {

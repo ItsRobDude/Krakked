@@ -93,7 +93,9 @@ def test_vol_breakout_strategy_requires_sufficient_bars():
     strat = VolBreakoutStrategy(cfg)
 
     ctx, market, _portfolio = _build_context()
-    market.get_ohlc.return_value = [_make_bar(ts, 100.0, 0.01, 0.01) for ts in range(5)]
+    market.get_ohlc.return_value = [
+        _make_bar(ts, 100.0, 0.01, 0.01) for ts in range(5)
+    ]
 
     intents = strat.generate_intents(ctx)
 

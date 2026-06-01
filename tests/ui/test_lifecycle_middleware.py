@@ -110,7 +110,9 @@ def test_lifecycle_middleware_allowlist(monkeypatch, tmp_path):
     monkeypatch.setattr(
         "krakked.ui.routes.system.load_accounts", MagicMock(return_value={})
     )
-    monkeypatch.setattr("krakked.ui.routes.system.ensure_default_account", MagicMock())
+    monkeypatch.setattr(
+        "krakked.ui.routes.system.ensure_default_account", MagicMock()
+    )
     monkeypatch.setattr(
         "krakked.ui.routes.system.resolve_secrets_path",
         MagicMock(return_value=tmp_path / "dummy.enc"),

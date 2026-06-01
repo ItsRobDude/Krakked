@@ -2319,9 +2319,7 @@ def test_strategy_evidence_scoreboard_writes_shared_aggregate(
     monkeypatch.setattr(
         cli,
         "_load_backtest_config",
-        lambda args: SimpleNamespace(
-            universe=SimpleNamespace(include_pairs=["BTC/USD"])
-        ),
+        lambda args: SimpleNamespace(universe=SimpleNamespace(include_pairs=["BTC/USD"])),
     )
     monkeypatch.setattr(
         cli,
@@ -2450,9 +2448,7 @@ def test_ml_regime_overlay_research_writes_reports_and_aggregate(
     monkeypatch.setattr(
         cli,
         "_load_backtest_config",
-        lambda args: SimpleNamespace(
-            universe=SimpleNamespace(include_pairs=["BTC/USD"])
-        ),
+        lambda args: SimpleNamespace(universe=SimpleNamespace(include_pairs=["BTC/USD"])),
     )
     monkeypatch.setattr(
         cli,

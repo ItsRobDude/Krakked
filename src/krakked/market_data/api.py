@@ -15,7 +15,10 @@ from krakked.market_data.exceptions import DataStaleError, PairNotFoundError
 from krakked.market_data.metadata_store import PairMetadataStore
 from krakked.market_data.models import ConnectionStatus, OHLCBar, PairMetadata
 from krakked.market_data.ohlc_fetcher import backfill_ohlc
-from krakked.market_data.ohlc_refresh import OHLCTailRefreshSummary, refresh_ohlc_tails
+from krakked.market_data.ohlc_refresh import (
+    OHLCTailRefreshSummary,
+    refresh_ohlc_tails,
+)
 from krakked.market_data.ohlc_store import FileOHLCStore, OHLCStore
 from krakked.market_data.universe import build_universe
 from krakked.market_data.ws_client import KrakenWSClientV2

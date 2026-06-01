@@ -29,7 +29,9 @@ def get_live_trading_block_reason(config: ExecutionConfig) -> Optional[str]:
         return "Live trading not enabled. Use the system mode switch with authentication first."
 
     if not getattr(config, "paper_tests_completed", False):
-        return "Live trading blocked until paper_tests_completed is True in the execution config."
+        return (
+            "Live trading blocked until paper_tests_completed is True in the execution config."
+        )
 
     return None
 

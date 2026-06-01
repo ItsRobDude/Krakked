@@ -44,7 +44,9 @@ def test_bootstrap_returns_client_and_config():
         ) as mock_load_keys,
         patch("krakked.bootstrap.KrakenRESTClient") as mock_client,
         patch("krakked.bootstrap.ensure_default_account"),
-        patch("krakked.bootstrap.resolve_secrets_path", return_value="path/to/secrets"),
+        patch(
+            "krakked.bootstrap.resolve_secrets_path", return_value="path/to/secrets"
+        ),
     ):
         client_instance = object()
         mock_client.return_value = client_instance

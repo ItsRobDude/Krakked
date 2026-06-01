@@ -26,7 +26,9 @@ def mock_config_dirs(monkeypatch, config_dir):
         return config_dir
 
     monkeypatch.setattr("krakked.config_loader.get_config_dir", _mock_get_config_dir)
-    monkeypatch.setattr("krakked.ui.routes.system.get_config_dir", _mock_get_config_dir)
+    monkeypatch.setattr(
+        "krakked.ui.routes.system.get_config_dir", _mock_get_config_dir
+    )
     return config_dir
 
 

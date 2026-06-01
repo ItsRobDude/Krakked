@@ -90,7 +90,10 @@ class TrendFollowingStrategy(Strategy):
             metadata = ctx.market_data.get_pair_metadata(pair)
             if metadata and min_liquidity is not None:
                 liquidity_24h_usd = getattr(metadata, "liquidity_24h_usd", None)
-                if liquidity_24h_usd is not None and liquidity_24h_usd < min_liquidity:
+                if (
+                    liquidity_24h_usd is not None
+                    and liquidity_24h_usd < min_liquidity
+                ):
                     continue
 
             ohlc = ctx.market_data.get_ohlc(pair, tf, lookback=self.params.ma_slow + 10)
