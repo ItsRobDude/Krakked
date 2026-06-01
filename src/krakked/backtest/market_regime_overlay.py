@@ -11,7 +11,6 @@ from typing import Any, Mapping, Sequence
 from krakked.config import AppConfig
 from krakked.market_data.models import OHLCBar
 from krakked.market_regime import (
-    DEFAULT_MARKET_REGIME_TIMEFRAME,
     MarketRegimeOverlayParams,
     MarketRegimeSnapshot,
     _as_utc,

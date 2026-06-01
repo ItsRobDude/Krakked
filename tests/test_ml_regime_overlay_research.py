@@ -17,7 +17,9 @@ def test_ml_regime_overlay_params_reject_invalid_values() -> None:
         MLRegimeOverlayResearchParams(min_training_examples=0)
 
 
-def test_best_scale_label_prefers_higher_scale_when_forward_return_is_positive() -> None:
+def test_best_scale_label_prefers_higher_scale_when_forward_return_is_positive() -> (
+    None
+):
     label, scale = _best_scale_label(  # noqa: SLF001
         {"BTC/USD": 0.2},
         price_maps={

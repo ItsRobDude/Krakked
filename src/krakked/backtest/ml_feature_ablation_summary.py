@@ -146,9 +146,7 @@ def _load_ablation_rows(path: Path) -> list[MLFeatureAblationRow]:
         raise ValueError(f"Skipping non-ML report with invalid root: {path}")
     version = payload.get("report_version")
     if version not in SUPPORTED_ML_ABLATION_REPORT_VERSIONS:
-        raise ValueError(
-            f"Skipping unsupported ML report version {version!r}: {path}"
-        )
+        raise ValueError(f"Skipping unsupported ML report version {version!r}: {path}")
     provenance = payload.get("provenance") or {}
     if not isinstance(provenance, dict) or provenance.get("generated_by") != (
         "krakked ml-walk-forward"
@@ -439,7 +437,11 @@ def _sort_rows(
     if sort_by == "rank":
         return sorted(
             rows,
-            key=lambda row: (row.mean_rank, row.report_name.lower(), row.feature.lower()),
+            key=lambda row: (
+                row.mean_rank,
+                row.report_name.lower(),
+                row.feature.lower(),
+            ),
         )
     if sort_by == "health":
         return sorted(
@@ -452,7 +454,9 @@ def _sort_rows(
             ),
         )
     if sort_by == "name":
-        return sorted(rows, key=lambda row: (row.report_name.lower(), row.feature.lower()))
+        return sorted(
+            rows, key=lambda row: (row.report_name.lower(), row.feature.lower())
+        )
     return sorted(
         rows,
         key=lambda row: (-row.drop_score, row.report_name.lower(), row.feature.lower()),

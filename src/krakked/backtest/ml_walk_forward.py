@@ -25,13 +25,13 @@ from krakked.backtest.runner import (
 )
 from krakked.config import AppConfig
 from krakked.strategy.engine import StrategyEngine
+from krakked.strategy.features import ML_FEATURE_CLIP_RANGES, ML_FEATURE_NAMES
 from krakked.strategy.ml_labels import (
     FEE_ADJUSTED_CLASSIFICATION_LABEL_TYPE,
     FEE_ADJUSTED_EDGE_PREDICTION_TARGET,
     NO_POSITIVE_EDGE_PREDICTION,
     POSITIVE_EDGE_PREDICTION,
 )
-from krakked.strategy.features import ML_FEATURE_CLIP_RANGES, ML_FEATURE_NAMES
 from krakked.strategy.models import StrategyIntent
 
 logger = logging.getLogger(__name__)
@@ -160,9 +160,7 @@ class MLWalkForwardFold:
             "prediction_count": len(self.predictions),
             "metrics": _build_prediction_metrics(self.predictions),
             "confidence_buckets": _build_confidence_buckets(self.predictions),
-            "regression_calibration": _build_regression_calibration(
-                self.predictions
-            ),
+            "regression_calibration": _build_regression_calibration(self.predictions),
             "baselines": copy.deepcopy(self.baselines),
             "diagnostics": copy.deepcopy(self.diagnostics),
         }
@@ -331,7 +329,9 @@ def _default_prediction_target_for_strategy_type(strategy_type: str) -> str:
 
 
 def _unique_or_mixed(values: Iterable[object], *, default: object = None) -> object:
-    unique = sorted({str(value) for value in values if value is not None and str(value)})
+    unique = sorted(
+        {str(value) for value in values if value is not None and str(value)}
+    )
     if not unique:
         return default
     if len(unique) == 1:
@@ -868,7 +868,9 @@ def _buy_hold_pair_baseline(
     starting_cash_usd: float,
     one_way_cost_pct: float,
 ) -> dict[str, Any]:
-    display_pair = str(getattr(market_data, "get_display_pair", lambda item: item)(pair))
+    display_pair = str(
+        getattr(market_data, "get_display_pair", lambda item: item)(pair)
+    )
     warnings: list[str] = []
     if not test_timestamps:
         return _baseline_result(
@@ -920,7 +922,9 @@ def _build_fold_baselines(
     slippage_bps: float,
     starting_cash_usd: float = 10_000.0,
 ) -> dict[str, Any]:
-    one_way_cost_pct = (max(float(fee_bps), 0.0) + max(float(slippage_bps), 0.0)) / 10_000.0
+    one_way_cost_pct = (
+        max(float(fee_bps), 0.0) + max(float(slippage_bps), 0.0)
+    ) / 10_000.0
     cash = _baseline_result(
         name="cash",
         equity_curve=[float(starting_cash_usd)] * max(len(test_timestamps), 1),
@@ -1109,9 +1113,7 @@ def _regression_sweep_row(
 ) -> dict[str, Any]:
     if selection_threshold_pct is None:
         selected = [
-            row
-            for row in rows
-            if row["predicted_delta"] > row["evaluation_hurdle_pct"]
+            row for row in rows if row["predicted_delta"] > row["evaluation_hurdle_pct"]
         ]
     else:
         selected = [
@@ -1130,9 +1132,7 @@ def _regression_sweep_row(
     else:
         hits = [row for row in rows if row["realized_return"] > realized_threshold_pct]
         true_positive = [
-            row
-            for row in selected
-            if row["realized_return"] > realized_threshold_pct
+            row for row in selected if row["realized_return"] > realized_threshold_pct
         ]
 
     total = len(rows)
@@ -1349,12 +1349,8 @@ def _build_regression_calibration(
     deciles = _build_predicted_delta_deciles(rows)
     return {
         "prediction_count": len(rows),
-        "predicted_delta_quantiles": _quantiles(
-            row["predicted_delta"] for row in rows
-        ),
-        "realized_return_quantiles": _quantiles(
-            row["realized_return"] for row in rows
-        ),
+        "predicted_delta_quantiles": _quantiles(row["predicted_delta"] for row in rows),
+        "realized_return_quantiles": _quantiles(row["realized_return"] for row in rows),
         "threshold_sweeps": threshold_sweeps,
         "predicted_delta_deciles": deciles,
         "monotonicity": _decile_monotonicity(deciles),
@@ -1493,9 +1489,14 @@ def _collect_model_diagnostics(
             """,
             (strategy_id,),
         )
-        for model_key, label_type, framework, version, updated_at, model_blob in (
-            cursor.fetchall()
-        ):
+        for (
+            model_key,
+            label_type,
+            framework,
+            version,
+            updated_at,
+            model_blob,
+        ) in cursor.fetchall():
             entries.append(
                 _model_diagnostic(
                     source="live_model",
@@ -1584,7 +1585,9 @@ def _collect_training_diagnostics(store: object, strategy_id: str) -> dict[str, 
             """,
             (strategy_id,),
         )
-        rows = [(str(model_key), float(label)) for model_key, label in cursor.fetchall()]
+        rows = [
+            (str(model_key), float(label)) for model_key, label in cursor.fetchall()
+        ]
     except Exception:
         logger.warning(
             "Failed to collect ML training diagnostics for %s",
@@ -1606,7 +1609,9 @@ def _collect_training_diagnostics(store: object, strategy_id: str) -> dict[str, 
     return summary
 
 
-def _features_from_prediction(prediction: MLWalkForwardPrediction) -> Optional[list[float]]:
+def _features_from_prediction(
+    prediction: MLWalkForwardPrediction,
+) -> Optional[list[float]]:
     features = prediction.metadata.get("features")
     if not isinstance(features, dict):
         return None
@@ -1720,7 +1725,9 @@ def _build_prediction_diagnostics(
         if _finite_float(prediction.metadata.get("predicted_delta")) is not None
     ]
     decision_scores = _decision_scores(predictions, model_entries)
-    positive_count = sum(1 for prediction in predictions if prediction.predicted_positive_edge)
+    positive_count = sum(
+        1 for prediction in predictions if prediction.predicted_positive_edge
+    )
     diagnostics: dict[str, Any] = {
         "prediction_count": len(predictions),
         "positive_edge_prediction_count": positive_count,
@@ -1812,10 +1819,7 @@ def _feature_health_thresholds() -> dict[str, Any]:
 
 
 def _feature_tail_abs(quantiles: dict[str, Any]) -> Optional[float]:
-    values = [
-        _finite_float(quantiles.get(key))
-        for key in ("p1", "p95", "p99")
-    ]
+    values = [_finite_float(quantiles.get(key)) for key in ("p1", "p95", "p99")]
     collected = [abs(value) for value in values if value is not None]
     return max(collected) if collected else None
 
@@ -1830,13 +1834,9 @@ def _build_feature_health_warnings(
         if not isinstance(quantiles, dict):
             continue
         p50 = _finite_float(quantiles.get("p50"))
-        if (
-            p50 is not None
-            and abs(p50) > SCALED_FEATURE_MEDIAN_ABS_WARNING_THRESHOLD
-        ):
+        if p50 is not None and abs(p50) > SCALED_FEATURE_MEDIAN_ABS_WARNING_THRESHOLD:
             warnings.append(
-                f"Scaled feature {name} median is shifted from 0 "
-                f"(p50={p50:.4g})."
+                f"Scaled feature {name} median is shifted from 0 " f"(p50={p50:.4g})."
             )
         std = _finite_float(quantiles.get("std"))
         if std is not None and (
@@ -2019,9 +2019,7 @@ def _build_feature_contribution_diagnostics(
 
     diagnostics: list[dict[str, Any]] = []
     for index, name in enumerate(feature_names):
-        coefficients = [
-            row[index] for row in coefficient_rows if index < len(row)
-        ]
+        coefficients = [row[index] for row in coefficient_rows if index < len(row)]
         scaled_values = [row[index] for row in scaled_rows if index < len(row)]
         if not coefficients or len(coefficients) != len(scaled_values):
             continue
@@ -2189,9 +2187,7 @@ def _build_fold_diagnostics(
     }
 
 
-def _fold_indexes_with(
-    fold_dicts: list[dict[str, Any]], predicate: Any
-) -> list[int]:
+def _fold_indexes_with(fold_dicts: list[dict[str, Any]], predicate: Any) -> list[int]:
     indexes: list[int] = []
     for fold in fold_dicts:
         try:
@@ -2215,7 +2211,9 @@ def _build_diagnostic_warnings(fold_dicts: list[dict[str, Any]]) -> list[str]:
         for model in ((fold.get("diagnostics") or {}).get("models") or [])
         if isinstance(model, dict)
     ]
-    uninitialized_count = sum(1 for model in model_snapshots if not model.get("initialized"))
+    uninitialized_count = sum(
+        1 for model in model_snapshots if not model.get("initialized")
+    )
     zero_coef_count = sum(
         1
         for model in model_snapshots
@@ -2247,9 +2245,11 @@ def _build_diagnostic_warnings(fold_dicts: list[dict[str, Any]]) -> list[str]:
     no_prediction_folds = _fold_indexes_with(
         fold_dicts,
         lambda fold: int(
-            (((fold.get("diagnostics") or {}).get("predictions") or {}).get(
-                "prediction_count"
-            ))
+            (
+                ((fold.get("diagnostics") or {}).get("predictions") or {}).get(
+                    "prediction_count"
+                )
+            )
             or 0
         )
         == 0,
@@ -2264,16 +2264,20 @@ def _build_diagnostic_warnings(fold_dicts: list[dict[str, Any]]) -> list[str]:
     no_positive_prediction_folds = _fold_indexes_with(
         fold_dicts,
         lambda fold: int(
-            (((fold.get("diagnostics") or {}).get("predictions") or {}).get(
-                "prediction_count"
-            ))
+            (
+                ((fold.get("diagnostics") or {}).get("predictions") or {}).get(
+                    "prediction_count"
+                )
+            )
             or 0
         )
         > 0
         and int(
-            (((fold.get("diagnostics") or {}).get("predictions") or {}).get(
-                "positive_edge_prediction_count"
-            ))
+            (
+                ((fold.get("diagnostics") or {}).get("predictions") or {}).get(
+                    "positive_edge_prediction_count"
+                )
+            )
             or 0
         )
         == 0,
@@ -2368,15 +2372,19 @@ def _build_diagnostic_warnings(fold_dicts: list[dict[str, Any]]) -> list[str]:
     no_positive_label_folds = _fold_indexes_with(
         fold_dicts,
         lambda fold: (
-            (((fold.get("diagnostics") or {}).get("training") or {}).get(
-                "class_balance"
-            ))
+            (
+                ((fold.get("diagnostics") or {}).get("training") or {}).get(
+                    "class_balance"
+                )
+            )
             is not None
             and int(
                 (
-                    (((fold.get("diagnostics") or {}).get("training") or {}).get(
-                        "class_balance"
-                    ))
+                    (
+                        ((fold.get("diagnostics") or {}).get("training") or {}).get(
+                            "class_balance"
+                        )
+                    )
                     or {}
                 ).get("positive_label_count")
                 or 0
@@ -2394,16 +2402,20 @@ def _build_diagnostic_warnings(fold_dicts: list[dict[str, Any]]) -> list[str]:
     rare_positive_label_folds = _fold_indexes_with(
         fold_dicts,
         lambda fold: (
-            (((fold.get("diagnostics") or {}).get("training") or {}).get(
-                "class_balance"
-            ))
+            (
+                ((fold.get("diagnostics") or {}).get("training") or {}).get(
+                    "class_balance"
+                )
+            )
             is not None
             and (
                 _finite_float(
                     (
-                        (((fold.get("diagnostics") or {}).get("training") or {}).get(
-                            "class_balance"
-                        ))
+                        (
+                            ((fold.get("diagnostics") or {}).get("training") or {}).get(
+                                "class_balance"
+                            )
+                        )
                         or {}
                     ).get("positive_label_rate")
                 )
@@ -2413,9 +2425,11 @@ def _build_diagnostic_warnings(fold_dicts: list[dict[str, Any]]) -> list[str]:
             and (
                 _finite_float(
                     (
-                        (((fold.get("diagnostics") or {}).get("training") or {}).get(
-                            "class_balance"
-                        ))
+                        (
+                            ((fold.get("diagnostics") or {}).get("training") or {}).get(
+                                "class_balance"
+                            )
+                        )
                         or {}
                     ).get("positive_label_rate")
                 )
@@ -2436,8 +2450,7 @@ def _build_diagnostic_warnings(fold_dicts: list[dict[str, Any]]) -> list[str]:
         lambda fold: (
             (
                 (
-                    (fold.get("regression_calibration") or {}).get("monotonicity")
-                    or {}
+                    (fold.get("regression_calibration") or {}).get("monotonicity") or {}
                 ).get("upper_half_improves")
             )
             is False
@@ -2455,8 +2468,7 @@ def _build_diagnostic_warnings(fold_dicts: list[dict[str, Any]]) -> list[str]:
         lambda fold: (
             (
                 (
-                    (fold.get("regression_calibration") or {}).get("monotonicity")
-                    or {}
+                    (fold.get("regression_calibration") or {}).get("monotonicity") or {}
                 ).get("upper_half_improves")
             )
             == MONOTONICITY_INSUFFICIENT_DATA
@@ -2616,12 +2628,9 @@ def _base_hit_rate_from_calibration(calibration: dict[str, Any]) -> Optional[flo
 
 
 def _fold_non_monotonic(fold: dict[str, Any]) -> bool:
-    return (
-        (
-            (fold.get("regression_calibration") or {}).get("monotonicity") or {}
-        ).get("upper_half_improves")
-        is False
-    )
+    return ((fold.get("regression_calibration") or {}).get("monotonicity") or {}).get(
+        "upper_half_improves"
+    ) is False
 
 
 def _format_fold_failure(fold_index: int, message: str) -> str:

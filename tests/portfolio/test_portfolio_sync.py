@@ -192,9 +192,11 @@ def test_paper_sync_keeps_local_wallet_and_caches_exchange_reference():
         tolerance_base=0.0,
         mismatched_assets=[],
     )
-    portfolio._convert_to_base_currency.side_effect = lambda amount, asset: SimpleNamespace(
-        value_base=float(amount) if asset == "USD" else float(amount) * 50000.0,
-        status="valued",
+    portfolio._convert_to_base_currency.side_effect = (
+        lambda amount, asset: SimpleNamespace(
+            value_base=float(amount) if asset == "USD" else float(amount) * 50000.0,
+            status="valued",
+        )
     )
 
     api_client.get_private.return_value = {
@@ -205,9 +207,10 @@ def test_paper_sync_keeps_local_wallet_and_caches_exchange_reference():
     service = _build_service(store, portfolio, api_client)
     service.app_config = SimpleNamespace(execution=SimpleNamespace(mode="paper"))
     service.market_data = Mock()
-    service.market_data.normalize_asset.side_effect = (
-        lambda asset: {"ZUSD": "USD", "XXBT": "XBT"}.get(asset, asset)
-    )
+    service.market_data.normalize_asset.side_effect = lambda asset: {
+        "ZUSD": "USD",
+        "XXBT": "XBT",
+    }.get(asset, asset)
 
     result = service.sync()
 

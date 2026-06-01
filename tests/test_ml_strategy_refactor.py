@@ -1,7 +1,7 @@
-from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
 import math
 import pickle
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock
@@ -25,8 +25,8 @@ from krakked.strategy.ml_labels import (
     POSITIVE_EDGE_PREDICTION,
 )
 from krakked.strategy.ml_models import (
-    DEFAULT_REGRESSION_MODEL_BACKEND,
     DEFAULT_REGRESSION_EPSILON_PCT,
+    DEFAULT_REGRESSION_MODEL_BACKEND,
     DEFAULT_SGD_L2_ALPHA,
     DEFAULT_SGD_LEARNING_RATE_INITIAL,
     MLOnlineModelBundle,
@@ -395,8 +395,7 @@ def test_feature_profile_changes_feature_names_metadata_and_model_key():
 
     assert strategy.params.feature_profile == "drop_weakest"
     assert strategy._model_key("1h") == (
-        "global|1h|features_ohlc_v5_profile_drop_weakest|"
-        "pa_reg_eps0p001_scalerstdv1"
+        "global|1h|features_ohlc_v5_profile_drop_weakest|" "pa_reg_eps0p001_scalerstdv1"
     )
     assert feature_model_key_suffix("drop_weakest") == (
         "features_ohlc_v5_profile_drop_weakest"
@@ -468,9 +467,7 @@ def test_feature_profile_vectors_use_configured_subset(
     assert classifier_vector.values == pytest.approx(regression_vector.values)
 
 
-def test_ohlc_v5_feature_values_include_normalized_context_fields(
-    strategy, mock_ctx
-):
+def test_ohlc_v5_feature_values_include_normalized_context_fields(strategy, mock_ctx):
     bars = [
         MockBar(1000000, open=100.0, high=101.0, low=99.0, close=100.0, volume=100.0),
         MockBar(1003600, open=101.0, high=103.0, low=100.0, close=102.0, volume=110.0),
@@ -487,8 +484,12 @@ def test_ohlc_v5_feature_values_include_normalized_context_fields(
     assert vector.schema_version == "ohlc_v5"
     atr = 4.0
     atr_pct = atr / 105.0
-    assert features["return_atr_1"] == pytest.approx(((105.0 - 103.0) / 103.0) / atr_pct)
-    assert features["return_atr_3"] == pytest.approx(((105.0 - 102.0) / 102.0) / atr_pct)
+    assert features["return_atr_1"] == pytest.approx(
+        ((105.0 - 103.0) / 103.0) / atr_pct
+    )
+    assert features["return_atr_3"] == pytest.approx(
+        ((105.0 - 102.0) / 102.0) / atr_pct
+    )
     assert features["range_atr"] == pytest.approx((108.0 - 100.0) / atr)
     assert features["upper_wick_atr"] == pytest.approx((108.0 - 105.0) / atr)
     assert "body_atr" not in features
@@ -498,7 +499,9 @@ def test_ohlc_v5_feature_values_include_normalized_context_fields(
     assert features["volume_change"] == pytest.approx(math.log(170.0 / 130.0))
     assert features["volume_log_ratio"] == pytest.approx(math.log(170.0 / 120.0))
     observed_at = datetime.fromtimestamp(1014400, tz=timezone.utc)
-    hour_value = observed_at.hour + observed_at.minute / 60.0 + observed_at.second / 3600.0
+    hour_value = (
+        observed_at.hour + observed_at.minute / 60.0 + observed_at.second / 3600.0
+    )
     assert features["hour_sin"] == pytest.approx(
         math.sin(2.0 * math.pi * hour_value / 24.0)
     )
@@ -646,8 +649,7 @@ def test_regression_backend_factory_and_keys_are_backend_specific():
     assert strategy.params.model_backend == "sgd_huber"
     assert strategy._model_framework() == "sklearn_sgd_regressor_huber"
     assert (
-        strategy._model_key("1h")
-        == "global|1h|features_ohlc_v5|"
+        strategy._model_key("1h") == "global|1h|features_ohlc_v5|"
         "sgd_huber_alpha0p0002_eta0p002_eps0p0025_scalerstdv1"
     )
     assert is_regression_model_for_backend(strategy.model, "sgd_huber") is True

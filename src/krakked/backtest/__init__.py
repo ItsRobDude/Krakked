@@ -6,6 +6,13 @@ from .action_diagnostics import (
     normalize_action_reason,
     run_strategy_action_diagnostics,
 )
+from .evidence_windows import (
+    EVIDENCE_WINDOW_SET_TUPLES,
+    EVIDENCE_WINDOWS,
+    EvidenceWindow,
+    build_evidence_window_context,
+    evidence_window_tuples,
+)
 from .market_regime_exposure import (
     DEFAULT_EXPOSURE_OVERLAY_MODES,
     DEFAULT_EXPOSURE_SCENARIOS,
@@ -14,13 +21,6 @@ from .market_regime_exposure import (
     build_top2_soft_target_scale_baseline,
     evaluate_market_regime_exposure_scenarios,
     run_market_regime_exposure_research,
-)
-from .evidence_windows import (
-    EVIDENCE_WINDOW_SET_TUPLES,
-    EVIDENCE_WINDOWS,
-    EvidenceWindow,
-    build_evidence_window_context,
-    evidence_window_tuples,
 )
 from .market_regime_overlay import (
     MarketRegimeOverlayBacktestResult,
@@ -38,6 +38,11 @@ from .market_regime_throttle import (
     run_market_regime_throttle_backtest,
     summarize_market_regime_throttle_plans,
 )
+from .ml_regime_overlay_research import (
+    MLRegimeOverlayResearchParams,
+    MLRegimeOverlayResearchResult,
+    run_ml_regime_overlay_research,
+)
 from .ml_reporting import (
     get_latest_ml_walk_forward_report_path,
     load_ml_walk_forward_report,
@@ -52,11 +57,6 @@ from .ml_walk_forward import (
     MLWalkForwardResult,
     MLWalkForwardSummary,
     run_ml_walk_forward,
-)
-from .ml_regime_overlay_research import (
-    MLRegimeOverlayResearchParams,
-    MLRegimeOverlayResearchResult,
-    run_ml_regime_overlay_research,
 )
 from .pair_local_source_research import (
     DEFAULT_PAIR_LOCAL_SOURCE_SCENARIOS,
@@ -95,17 +95,17 @@ from .runner import (
     run_backtest,
 )
 from .strategy_activity import (
-    DEFAULT_STRATEGY_EVIDENCE_GROUP_IDS,
     DEFAULT_STRATEGY_ACTIVITY_GROUP_IDS,
+    DEFAULT_STRATEGY_EVIDENCE_GROUP_IDS,
     STARTER_STRATEGIES,
     STRATEGY_ACTIVITY_WINDOW_SETS,
     StrategyActivityGroup,
     StrategyActivitySweepResult,
     apply_strategy_activity_override,
+    build_strategy_activity_groups,
     build_strategy_evidence_baselines,
     build_strategy_evidence_groups,
     build_strategy_evidence_scoreboard,
-    build_strategy_activity_groups,
     run_strategy_activity_sweep,
 )
 from .target_source_research import (

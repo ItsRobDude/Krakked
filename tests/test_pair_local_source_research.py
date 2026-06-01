@@ -3,8 +3,6 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-import pytest
-
 from krakked.backtest.pair_local_source_research import (
     PairLocalSourceResearchParams,
     aggregate_pair_local_source_research_reports,

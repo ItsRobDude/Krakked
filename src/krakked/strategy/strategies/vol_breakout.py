@@ -54,7 +54,7 @@ class VolBreakoutStrategy(Strategy):
 
             df: pd.DataFrame = pd.DataFrame(
                 [(b.timestamp, b.open, b.high, b.low, b.close, b.volume) for b in ohlc],
-                columns=["timestamp", "open", "high", "low", "close", "volume"]
+                columns=["timestamp", "open", "high", "low", "close", "volume"],
             )
             # ⚡ Bolt: DataFrame from tuple comprehension is ~5x faster than using asdict
             atr = compute_atr(df, window=self.params.lookback_bars)

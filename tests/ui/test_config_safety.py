@@ -148,9 +148,7 @@ def test_config_apply_blocks_on_universe_validation_failure(client, safe_context
 def test_config_apply_succeeds_on_valid_universe(client, safe_context, temp_config_dir):
     safe_context.market_data.validate_pairs.return_value = []  # No invalid pairs
 
-    with patch(
-        "krakked.ui.routes.config.get_config_dir", return_value=temp_config_dir
-    ):
+    with patch("krakked.ui.routes.config.get_config_dir", return_value=temp_config_dir):
         payload = {
             "config": {"universe": {"include_pairs": ["XBTUSD"]}},
             "dry_run": True,
@@ -167,9 +165,7 @@ def test_apply_config_restricted_keys_stripped_if_same(
 ):
     """Test that sending SAME restricted keys is allowed (stripped)."""
     # Mock get_config_dir to return our temp dir
-    with patch(
-        "krakked.ui.routes.config.get_config_dir", return_value=temp_config_dir
-    ):
+    with patch("krakked.ui.routes.config.get_config_dir", return_value=temp_config_dir):
         payload = {
             "config": {
                 "execution": {
@@ -204,9 +200,7 @@ def test_profile_runtime_override_pruning_with_main_key(
     client, safe_context, temp_config_dir
 ):
     """Test that applying a main-config key (ui) also prunes it from PROFILE overrides."""
-    with patch(
-        "krakked.ui.routes.config.get_config_dir", return_value=temp_config_dir
-    ):
+    with patch("krakked.ui.routes.config.get_config_dir", return_value=temp_config_dir):
         # Setup active profile
         safe_context.session.profile_name = "test_profile"
         # We need to add the profile to the config for it to be found
@@ -259,9 +253,7 @@ def test_dry_run_full_validation_failure(client, safe_context, temp_config_dir):
     # Simulate LIVE env to force strict checks
     with (
         patch.dict(os.environ, {"KRAKKED_ENV": "live"}),
-        patch(
-            "krakked.ui.routes.config.get_config_dir", return_value=temp_config_dir
-        ),
+        patch("krakked.ui.routes.config.get_config_dir", return_value=temp_config_dir),
     ):
 
         # Valid config.yaml content
@@ -301,9 +293,7 @@ def test_dry_run_full_validation_failure(client, safe_context, temp_config_dir):
 
 def test_ui_refresh_intervals_profile_bound(client, safe_context, temp_config_dir):
     """Test B: UI refresh_intervals persist to Profile, others to Main."""
-    with patch(
-        "krakked.ui.routes.config.get_config_dir", return_value=temp_config_dir
-    ):
+    with patch("krakked.ui.routes.config.get_config_dir", return_value=temp_config_dir):
 
         # Setup active profile
         safe_context.session.profile_name = "test_profile"
@@ -349,9 +339,7 @@ def test_ui_refresh_intervals_profile_bound(client, safe_context, temp_config_di
 
 def test_profile_create_rejects_invalid_ui_keys(client, safe_context, temp_config_dir):
     """Test C: Profile creation rejects invalid UI keys."""
-    with patch(
-        "krakked.ui.routes.system.get_config_dir", return_value=temp_config_dir
-    ):
+    with patch("krakked.ui.routes.system.get_config_dir", return_value=temp_config_dir):
 
         payload = {
             "name": "bad_ui_profile",
@@ -369,9 +357,7 @@ def test_atomic_failure_no_writes(client, safe_context, temp_config_dir):
     """Test D: Validation failure results in NO disk writes."""
     with (
         patch.dict(os.environ, {"KRAKKED_ENV": "live"}),
-        patch(
-            "krakked.ui.routes.config.get_config_dir", return_value=temp_config_dir
-        ),
+        patch("krakked.ui.routes.config.get_config_dir", return_value=temp_config_dir),
     ):
 
         # Initial config state
@@ -417,9 +403,7 @@ def test_corrupted_yaml_triggers_validation_failure(
     client, safe_context, temp_config_dir
 ):
     """Test E: Corrupted YAML file triggers validation failure."""
-    with patch(
-        "krakked.ui.routes.config.get_config_dir", return_value=temp_config_dir
-    ):
+    with patch("krakked.ui.routes.config.get_config_dir", return_value=temp_config_dir):
 
         # Corrupt the main config file
         with open(temp_config_dir / "config.yaml", "w") as f:
@@ -438,9 +422,7 @@ def test_apply_refresh_intervals_no_profile_fails(
     client, safe_context, temp_config_dir
 ):
     """Test F: Applying ui.refresh_intervals requires active profile."""
-    with patch(
-        "krakked.ui.routes.config.get_config_dir", return_value=temp_config_dir
-    ):
+    with patch("krakked.ui.routes.config.get_config_dir", return_value=temp_config_dir):
 
         # Ensure NO profile active
         safe_context.session.profile_name = None
@@ -466,9 +448,7 @@ def test_apply_refresh_intervals_no_profile_fails(
 
 def test_apply_ml_config_profile_bound(client, safe_context, temp_config_dir):
     """Test G: ML config changes require an active profile and persist to profile."""
-    with patch(
-        "krakked.ui.routes.config.get_config_dir", return_value=temp_config_dir
-    ):
+    with patch("krakked.ui.routes.config.get_config_dir", return_value=temp_config_dir):
         # 1. Test without active profile
         safe_context.session.profile_name = None
         payload = {"config": {"ml": {"enabled": False}}}
