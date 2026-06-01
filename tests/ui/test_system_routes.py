@@ -503,7 +503,10 @@ def test_latest_replay_endpoint_returns_compact_summary(
         payload["clamped_reason_counts"]["Max per asset limit (750.00 > 500.00)"] == 2
     )
     assert payload["replay_inputs"]["enabled_strategies"] == ["majors_mean_rev"]
-    assert payload["report_path"].endswith("reports\\backtests\\latest.json")
+    import os
+
+    expected_path = os.path.join("reports", "backtests", "latest.json")
+    assert payload["report_path"].endswith(expected_path)
 
 
 def test_latest_replay_endpoint_hides_invalid_report(

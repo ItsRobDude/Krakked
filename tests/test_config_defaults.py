@@ -280,7 +280,7 @@ ml:
   enabled: true
 profiles:
   Rob:
-    config_path: profiles\\Rob.yaml
+    config_path: profiles/Rob.yaml
 session:
   profile_name: Rob
 """.strip()
