@@ -70,6 +70,9 @@ def test_engine_cycle():
         close: float
         high: float = 0
         low: float = 0
+        timestamp: int = 0
+        open: float = 0.0
+        volume: float = 0.0
 
     # Provide enough data for MA(20)
     # Slow MA = 20. Need > 20 bars.
@@ -718,6 +721,11 @@ def test_trend_following_ignores_missing_liquidity_metadata():
     @dataclass
     class MockBar:
         close: float
+        timestamp: int = 0
+        open: float = 0.0
+        high: float = 0.0
+        low: float = 0.0
+        volume: float = 0.0
 
     prices = [100 + i for i in range(20)]
     market.get_ohlc.side_effect = [
@@ -762,6 +770,11 @@ def test_trend_following_does_not_exit_without_owned_position():
     @dataclass
     class MockBar:
         close: float
+        timestamp: int = 0
+        open: float = 0.0
+        high: float = 0.0
+        low: float = 0.0
+        volume: float = 0.0
 
     prices = [100.0 for _ in range(20)]
     market.get_ohlc.side_effect = [
@@ -814,6 +827,11 @@ def test_trend_following_reduces_owned_position_when_trend_is_flat():
     @dataclass
     class MockBar:
         close: float
+        timestamp: int = 0
+        open: float = 0.0
+        high: float = 0.0
+        low: float = 0.0
+        volume: float = 0.0
 
     prices = [100.0 for _ in range(20)]
     market.get_ohlc.side_effect = [
@@ -879,6 +897,11 @@ def test_trend_following_matches_display_pair_to_canonical_owned_position_for_re
     @dataclass
     class MockBar:
         close: float
+        timestamp: int = 0
+        open: float = 0.0
+        high: float = 0.0
+        low: float = 0.0
+        volume: float = 0.0
 
     prices = [100.0 for _ in range(20)]
     market.get_ohlc.side_effect = [
