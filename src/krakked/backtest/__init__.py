@@ -58,6 +58,11 @@ from .ml_regime_overlay_research import (
     MLRegimeOverlayResearchResult,
     run_ml_regime_overlay_research,
 )
+from .ml_risk_signal_research import (
+    MLRiskSignalResearchParams,
+    MLRiskSignalResearchResult,
+    run_ml_risk_signal_research,
+)
 from .pair_local_source_research import (
     DEFAULT_PAIR_LOCAL_SOURCE_SCENARIOS,
     PairLocalSourceResearchParams,
@@ -148,6 +153,8 @@ __all__ = [
     "MLWalkForwardSummary",
     "MLRegimeOverlayResearchParams",
     "MLRegimeOverlayResearchResult",
+    "MLRiskSignalResearchParams",
+    "MLRiskSignalResearchResult",
     "PairLocalSourceResearchParams",
     "PairLocalSourceResearchResult",
     "RSRotationV2ResearchParams",
@@ -203,6 +210,7 @@ __all__ = [
     "run_market_regime_research",
     "run_market_regime_throttle_backtest",
     "run_ml_regime_overlay_research",
+    "run_ml_risk_signal_research",
     "run_rs_rotation_v2_research",
     "run_ml_walk_forward",
     "run_pair_local_source_research",

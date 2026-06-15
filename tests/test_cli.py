@@ -2319,7 +2319,9 @@ def test_strategy_evidence_scoreboard_writes_shared_aggregate(
     monkeypatch.setattr(
         cli,
         "_load_backtest_config",
-        lambda args: SimpleNamespace(universe=SimpleNamespace(include_pairs=["BTC/USD"])),
+        lambda args: SimpleNamespace(
+            universe=SimpleNamespace(include_pairs=["BTC/USD"])
+        ),
     )
     monkeypatch.setattr(
         cli,
@@ -2390,8 +2392,8 @@ def test_ml_regime_overlay_research_writes_reports_and_aggregate(
                     "research_only": True,
                     "runtime_wiring_approved": False,
                     "baseline_profile": "top2_soft_target_scale",
-                    "window_count": 3,
-                    "ml_ready_windows": 3,
+                    "window_count": 4,
+                    "ml_ready_windows": 4,
                 },
                 "windows": [
                     {
@@ -2418,7 +2420,13 @@ def test_ml_regime_overlay_research_writes_reports_and_aggregate(
                         },
                     }
                     for index, bucket in enumerate(
-                        ("uptrend", "downtrend", "chop_or_transition"), start=1
+                        (
+                            "uptrend",
+                            "downtrend",
+                            "chop_or_transition",
+                            "current_rolling",
+                        ),
+                        start=1,
                     )
                 ],
             }
@@ -2448,7 +2456,9 @@ def test_ml_regime_overlay_research_writes_reports_and_aggregate(
     monkeypatch.setattr(
         cli,
         "_load_backtest_config",
-        lambda args: SimpleNamespace(universe=SimpleNamespace(include_pairs=["BTC/USD"])),
+        lambda args: SimpleNamespace(
+            universe=SimpleNamespace(include_pairs=["BTC/USD"])
+        ),
     )
     monkeypatch.setattr(
         cli,
@@ -2484,12 +2494,125 @@ def test_ml_regime_overlay_research_writes_reports_and_aggregate(
     assert group["promotion_gate"]["passed"] is True
     assert group["promotion_gate"]["not_cash_only"] is True
     assert group["promotion_gate"]["regime_coverage_sufficient"] is True
+    assert group["promotion_gate"]["current_rolling_not_worse"] is True
     assert group["evidence_bucket_counts"] == {
         "chop_or_transition": 1,
+        "current_rolling": 1,
         "downtrend": 1,
         "uptrend": 1,
     }
     assert (save_dir / "allocation-20.json").exists()
+
+
+def test_ml_risk_signal_research_writes_aggregate(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: Any
+) -> None:
+    captured: dict[str, Any] = {}
+
+    class _FakeMLRiskSignalResult:
+        def to_report_dict(self) -> dict[str, Any]:
+            return {
+                "report_version": 1,
+                "report_type": "ml_risk_signal_research",
+                "generated_at": "2026-05-31T00:00:00+00:00",
+                "summary": {
+                    "research_only": True,
+                    "runtime_wiring_approved": False,
+                    "benchmark_pair": "BTC/USD",
+                    "timeframe": "4h",
+                    "target": {"horizon_bars": 6},
+                    "window_count": 1,
+                    "model_ready_windows": 1,
+                    "forecast_skill": {
+                        "overall": {
+                            "observation_count": 5,
+                            "model_vs_ewma_qlike_improvement_pct": 3.0,
+                        }
+                    },
+                    "pre_registered_outcomes": {
+                        "exposure_research_gate": {"passed": False},
+                        "display_only_gate": {"passed": False},
+                    },
+                    "lane_status": "close_volatility_forecast_lane",
+                },
+                "windows": [],
+            }
+
+    def _fake_run_ml_risk_signal_research(
+        config: Any,
+        *,
+        window_sets: Any,
+        pairs: Any,
+        timeframe: str,
+        benchmark_pair: str,
+        params: Any,
+        strict_data: bool,
+    ) -> _FakeMLRiskSignalResult:
+        captured["config"] = config
+        captured["window_sets"] = window_sets
+        captured["pairs"] = pairs
+        captured["timeframe"] = timeframe
+        captured["benchmark_pair"] = benchmark_pair
+        captured["horizon_bars"] = params.horizon_bars
+        captured["short_lookback_bars"] = params.short_lookback_bars
+        captured["medium_lookback_bars"] = params.medium_lookback_bars
+        captured["long_lookback_bars"] = params.long_lookback_bars
+        captured["rolling_lookback_bars"] = params.rolling_lookback_bars
+        captured["ewma_lambda"] = params.ewma_lambda
+        captured["strict_data"] = strict_data
+        return _FakeMLRiskSignalResult()
+
+    monkeypatch.setitem(
+        cli.STRATEGY_ACTIVITY_WINDOW_SETS,
+        "tiny",
+        [("w1", "2026-05-01T00:00:00Z", "2026-05-02T00:00:00Z")],
+    )
+    monkeypatch.setattr(
+        cli,
+        "_load_backtest_config",
+        lambda args: SimpleNamespace(
+            universe=SimpleNamespace(include_pairs=["BTC/USD"])
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "run_ml_risk_signal_research",
+        _fake_run_ml_risk_signal_research,
+    )
+
+    save_dir = tmp_path / "ml-risk"
+    exit_code = cli.main(
+        [
+            "ml-risk-signal-research",
+            "--window-set",
+            "tiny",
+            "--save-dir",
+            str(save_dir),
+            "--strict-data",
+            "--json",
+        ]
+    )
+
+    assert exit_code == 0
+    assert captured["window_sets"] == {
+        "tiny": [("w1", "2026-05-01T00:00:00Z", "2026-05-02T00:00:00Z")]
+    }
+    assert captured["benchmark_pair"] == "BTC/USD"
+    assert captured["timeframe"] == "4h"
+    assert captured["horizon_bars"] == 6
+    assert captured["short_lookback_bars"] == 1
+    assert captured["medium_lookback_bars"] == 6
+    assert captured["long_lookback_bars"] == 42
+    assert captured["rolling_lookback_bars"] == 42
+    assert captured["ewma_lambda"] == pytest.approx(0.94)
+    assert captured["strict_data"] is True
+    output = json.loads(capsys.readouterr().out)
+    aggregate = json.loads((save_dir / "aggregate.json").read_text(encoding="utf-8"))
+    assert output["report_type"] == "ml_risk_signal_research"
+    assert aggregate["summary"]["research_only"] is True
+    assert aggregate["summary"]["runtime_wiring_approved"] is False
+    assert aggregate["summary"]["window_sets"] == ["tiny"]
+    assert aggregate["provenance"]["generated_by"] == "krakked ml-risk-signal-research"
 
 
 def test_strategy_action_diagnostics_subcommand_writes_report(

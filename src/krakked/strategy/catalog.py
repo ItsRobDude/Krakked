@@ -63,7 +63,7 @@ CANONICAL_STRATEGIES: Dict[str, StrategyDefinition] = {
 ML_STRATEGY_IDS = [
     sid
     for sid, definition in CANONICAL_STRATEGIES.items()
-    if definition.type in ("machine_learning", "machine_learning_regression")
+    if definition.type.startswith("machine_learning")
 ]
 
 CANONICAL_STRATEGY_TYPES = {

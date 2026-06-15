@@ -25,6 +25,7 @@ from krakked.strategy.ml_models import (
 )
 
 from .evidence_windows import (
+    REQUIRED_REGIME_BUCKETS,
     build_evidence_window_context,
     context_by_window_key,
     parse_evidence_datetime,
@@ -66,6 +67,7 @@ FEATURE_NAMES = (
     "selected_pair_count",
     "previous_scale",
 )
+REQUIRED_PASSING_REGIME_BUCKETS = (len(REQUIRED_REGIME_BUCKETS) // 2) + 1
 
 
 @dataclass(frozen=True)
@@ -93,6 +95,14 @@ class MLRegimeOverlayResearchParams:
             raise ValueError("max_target_pairs must be at least 1")
         if int(self.min_training_examples) < 1:
             raise ValueError("min_training_examples must be at least 1")
+
+
+@dataclass(frozen=True)
+class _WindowSpec:
+    window_set: str
+    window_id: str
+    start: datetime
+    end: datetime
 
 
 @dataclass
@@ -142,83 +152,85 @@ def run_ml_regime_overlay_research(
 
     training_examples: list[dict[str, Any]] = []
     window_reports: list[dict[str, Any]] = []
-    for window_set, windows in window_sets.items():
-        for window_id, start_text, end_text in windows:
-            start = parse_evidence_datetime(start_text)
-            end = parse_evidence_datetime(end_text)
-            bars_by_pair, preflight = _load_window_bars(
-                config,
-                start=start,
-                end=end,
-                pairs=selected_pairs,
-                timeframe=timeframe,
-                strict_data=strict_data,
-            )
-            scenario_params = _scenario_params(params)
-            controlled = evaluate_market_regime_exposure_scenarios(
+    for spec in _chronological_window_specs(window_sets):
+        bars_by_pair, preflight = _load_window_bars(
+            config,
+            start=spec.start,
+            end=spec.end,
+            pairs=selected_pairs,
+            timeframe=timeframe,
+            strict_data=strict_data,
+        )
+        scenario_params = _scenario_params(params)
+        controlled = evaluate_market_regime_exposure_scenarios(
+            bars_by_pair,
+            start=spec.start,
+            end=spec.end,
+            pairs=selected_pairs,
+            regime_params=regime_params,
+            scenario_params=scenario_params,
+            scenarios=["trend_rank_proxy"],
+            overlay_modes=["target_scale"],
+            preflight=preflight,
+        )
+        baseline_run = next(
+            run for run in controlled.runs if run["overlay_mode"] == "none"
+        )
+        handcoded_run = next(
+            run for run in controlled.runs if run["overlay_mode"] == "target_scale"
+        )
+        eligible_training_examples = _examples_with_labels_before(
+            training_examples,
+            cutoff=spec.start,
+        )
+        model = _fit_model(eligible_training_examples, params=params)
+        ml_run: dict[str, Any] | None = None
+        status = "ready"
+        if model is None:
+            status = "insufficient_training"
+        else:
+            ml_run = _simulate_ml_scale_overlay(
                 bars_by_pair,
-                start=start,
-                end=end,
+                start=spec.start,
+                end=spec.end,
                 pairs=selected_pairs,
                 regime_params=regime_params,
                 scenario_params=scenario_params,
-                scenarios=["trend_rank_proxy"],
-                overlay_modes=["target_scale"],
-                preflight=preflight,
+                model=model,
             )
-            baseline_run = next(
-                run for run in controlled.runs if run["overlay_mode"] == "none"
+        examples = _build_training_examples(
+            bars_by_pair,
+            start=spec.start,
+            end=spec.end,
+            pairs=selected_pairs,
+            regime_params=regime_params,
+            scenario_params=scenario_params,
+        )
+        training_examples.extend(examples)
+        report = _window_report(
+            window_set=spec.window_set,
+            window_id=spec.window_id,
+            start=spec.start,
+            end=spec.end,
+            preflight=preflight,
+            training_examples_available=len(training_examples) - len(examples),
+            training_examples_used=len(eligible_training_examples),
+            training_examples_added=len(examples),
+            status=status,
+            baseline_run=baseline_run,
+            handcoded_run=handcoded_run,
+            ml_run=ml_run,
+        )
+        context = context_map.get((spec.window_set, spec.window_id))
+        if context:
+            report["market_bucket"] = context.get("market_bucket")
+            report["evidence_bucket"] = context.get("evidence_bucket")
+            report["benchmark_return_pct"] = context.get("benchmark_return_pct")
+            report["basket_return_pct"] = context.get("basket_return_pct")
+            report["benchmark_max_drawdown_pct"] = context.get(
+                "benchmark_max_drawdown_pct"
             )
-            handcoded_run = next(
-                run for run in controlled.runs if run["overlay_mode"] == "target_scale"
-            )
-            model = _fit_model(training_examples, params=params)
-            ml_run: dict[str, Any] | None = None
-            status = "ready"
-            if model is None:
-                status = "insufficient_training"
-            else:
-                ml_run = _simulate_ml_scale_overlay(
-                    bars_by_pair,
-                    start=start,
-                    end=end,
-                    pairs=selected_pairs,
-                    regime_params=regime_params,
-                    scenario_params=scenario_params,
-                    model=model,
-                )
-            examples = _build_training_examples(
-                bars_by_pair,
-                start=start,
-                end=end,
-                pairs=selected_pairs,
-                regime_params=regime_params,
-                scenario_params=scenario_params,
-            )
-            training_examples.extend(examples)
-            report = _window_report(
-                window_set=window_set,
-                window_id=window_id,
-                start=start,
-                end=end,
-                preflight=preflight,
-                training_examples_before=len(training_examples) - len(examples),
-                training_examples_added=len(examples),
-                status=status,
-                baseline_run=baseline_run,
-                handcoded_run=handcoded_run,
-                ml_run=ml_run,
-            )
-            context = context_map.get((window_set, window_id))
-            if context:
-                report["market_bucket"] = context.get("market_bucket")
-                report["evidence_bucket"] = context.get("evidence_bucket")
-                report["benchmark_return_pct"] = context.get("benchmark_return_pct")
-                report["basket_return_pct"] = context.get("basket_return_pct")
-                report["benchmark_max_drawdown_pct"] = context.get(
-                    "benchmark_max_drawdown_pct"
-                )
-            window_reports.append(report)
+        window_reports.append(report)
 
     summary = _summary(window_reports, params=params, timeframe=timeframe)
     return MLRegimeOverlayResearchResult(
@@ -226,6 +238,45 @@ def run_ml_regime_overlay_research(
         summary=summary,
         windows=window_reports,
     )
+
+
+def _chronological_window_specs(
+    window_sets: Mapping[str, Sequence[tuple[str, str, str]]],
+) -> list[_WindowSpec]:
+    specs: list[_WindowSpec] = []
+    for window_set, windows in window_sets.items():
+        for window_id, start_text, end_text in windows:
+            specs.append(
+                _WindowSpec(
+                    window_set=window_set,
+                    window_id=window_id,
+                    start=parse_evidence_datetime(start_text),
+                    end=parse_evidence_datetime(end_text),
+                )
+            )
+    return sorted(
+        specs,
+        key=lambda spec: (
+            spec.start,
+            spec.end,
+            spec.window_set,
+            spec.window_id,
+        ),
+    )
+
+
+def _examples_with_labels_before(
+    examples: Sequence[Mapping[str, Any]],
+    *,
+    cutoff: datetime,
+) -> list[Mapping[str, Any]]:
+    cutoff_ts = int(cutoff.astimezone(UTC).timestamp())
+    eligible: list[Mapping[str, Any]] = []
+    for example in examples:
+        value = example.get("label_end_timestamp")
+        if value is not None and int(value) <= cutoff_ts:
+            eligible.append(example)
+    return eligible
 
 
 def _load_window_bars(
@@ -288,7 +339,9 @@ def _build_training_examples(
 ) -> list[dict[str, Any]]:
     cleaned = {pair: _sort_bars(bars) for pair, bars in bars_by_pair.items()}
     price_maps = _price_maps(cleaned)
-    timeline = _common_timeline(price_maps, pairs=pairs, start=_as_utc(start), end=_as_utc(end))
+    timeline = _common_timeline(
+        price_maps, pairs=pairs, start=_as_utc(start), end=_as_utc(end)
+    )
     snapshots = {
         ts: classify_market_regime_snapshot(cleaned, timestamp=ts, params=regime_params)
         for ts in timeline
@@ -297,6 +350,7 @@ def _build_training_examples(
     previous_scale = 1.0
     interval = int(scenario_params.rebalance_interval_bars)
     for index in range(0, max(len(timeline) - interval, 0), interval):
+        next_index = min(index + interval, len(timeline) - 1)
         target_weights = _scenario_target_weights(
             "trend_rank_proxy",
             target_pairs=pairs,
@@ -321,7 +375,7 @@ def _build_training_examples(
             price_maps=price_maps,
             timeline=timeline,
             index=index,
-            next_index=min(index + interval, len(timeline) - 1),
+            next_index=next_index,
             fee_bps=float(scenario_params.fee_bps),
         )
         previous_scale = scale
@@ -331,6 +385,7 @@ def _build_training_examples(
                 "features": features,
                 "label": label,
                 "scale": scale,
+                "label_end_timestamp": timeline[next_index],
             }
         )
     return examples
@@ -348,7 +403,9 @@ def _simulate_ml_scale_overlay(
 ) -> dict[str, Any]:
     cleaned = {pair: _sort_bars(bars) for pair, bars in bars_by_pair.items()}
     price_maps = _price_maps(cleaned)
-    timeline = _common_timeline(price_maps, pairs=pairs, start=_as_utc(start), end=_as_utc(end))
+    timeline = _common_timeline(
+        price_maps, pairs=pairs, start=_as_utc(start), end=_as_utc(end)
+    )
     snapshots = {
         ts: classify_market_regime_snapshot(cleaned, timestamp=ts, params=regime_params)
         for ts in timeline
@@ -598,7 +655,8 @@ def _window_report(
     start: datetime,
     end: datetime,
     preflight: Mapping[str, Any],
-    training_examples_before: int,
+    training_examples_available: int,
+    training_examples_used: int,
     training_examples_added: int,
     status: str,
     baseline_run: Mapping[str, Any],
@@ -614,7 +672,11 @@ def _window_report(
         "strict_data_ready": not (
             preflight.get("missing_series") or preflight.get("partial_series")
         ),
-        "training_examples_before": training_examples_before,
+        "training_examples_before": training_examples_available,
+        "training_examples_used": training_examples_used,
+        "training_examples_excluded_overlap": (
+            training_examples_available - training_examples_used
+        ),
         "training_examples_added": training_examples_added,
         "rows": {
             "no_overlay": _run_slice(baseline_run),
@@ -667,58 +729,9 @@ def _summary(
     params: MLRegimeOverlayResearchParams,
     timeframe: str,
 ) -> dict[str, Any]:
-    ready = [window for window in windows if window.get("status") == "ready"]
-    deltas = [
-        comparison
-        for window in ready
-        if (
-            comparison := (window.get("comparisons") or {}).get("ml_vs_handcoded")
-        )
-        is not None
-    ]
-    avg_return_delta = _mean_or_none(
-        [float(delta["delta_return_pct"]) for delta in deltas]
+    promotion = summarize_ml_overlay_promotion_rows(
+        [_overlay_promotion_row(window) for window in windows]
     )
-    avg_drawdown_delta = _mean_or_none(
-        [float(delta["delta_max_drawdown_pct"]) for delta in deltas]
-    )
-    avg_ml_exposure = _average_row_metric(
-        windows,
-        "ml_scale_overlay",
-        "avg_exposure_pct",
-    )
-    avg_handcoded_exposure = _average_row_metric(
-        windows,
-        "handcoded_top2_soft_target_scale",
-        "avg_exposure_pct",
-    )
-    min_required_ml_exposure = (
-        avg_handcoded_exposure * 0.35
-        if avg_handcoded_exposure is not None
-        else None
-    )
-    bucket_counts, regime_coverage_sufficient = summarize_regime_coverage(
-        window.get("evidence_bucket") for window in windows
-    )
-    gate = {
-        "strict_data_ready": all(bool(window.get("strict_data_ready")) for window in windows),
-        "has_ml_windows": len(deltas) > 0,
-        "regime_coverage_sufficient": regime_coverage_sufficient,
-        "beats_handcoded_return": (
-            avg_return_delta is not None and avg_return_delta > 0.0
-        ),
-        "beats_handcoded_drawdown": (
-            avg_drawdown_delta is not None and avg_drawdown_delta < 0.0
-        ),
-        "not_cash_only": (
-            avg_ml_exposure is not None
-            and (
-                min_required_ml_exposure is None
-                or avg_ml_exposure >= min_required_ml_exposure
-            )
-        ),
-    }
-    gate["passed"] = all(gate.values())
     return {
         "research_only": True,
         "runtime_wiring_approved": False,
@@ -739,10 +752,125 @@ def _summary(
             "min_training_examples": params.min_training_examples,
         },
         "window_count": len(windows),
-        "ml_ready_windows": len(deltas),
+        **promotion,
+    }
+
+
+def _overlay_promotion_row(window: Mapping[str, Any]) -> dict[str, Any]:
+    comparison = (window.get("comparisons") or {}).get("ml_vs_handcoded")
+    rows = window.get("rows") or {}
+    ml_row = rows.get("ml_scale_overlay") or {}
+    handcoded_row = rows.get("handcoded_top2_soft_target_scale") or {}
+    return {
+        "strict_data_ready": bool(window.get("strict_data_ready")),
+        "evidence_bucket": window.get("evidence_bucket"),
+        "delta_return_pct": (
+            float(comparison["delta_return_pct"]) if comparison is not None else None
+        ),
+        "delta_max_drawdown_pct": (
+            float(comparison["delta_max_drawdown_pct"])
+            if comparison is not None
+            else None
+        ),
+        "ml_avg_exposure_pct": _float_or_none(ml_row.get("avg_exposure_pct")),
+        "handcoded_avg_exposure_pct": _float_or_none(
+            handcoded_row.get("avg_exposure_pct")
+        ),
+        "training_examples_excluded_overlap": int(
+            window.get("training_examples_excluded_overlap", 0) or 0
+        ),
+    }
+
+
+def summarize_ml_overlay_promotion_rows(
+    rows: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    ready = [row for row in rows if row.get("delta_return_pct") is not None]
+    avg_return_delta = _mean_or_none([float(row["delta_return_pct"]) for row in ready])
+    avg_drawdown_delta = _mean_or_none(
+        [float(row["delta_max_drawdown_pct"]) for row in ready]
+    )
+    avg_ml_exposure = _mean_or_none(
+        [
+            float(row["ml_avg_exposure_pct"])
+            for row in rows
+            if row.get("ml_avg_exposure_pct") is not None
+        ]
+    )
+    avg_handcoded_exposure = _mean_or_none(
+        [
+            float(row["handcoded_avg_exposure_pct"])
+            for row in rows
+            if row.get("handcoded_avg_exposure_pct") is not None
+        ]
+    )
+    min_required_ml_exposure = (
+        avg_handcoded_exposure * 0.35 if avg_handcoded_exposure is not None else None
+    )
+    bucket_counts, regime_coverage_sufficient = summarize_regime_coverage(
+        row.get("evidence_bucket") for row in rows
+    )
+    regime_bucket_results = _regime_bucket_results(ready)
+    passing_regime_buckets = [
+        bucket
+        for bucket, result in regime_bucket_results.items()
+        if bool(result["passed"])
+    ]
+    current_rows = [
+        row for row in ready if row.get("evidence_bucket") == "current_rolling"
+    ]
+    current_rolling_window_count = sum(
+        1 for row in rows if row.get("evidence_bucket") == "current_rolling"
+    )
+    current_rolling_present = current_rolling_window_count > 0
+    current_rolling_evaluable = bool(current_rows)
+    current_rolling_not_worse = bool(current_rows) and all(
+        float(row["delta_return_pct"]) >= 0.0
+        and float(row["delta_max_drawdown_pct"]) <= 0.0
+        for row in current_rows
+    )
+    gate = {
+        "research_flags": True,
+        "strict_data_ready": all(bool(row.get("strict_data_ready")) for row in rows),
+        "has_ml_windows": bool(ready),
+        "regime_coverage_sufficient": regime_coverage_sufficient,
+        "current_rolling_present": current_rolling_present,
+        "current_rolling_evaluable": current_rolling_evaluable,
+        "regime_bucket_return_drawdown": (
+            len(passing_regime_buckets) >= REQUIRED_PASSING_REGIME_BUCKETS
+        ),
+        "current_rolling_not_worse": current_rolling_not_worse,
+        "beats_handcoded_return": (
+            avg_return_delta is not None and avg_return_delta > 0.0
+        ),
+        "beats_handcoded_drawdown": (
+            avg_drawdown_delta is not None and avg_drawdown_delta < 0.0
+        ),
+        "not_cash_only": (
+            avg_ml_exposure is not None
+            and (
+                min_required_ml_exposure is None
+                or avg_ml_exposure >= min_required_ml_exposure
+            )
+        ),
+    }
+    gate["passed"] = all(gate.values())
+    return {
+        "ml_ready_windows": len(ready),
         "evidence_bucket_counts": bucket_counts,
         "regime_coverage_sufficient": regime_coverage_sufficient,
         "insufficient_regime_coverage": not regime_coverage_sufficient,
+        "required_passing_regime_buckets": REQUIRED_PASSING_REGIME_BUCKETS,
+        "passing_regime_buckets": passing_regime_buckets,
+        "regime_bucket_results": regime_bucket_results,
+        "current_rolling_window_count": current_rolling_window_count,
+        "current_rolling_ready_window_count": len(current_rows),
+        "current_rolling_present": current_rolling_present,
+        "current_rolling_evaluable": current_rolling_evaluable,
+        "current_rolling_not_worse": current_rolling_not_worse,
+        "training_examples_excluded_overlap": sum(
+            int(row.get("training_examples_excluded_overlap", 0) or 0) for row in rows
+        ),
         "avg_ml_delta_return_pct": avg_return_delta,
         "avg_ml_delta_max_drawdown_pct": avg_drawdown_delta,
         "avg_ml_exposure_pct": avg_ml_exposure,
@@ -752,23 +880,47 @@ def _summary(
     }
 
 
-def _average_row_metric(
-    windows: Sequence[Mapping[str, Any]],
-    row_name: str,
-    metric_name: str,
-) -> float | None:
-    values = []
-    for window in windows:
-        row = (window.get("rows") or {}).get(row_name)
-        if isinstance(row, Mapping):
-            values.append(float(row.get(metric_name, 0.0) or 0.0))
-    return mean(values) if values else None
+def _regime_bucket_results(
+    ready_rows: Sequence[Mapping[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    results: dict[str, dict[str, Any]] = {}
+    for bucket in REQUIRED_REGIME_BUCKETS:
+        bucket_rows = [
+            row for row in ready_rows if row.get("evidence_bucket") == bucket
+        ]
+        avg_return_delta = _mean_or_none(
+            [float(row["delta_return_pct"]) for row in bucket_rows]
+        )
+        avg_drawdown_delta = _mean_or_none(
+            [float(row["delta_max_drawdown_pct"]) for row in bucket_rows]
+        )
+        results[bucket] = {
+            "window_count": len(bucket_rows),
+            "avg_delta_return_pct": avg_return_delta,
+            "avg_delta_max_drawdown_pct": avg_drawdown_delta,
+            "passed": (
+                avg_return_delta is not None
+                and avg_return_delta > 0.0
+                and avg_drawdown_delta is not None
+                and avg_drawdown_delta < 0.0
+            ),
+        }
+    return results
 
 
 def _mean_or_none(values: Sequence[float]) -> float | None:
     if not values:
         return None
     return sum(values) / len(values)
+
+
+def _float_or_none(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _default_regime_params(timeframe: str) -> MarketRegimeOverlayParams:

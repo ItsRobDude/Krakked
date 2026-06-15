@@ -27,6 +27,7 @@ from krakked.backtest import (
     MarketRegimeExposureScenarioParams,
     MarketRegimeOverlayParams,
     MLRegimeOverlayResearchParams,
+    MLRiskSignalResearchParams,
     PairLocalSourceResearchParams,
     RSRotationV2ResearchParams,
     aggregate_pair_local_source_research_reports,
@@ -50,6 +51,7 @@ from krakked.backtest import (
     run_market_regime_research,
     run_market_regime_throttle_backtest,
     run_ml_regime_overlay_research,
+    run_ml_risk_signal_research,
     run_ml_walk_forward,
     run_pair_local_source_research,
     run_rs_rotation_v2_research,
@@ -68,6 +70,9 @@ from krakked.backtest.ml_feature_ablation_summary import (
 from krakked.backtest.ml_report_compare import (
     compare_ml_reports,
     render_ml_report_comparison,
+)
+from krakked.backtest.ml_regime_overlay_research import (
+    summarize_ml_overlay_promotion_rows,
 )
 from krakked.backtest.strategy_activity import (
     apply_strategy_activity_override,
@@ -1761,6 +1766,97 @@ def _add_ml_regime_overlay_research_arguments(
     )
 
 
+def _add_ml_risk_signal_research_arguments(
+    subparser: argparse.ArgumentParser,
+) -> None:
+    subparser.add_argument(
+        "--window-set",
+        action="append",
+        choices=sorted(STRATEGY_ACTIVITY_WINDOW_SETS),
+        default=None,
+        help=(
+            "Evidence window set to run; repeat to include multiple sets "
+            "(defaults to regime_diverse_4h)"
+        ),
+    )
+    subparser.add_argument(
+        "--config",
+        help="Optional path to the base config.yaml to use",
+    )
+    subparser.add_argument(
+        "--pair",
+        action="append",
+        help="Pairs used for regime context; repeat to include multiple pairs",
+    )
+    subparser.add_argument(
+        "--benchmark-pair",
+        default="BTC/USD",
+        help="Benchmark pair whose next-window volatility is forecast",
+    )
+    subparser.add_argument(
+        "--timeframe",
+        default="4h",
+        help="Cached OHLC timeframe for risk-signal research",
+    )
+    subparser.add_argument(
+        "--horizon-bars",
+        type=int,
+        default=6,
+        help="Future bars in the realized-volatility label",
+    )
+    subparser.add_argument(
+        "--short-lookback-bars",
+        type=int,
+        default=1,
+        help="Short HAR realized-volatility feature lookback",
+    )
+    subparser.add_argument(
+        "--medium-lookback-bars",
+        type=int,
+        default=6,
+        help="Medium HAR realized-volatility feature lookback",
+    )
+    subparser.add_argument(
+        "--long-lookback-bars",
+        type=int,
+        default=42,
+        help="Long HAR realized-volatility feature lookback",
+    )
+    subparser.add_argument(
+        "--rolling-lookback-bars",
+        type=int,
+        default=42,
+        help="Rolling realized-volatility baseline lookback",
+    )
+    subparser.add_argument(
+        "--ewma-lambda",
+        type=float,
+        default=0.94,
+        help="RiskMetrics EWMA decay factor",
+    )
+    subparser.add_argument(
+        "--min-training-examples",
+        type=int,
+        default=30,
+        help="Minimum earlier-window examples before model evaluation starts",
+    )
+    subparser.add_argument(
+        "--save-dir",
+        required=True,
+        help="Directory where aggregate.json is written",
+    )
+    subparser.add_argument(
+        "--strict-data",
+        action="store_true",
+        help="Fail if the requested benchmark/timeframe is missing or partial",
+    )
+    subparser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print the ML risk-signal report as JSON",
+    )
+
+
 def _add_strategy_action_diagnostics_arguments(
     subparser: argparse.ArgumentParser,
 ) -> None:
@@ -2079,6 +2175,35 @@ def _print_ml_regime_overlay_research_summary(payload: dict[str, Any]) -> None:
     print(f"Saved aggregate: {summary['aggregate_path']}")
 
 
+def _print_ml_risk_signal_research_summary(payload: dict[str, Any]) -> None:
+    summary = payload["summary"]
+    forecast_skill = summary.get("forecast_skill") or {}
+    overall = forecast_skill.get("overall") or {}
+    outcomes = summary.get("pre_registered_outcomes") or {}
+    exposure_gate = outcomes.get("exposure_research_gate") or {}
+    display_gate = outcomes.get("display_only_gate") or {}
+    print("ML risk-signal research completed.")
+    print(
+        f"Benchmark: {summary['benchmark_pair']} | "
+        f"Timeframe: {summary['timeframe']} | "
+        f"Horizon: {summary['target']['horizon_bars']} bars"
+    )
+    print(
+        f"Windows: {summary['model_ready_windows']}/{summary['window_count']} "
+        f"model-ready | Observations: {overall.get('observation_count', 0)}"
+    )
+    print(
+        "Model vs EWMA QLIKE improvement: "
+        f"{_format_optional_pct(overall.get('model_vs_ewma_qlike_improvement_pct'))}"
+    )
+    print(
+        f"Exposure gate passed={exposure_gate.get('passed', False)} | "
+        f"Display gate passed={display_gate.get('passed', False)} | "
+        f"Lane status={summary['lane_status']}"
+    )
+    print(f"Saved aggregate: {summary['aggregate_path']}")
+
+
 def _print_strategy_action_diagnostics_summary(
     payload: dict[str, Any],
     report_path: str | None,
@@ -2314,11 +2439,7 @@ def _print_ml_walk_forward_summary(
     cost_semantics = summary.get("cost_semantics") or {}
     hurdle_source = cost_semantics.get("evaluation_hurdle_source", "unknown")
     hurdle_pct = cost_semantics.get("evaluation_hurdle_pct")
-    hurdle_text = (
-        "mixed"
-        if hurdle_pct is None
-        else f"{float(hurdle_pct) * 100.0:.2f}%"
-    )
+    hurdle_text = "mixed" if hurdle_pct is None else f"{float(hurdle_pct) * 100.0:.2f}%"
     print(f"Cost hurdle: {summary['round_trip_cost_bps']:.2f} bps estimated round trip")
     print(f"Evaluation hurdle: {hurdle_source} ({hurdle_text})")
     baselines = summary.get("baselines") or {}
@@ -3558,6 +3679,66 @@ def _ml_regime_overlay_research_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _ml_risk_signal_research_command(args: argparse.Namespace) -> int:
+    """Run research-only next-window volatility forecast diagnostics."""
+
+    try:
+        config = _load_backtest_config(args)
+        selected_window_sets = _unique_strings(args.window_set or ["regime_diverse_4h"])
+        window_sets = {
+            window_set: STRATEGY_ACTIVITY_WINDOW_SETS[window_set]
+            for window_set in selected_window_sets
+        }
+        params = MLRiskSignalResearchParams(
+            horizon_bars=int(args.horizon_bars),
+            short_lookback_bars=int(args.short_lookback_bars),
+            medium_lookback_bars=int(args.medium_lookback_bars),
+            long_lookback_bars=int(args.long_lookback_bars),
+            rolling_lookback_bars=int(args.rolling_lookback_bars),
+            ewma_lambda=float(args.ewma_lambda),
+            min_training_examples=int(args.min_training_examples),
+        )
+        save_dir = Path(args.save_dir).expanduser().resolve()
+        save_dir.mkdir(parents=True, exist_ok=True)
+    except Exception as exc:  # noqa: BLE001
+        return _print_error(f"ML risk-signal research setup failed: {exc}")
+
+    try:
+        result = run_ml_risk_signal_research(
+            config,
+            window_sets=window_sets,
+            pairs=args.pair,
+            timeframe=str(args.timeframe),
+            benchmark_pair=str(args.benchmark_pair),
+            params=params,
+            strict_data=bool(args.strict_data),
+        )
+        payload = result.to_report_dict()
+        payload["summary"]["config_path"] = (
+            str(Path(args.config).expanduser().resolve()) if args.config else None
+        )
+        payload["summary"]["save_dir"] = str(save_dir)
+        aggregate_path = save_dir / "aggregate.json"
+        payload["summary"]["aggregate_path"] = str(aggregate_path)
+        payload["summary"]["window_sets"] = selected_window_sets
+        payload["provenance"] = {
+            "app_version": APP_VERSION,
+            "config_path": (
+                str(Path(args.config).expanduser().resolve()) if args.config else None
+            ),
+            "generated_by": "krakked ml-risk-signal-research",
+        }
+        _write_backtest_report(payload, str(aggregate_path))
+    except Exception as exc:  # noqa: BLE001
+        return _print_error(f"ML risk-signal research failed: {exc}")
+
+    if args.json:
+        print(json.dumps(payload, indent=2))
+    else:
+        _print_ml_risk_signal_research_summary(payload)
+    return 0
+
+
 def _strategy_action_diagnostics_command(args: argparse.Namespace) -> int:
     """Run one cache-only replay and emit action-quality diagnostics."""
 
@@ -3819,9 +4000,7 @@ def _ml_regime_overlay_research_aggregate(
             comparison = (window.get("comparisons") or {}).get("ml_vs_handcoded")
             window_rows = window.get("rows") or {}
             ml_row = window_rows.get("ml_scale_overlay") or {}
-            handcoded_row = (
-                window_rows.get("handcoded_top2_soft_target_scale") or {}
-            )
+            handcoded_row = window_rows.get("handcoded_top2_soft_target_scale") or {}
             rows.append(
                 {
                     "allocation_pct": float(summary["allocation_pct"]),
@@ -3832,6 +4011,12 @@ def _ml_regime_overlay_research_aggregate(
                     "evidence_bucket": window.get("evidence_bucket"),
                     "training_examples_before": int(
                         window.get("training_examples_before", 0) or 0
+                    ),
+                    "training_examples_used": int(
+                        window.get("training_examples_used", 0) or 0
+                    ),
+                    "training_examples_excluded_overlap": int(
+                        window.get("training_examples_excluded_overlap", 0) or 0
                     ),
                     "training_examples_added": int(
                         window.get("training_examples_added", 0) or 0
@@ -3859,66 +4044,24 @@ def _ml_regime_overlay_research_aggregate(
     groups: list[dict[str, Any]] = []
     for allocation_pct in sorted({row["allocation_pct"] for row in rows}):
         items = [row for row in rows if row["allocation_pct"] == allocation_pct]
-        ready = [row for row in items if row["delta_return_pct"] is not None]
-        avg_return_delta = _avg_optional(
-            [row["delta_return_pct"] for row in ready]
-        )
-        avg_drawdown_delta = _avg_optional(
-            [row["delta_max_drawdown_pct"] for row in ready]
-        )
-        avg_ml_exposure = _avg_optional(
-            [row["ml_avg_exposure_pct"] for row in ready]
-        )
-        avg_handcoded_exposure = _avg_optional(
-            [row["handcoded_avg_exposure_pct"] for row in ready]
-        )
-        min_required_ml_exposure = (
-            avg_handcoded_exposure * 0.35
-            if avg_handcoded_exposure is not None
-            else None
-        )
-        bucket_counts, regime_coverage_sufficient = summarize_regime_coverage(
-            row.get("evidence_bucket") for row in items
-        )
-        gate = {
-            "strict_data_ready": all(row["strict_data_ready"] for row in items),
-            "has_ml_windows": bool(ready),
-            "regime_coverage_sufficient": regime_coverage_sufficient,
-            "beats_handcoded_return": (
-                avg_return_delta is not None and avg_return_delta > 0.0
-            ),
-            "beats_handcoded_drawdown": (
-                avg_drawdown_delta is not None and avg_drawdown_delta < 0.0
-            ),
-            "not_cash_only": (
-                avg_ml_exposure is not None
-                and (
-                    min_required_ml_exposure is None
-                    or avg_ml_exposure >= min_required_ml_exposure
-                )
-            ),
-        }
-        gate["passed"] = all(gate.values())
+        promotion = summarize_ml_overlay_promotion_rows(items)
         groups.append(
             {
                 "allocation_pct": allocation_pct,
                 "window_count": len(items),
-                "ml_ready_windows": len(ready),
-                "evidence_bucket_counts": bucket_counts,
-                "avg_ml_delta_return_pct": avg_return_delta,
+                **promotion,
                 "positive_delta_windows": sum(
-                    1 for row in ready if float(row["delta_return_pct"]) > 0.0
+                    1
+                    for row in items
+                    if row.get("delta_return_pct") is not None
+                    and float(row["delta_return_pct"]) > 0.0
                 ),
-                "avg_ml_delta_max_drawdown_pct": avg_drawdown_delta,
                 "drawdown_improved_windows": sum(
                     1
-                    for row in ready
-                    if float(row["delta_max_drawdown_pct"]) < 0.0
+                    for row in items
+                    if row.get("delta_max_drawdown_pct") is not None
+                    and float(row["delta_max_drawdown_pct"]) < 0.0
                 ),
-                "avg_ml_exposure_pct": avg_ml_exposure,
-                "avg_handcoded_exposure_pct": avg_handcoded_exposure,
-                "min_required_ml_exposure_pct": min_required_ml_exposure,
-                "promotion_gate": gate,
             }
         )
 
@@ -4991,6 +5134,13 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     _add_ml_regime_overlay_research_arguments(ml_regime_overlay_parser)
     ml_regime_overlay_parser.set_defaults(func=_ml_regime_overlay_research_command)
+
+    ml_risk_signal_parser = subparsers.add_parser(
+        "ml-risk-signal-research",
+        help="Research next-window volatility forecasts before any exposure rules",
+    )
+    _add_ml_risk_signal_research_arguments(ml_risk_signal_parser)
+    ml_risk_signal_parser.set_defaults(func=_ml_risk_signal_research_command)
 
     ml_walk_forward_parser = subparsers.add_parser(
         "ml-walk-forward",
