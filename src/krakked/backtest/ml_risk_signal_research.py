@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import math
+from collections import Counter
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from statistics import mean
@@ -30,7 +31,7 @@ from .market_regime_overlay import _preflight_to_dict, _sort_bars, _strict_data_
 from .runner import BacktestMarketData
 
 REPORT_TYPE = "ml_risk_signal_research"
-REPORT_VERSION = 1
+REPORT_VERSION = 2
 MODEL_ID = "har_rv_ols"
 BASELINE_PREVIOUS = "previous_horizon_realized_vol"
 BASELINE_ROLLING = "rolling_realized_vol"
@@ -43,6 +44,7 @@ MAX_DISPLAY_EWMA_LAG_PCT = 1.0
 MIN_CALIBRATION_RATIO = 0.75
 MAX_CALIBRATION_RATIO = 1.33
 MAX_LOG_VARIANCE_FORECAST = 50.0
+MAX_NON_CURRENT_EVALUATION_OVERLAP_FRACTION = 0.25
 
 
 @dataclass(frozen=True)
@@ -636,6 +638,12 @@ def _window_report(
         "example_count": len(examples),
         "first_example_time": examples[0]["time"] if examples else None,
         "last_example_time": examples[-1]["time"] if examples else None,
+        "first_label_start_time": (
+            _example_label_time(examples[0], "label_start") if examples else None
+        ),
+        "last_label_end_time": (
+            _example_label_time(examples[-1], "label_end") if examples else None
+        ),
         "forecast_skill": {
             "baselines": baselines,
             "model": {
@@ -745,6 +753,7 @@ def _summary(
         "model_evaluation_observations": len(evaluation_rows),
         "evidence_bucket_counts": bucket_counts,
         "regime_coverage_sufficient": regime_coverage_sufficient,
+        "forecast_verdict_readiness": outcomes["forecast_verdict_readiness"],
         "forecast_skill": forecast_skill,
         "rule_performance": {
             "status": "deferred",
@@ -916,6 +925,10 @@ def _pre_registered_outcomes(
     *,
     forecast_skill: Mapping[str, Any],
 ) -> dict[str, Any]:
+    readiness = _forecast_verdict_readiness(
+        windows,
+        forecast_skill=forecast_skill,
+    )
     by_regime = forecast_skill.get("by_regime") or {}
     passing_buckets: list[str] = []
     bucket_improvements: dict[str, float | None] = {}
@@ -938,11 +951,14 @@ def _pre_registered_outcomes(
         current_rolling_evaluable
         and float(current_improvement) >= -MAX_CURRENT_EWMA_LAG_PCT
     )
-    strict_data_ready = all(bool(window.get("strict_data_ready")) for window in windows)
+    strict_data_ready = bool(windows) and all(
+        bool(window.get("strict_data_ready")) for window in windows
+    )
     has_model_observations = (
         int((forecast_skill.get("overall") or {}).get("observation_count", 0) or 0) > 0
     )
     exposure_gate = {
+        "readiness_passed": bool(readiness["ready_for_exposure_verdict"]),
         "strict_data_ready": strict_data_ready,
         "has_model_observations": has_model_observations,
         "current_rolling_present": current_rolling_present,
@@ -970,11 +986,19 @@ def _pre_registered_outcomes(
         "has_model_observations": has_model_observations,
         "not_materially_worse_than_ewma": not_materially_worse,
         "calibrated_mean_vol_ratio": calibrated,
+        "readiness_passed": bool(readiness["ready_for_exposure_verdict"]),
     }
-    display_gate["passed"] = all(display_gate.values())
+    display_gate["metric_passed"] = (
+        has_model_observations and not_materially_worse and calibrated
+    )
+    display_gate["passed"] = (
+        display_gate["metric_passed"] and display_gate["readiness_passed"]
+    )
 
     if exposure_gate["passed"]:
         lane_status = "continue_to_rule_research"
+    elif not readiness["ready_for_exposure_verdict"]:
+        lane_status = str(readiness["status"])
     elif display_gate["passed"]:
         lane_status = "display_only_candidate"
     else:
@@ -983,6 +1007,7 @@ def _pre_registered_outcomes(
     return {
         "exposure_research_gate": exposure_gate,
         "display_only_gate": display_gate,
+        "forecast_verdict_readiness": readiness,
         "non_current_bucket_qlike_improvement_pct": bucket_improvements,
         "passing_non_current_buckets": passing_buckets,
         "current_rolling_present": current_rolling_present,
@@ -993,11 +1018,260 @@ def _pre_registered_outcomes(
                 "close this volatility-forecasting lane instead of iterating "
                 "model variants on the same target"
             ),
-            "triggered": lane_status == "close_volatility_forecast_lane",
+            "triggered": (
+                readiness["ready_for_exposure_verdict"]
+                and lane_status == "close_volatility_forecast_lane"
+            ),
         },
         "lane_status": lane_status,
     }
 
 
+def _forecast_verdict_readiness(
+    windows: Sequence[Mapping[str, Any]],
+    *,
+    forecast_skill: Mapping[str, Any],
+) -> dict[str, Any]:
+    status_counts = Counter(
+        str(window.get("status") or "unknown") for window in windows
+    )
+    overall = forecast_skill.get("overall") or {}
+    observation_count = int(overall.get("observation_count", 0) or 0)
+    model_ready_windows = int(status_counts.get("ready", 0))
+    strict_data_ready = bool(windows) and all(
+        bool(window.get("strict_data_ready")) for window in windows
+    )
+    missing_series_by_window = _series_gaps_by_window(windows, "missing_series")
+    partial_series_by_window = _series_gaps_by_window(windows, "partial_series")
+    has_data_shortfall = (
+        bool(missing_series_by_window)
+        or bool(partial_series_by_window)
+        or status_counts.get("insufficient_data", 0) > 0
+    )
+
+    by_regime = forecast_skill.get("by_regime") or {}
+    evaluable_non_current_buckets = sorted(
+        bucket
+        for bucket in NON_CURRENT_EXPOSURE_BUCKETS
+        if (by_regime.get(bucket) or {}).get("model_vs_ewma_qlike_improvement_pct")
+        is not None
+    )
+    current_rolling_present = any(
+        window.get("evidence_bucket") == "current_rolling" for window in windows
+    )
+    current_rolling_evaluable = (by_regime.get("current_rolling") or {}).get(
+        "model_vs_ewma_qlike_improvement_pct"
+    ) is not None
+    overlap_diagnostics = _evaluation_overlap_diagnostics(windows)
+    has_blocking_overlaps = bool(overlap_diagnostics["blocking_overlaps"])
+
+    blocking_reasons: list[str] = []
+    status = "ready_for_verdict"
+    if observation_count <= 0:
+        blocking_reasons.append("no_model_evaluation_observations")
+        if has_data_shortfall:
+            status = "insufficient_data"
+            blocking_reasons.append("benchmark_data_missing_or_insufficient")
+        elif status_counts.get("insufficient_training", 0) > 0:
+            status = "insufficient_training"
+            blocking_reasons.append("insufficient_training_history")
+        else:
+            status = "insufficient_evaluation"
+    else:
+        if not strict_data_ready:
+            status = "insufficient_data"
+            blocking_reasons.append("strict_data_not_ready")
+        if len(evaluable_non_current_buckets) < MIN_EXPOSURE_BUCKETS:
+            if status == "ready_for_verdict":
+                status = "insufficient_regime_coverage"
+            blocking_reasons.append("fewer_than_2_evaluable_non_current_regime_buckets")
+        if not current_rolling_present:
+            if status == "ready_for_verdict":
+                status = "insufficient_regime_coverage"
+            blocking_reasons.append("current_rolling_window_missing")
+        elif not current_rolling_evaluable:
+            if status == "ready_for_verdict":
+                status = "insufficient_regime_coverage"
+            blocking_reasons.append("current_rolling_window_not_evaluable")
+        if has_blocking_overlaps:
+            if status == "ready_for_verdict":
+                status = "insufficient_independence"
+            blocking_reasons.append("overlapping_evaluation_windows")
+
+    ready_for_exposure_verdict = status == "ready_for_verdict"
+    return {
+        "status": status,
+        "ready_for_exposure_verdict": ready_for_exposure_verdict,
+        "observation_count": observation_count,
+        "model_ready_windows": model_ready_windows,
+        "window_count": len(windows),
+        "window_status_counts": dict(sorted(status_counts.items())),
+        "strict_data_ready": strict_data_ready,
+        "required_evaluable_non_current_regime_buckets": MIN_EXPOSURE_BUCKETS,
+        "evaluable_non_current_regime_buckets": evaluable_non_current_buckets,
+        "evaluable_non_current_regime_bucket_count": len(evaluable_non_current_buckets),
+        "current_rolling_present": current_rolling_present,
+        "current_rolling_evaluable": current_rolling_evaluable,
+        "window_independence": overlap_diagnostics,
+        "blocking_reasons": blocking_reasons,
+        "coverage_gaps": {
+            "missing_series_by_window": missing_series_by_window,
+            "partial_series_by_window": partial_series_by_window,
+        },
+    }
+
+
+def _evaluation_overlap_diagnostics(
+    windows: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    ranges: list[dict[str, Any]] = []
+    for window in windows:
+        if window.get("status") != "ready":
+            continue
+        start = _parse_report_datetime(window.get("first_example_time"))
+        decision_end = _parse_report_datetime(window.get("last_example_time"))
+        label_end = _parse_report_datetime(window.get("last_label_end_time"))
+        end = label_end or decision_end
+        if start is None or end is None or end < start:
+            continue
+        bucket = str(window.get("evidence_bucket") or "")
+        ranges.append(
+            {
+                "window_set": window.get("window_set"),
+                "window_id": window.get("window_id"),
+                "evidence_bucket": bucket,
+                "start": start,
+                "end": end,
+                "decision_end": decision_end,
+                "label_end": label_end,
+                "is_current_rolling": bucket == "current_rolling",
+            }
+        )
+
+    overlaps: list[dict[str, Any]] = []
+    blocking_overlaps: list[dict[str, Any]] = []
+    for left_index, left in enumerate(ranges):
+        left_start = left["start"]
+        left_end = left["end"]
+        for right in ranges[left_index + 1 :]:
+            right_start = right["start"]
+            right_end = right["end"]
+            overlap_seconds = (
+                min(left_end, right_end) - max(left_start, right_start)
+            ).total_seconds()
+            if overlap_seconds <= 0.0:
+                continue
+            shorter_seconds = max(
+                min(
+                    max((left_end - left_start).total_seconds(), 0.0),
+                    max((right_end - right_start).total_seconds(), 0.0),
+                ),
+                1.0,
+            )
+            overlap_fraction = overlap_seconds / shorter_seconds
+            blocks_verdict = (
+                not bool(left["is_current_rolling"])
+                and not bool(right["is_current_rolling"])
+                and overlap_fraction > MAX_NON_CURRENT_EVALUATION_OVERLAP_FRACTION
+            )
+            overlap = {
+                "left_window_id": left["window_id"],
+                "left_evidence_bucket": left["evidence_bucket"],
+                "right_window_id": right["window_id"],
+                "right_evidence_bucket": right["evidence_bucket"],
+                "overlap_hours": overlap_seconds / 3600.0,
+                "overlap_fraction_of_shorter_range": overlap_fraction,
+                "blocks_verdict": blocks_verdict,
+            }
+            overlaps.append(overlap)
+            if blocks_verdict:
+                blocking_overlaps.append(overlap)
+
+    return {
+        "status": "ready" if not blocking_overlaps else "overlapping",
+        "max_allowed_non_current_overlap_fraction": (
+            MAX_NON_CURRENT_EVALUATION_OVERLAP_FRACTION
+        ),
+        "range_basis": (
+            "first decision-bar time through last label-end time; reports that "
+            "lack label-end metadata fall back to last decision-bar time"
+        ),
+        "limitations": [
+            "Pairwise overlap checks do not fully measure cumulative chained reuse."
+        ],
+        "ready_scored_window_count": len(ranges),
+        "ready_scored_window_ranges": [
+            _overlap_range_to_report_dict(item) for item in ranges
+        ],
+        "scored_example_range_overlaps": overlaps,
+        "blocking_overlaps": blocking_overlaps,
+    }
+
+
+def _overlap_range_to_report_dict(item: Mapping[str, Any]) -> dict[str, Any]:
+    start = item["start"]
+    end = item["end"]
+    decision_end = item.get("decision_end")
+    label_end = item.get("label_end")
+    return {
+        "window_set": item.get("window_set"),
+        "window_id": item.get("window_id"),
+        "evidence_bucket": item.get("evidence_bucket"),
+        "first_example_time": start.isoformat(),
+        "last_example_time": decision_end.isoformat() if decision_end else None,
+        "last_label_end_time": label_end.isoformat() if label_end else None,
+        "overlap_range_end_time": end.isoformat(),
+        "is_current_rolling": bool(item.get("is_current_rolling")),
+        "duration_hours": (end - start).total_seconds() / 3600.0,
+    }
+
+
+def _series_gaps_by_window(
+    windows: Sequence[Mapping[str, Any]],
+    field_name: str,
+) -> list[dict[str, Any]]:
+    gaps: list[dict[str, Any]] = []
+    for window in windows:
+        preflight = window.get("preflight")
+        if not isinstance(preflight, Mapping):
+            continue
+        values = [str(value) for value in (preflight.get(field_name) or [])]
+        if not values:
+            continue
+        gaps.append(
+            {
+                "window_set": window.get("window_set"),
+                "window_id": window.get("window_id"),
+                field_name: sorted(values),
+            }
+        )
+    return gaps
+
+
+def _parse_report_datetime(value: Any) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
 def _bar_time(bar: OHLCBar) -> str:
     return datetime.fromtimestamp(int(bar.timestamp), tz=UTC).isoformat()
+
+
+def _example_label_time(example: Mapping[str, Any], field_prefix: str) -> str | None:
+    label = example.get("label")
+    if not isinstance(label, Mapping):
+        return None
+    time_value = label.get(f"{field_prefix}_time")
+    if time_value is not None:
+        return str(time_value)
+    timestamp_value = label.get(f"{field_prefix}_timestamp")
+    if timestamp_value is None:
+        return None
+    return datetime.fromtimestamp(int(timestamp_value), tz=UTC).isoformat()

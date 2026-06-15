@@ -629,6 +629,37 @@ class MarketDataAPI:
             store=self._ohlc_store,
         )
 
+    def append_ohlc_bars(
+        self, pair: str, timeframe: str, bars: List[OHLCBar]
+    ) -> tuple[str, int]:
+        """Append already-sourced OHLC bars to the local store.
+
+        This is used by offline/import workflows where the source is a trusted
+        historical file rather than the Kraken REST tail endpoint.
+        Returns the canonical pair and count of input timestamps that were not
+        already present before the append.
+        """
+
+        canonical = self.normalize_pair(pair)
+        if canonical not in self._universe_map:
+            raise PairNotFoundError(pair)
+        bars_to_append = list(bars)
+        input_timestamps = {int(bar.timestamp) for bar in bars_to_append}
+        existing_timestamps: set[int] = set()
+        if input_timestamps:
+            existing_bars = self._ohlc_store.get_bars_since(
+                canonical,
+                timeframe,
+                min(input_timestamps),
+            )
+            existing_timestamps = {int(bar.timestamp) for bar in existing_bars}
+
+        self._ohlc_store.append_bars(canonical, timeframe, bars_to_append)
+        flush = getattr(self._ohlc_store, "flush", None)
+        if callable(flush):
+            flush()
+        return canonical, len(input_timestamps - existing_timestamps)
+
     def _ticker_freshness(self, pair: str) -> Tuple[bool, float]:
         """
         Returns whether ticker data for the pair is fresh alongside the current
