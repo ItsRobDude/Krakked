@@ -48,6 +48,9 @@ docker compose -f compose.unraid.yaml up -d
 
 # Rebuild/recreate after code changes, keeping existing config files
 bash scripts/unraid_bootstrap.sh --recreate --start
+
+# Run the current-main deployment proof and write a log under appdata/state
+bash scripts/unraid_deployment_proof.sh --host-url http://<your-unraid-ip>:8088
 ```
 
 If your Unraid install uses the older Compose command, replace `docker compose` with `docker-compose`. If Compose is not installed at all, the bootstrap helper falls back to plain `docker build` / `docker run`.
@@ -101,6 +104,21 @@ The export lands under:
 ```text
 /mnt/user/appdata/krakked/state/krakked-first-backup.zip
 ```
+
+## Current-main Proof
+
+After pulling a new commit or before treating a build as operator-ready, run:
+
+```bash
+git pull --ff-only
+bash scripts/unraid_deployment_proof.sh --host-url http://<your-unraid-ip>:8088
+```
+
+The proof runner recreates the paper container by default while preserving
+existing appdata config. It checks health, UI reachability, persisted mounts,
+forced-safe paper `run-once`, synthetic store evidence, live gates, restart
+persistence, export, and restore into scratch paths. It prints
+`DEPLOYMENT_PROOF_RESULT=PASS` only when all required checks pass.
 
 ## Cautions
 

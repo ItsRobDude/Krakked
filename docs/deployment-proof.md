@@ -5,6 +5,38 @@ end to end as a Docker-first self-hosted product on a real Unraid host — first
 boot, persistence, paper safety, operator visibility, backup/restore, and
 live-gates-closed-by-default — and to capture any gaps the drill exposes.
 
+## Current-main proof runner
+
+The historical V1 result below proves commit `40c21ea`. For any current branch
+or release candidate, run the host-side proof runner from the Krakked checkout
+on Unraid:
+
+```bash
+git pull --ff-only
+bash scripts/unraid_deployment_proof.sh --host-url http://<unraid-ip>:8088
+```
+
+By default the runner calls `scripts/unraid_bootstrap.sh --recreate --start`,
+keeps existing appdata config, writes a dated log and summary under
+`/mnt/user/appdata/krakked/state`, and exits non-zero if a required acceptance
+check fails. It checks the same deployment contract as V1: first boot/recreate,
+container health, persisted mounts, UI/health endpoints, forced-safe paper
+`run-once`, synthetic portfolio-store evidence, live gates closed, restart
+persistence, export, restore into scratch state paths, and final health.
+
+Useful variants:
+
+```bash
+# Published-image proof once KRAKKED_IMAGE / KRAKKED_IMAGE_TAG are pinned in .env
+bash scripts/unraid_deployment_proof.sh --mode image --host-url http://<unraid-ip>:8088
+
+# Use only when the host is already recreated and you want a non-recreate check
+bash scripts/unraid_deployment_proof.sh --no-recreate --host-url http://<unraid-ip>:8088
+```
+
+Paste back the `DEPLOYMENT_PROOF_RESULT`, pass/fail/warn counts, commit, and log
+path from the summary when recording a new proof.
+
 This is an operator drill you run on the Unraid box. Fill in the Results column
 and the Findings section. It changes no runtime behavior by itself; it is the
 acceptance test for "Krakked installs and runs cleanly for a non-developer
@@ -26,6 +58,8 @@ See [`unraid.md`](./unraid.md) for the low-terminal install path and
 - Mode: paper (default). Live gates must stay closed for this drill.
 
 Record the build under test:
+
+Historical V1 result:
 
 - Commit / image tag: `40c21ea` / `krakked:local`
 - Date run: `2026-05-31 10:50:49-10:52:02 America/Los_Angeles`
