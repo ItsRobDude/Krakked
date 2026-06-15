@@ -5,8 +5,8 @@ from typing import cast
 from krakked.config import AppConfig, RiskConfig
 from krakked.portfolio.manager import PortfolioService
 from krakked.strategy.allocator import StrategyWeights
-from krakked.strategy.models import StrategyState
 from krakked.strategy.engine import StrategyEngine
+from krakked.strategy.models import StrategyState
 from krakked.strategy.performance import StrategyPerformance
 from krakked.strategy.regime import MarketRegime, RegimeSnapshot
 
@@ -77,9 +77,7 @@ def test_compute_strategy_weights_uses_performance(monkeypatch):
     )
     engine = _build_engine(risk_config, portfolio)
 
-    monkeypatch.setattr(
-        "krakked.strategy.engine.compute_weights", fake_compute_weights
-    )
+    monkeypatch.setattr("krakked.strategy.engine.compute_weights", fake_compute_weights)
 
     weights = engine._compute_strategy_weights(_regime())
 

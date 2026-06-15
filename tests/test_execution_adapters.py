@@ -319,9 +319,8 @@ def test_execution_service_refreshes_dead_man_switch_when_due(
 
     assert refreshed is True
     client.cancel_all_orders_after.assert_called_once_with(30)
-    assert (
-        service.recommended_dead_man_refresh_interval_seconds()
-        == pytest.approx(15.0)
+    assert service.recommended_dead_man_refresh_interval_seconds() == pytest.approx(
+        15.0
     )
 
     client.cancel_all_orders_after.reset_mock()
@@ -329,9 +328,7 @@ def test_execution_service_refreshes_dead_man_switch_when_due(
     assert skipped is False
     client.cancel_all_orders_after.assert_not_called()
 
-    refreshed_again = service.refresh_dead_man_switch(
-        now=now + timedelta(seconds=16)
-    )
+    refreshed_again = service.refresh_dead_man_switch(now=now + timedelta(seconds=16))
     assert refreshed_again is True
     client.cancel_all_orders_after.assert_called_once_with(30)
 

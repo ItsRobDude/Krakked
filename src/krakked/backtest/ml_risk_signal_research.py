@@ -947,9 +947,13 @@ def _pre_registered_outcomes(
         window.get("evidence_bucket") == "current_rolling" for window in windows
     )
     current_rolling_evaluable = current_improvement is not None
+    current_improvement_pct = (
+        float(current_improvement) if current_improvement is not None else None
+    )
     current_not_worse = (
         current_rolling_evaluable
-        and float(current_improvement) >= -MAX_CURRENT_EWMA_LAG_PCT
+        and current_improvement_pct is not None
+        and current_improvement_pct >= -MAX_CURRENT_EWMA_LAG_PCT
     )
     strict_data_ready = bool(windows) and all(
         bool(window.get("strict_data_ready")) for window in windows

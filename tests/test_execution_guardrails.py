@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from typing import Any
 from unittest.mock import MagicMock
 
 from krakked.config import ExecutionConfig
@@ -8,7 +9,7 @@ from krakked.strategy.models import ExecutionPlan, RiskAdjustedAction
 
 
 def _build_action(pair: str, target_notional: float, **overrides) -> RiskAdjustedAction:
-    payload = {
+    payload: dict[str, Any] = {
         "pair": pair,
         "strategy_id": "test_strategy",
         "action_type": "open",

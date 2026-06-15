@@ -651,9 +651,9 @@ def _rebalance_trace_row(
     }
     selected_pairs = list(decision["selected_pairs"])
     selected_returns = [
-        float(pair_forward_returns[pair])
+        float(value)
         for pair in selected_pairs
-        if pair_forward_returns.get(pair) is not None
+        if (value := pair_forward_returns.get(pair)) is not None
     ]
     basket_returns = [
         float(value) for value in pair_forward_returns.values() if value is not None
@@ -826,9 +826,9 @@ def _target_source_diagnostics(
     )
     failure_reasons: list[str] = []
     if return_pct < 0.0:
+        mean_selection_gap = _mean_or_none(selection_gaps)
         if wrong_asset_ratio >= 0.25 or (
-            _mean_or_none(selection_gaps) is not None
-            and float(_mean_or_none(selection_gaps)) <= -0.50
+            mean_selection_gap is not None and float(mean_selection_gap) <= -0.50
         ):
             failure_reasons.append("wrong_asset_selection")
         if late_chase_ratio >= 0.20:

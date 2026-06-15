@@ -207,23 +207,15 @@ def build_top2_soft_target_scale_baseline(
                             "allocation_pct": float(allocation_pct),
                             "status": "ready",
                             "baseline_return_pct": baseline["return_pct"],
-                            "baseline_max_drawdown_pct": baseline[
-                                "max_drawdown_pct"
-                            ],
+                            "baseline_max_drawdown_pct": baseline["max_drawdown_pct"],
                             "overlay_return_pct": overlay["return_pct"],
-                            "overlay_max_drawdown_pct": overlay[
-                                "max_drawdown_pct"
-                            ],
+                            "overlay_max_drawdown_pct": overlay["max_drawdown_pct"],
                             "delta_return_pct": comparison["delta"]["return_pct"],
                             "delta_max_drawdown_pct": comparison["delta"][
                                 "max_drawdown_pct"
                             ],
-                            "overlay_active_cycle_pct": overlay[
-                                "active_cycle_pct"
-                            ],
-                            "overlay_avg_exposure_pct": overlay[
-                                "avg_exposure_pct"
-                            ],
+                            "overlay_active_cycle_pct": overlay["active_cycle_pct"],
+                            "overlay_avg_exposure_pct": overlay["avg_exposure_pct"],
                             "report_type": "controlled_exposure_proxy",
                         }
                     )

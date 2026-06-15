@@ -331,8 +331,11 @@ def _cycle_diagnostics(
         if any(order.status == "filled" for order in execution.orders):
             filled_order_cycles += 1
 
-    top_cycles = sorted(
-        (
+    top_cycle_rows: list[dict[str, Any]] = []
+    for plan in plans:
+        if not plan.actions:
+            continue
+        top_cycle_rows.append(
             {
                 "generated_at": plan.generated_at.astimezone(UTC).isoformat(),
                 "plan_id": plan.plan_id,
@@ -353,9 +356,10 @@ def _cycle_diagnostics(
                     action.action_type for action in plan.actions
                 ),
             }
-            for plan in plans
-            if plan.actions
-        ),
+        )
+
+    top_cycles = sorted(
+        top_cycle_rows,
         key=lambda item: (
             -int(item["total_actions"]),
             str(item["generated_at"]),

@@ -359,9 +359,9 @@ class RiskEngine:
                 if kill_switch_reasons
                 else "Kill Switch Active"
             )
-            actions = self._block_all_opens(intents, ctx, reason)
-            self._record_market_regime_throttle_results(actions)
-            return actions
+            blocked_actions = self._block_all_opens(intents, ctx, reason)
+            self._record_market_regime_throttle_results(blocked_actions)
+            return blocked_actions
 
         intents_by_pair: Dict[str, List[StrategyIntent]] = {}
         for intent in intents:

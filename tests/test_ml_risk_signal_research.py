@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
 import math
+from datetime import UTC, datetime
 from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 
@@ -12,12 +13,12 @@ from krakked.backtest.ml_risk_signal_research import (
     BASELINE_PREVIOUS,
     BASELINE_ROLLING,
     MLRiskSignalResearchParams,
-    _HARLinearModel,
     _build_forecast_examples,
-    _examples_with_labels_before,
     _example_at_index,
+    _examples_with_labels_before,
     _fit_har_rv_model,
     _forecast_metrics,
+    _HARLinearModel,
     _log_vol_rmse,
     _predict_model_variances,
     _qlike_loss,
@@ -196,8 +197,8 @@ def test_har_rv_ols_recovers_linear_log_variance_relationship() -> None:
 
 def test_har_rv_ols_beats_constant_mean_on_autocorrelated_vol_fixture() -> None:
     params = MLRiskSignalResearchParams(min_training_examples=30)
-    train = []
-    test = []
+    train: list[dict[str, Any]] = []
+    test: list[dict[str, Any]] = []
     for index in range(180):
         latent = math.sin(index / 12.0) + 0.3 * math.sin(index / 3.0)
         features = [latent, 0.7 * latent, 0.4 * latent]
@@ -349,7 +350,7 @@ def test_run_ml_risk_signal_research_sorts_filters_and_accumulates_evaluation_ro
     monkeypatch.setattr(risk_research, "_fit_har_rv_model", _fake_fit)
 
     result = risk_research.run_ml_risk_signal_research(
-        SimpleNamespace(universe=SimpleNamespace(include_pairs=["BTC/USD"])),
+        cast(Any, SimpleNamespace(universe=SimpleNamespace(include_pairs=["BTC/USD"]))),
         window_sets={
             "overlap": [
                 ("final", "1970-01-01T00:04:10Z", "1970-01-01T00:05:00Z"),

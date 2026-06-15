@@ -1,6 +1,7 @@
 import logging
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+from typing import Any, cast
 from unittest.mock import MagicMock
 
 from krakked.main import (
@@ -143,7 +144,7 @@ def test_main_loop_tail_refresh_helper_triggers_market_data_scheduler() -> None:
         maybe_start_scheduled_ohlc_tail_refresh=MagicMock(return_value=True)
     )
 
-    assert _maybe_start_ohlc_tail_refresh(market_data) is True
+    assert _maybe_start_ohlc_tail_refresh(cast(Any, market_data)) is True
     market_data.maybe_start_scheduled_ohlc_tail_refresh.assert_called_once_with()
 
 

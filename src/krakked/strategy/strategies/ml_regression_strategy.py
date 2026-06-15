@@ -18,16 +18,13 @@ from krakked.strategy.features import (
     feature_names_for_profile,
     normalize_feature_profile,
 )
-from krakked.strategy.ml_labels import (
-    MLEdgeCostConfig,
-    edge_cost_config_from_context,
-)
+from krakked.strategy.ml_labels import MLEdgeCostConfig, edge_cost_config_from_context
 from krakked.strategy.ml_models import (
-    DEFAULT_REGRESSION_MODEL_BACKEND,
     DEFAULT_REGRESSION_EPSILON_PCT,
-    ML_STANDARD_SCALER_SCHEMA_VERSION,
+    DEFAULT_REGRESSION_MODEL_BACKEND,
     DEFAULT_SGD_L2_ALPHA,
     DEFAULT_SGD_LEARNING_RATE_INITIAL,
+    ML_STANDARD_SCALER_SCHEMA_VERSION,
     MLOnlineModelBundle,
     create_regression_model_bundle,
     is_regression_model_for_backend,
@@ -175,7 +172,9 @@ class AIRegressionStrategy(Strategy):
             "continuous_learning": self._learning_enabled(),
             "feature_schema_version": ML_FEATURE_SCHEMA_VERSION,
             "feature_profile": self.params.feature_profile,
-            "feature_names": list(feature_names_for_profile(self.params.feature_profile)),
+            "feature_names": list(
+                feature_names_for_profile(self.params.feature_profile)
+            ),
             "model_backend": self.params.model_backend,
             "model_framework": self._model_framework(),
             "model_config_key": self._model_config_key(),

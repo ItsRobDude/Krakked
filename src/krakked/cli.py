@@ -18,8 +18,8 @@ from krakked.backtest import (
     DEFAULT_EXPOSURE_OVERLAY_MODES,
     DEFAULT_EXPOSURE_SCENARIOS,
     DEFAULT_PAIR_LOCAL_SOURCE_SCENARIOS,
-    DEFAULT_STRATEGY_EVIDENCE_GROUP_IDS,
     DEFAULT_STRATEGY_ACTIVITY_GROUP_IDS,
+    DEFAULT_STRATEGY_EVIDENCE_GROUP_IDS,
     DEFAULT_TARGET_SOURCE_SCENARIOS,
     STRATEGY_ACTIVITY_WINDOW_SETS,
     BacktestPreflightResult,
@@ -30,8 +30,8 @@ from krakked.backtest import (
     MLRiskSignalResearchParams,
     PairLocalSourceResearchParams,
     RSRotationV2ResearchParams,
-    aggregate_pair_local_source_research_reports,
     TargetSourceResearchParams,
+    aggregate_pair_local_source_research_reports,
     aggregate_target_source_research_reports,
     backtest_strict_data_details,
     build_backtest_preflight,
@@ -62,17 +62,16 @@ from krakked.backtest import (
     write_backtest_report,
     write_ml_walk_forward_report,
 )
-from krakked.backtest.evidence_windows import summarize_regime_coverage
 from krakked.backtest.ml_feature_ablation_summary import (
     render_ml_feature_ablation_summary,
     summarize_ml_feature_ablation,
 )
+from krakked.backtest.ml_regime_overlay_research import (
+    summarize_ml_overlay_promotion_rows,
+)
 from krakked.backtest.ml_report_compare import (
     compare_ml_reports,
     render_ml_report_comparison,
-)
-from krakked.backtest.ml_regime_overlay_research import (
-    summarize_ml_overlay_promotion_rows,
 )
 from krakked.backtest.strategy_activity import (
     apply_strategy_activity_override,
@@ -1014,14 +1013,14 @@ def _print_rs_rotation_v2_research_summary(
         )
     forward = summary.get("forward_diagnostics") or {}
     if forward.get("evaluated_cycles"):
-        selected_forward = forward.get("mean_selected_forward_return_pct")
-        universe_forward = forward.get("mean_universe_forward_return_pct")
-        spread = forward.get("mean_selected_spread_pct")
+        selected_forward = float(forward.get("mean_selected_forward_return_pct") or 0.0)
+        universe_forward = float(forward.get("mean_universe_forward_return_pct") or 0.0)
+        spread = float(forward.get("mean_selected_spread_pct") or 0.0)
         print(
             "Forward check: "
-            f"selected {float(selected_forward):+.2f}% | "
-            f"universe {float(universe_forward):+.2f}% | "
-            f"spread {float(spread):+.2f}%"
+            f"selected {selected_forward:+.2f}% | "
+            f"universe {universe_forward:+.2f}% | "
+            f"spread {spread:+.2f}%"
         )
     print("Research gates:")
     for gate_name, gate in summary["gates"].items():

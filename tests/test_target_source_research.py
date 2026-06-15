@@ -40,7 +40,7 @@ def _bars(prices: list[float]) -> list[OHLCBar]:
 
 
 def _selector_params(**overrides: Any) -> TargetSourceResearchParams:
-    values = {
+    values: dict[str, Any] = {
         "allocation_pct": 20.0,
         "long_lookback_bars": 5,
         "short_lookback_bars": 3,

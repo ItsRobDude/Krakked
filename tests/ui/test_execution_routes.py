@@ -330,4 +330,6 @@ def test_cancel_all_logs_client_context(
     assert records
     assert any(getattr(record, "account_id", None) == "default" for record in records)
     assert any(getattr(record, "client_ip", None) for record in records)
-    assert any(getattr(record, "forwarded_for", None) == "203.0.113.5" for record in records)
+    assert any(
+        getattr(record, "forwarded_for", None) == "203.0.113.5" for record in records
+    )

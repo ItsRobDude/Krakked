@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import csv
+import io
+import zipfile
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-import io
 from pathlib import Path
 from typing import Iterable, TextIO
-import zipfile
 
 from krakked.market_data.models import OHLCBar
 

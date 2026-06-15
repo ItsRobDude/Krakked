@@ -31,8 +31,7 @@ ML_FEATURE_PROFILES: dict[str, tuple[str, ...]] = {
     "drop_weakest": tuple(
         name
         for name in ML_FEATURE_NAMES
-        if name
-        not in {"pct_change", "return_atr_3", "volatility_ratio"}
+        if name not in {"pct_change", "return_atr_3", "volatility_ratio"}
     ),
     "volume_change_only": tuple(
         name for name in ML_FEATURE_NAMES if name != "volume_log_ratio"
@@ -157,9 +156,7 @@ def _time_features(timestamp: int | None) -> tuple[float, float, float, float]:
         return 0.0, 0.0, 0.0, 0.0
     observed_at = datetime.fromtimestamp(int(timestamp), tz=FEATURE_TIME_TZ)
     hour_value = (
-        observed_at.hour
-        + observed_at.minute / 60.0
-        + observed_at.second / 3600.0
+        observed_at.hour + observed_at.minute / 60.0 + observed_at.second / 3600.0
     )
     hour_sin, hour_cos = _cyclical(hour_value, 24.0)
     weekday_sin, weekday_cos = _cyclical(float(observed_at.weekday()), 7.0)
@@ -172,7 +169,9 @@ def normalize_feature_profile(value: object = None) -> str:
     profile = str(value)
     if profile not in ML_FEATURE_PROFILES:
         choices = ", ".join(sorted(ML_FEATURE_PROFILES))
-        raise ValueError(f"Unknown ML feature profile {profile!r}; expected one of: {choices}")
+        raise ValueError(
+            f"Unknown ML feature profile {profile!r}; expected one of: {choices}"
+        )
     return profile
 
 
@@ -271,9 +270,7 @@ def _feature_vector(
     volume_change = _safe_log_ratio(latest_volume, previous_volume)
     volume_log_ratio = _safe_log_ratio(latest_volume, mean_volume)
 
-    hour_sin, hour_cos, weekday_sin, weekday_cos = _time_features(
-        latest_timestamp
-    )
+    hour_sin, hour_cos, weekday_sin, weekday_cos = _time_features(latest_timestamp)
 
     raw_values = {
         "pct_change": pct_change,

@@ -364,6 +364,12 @@ def normalize_bootstrap_residue(
     return normalized_main, normalized_profile, normalized_overrides, changed
 
 
+def _profile_config_path_from_string(path_value: str) -> Path:
+    """Resolve profile config paths written with either slash style."""
+
+    return Path(path_value.replace("\\", "/"))
+
+
 def cleanup_active_config_chain(
     config_dir: Optional[Path] = None,
 ) -> dict[str, Any]:
@@ -385,7 +391,7 @@ def cleanup_active_config_chain(
         profile_entry = profiles_registry.get(profile_name) or {}
         profile_path_str = profile_entry.get("config_path")
         if isinstance(profile_path_str, str) and profile_path_str.strip():
-            profile_config_path = Path(profile_path_str)
+            profile_config_path = _profile_config_path_from_string(profile_path_str)
             if not profile_config_path.is_absolute():
                 profile_config_path = target_dir / profile_config_path
             profile_config = _load_yaml_mapping(profile_config_path)
@@ -1610,7 +1616,7 @@ def load_config(
         profile_entry = profiles_registry[active_profile]
         profile_path_str = profile_entry.get("config_path")
         if profile_path_str:
-            profile_path = Path(profile_path_str)
+            profile_path = _profile_config_path_from_string(str(profile_path_str))
             if not profile_path.is_absolute():
                 profile_path = config_dir / profile_path
 
