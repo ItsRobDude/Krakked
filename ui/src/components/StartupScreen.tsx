@@ -279,7 +279,7 @@ export function StartupScreen({
             {mode === 'live' ? (
               <p className="field__hint field__hint--warn">
                 Live is meant for cautious rollout. The shipped live example starts from a smaller enabled strategy set,
-                even though the full starter pack remains available later.
+                while research strategies remain available for deliberate manual enablement.
               </p>
             ) : null}
           </div>

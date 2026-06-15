@@ -58,8 +58,10 @@ Krakked now boots with a conservative operator-first starter profile unless you 
   reductions.
 * The enabled starter strategy pack is:
   * `trend_core`
-  * `vol_breakout`
   * `majors_mean_rev`
+* `vol_breakout` remains configured with conservative caps for manual
+  research, but is disabled by default because it requires `15m` OHLC and the
+  default replay/backfill set intentionally stays on `1h`, `4h`, and `1d`.
 * `rs_rotation` remains configured with conservative caps for manual research,
   but is disabled by default after replay evidence showed the v1 signal was not
   promotion-ready.
@@ -70,6 +72,9 @@ Krakked now boots with a conservative operator-first starter profile unless you 
   * `paper` enables the active starter pack above
   * `live` keeps the same configured strategies, but enables only `trend_core` and `majors_mean_rev` by default
 * ML is disabled by default until the operator explicitly opts in.
+* The cockpit may show a display-only BTC/USD `4h` RiskMetrics EWMA volatility
+  signal. It is operator context only: it does not affect strategy selection,
+  sizing, vetoes, or order flow.
 * First-run risk defaults are explicit and conservative:
   * `max_open_positions: 4`
   * `max_risk_per_trade_pct: 1.0`

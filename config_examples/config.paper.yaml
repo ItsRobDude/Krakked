@@ -8,12 +8,11 @@ execution:
 ui:
   read_only: false
 
-# In paper, start with the active starter pack enabled by default. rs_rotation
-# remains configured in the base file, but is experimental and disabled.
+# In paper, start with the active starter pack enabled by default. vol_breakout
+# and rs_rotation remain configured in the base file for manual research.
 strategies:
   enabled:
     - "trend_core"
-    - "vol_breakout"
     - "majors_mean_rev"
 
 ml:

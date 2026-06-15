@@ -35,11 +35,12 @@ from krakked.utils.io import atomic_write, backup_file
 RUNTIME_OVERRIDES_FILENAME = "config.runtime.yaml"
 DEFAULT_STARTER_STRATEGY_IDS = [
     "trend_core",
-    "vol_breakout",
     "majors_mean_rev",
 ]
 DEFAULT_STARTER_CONFIG_STRATEGY_IDS = [
-    *DEFAULT_STARTER_STRATEGY_IDS,
+    "trend_core",
+    "vol_breakout",
+    "majors_mean_rev",
     "rs_rotation",
 ]
 DEFAULT_STARTER_PAIRS = ["BTC/USD", "ETH/USD", "SOL/USD", "ADA/USD"]

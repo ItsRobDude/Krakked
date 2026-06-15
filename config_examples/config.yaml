@@ -111,7 +111,6 @@ risk:
 strategies:
   enabled:
     - "trend_core"
-    - "vol_breakout"
     - "majors_mean_rev"
   configs:
     trend_core:
@@ -132,7 +131,7 @@ strategies:
     vol_breakout:
       name: "vol_breakout"
       type: "vol_breakout"
-      enabled: true
+      enabled: false
       params:
         pairs: ["BTC/USD", "ETH/USD", "SOL/USD", "ADA/USD"]
         timeframes: ["15m", "1h"]

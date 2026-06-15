@@ -110,6 +110,7 @@ def test_load_config_applies_default_starter_strategies_when_missing(
         DEFAULT_STARTER_CONFIG_STRATEGY_IDS
     )
     assert app_config.strategies.configs["trend_core"].enabled is True
+    assert app_config.strategies.configs["vol_breakout"].enabled is False
     assert app_config.strategies.configs["rs_rotation"].enabled is False
     assert app_config.ml.enabled is False
     assert app_config.universe.include_pairs == DEFAULT_STARTER_PAIRS
