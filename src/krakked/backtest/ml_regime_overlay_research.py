@@ -33,7 +33,6 @@ from .evidence_windows import (
 )
 from .market_regime_exposure import (
     MarketRegimeExposureScenarioParams,
-    _ScenarioPortfolio,
     _common_timeline,
     _execute_plan,
     _max_drawdown_pct,
@@ -41,6 +40,7 @@ from .market_regime_exposure import (
     _portfolio_exposure,
     _price_maps,
     _scenario_target_weights,
+    _ScenarioPortfolio,
     _target_plan,
     evaluate_market_regime_exposure_scenarios,
 )
@@ -638,7 +638,11 @@ def _scale_from_prediction(value: Any) -> float:
         label = int(round(float(value)))
     except (TypeError, ValueError):
         label = 1
-    return SCALE_BY_CLASS.get(label, 0.75)
+    if label == 0:
+        return SCALE_BY_CLASS[0]
+    if label == 2:
+        return SCALE_BY_CLASS[2]
+    return SCALE_BY_CLASS[1]
 
 
 def _feature_float(value: Any) -> float:

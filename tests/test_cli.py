@@ -501,6 +501,81 @@ def test_refresh_ohlc_subcommand_exits_nonzero_on_series_failure(
     assert "Unsupported timeframe" in output
 
 
+def test_import_ohlc_subcommand_parses_and_appends_bars(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: Any
+) -> None:
+    captured: dict[str, Any] = {}
+
+    csv_path = tmp_path / "XBTUSD_240.csv"
+    csv_path.write_text(
+        "\n".join(
+            [
+                "timestamp,open,high,low,close,volume,trades",
+                "1764547200,100,110,90,105,1.5,10",
+                "1764561600,105,115,95,108,1.7,11",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    class _DummyMarketData:
+        def __init__(self, config: Any) -> None:
+            captured["config"] = config
+
+        def refresh_universe(self) -> None:
+            captured["refresh_universe"] = True
+
+        def normalize_pair(self, pair: str) -> str:
+            captured["normalize_pair"] = pair
+            return "XBTUSD"
+
+        def append_ohlc_bars(
+            self, pair: str, timeframe: str, bars: list[Any]
+        ) -> tuple[str, int]:
+            captured["append_pair"] = pair
+            captured["append_timeframe"] = timeframe
+            captured["bars"] = bars
+            return "XBTUSD", 1
+
+        def shutdown(self) -> None:
+            captured["shutdown"] = True
+
+    monkeypatch.setattr(cli, "load_config", lambda config_path=None: object())
+    monkeypatch.setattr(cli, "MarketDataAPI", _DummyMarketData)
+
+    exit_code = cli.main(
+        [
+            "import-ohlc",
+            "--input",
+            str(csv_path),
+            "--pair",
+            "BTC/USD",
+            "--timeframe",
+            "4h",
+            "--start",
+            "2025-12-01T00:00:00Z",
+            "--end",
+            "2025-12-02T00:00:00Z",
+            "--json",
+        ]
+    )
+
+    assert exit_code == 0
+    assert captured["refresh_universe"] is True
+    assert captured["normalize_pair"] == "BTC/USD"
+    assert captured["append_pair"] == "BTC/USD"
+    assert captured["append_timeframe"] == "4h"
+    assert len(captured["bars"]) == 2
+    assert captured["bars"][0].timestamp == 1764547200
+    assert captured["shutdown"] is True
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["submitted_bars"] == 2
+    assert payload["new_bars_stored"] == 1
+    assert payload["imported_bars"] == 1
+    assert payload["parse"]["canonical_pair"] == "XBTUSD"
+    assert payload["parse"]["status"] == "ready"
+
+
 def test_migrate_db_subcommand_upgrades_outdated_schema(tmp_path, capsys: Any) -> None:
     db_path = tmp_path / "upgrade_cli.db"
     _seed_schema_version(str(db_path), CURRENT_SCHEMA_VERSION - 1)
@@ -2512,7 +2587,7 @@ def test_ml_risk_signal_research_writes_aggregate(
     class _FakeMLRiskSignalResult:
         def to_report_dict(self) -> dict[str, Any]:
             return {
-                "report_version": 1,
+                "report_version": 2,
                 "report_type": "ml_risk_signal_research",
                 "generated_at": "2026-05-31T00:00:00+00:00",
                 "summary": {
@@ -2529,9 +2604,18 @@ def test_ml_risk_signal_research_writes_aggregate(
                             "model_vs_ewma_qlike_improvement_pct": 3.0,
                         }
                     },
+                    "forecast_verdict_readiness": {
+                        "status": "ready_for_verdict",
+                        "ready_for_exposure_verdict": True,
+                        "blocking_reasons": [],
+                    },
                     "pre_registered_outcomes": {
                         "exposure_research_gate": {"passed": False},
-                        "display_only_gate": {"passed": False},
+                        "display_only_gate": {
+                            "metric_passed": False,
+                            "readiness_passed": True,
+                            "passed": False,
+                        },
                     },
                     "lane_status": "close_volatility_forecast_lane",
                 },
@@ -2613,6 +2697,54 @@ def test_ml_risk_signal_research_writes_aggregate(
     assert aggregate["summary"]["runtime_wiring_approved"] is False
     assert aggregate["summary"]["window_sets"] == ["tiny"]
     assert aggregate["provenance"]["generated_by"] == "krakked ml-risk-signal-research"
+
+
+def test_ml_risk_signal_research_summary_prints_verdict_readiness(
+    capsys: Any,
+) -> None:
+    cli._print_ml_risk_signal_research_summary(  # noqa: SLF001
+        {
+            "summary": {
+                "benchmark_pair": "BTC/USD",
+                "timeframe": "4h",
+                "target": {"horizon_bars": 6},
+                "window_count": 6,
+                "model_ready_windows": 0,
+                "aggregate_path": "reports/ml-risk-signal-smoke/aggregate.json",
+                "forecast_skill": {
+                    "overall": {
+                        "observation_count": 0,
+                        "model_vs_ewma_qlike_improvement_pct": None,
+                    }
+                },
+                "forecast_verdict_readiness": {
+                    "status": "insufficient_data",
+                    "ready_for_exposure_verdict": False,
+                    "blocking_reasons": [
+                        "no_model_evaluation_observations",
+                        "benchmark_data_missing_or_insufficient",
+                    ],
+                },
+                "pre_registered_outcomes": {
+                    "exposure_research_gate": {"passed": False},
+                    "display_only_gate": {
+                        "metric_passed": True,
+                        "readiness_passed": False,
+                        "passed": False,
+                    },
+                },
+                "lane_status": "insufficient_data",
+            }
+        }
+    )
+
+    output = capsys.readouterr().out
+    assert "Verdict readiness=insufficient_data" in output
+    assert "Ready for exposure verdict=False" in output
+    assert "no_model_evaluation_observations" in output
+    assert "Display metrics passed=True" in output
+    assert "Display gate passed=False" in output
+    assert "Lane status=insufficient_data" in output
 
 
 def test_strategy_action_diagnostics_subcommand_writes_report(

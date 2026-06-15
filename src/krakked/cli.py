@@ -18,8 +18,8 @@ from krakked.backtest import (
     DEFAULT_EXPOSURE_OVERLAY_MODES,
     DEFAULT_EXPOSURE_SCENARIOS,
     DEFAULT_PAIR_LOCAL_SOURCE_SCENARIOS,
-    DEFAULT_STRATEGY_EVIDENCE_GROUP_IDS,
     DEFAULT_STRATEGY_ACTIVITY_GROUP_IDS,
+    DEFAULT_STRATEGY_EVIDENCE_GROUP_IDS,
     DEFAULT_TARGET_SOURCE_SCENARIOS,
     STRATEGY_ACTIVITY_WINDOW_SETS,
     BacktestPreflightResult,
@@ -30,8 +30,8 @@ from krakked.backtest import (
     MLRiskSignalResearchParams,
     PairLocalSourceResearchParams,
     RSRotationV2ResearchParams,
-    aggregate_pair_local_source_research_reports,
     TargetSourceResearchParams,
+    aggregate_pair_local_source_research_reports,
     aggregate_target_source_research_reports,
     backtest_strict_data_details,
     build_backtest_preflight,
@@ -62,17 +62,16 @@ from krakked.backtest import (
     write_backtest_report,
     write_ml_walk_forward_report,
 )
-from krakked.backtest.evidence_windows import summarize_regime_coverage
 from krakked.backtest.ml_feature_ablation_summary import (
     render_ml_feature_ablation_summary,
     summarize_ml_feature_ablation,
 )
+from krakked.backtest.ml_regime_overlay_research import (
+    summarize_ml_overlay_promotion_rows,
+)
 from krakked.backtest.ml_report_compare import (
     compare_ml_reports,
     render_ml_report_comparison,
-)
-from krakked.backtest.ml_regime_overlay_research import (
-    summarize_ml_overlay_promotion_rows,
 )
 from krakked.backtest.strategy_activity import (
     apply_strategy_activity_override,
@@ -94,6 +93,7 @@ from krakked.connection.rest_client import KrakenRESTClient
 from krakked.credentials import CredentialResult, CredentialStatus
 from krakked.main import run as run_orchestrator
 from krakked.market_data.api import MarketDataAPI
+from krakked.market_data.ohlc_import import parse_kraken_ohlcvt_files
 from krakked.portfolio.exceptions import PortfolioSchemaError
 from krakked.portfolio.store import (
     CURRENT_SCHEMA_VERSION,
@@ -747,6 +747,27 @@ def _print_ohlc_refresh_summary(payload: dict[str, Any]) -> None:
         )
 
 
+def _print_ohlc_import_summary(payload: dict[str, Any]) -> None:
+    parse = payload["parse"]
+    action = "dry-run" if payload.get("dry_run") else "import"
+    print(f"OHLC {action} completed.")
+    print(
+        f"{parse['canonical_pair']}@{parse['timeframe']} | "
+        f"matched files={len(parse['matched_files'])} | "
+        f"bars ready={parse['bars_ready']} | "
+        f"submitted={payload.get('submitted_bars', 0)} | "
+        f"new stored={payload.get('new_bars_stored', payload['imported_bars'])}"
+    )
+    print(
+        f"Range: {parse.get('first_bar_at') or 'n/a'} -> "
+        f"{parse.get('last_bar_at') or 'n/a'} | status={parse['status']}"
+    )
+    if parse.get("errors"):
+        print("Errors:")
+        for error in parse["errors"]:
+            print(f"- {error}")
+
+
 def _refresh_ohlc_command(args: argparse.Namespace) -> int:
     try:
         since = _parse_since_arg(args.since) if args.since else None
@@ -779,6 +800,62 @@ def _refresh_ohlc_command(args: argparse.Namespace) -> int:
     if result.failed_count:
         return 1
     return 0
+
+
+def _import_ohlc_command(args: argparse.Namespace) -> int:
+    try:
+        start_ts = (
+            int(_parse_datetime_arg(args.start).timestamp()) if args.start else None
+        )
+        end_ts = int(_parse_datetime_arg(args.end).timestamp()) if args.end else None
+        if start_ts is not None and end_ts is not None and end_ts <= start_ts:
+            raise ValueError("--end must be after --start")
+    except ValueError as exc:
+        return _print_error(f"Invalid OHLC import window: {exc}")
+
+    market_data: MarketDataAPI | None = None
+    try:
+        config_path = Path(args.config).expanduser().resolve() if args.config else None
+        config = load_config(config_path=config_path)
+        market_data = MarketDataAPI(config)
+        market_data.refresh_universe()
+        canonical_pair = market_data.normalize_pair(str(args.pair))
+        parsed = parse_kraken_ohlcvt_files(
+            args.input,
+            canonical_pair=canonical_pair,
+            timeframe=str(args.timeframe),
+            start_timestamp=start_ts,
+            end_timestamp=end_ts,
+        )
+        submitted_bars = 0
+        new_bars_stored = 0
+        if parsed.bars and not bool(args.dry_run) and parsed.status == "ready":
+            submitted_bars = len(parsed.bars)
+            _, new_bars_stored = market_data.append_ohlc_bars(
+                str(args.pair),
+                str(args.timeframe),
+                parsed.bars,
+            )
+    except Exception as exc:  # noqa: BLE001
+        return _print_error(f"OHLC import failed: {exc}")
+    finally:
+        if market_data is not None:
+            market_data.shutdown()
+
+    payload = {
+        "generated_at": datetime.now(UTC).isoformat(),
+        "dry_run": bool(args.dry_run),
+        "submitted_bars": submitted_bars,
+        "new_bars_stored": new_bars_stored,
+        "imported_bars": new_bars_stored,
+        "parse": parsed.to_dict(),
+    }
+    if args.json:
+        print(json.dumps(payload, indent=2))
+    else:
+        _print_ohlc_import_summary(payload)
+
+    return 0 if parsed.status == "ready" else 1
 
 
 def _load_backtest_config(args: argparse.Namespace) -> AppConfig:
@@ -936,14 +1013,14 @@ def _print_rs_rotation_v2_research_summary(
         )
     forward = summary.get("forward_diagnostics") or {}
     if forward.get("evaluated_cycles"):
-        selected_forward = forward.get("mean_selected_forward_return_pct")
-        universe_forward = forward.get("mean_universe_forward_return_pct")
-        spread = forward.get("mean_selected_spread_pct")
+        selected_forward = float(forward.get("mean_selected_forward_return_pct") or 0.0)
+        universe_forward = float(forward.get("mean_universe_forward_return_pct") or 0.0)
+        spread = float(forward.get("mean_selected_spread_pct") or 0.0)
         print(
             "Forward check: "
-            f"selected {float(selected_forward):+.2f}% | "
-            f"universe {float(universe_forward):+.2f}% | "
-            f"spread {float(spread):+.2f}%"
+            f"selected {selected_forward:+.2f}% | "
+            f"universe {universe_forward:+.2f}% | "
+            f"spread {spread:+.2f}%"
         )
     print("Research gates:")
     for gate_name, gate in summary["gates"].items():
@@ -2182,6 +2259,11 @@ def _print_ml_risk_signal_research_summary(payload: dict[str, Any]) -> None:
     outcomes = summary.get("pre_registered_outcomes") or {}
     exposure_gate = outcomes.get("exposure_research_gate") or {}
     display_gate = outcomes.get("display_only_gate") or {}
+    readiness = (
+        summary.get("forecast_verdict_readiness")
+        or outcomes.get("forecast_verdict_readiness")
+        or {}
+    )
     print("ML risk-signal research completed.")
     print(
         f"Benchmark: {summary['benchmark_pair']} | "
@@ -2192,12 +2274,23 @@ def _print_ml_risk_signal_research_summary(payload: dict[str, Any]) -> None:
         f"Windows: {summary['model_ready_windows']}/{summary['window_count']} "
         f"model-ready | Observations: {overall.get('observation_count', 0)}"
     )
+    blockers = [str(value) for value in (readiness.get("blocking_reasons") or [])]
+    blocker_text = ", ".join(blockers[:3]) if blockers else "none"
+    if len(blockers) > 3:
+        blocker_text = f"{blocker_text}, +{len(blockers) - 3} more"
+    print(
+        f"Verdict readiness={readiness.get('status', 'unknown')} | "
+        "Ready for exposure verdict="
+        f"{readiness.get('ready_for_exposure_verdict', False)} | "
+        f"Blockers={blocker_text}"
+    )
     print(
         "Model vs EWMA QLIKE improvement: "
         f"{_format_optional_pct(overall.get('model_vs_ewma_qlike_improvement_pct'))}"
     )
     print(
         f"Exposure gate passed={exposure_gate.get('passed', False)} | "
+        f"Display metrics passed={display_gate.get('metric_passed', False)} | "
         f"Display gate passed={display_gate.get('passed', False)} | "
         f"Lane status={summary['lane_status']}"
     )
@@ -4748,6 +4841,49 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Print the refresh result payload as JSON",
     )
     refresh_ohlc_parser.set_defaults(func=_refresh_ohlc_command)
+
+    import_ohlc_parser = subparsers.add_parser(
+        "import-ohlc",
+        help="Import local Kraken OHLCVT CSV/ZIP history into the OHLC cache",
+    )
+    import_ohlc_parser.add_argument(
+        "--config",
+        help="Optional path to the base config.yaml to use for market-data import",
+    )
+    import_ohlc_parser.add_argument(
+        "--input",
+        required=True,
+        help="Path to a Kraken OHLCVT CSV file, ZIP file, or directory of CSV files",
+    )
+    import_ohlc_parser.add_argument(
+        "--pair",
+        required=True,
+        help="Pair to import, for example BTC/USD or XBTUSD",
+    )
+    import_ohlc_parser.add_argument(
+        "--timeframe",
+        default="4h",
+        help="OHLC timeframe to import; Kraken interval 240 maps to 4h",
+    )
+    import_ohlc_parser.add_argument(
+        "--start",
+        help="Optional inclusive import start time in ISO-8601 form",
+    )
+    import_ohlc_parser.add_argument(
+        "--end",
+        help="Optional exclusive import end time in ISO-8601 form",
+    )
+    import_ohlc_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Parse and report matching bars without writing the OHLC cache",
+    )
+    import_ohlc_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print the import result payload as JSON",
+    )
+    import_ohlc_parser.set_defaults(func=_import_ohlc_command)
 
     backtest_preflight_parser = subparsers.add_parser(
         "backtest-preflight",

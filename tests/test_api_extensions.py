@@ -92,3 +92,21 @@ def test_backfill_ohlc_delegation(api):
 def test_backfill_ohlc_pair_not_found(api):
     with pytest.raises(PairNotFoundError):
         api.backfill_ohlc("UNKNOWN", "1h")
+
+
+def test_append_ohlc_bars_counts_only_new_timestamps(api):
+    existing_bar = OHLCBar(timestamp=100, open=1, high=2, low=0.5, close=1.5, volume=10)
+    new_bar = OHLCBar(timestamp=200, open=2, high=3, low=1.5, close=2.5, volume=11)
+    api._ohlc_store.get_bars_since.return_value = [existing_bar]
+
+    canonical, count = api.append_ohlc_bars("BTC/USD", "4h", [existing_bar, new_bar])
+
+    assert canonical == "XBTUSD"
+    assert count == 1
+    api._ohlc_store.get_bars_since.assert_called_once_with("XBTUSD", "4h", 100)
+    api._ohlc_store.append_bars.assert_called_once_with(
+        "XBTUSD",
+        "4h",
+        [existing_bar, new_bar],
+    )
+    api._ohlc_store.flush.assert_called_once()

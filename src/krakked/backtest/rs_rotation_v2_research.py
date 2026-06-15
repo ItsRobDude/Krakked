@@ -723,7 +723,9 @@ def evaluate_rs_rotation_v2_bars(
         },
     }
     gate_failures = [
-        name for name, payload in gates.items() if not bool(payload.get("passed"))
+        name
+        for name, payload in gates.items()
+        if isinstance(payload, dict) and not bool(payload.get("passed"))
     ]
     if not cycles:
         status = "insufficient_data"

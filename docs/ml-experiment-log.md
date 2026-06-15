@@ -313,3 +313,87 @@ Decision:
   upside even in up-windows. Do **not** diagnose ML scale features on this
   source; see [`regime-diverse-evidence-plan.md`](./regime-diverse-evidence-plan.md)
   for the verified composition and corrected next steps.
+
+## 2026-06-14: Volatility Forecast Verdict Readiness
+
+The `krakked ml-risk-signal-research` command evaluates forecast skill only:
+HAR-RV-style next-window volatility forecasts versus previous-horizon,
+rolling-volatility, and RiskMetrics EWMA baselines. It does not simulate
+exposure rules or trading P&L.
+
+Read `summary.forecast_verdict_readiness` before reading `summary.lane_status`.
+Runs with zero model observations, missing/partial benchmark OHLC, insufficient
+training history, too few evaluable regime buckets, or overlapping non-current
+scored evaluation windows are not fair model verdicts. They should report
+`insufficient_data`, `insufficient_training`, `insufficient_regime_coverage`, or
+`insufficient_independence`, and `kill_criterion.triggered=false`.
+
+The readiness payload includes `window_independence` diagnostics. Overlapping
+current-rolling examples are reported, but only excessive overlap between
+non-current scored windows blocks a verdict; otherwise a rolling current window
+would make every freshness check fail.
+
+Only `close_volatility_forecast_lane` on a readiness-passing report means the
+volatility-forecasting lane failed its pre-registered exposure-research bar.
+
+## 2026-06-14: Volatility Forecast Strict Verdict After History Import
+
+Imported Kraken historical OHLCVT `XBTUSD_240.csv` rows from Q4 2025 and Q1
+2026 quarterly archives into the local BTC/USD `4h` cache, covering
+`2025-12-01T00:00:00Z` through `2026-02-19T20:00:00Z`. The local BTC/USD `4h`
+cache then spanned `2025-12-01T00:00:00Z` through `2026-06-14T20:00:00Z` with
+`1,176` unique bars.
+
+Command:
+
+```bash
+poetry run krakked ml-risk-signal-research \
+  --strict-data \
+  --save-dir reports/ml-risk-signal-regime-diverse-strict-after-import
+```
+
+Artifact:
+
+- `reports/ml-risk-signal-regime-diverse-strict-after-import/aggregate.json`
+
+Result:
+
+- `forecast_verdict_readiness.status=ready_for_verdict`
+- `strict_data_ready=true`
+- `window_independence.status=ready`
+- model-ready windows: `5 / 6`
+- evaluation observations: `605`
+- overall mean model versus EWMA QLIKE improvement: `-9981.5281%`
+- downtrend bucket model versus EWMA QLIKE improvement: `-41195.9083%`
+- uptrend bucket model versus EWMA QLIKE improvement: `+0.7662%`
+- current rolling model versus EWMA QLIKE improvement: `-10.0323%`
+- `lane_status=close_volatility_forecast_lane`
+- `kill_criterion.triggered=true`
+
+Readout:
+
+- The large overall negative number is outlier-dominated by the January
+  downtrend/crash window. It should not be quoted without the bucket breakdown.
+- The HAR-RV model roughly tied EWMA in the uptrend bucket, slightly lagged EWMA
+  in the current rolling bucket, and catastrophically under-forecast the
+  downtrend bucket.
+- That downtrend model was trained only on the prior calm/uptrend history
+  available under the chronological harness, so this is a valid failure of the
+  pre-registered slice, not proof that every possible regime-aware volatility
+  model is impossible.
+- EWMA was the useful finding: it remained adaptive and much more stable than
+  the HAR-RV model on this target.
+
+Decision:
+
+- Close this HAR-RV volatility-forecasting lane for exposure-influencing
+  research under the pre-registered bar.
+- Do not iterate model variants on the same next-window volatility target as a
+  path to trading influence unless a future lane is explicitly pre-registered
+  as a different adaptive/regime-aware hypothesis with deeper history.
+- Consider a separate display-only EWMA volatility/risk signal lane before any
+  new ML volatility work. It would be product context only and would not affect
+  trading without its own approval gate.
+- Keep the command and importer as research infrastructure. Display-only,
+  anomaly-detection, or drawdown-probability lanes would need separate
+  pre-registered targets and bars.

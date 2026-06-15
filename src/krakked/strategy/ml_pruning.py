@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-import math
 from types import SimpleNamespace
 from typing import Iterable, Optional
 
@@ -13,8 +13,8 @@ from krakked.portfolio.store import MLArtifactGroup
 from krakked.strategy.features import feature_model_key_suffix
 from krakked.strategy.ml_labels import label_config_from_context
 from krakked.strategy.ml_models import (
-    DEFAULT_REGRESSION_MODEL_BACKEND,
     DEFAULT_REGRESSION_EPSILON_PCT,
+    DEFAULT_REGRESSION_MODEL_BACKEND,
     DEFAULT_SGD_L2_ALPHA,
     DEFAULT_SGD_LEARNING_RATE_INITIAL,
     classifier_model_config_key,

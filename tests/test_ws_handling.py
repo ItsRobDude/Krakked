@@ -192,7 +192,10 @@ def test_subscription_failure_uses_pending_request_context(
 
     status_record = ws_client.subscription_status["XBTUSD"]["ohlc"]
     assert status_record["status"] == "error"
-    assert status_record["message"] == "Already subscribed to one ohlc interval on this symbol"
+    assert (
+        status_record["message"]
+        == "Already subscribed to one ohlc interval on this symbol"
+    )
     assert "BTC/USD" in caplog.text
 
 

@@ -9,16 +9,16 @@ import pandas as pd
 import pytest
 
 from krakked.backtest.ml_walk_forward import (
-    MLWalkForwardFold,
-    MLWalkForwardPrediction,
-    MLWalkForwardSummary,
     PROMOTION_TIER_BLOCKED,
     PROMOTION_TIER_RESEARCH,
     PROMOTION_TIER_RISK_OVERLAY,
     PROMOTION_TIER_SELF_STANDING,
+    MLWalkForwardFold,
+    MLWalkForwardPrediction,
+    MLWalkForwardSummary,
     _assess_promotability,
-    _build_feature_diagnostics,
     _build_diagnostic_warnings,
+    _build_feature_diagnostics,
     _build_prediction_metrics,
     _build_regression_calibration,
     _build_walk_forward_folds,
@@ -29,13 +29,13 @@ from krakked.backtest.ml_walk_forward import (
 from krakked.config import AppConfig, StrategyConfig, load_config
 from krakked.market_data.metadata_store import PairMetadataStore
 from krakked.market_data.models import PairMetadata
-from krakked.strategy.models import StrategyIntent
 from krakked.strategy.features import (
     ML_FEATURE_CLIPPING_VERSION,
     ML_FEATURE_NAMES,
     ML_FEATURE_SCHEMA_VERSION,
     feature_names_for_profile,
 )
+from krakked.strategy.models import StrategyIntent
 from krakked.strategy.strategies.ml_alt_strategy import AIPredictorAltStrategy
 from krakked.strategy.strategies.ml_regression_strategy import AIRegressionStrategy
 from krakked.strategy.strategies.ml_strategy import AIPredictorStrategy
@@ -105,7 +105,9 @@ def _write_ohlc_series(
     frame.to_parquet(bars_path / "XBTUSD.parquet")
 
 
-def _configure_classifier_strategy(config: AppConfig, strategy_id: str, type_: str) -> None:
+def _configure_classifier_strategy(
+    config: AppConfig, strategy_id: str, type_: str
+) -> None:
     config.strategies.configs[strategy_id] = StrategyConfig(
         name=strategy_id,
         type=type_,
@@ -203,9 +205,7 @@ def test_run_ml_walk_forward_scores_out_of_sample_predictions(tmp_path: Path) ->
     assert summary["folds"][0]["prediction_count"] > 0
     assert summary["folds"][0]["confidence_buckets"]
     assert summary["folds"][0]["regression_calibration"]["threshold_sweeps"]
-    assert summary["folds"][0]["baselines"]["cash"]["return_pct"] == pytest.approx(
-        0.0
-    )
+    assert summary["folds"][0]["baselines"]["cash"]["return_pct"] == pytest.approx(0.0)
     assert "buy_hold_by_pair" in summary["folds"][0]["baselines"]
     assert summary["baselines"]["cash"]["avg_return_pct"] == pytest.approx(0.0)
     assert "buy_hold_equal_weight" in summary["baselines"]
@@ -611,12 +611,10 @@ def test_classifier_summary_reports_fee_adjusted_label_semantics() -> None:
 
     assert payload["model_semantics"]["model_family"] == "classifier"
     assert (
-        payload["model_semantics"]["training_target"]
-        == "fee_adjusted_classification"
+        payload["model_semantics"]["training_target"] == "fee_adjusted_classification"
     )
     assert (
-        payload["model_semantics"]["prediction_target"]
-        == "fee_adjusted_positive_edge"
+        payload["model_semantics"]["prediction_target"] == "fee_adjusted_positive_edge"
     )
     assert payload["cost_semantics"]["label_cost_multipliers"] == [2.0]
     assert payload["cost_semantics"]["evaluation_hurdle_source"] == "label_hurdle_bps"
@@ -850,7 +848,9 @@ def _feature_prediction_row(
     return prediction
 
 
-def test_feature_diagnostics_reports_no_health_warnings_for_sane_scaled_features() -> None:
+def test_feature_diagnostics_reports_no_health_warnings_for_sane_scaled_features() -> (
+    None
+):
     predictions = [
         _feature_prediction_row([value] * len(ML_FEATURE_NAMES))
         for value in (-1.0, 0.0, 0.0, 1.0)
@@ -900,12 +900,10 @@ def test_feature_diagnostics_warns_for_tail_heavy_scaled_features() -> None:
 
     warnings = diagnostics["health_warnings"]
     assert any(
-        "High-risk scaled feature volume_log_ratio" in warning
-        for warning in warnings
+        "High-risk scaled feature volume_log_ratio" in warning for warning in warnings
     )
     assert any(
-        "High-risk scaled feature upper_wick_atr" in warning
-        for warning in warnings
+        "High-risk scaled feature upper_wick_atr" in warning for warning in warnings
     )
 
 
@@ -992,9 +990,9 @@ def test_feature_diagnostics_reports_clipping_stats_and_warnings() -> None:
         was_clipped = index < 3
         raw_value = 0.25 if was_clipped else 0.01
         clipped_value = 0.15 if was_clipped else raw_value
-        prediction.metadata["features"]["feature_clipping_version"] = (
-            ML_FEATURE_CLIPPING_VERSION
-        )
+        prediction.metadata["features"][
+            "feature_clipping_version"
+        ] = ML_FEATURE_CLIPPING_VERSION
         prediction.metadata["features"]["feature_clipping"] = {
             "pct_change": {
                 "cap_min": -0.15,
@@ -1028,7 +1026,10 @@ def test_feature_diagnostics_reports_clipping_stats_and_warnings() -> None:
     assert clipping["raw_min"] == pytest.approx(0.01)
     assert clipping["raw_max"] == pytest.approx(0.25)
     assert clipping["research_gate_failed"] is True
-    assert any("pct_change clipped on 30.0%" in warning for warning in diagnostics["health_warnings"])
+    assert any(
+        "pct_change clipped on 30.0%" in warning
+        for warning in diagnostics["health_warnings"]
+    )
 
 
 def test_feature_diagnostics_omits_clipping_warning_at_two_percent() -> None:
@@ -1038,9 +1039,9 @@ def test_feature_diagnostics_omits_clipping_warning_at_two_percent() -> None:
         was_clipped = index == 0
         raw_value = 0.25 if was_clipped else 0.01
         clipped_value = 0.15 if was_clipped else raw_value
-        prediction.metadata["features"]["feature_clipping_version"] = (
-            ML_FEATURE_CLIPPING_VERSION
-        )
+        prediction.metadata["features"][
+            "feature_clipping_version"
+        ] = ML_FEATURE_CLIPPING_VERSION
         prediction.metadata["features"]["feature_clipping"] = {
             "pct_change": {
                 "cap_min": -0.15,
@@ -1066,7 +1067,9 @@ def test_feature_diagnostics_omits_clipping_warning_at_two_percent() -> None:
 
     clipping = diagnostics["clipping"]["features"]["pct_change"]
     assert clipping["clipped_rate"] == pytest.approx(0.02)
-    assert not any("pct_change clipped" in warning for warning in diagnostics["health_warnings"])
+    assert not any(
+        "pct_change clipped" in warning for warning in diagnostics["health_warnings"]
+    )
 
 
 def test_diagnostic_warnings_surface_non_monotonic_regression_calibration() -> None:
@@ -1078,9 +1081,7 @@ def test_diagnostic_warnings_surface_non_monotonic_regression_calibration() -> N
                     "models": [],
                     "training": {},
                     "predictions": {"prediction_count": 4},
-                    "outcomes": {
-                        "above_evaluation_hurdle": {"count": 1, "rate": 0.25}
-                    },
+                    "outcomes": {"above_evaluation_hurdle": {"count": 1, "rate": 0.25}},
                 },
                 "regression_calibration": {
                     "monotonicity": {
@@ -1218,9 +1219,7 @@ def test_diagnostic_warnings_surface_collapsed_model_and_constant_predictions() 
                         "positive_edge_prediction_count": 0,
                         "predicted_delta_quantiles": {"count": 2, "std": 0.0},
                     },
-                    "outcomes": {
-                        "above_evaluation_hurdle": {"count": 0, "rate": 0.0}
-                    },
+                    "outcomes": {"above_evaluation_hurdle": {"count": 0, "rate": 0.0}},
                     "features": {
                         "health_warnings": [
                             "High-risk scaled feature volume_log_ratio has tail values."
@@ -1318,7 +1317,9 @@ def test_assess_promotability_research_only_when_risk_overlay_fails() -> None:
     assert any("Precision lift" in reason for reason in risk_overlay.reasons)
 
 
-def test_assess_promotability_reaches_risk_overlay_with_lift_and_positive_return() -> None:
+def test_assess_promotability_reaches_risk_overlay_with_lift_and_positive_return() -> (
+    None
+):
     metrics = _full_research_metrics(precision_long=0.30)  # 0.30 / 0.18 ≈ 1.67x lift
     calibration = _calibration_with_lift(
         base_hit_rate=0.18,
@@ -1338,8 +1339,7 @@ def test_assess_promotability_reaches_risk_overlay_with_lift_and_positive_return
     self_standing = assessment.tier_results[2]
     assert self_standing.clears is False
     assert any(
-        "below 50% after estimated costs" in reason
-        for reason in self_standing.reasons
+        "below 50% after estimated costs" in reason for reason in self_standing.reasons
     )
 
 
@@ -1358,9 +1358,7 @@ def test_assess_promotability_reaches_self_standing_with_strict_metrics() -> Non
                 "positive_edge_prediction_count": 5,
                 "edge_prediction_accuracy": 0.6,
             },
-            "regression_calibration": {
-                "monotonicity": {"upper_half_improves": True}
-            },
+            "regression_calibration": {"monotonicity": {"upper_half_improves": True}},
         },
     ]
 
@@ -1451,9 +1449,7 @@ def test_assess_promotability_holds_at_risk_overlay_on_per_fold_failure() -> Non
                 "positive_edge_prediction_count": 0,  # per-fold strict failure
                 "edge_prediction_accuracy": 0.6,
             },
-            "regression_calibration": {
-                "monotonicity": {"upper_half_improves": True}
-            },
+            "regression_calibration": {"monotonicity": {"upper_half_improves": True}},
         },
     ]
 

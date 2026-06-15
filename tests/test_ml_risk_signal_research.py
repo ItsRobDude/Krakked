@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
 import math
+from datetime import UTC, datetime
 from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 
@@ -12,12 +13,12 @@ from krakked.backtest.ml_risk_signal_research import (
     BASELINE_PREVIOUS,
     BASELINE_ROLLING,
     MLRiskSignalResearchParams,
-    _HARLinearModel,
     _build_forecast_examples,
-    _examples_with_labels_before,
     _example_at_index,
+    _examples_with_labels_before,
     _fit_har_rv_model,
     _forecast_metrics,
+    _HARLinearModel,
     _log_vol_rmse,
     _predict_model_variances,
     _qlike_loss,
@@ -38,6 +39,25 @@ def _bars(closes: list[float]) -> list[OHLCBar]:
         )
         for index, close in enumerate(closes)
     ]
+
+
+def _forecast_row(
+    bucket: str,
+    *,
+    actual: float = 1.0,
+    model: float = 1.0,
+    ewma: float = 1.6,
+) -> dict[str, object]:
+    return {
+        "evidence_bucket": bucket,
+        "actual_variance": actual,
+        "model_variance": model,
+        "baseline_variances": {
+            BASELINE_PREVIOUS: ewma,
+            BASELINE_ROLLING: ewma,
+            BASELINE_EWMA: ewma,
+        },
+    }
 
 
 def test_ml_risk_signal_params_reject_invalid_values() -> None:
@@ -177,8 +197,8 @@ def test_har_rv_ols_recovers_linear_log_variance_relationship() -> None:
 
 def test_har_rv_ols_beats_constant_mean_on_autocorrelated_vol_fixture() -> None:
     params = MLRiskSignalResearchParams(min_training_examples=30)
-    train = []
-    test = []
+    train: list[dict[str, Any]] = []
+    test: list[dict[str, Any]] = []
     for index in range(180):
         latent = math.sin(index / 12.0) + 0.3 * math.sin(index / 3.0)
         features = [latent, 0.7 * latent, 0.4 * latent]
@@ -330,7 +350,7 @@ def test_run_ml_risk_signal_research_sorts_filters_and_accumulates_evaluation_ro
     monkeypatch.setattr(risk_research, "_fit_har_rv_model", _fake_fit)
 
     result = risk_research.run_ml_risk_signal_research(
-        SimpleNamespace(universe=SimpleNamespace(include_pairs=["BTC/USD"])),
+        cast(Any, SimpleNamespace(universe=SimpleNamespace(include_pairs=["BTC/USD"]))),
         window_sets={
             "overlap": [
                 ("final", "1970-01-01T00:04:10Z", "1970-01-01T00:05:00Z"),
@@ -413,4 +433,396 @@ def test_ml_risk_signal_summary_separates_forecast_skill_from_rules() -> None:
     assert (
         summary["pre_registered_outcomes"]["exposure_research_gate"]["passed"] is True
     )
+    assert summary["forecast_verdict_readiness"]["status"] == "ready_for_verdict"
+    assert summary["forecast_verdict_readiness"]["ready_for_exposure_verdict"] is True
     assert summary["lane_status"] == "continue_to_rule_research"
+
+
+def test_ml_risk_signal_zero_observations_are_insufficient_data_not_kill() -> None:
+    summary = _summary(  # noqa: SLF001
+        [
+            {
+                "status": "insufficient_data",
+                "strict_data_ready": False,
+                "evidence_bucket": "insufficient_data",
+                "window_set": "tiny",
+                "window_id": "w1",
+                "preflight": {
+                    "missing_series": ["BTC/USD@4h"],
+                    "partial_series": [],
+                },
+            }
+        ],
+        evaluation_rows=[],
+        params=MLRiskSignalResearchParams(),
+        timeframe="4h",
+        benchmark_pair="BTC/USD",
+    )
+
+    readiness = summary["forecast_verdict_readiness"]
+    assert readiness["status"] == "insufficient_data"
+    assert readiness["ready_for_exposure_verdict"] is False
+    assert "no_model_evaluation_observations" in readiness["blocking_reasons"]
+    assert readiness["coverage_gaps"]["missing_series_by_window"] == [
+        {
+            "window_set": "tiny",
+            "window_id": "w1",
+            "missing_series": ["BTC/USD@4h"],
+        }
+    ]
+    assert summary["lane_status"] == "insufficient_data"
+    assert summary["pre_registered_outcomes"]["kill_criterion"]["triggered"] is False
+
+
+def test_ml_risk_signal_zero_observations_from_training_is_not_kill() -> None:
+    summary = _summary(  # noqa: SLF001
+        [
+            {
+                "status": "insufficient_training",
+                "strict_data_ready": True,
+                "evidence_bucket": "uptrend",
+                "preflight": {"missing_series": [], "partial_series": []},
+            }
+        ],
+        evaluation_rows=[],
+        params=MLRiskSignalResearchParams(),
+        timeframe="4h",
+        benchmark_pair="BTC/USD",
+    )
+
+    readiness = summary["forecast_verdict_readiness"]
+    assert readiness["status"] == "insufficient_training"
+    assert readiness["ready_for_exposure_verdict"] is False
+    assert "insufficient_training_history" in readiness["blocking_reasons"]
+    assert summary["lane_status"] == "insufficient_training"
+    assert summary["pre_registered_outcomes"]["kill_criterion"]["triggered"] is False
+
+
+def test_ml_risk_signal_inadequate_regime_coverage_is_not_kill() -> None:
+    windows = [
+        {"status": "ready", "strict_data_ready": True, "evidence_bucket": "uptrend"},
+        {
+            "status": "ready",
+            "strict_data_ready": True,
+            "evidence_bucket": "current_rolling",
+        },
+    ]
+    rows = [
+        _forecast_row("uptrend", model=1.6, ewma=1.1),
+        _forecast_row("current_rolling", model=1.6, ewma=1.1),
+    ]
+
+    summary = _summary(  # noqa: SLF001
+        windows,
+        evaluation_rows=rows,
+        params=MLRiskSignalResearchParams(),
+        timeframe="4h",
+        benchmark_pair="BTC/USD",
+    )
+
+    readiness = summary["forecast_verdict_readiness"]
+    assert readiness["status"] == "insufficient_regime_coverage"
+    assert readiness["ready_for_exposure_verdict"] is False
+    assert (
+        "fewer_than_2_evaluable_non_current_regime_buckets"
+        in readiness["blocking_reasons"]
+    )
+    assert summary["lane_status"] == "insufficient_regime_coverage"
+    assert summary["pre_registered_outcomes"]["kill_criterion"]["triggered"] is False
+
+
+def test_ml_risk_signal_overlapping_non_current_windows_block_verdict() -> None:
+    windows = [
+        {
+            "status": "ready",
+            "strict_data_ready": True,
+            "evidence_bucket": "uptrend",
+            "window_id": "up",
+            "first_example_time": "2026-05-01T00:00:00+00:00",
+            "last_example_time": "2026-05-10T00:00:00+00:00",
+        },
+        {
+            "status": "ready",
+            "strict_data_ready": True,
+            "evidence_bucket": "downtrend",
+            "window_id": "down",
+            "first_example_time": "2026-05-05T00:00:00+00:00",
+            "last_example_time": "2026-05-14T00:00:00+00:00",
+        },
+        {
+            "status": "ready",
+            "strict_data_ready": True,
+            "evidence_bucket": "current_rolling",
+            "window_id": "current",
+            "first_example_time": "2026-05-20T00:00:00+00:00",
+            "last_example_time": "2026-05-29T00:00:00+00:00",
+        },
+    ]
+    rows = [
+        _forecast_row("uptrend"),
+        _forecast_row("downtrend"),
+        _forecast_row("current_rolling"),
+    ]
+
+    summary = _summary(  # noqa: SLF001
+        windows,
+        evaluation_rows=rows,
+        params=MLRiskSignalResearchParams(),
+        timeframe="4h",
+        benchmark_pair="BTC/USD",
+    )
+
+    readiness = summary["forecast_verdict_readiness"]
+    exposure_gate = summary["pre_registered_outcomes"]["exposure_research_gate"]
+    assert readiness["status"] == "insufficient_independence"
+    assert readiness["ready_for_exposure_verdict"] is False
+    assert "overlapping_evaluation_windows" in readiness["blocking_reasons"]
+    assert readiness["window_independence"]["status"] == "overlapping"
+    assert len(readiness["window_independence"]["blocking_overlaps"]) == 1
+    assert exposure_gate["readiness_passed"] is False
+    assert exposure_gate["passed"] is False
+    assert summary["lane_status"] == "insufficient_independence"
+    assert summary["pre_registered_outcomes"]["kill_criterion"]["triggered"] is False
+
+
+def test_ml_risk_signal_overlap_uses_label_inclusive_ranges() -> None:
+    windows = [
+        {
+            "status": "ready",
+            "strict_data_ready": True,
+            "evidence_bucket": "uptrend",
+            "window_id": "up",
+            "first_example_time": "2026-05-01T00:00:00+00:00",
+            "last_example_time": "2026-05-09T00:00:00+00:00",
+            "last_label_end_time": "2026-05-10T00:00:00+00:00",
+        },
+        {
+            "status": "ready",
+            "strict_data_ready": True,
+            "evidence_bucket": "downtrend",
+            "window_id": "down",
+            "first_example_time": "2026-05-07T00:00:00+00:00",
+            "last_example_time": "2026-05-15T00:00:00+00:00",
+            "last_label_end_time": "2026-05-16T00:00:00+00:00",
+        },
+        {
+            "status": "ready",
+            "strict_data_ready": True,
+            "evidence_bucket": "current_rolling",
+            "window_id": "current",
+            "first_example_time": "2026-05-20T00:00:00+00:00",
+            "last_example_time": "2026-05-29T00:00:00+00:00",
+            "last_label_end_time": "2026-05-30T00:00:00+00:00",
+        },
+    ]
+    rows = [
+        _forecast_row("uptrend"),
+        _forecast_row("downtrend"),
+        _forecast_row("current_rolling"),
+    ]
+
+    summary = _summary(  # noqa: SLF001
+        windows,
+        evaluation_rows=rows,
+        params=MLRiskSignalResearchParams(),
+        timeframe="4h",
+        benchmark_pair="BTC/USD",
+    )
+
+    independence = summary["forecast_verdict_readiness"]["window_independence"]
+    blocking = independence["blocking_overlaps"][0]
+    assert summary["forecast_verdict_readiness"]["status"] == (
+        "insufficient_independence"
+    )
+    assert blocking["left_window_id"] == "up"
+    assert blocking["right_window_id"] == "down"
+    assert blocking["overlap_fraction_of_shorter_range"] == pytest.approx(1 / 3)
+
+
+def test_ml_risk_signal_current_overlap_is_reported_but_not_blocking() -> None:
+    windows = [
+        {
+            "status": "ready",
+            "strict_data_ready": True,
+            "evidence_bucket": "uptrend",
+            "window_id": "up",
+            "first_example_time": "2026-04-01T00:00:00+00:00",
+            "last_example_time": "2026-04-10T00:00:00+00:00",
+        },
+        {
+            "status": "ready",
+            "strict_data_ready": True,
+            "evidence_bucket": "downtrend",
+            "window_id": "down",
+            "first_example_time": "2026-05-01T00:00:00+00:00",
+            "last_example_time": "2026-05-20T00:00:00+00:00",
+        },
+        {
+            "status": "ready",
+            "strict_data_ready": True,
+            "evidence_bucket": "current_rolling",
+            "window_id": "current",
+            "first_example_time": "2026-05-10T00:00:00+00:00",
+            "last_example_time": "2026-05-29T00:00:00+00:00",
+        },
+    ]
+    rows = [
+        _forecast_row("uptrend"),
+        _forecast_row("downtrend"),
+        _forecast_row("current_rolling"),
+    ]
+
+    summary = _summary(  # noqa: SLF001
+        windows,
+        evaluation_rows=rows,
+        params=MLRiskSignalResearchParams(),
+        timeframe="4h",
+        benchmark_pair="BTC/USD",
+    )
+
+    independence = summary["forecast_verdict_readiness"]["window_independence"]
+    assert summary["forecast_verdict_readiness"]["status"] == "ready_for_verdict"
+    assert independence["status"] == "ready"
+    assert len(independence["scored_example_range_overlaps"]) == 1
+    assert independence["scored_example_range_overlaps"][0]["blocks_verdict"] is False
+    assert independence["blocking_overlaps"] == []
+    assert (
+        summary["pre_registered_outcomes"]["exposure_research_gate"]["passed"] is True
+    )
+
+
+def test_ml_risk_signal_display_candidate_is_blocked_by_regime_readiness_gap() -> None:
+    windows = [
+        {"status": "ready", "strict_data_ready": True, "evidence_bucket": "uptrend"},
+        {
+            "status": "ready",
+            "strict_data_ready": True,
+            "evidence_bucket": "current_rolling",
+        },
+    ]
+    rows = [
+        _forecast_row("uptrend", model=1.04, ewma=1.08),
+        _forecast_row("current_rolling", model=1.04, ewma=1.08),
+    ]
+
+    summary = _summary(  # noqa: SLF001
+        windows,
+        evaluation_rows=rows,
+        params=MLRiskSignalResearchParams(),
+        timeframe="4h",
+        benchmark_pair="BTC/USD",
+    )
+
+    assert summary["forecast_verdict_readiness"]["status"] == (
+        "insufficient_regime_coverage"
+    )
+    display_gate = summary["pre_registered_outcomes"]["display_only_gate"]
+    assert display_gate["metric_passed"] is True
+    assert display_gate["readiness_passed"] is False
+    assert display_gate["passed"] is False
+    assert summary["lane_status"] == "insufficient_regime_coverage"
+    assert summary["pre_registered_outcomes"]["kill_criterion"]["triggered"] is False
+
+
+def test_ml_risk_signal_display_candidate_is_blocked_by_partial_data() -> None:
+    windows = [
+        {
+            "status": "ready",
+            "strict_data_ready": False,
+            "evidence_bucket": "uptrend",
+            "preflight": {"missing_series": [], "partial_series": ["BTC/USD@4h"]},
+        },
+        {
+            "status": "ready",
+            "strict_data_ready": False,
+            "evidence_bucket": "current_rolling",
+            "preflight": {"missing_series": [], "partial_series": ["BTC/USD@4h"]},
+        },
+    ]
+    rows = [
+        _forecast_row("uptrend", model=1.04, ewma=1.08),
+        _forecast_row("current_rolling", model=1.04, ewma=1.08),
+    ]
+
+    summary = _summary(  # noqa: SLF001
+        windows,
+        evaluation_rows=rows,
+        params=MLRiskSignalResearchParams(),
+        timeframe="4h",
+        benchmark_pair="BTC/USD",
+    )
+
+    readiness = summary["forecast_verdict_readiness"]
+    display_gate = summary["pre_registered_outcomes"]["display_only_gate"]
+    assert readiness["status"] == "insufficient_data"
+    assert "strict_data_not_ready" in readiness["blocking_reasons"]
+    assert display_gate["metric_passed"] is True
+    assert display_gate["readiness_passed"] is False
+    assert display_gate["passed"] is False
+    assert summary["lane_status"] == "insufficient_data"
+    assert summary["pre_registered_outcomes"]["kill_criterion"]["triggered"] is False
+
+
+def test_ml_risk_signal_ready_display_candidate_survives_failed_exposure_gate() -> None:
+    windows = [
+        {"status": "ready", "strict_data_ready": True, "evidence_bucket": "uptrend"},
+        {"status": "ready", "strict_data_ready": True, "evidence_bucket": "downtrend"},
+        {
+            "status": "ready",
+            "strict_data_ready": True,
+            "evidence_bucket": "current_rolling",
+        },
+    ]
+    rows = [
+        _forecast_row("uptrend", model=1.08, ewma=1.08),
+        _forecast_row("downtrend", model=1.08, ewma=1.08),
+        _forecast_row("current_rolling", model=1.08, ewma=1.08),
+    ]
+
+    summary = _summary(  # noqa: SLF001
+        windows,
+        evaluation_rows=rows,
+        params=MLRiskSignalResearchParams(),
+        timeframe="4h",
+        benchmark_pair="BTC/USD",
+    )
+
+    display_gate = summary["pre_registered_outcomes"]["display_only_gate"]
+    assert summary["forecast_verdict_readiness"]["status"] == "ready_for_verdict"
+    assert (
+        summary["pre_registered_outcomes"]["exposure_research_gate"]["passed"] is False
+    )
+    assert display_gate["metric_passed"] is True
+    assert display_gate["readiness_passed"] is True
+    assert display_gate["passed"] is True
+    assert summary["lane_status"] == "display_only_candidate"
+    assert summary["pre_registered_outcomes"]["kill_criterion"]["triggered"] is False
+
+
+def test_ml_risk_signal_adequate_losing_model_closes_lane() -> None:
+    windows = [
+        {"status": "ready", "strict_data_ready": True, "evidence_bucket": "uptrend"},
+        {"status": "ready", "strict_data_ready": True, "evidence_bucket": "downtrend"},
+        {
+            "status": "ready",
+            "strict_data_ready": True,
+            "evidence_bucket": "current_rolling",
+        },
+    ]
+    rows = [
+        _forecast_row("uptrend", model=1.6, ewma=1.1),
+        _forecast_row("downtrend", model=1.6, ewma=1.1),
+        _forecast_row("current_rolling", model=1.6, ewma=1.1),
+    ]
+
+    summary = _summary(  # noqa: SLF001
+        windows,
+        evaluation_rows=rows,
+        params=MLRiskSignalResearchParams(),
+        timeframe="4h",
+        benchmark_pair="BTC/USD",
+    )
+
+    assert summary["forecast_verdict_readiness"]["status"] == "ready_for_verdict"
+    assert summary["lane_status"] == "close_volatility_forecast_lane"
+    assert summary["pre_registered_outcomes"]["kill_criterion"]["triggered"] is True

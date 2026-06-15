@@ -11,7 +11,6 @@ from typing import Any, Mapping, Sequence
 from krakked.config import AppConfig
 from krakked.market_data.models import OHLCBar
 from krakked.market_regime import (
-    DEFAULT_MARKET_REGIME_TIMEFRAME,
     MarketRegimeOverlayParams,
     MarketRegimeSnapshot,
     _as_utc,
@@ -130,8 +129,13 @@ def evaluate_market_regime_bars(
 def _preflight_to_dict(preflight: Any) -> dict[str, Any]:
     to_dict = getattr(preflight, "to_dict", None)
     if callable(to_dict):
-        return to_dict()
-    return copy.deepcopy(dict(preflight or {}))
+        payload = to_dict()
+        if isinstance(payload, Mapping):
+            return {str(key): copy.deepcopy(value) for key, value in payload.items()}
+        return {}
+    if isinstance(preflight, Mapping):
+        return {str(key): copy.deepcopy(value) for key, value in preflight.items()}
+    return {}
 
 
 def run_market_regime_research(

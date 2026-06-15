@@ -176,12 +176,12 @@ class MarketRegimeThrottleConfig:
             "neutral_allocation_multiplier",
             "risk_off_allocation_multiplier",
         ):
-            value = float(getattr(self, field_name))
-            if value < 0.0 or value > 1.0:
+            multiplier = float(getattr(self, field_name))
+            if multiplier < 0.0 or multiplier > 1.0:
                 raise ValueError(
                     f"market_regime_throttle.{field_name} must be between 0.0 and 1.0"
                 )
-            setattr(self, field_name, value)
+            setattr(self, field_name, multiplier)
 
         if self.risk_off_allocation_multiplier > self.neutral_allocation_multiplier:
             raise ValueError(

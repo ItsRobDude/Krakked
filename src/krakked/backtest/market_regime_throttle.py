@@ -324,7 +324,7 @@ def _build_runtime_throttle_promotion_checks(
     )
     interventions = int(throttle_counts.get("throttled_actions", 0) or 0)
     reason_counts = copy.deepcopy(throttle_counts.get("reason_counts") or {})
-    checks = {
+    checks: dict[str, Any] = {
         "actual_strategy_actions": {
             "passed": baseline_actions > 0 or throttle_actions > 0,
             "baseline": baseline_actions,
@@ -360,9 +360,10 @@ def _build_runtime_throttle_promotion_checks(
             "throttled_actions": interventions,
         },
     }
-    checks["passed"] = all(
+    passed = all(
         bool(payload.get("passed"))
         for name, payload in checks.items()
         if name != "passed" and isinstance(payload, dict)
     )
+    checks["passed"] = passed
     return checks

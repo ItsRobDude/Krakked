@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import pytest
 
@@ -42,8 +43,8 @@ def _trend(start_price: float, pct_per_bar: float, count: int = 20) -> list[floa
     return prices
 
 
-def _params(**overrides) -> MarketRegimeOverlayParams:
-    values = {
+def _params(**overrides: Any) -> MarketRegimeOverlayParams:
+    values: dict[str, Any] = {
         "momentum_lookback_bars": 10,
         "basket_momentum_lookback_bars": 10,
         "volatility_lookback_bars": 10,

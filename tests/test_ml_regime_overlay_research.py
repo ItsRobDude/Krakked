@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 
@@ -227,7 +228,7 @@ def test_ml_regime_overlay_run_uses_only_earlier_windows_for_training(
     monkeypatch.setattr(overlay_research, "_build_training_examples", _fake_examples)
 
     result = overlay_research.run_ml_regime_overlay_research(
-        SimpleNamespace(universe=SimpleNamespace(include_pairs=["BTC/USD"])),
+        cast(Any, SimpleNamespace(universe=SimpleNamespace(include_pairs=["BTC/USD"]))),
         window_sets={
             "shuffled": [
                 ("late", "2026-02-01T00:00:00Z", "2026-02-02T00:00:00Z"),
@@ -306,7 +307,7 @@ def test_ml_regime_overlay_excludes_overlapping_future_labels_from_training(
     monkeypatch.setattr(overlay_research, "_build_training_examples", _fake_examples)
 
     result = overlay_research.run_ml_regime_overlay_research(
-        SimpleNamespace(universe=SimpleNamespace(include_pairs=["BTC/USD"])),
+        cast(Any, SimpleNamespace(universe=SimpleNamespace(include_pairs=["BTC/USD"]))),
         window_sets={
             "overlap": [
                 ("earlier", "2026-01-01T00:00:00Z", "2026-01-20T00:00:00Z"),

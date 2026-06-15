@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -178,9 +177,9 @@ def test_strategy_evidence_scoreboard_adds_regime_and_risk_metrics() -> None:
     assert row["turnover_proxy"] == pytest.approx(0.2)
     assert row["current_recent_20d"]["evidence_bucket"] == "current_rolling"
     assert row["current_recent_20d"]["market_bucket"] == "downtrend"
-    assert row["regime_breakdown"]["current_rolling"]["avg_return_pct"] == pytest.approx(
-        -0.5
-    )
+    assert row["regime_breakdown"]["current_rolling"][
+        "avg_return_pct"
+    ] == pytest.approx(-0.5)
     assert scoreboard["baselines"]["negative_benchmark_context"] is True
 
 

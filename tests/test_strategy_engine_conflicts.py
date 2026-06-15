@@ -134,6 +134,8 @@ def test_build_conflict_summaries_reports_netted_out_actions():
     summaries = engine._build_conflict_summaries(intents, actions)
 
     assert summaries["trend_core"][0]["winner_strategy_id"] is None
-    assert summaries["trend_core"][0]["winning_reason"] == "risk blocked competing intent"
+    assert (
+        summaries["trend_core"][0]["winning_reason"] == "risk blocked competing intent"
+    )
     assert summaries["trend_core"][0]["outcome"] == "netted_out"
     assert summaries["vol_breakout"][0]["outcome"] == "netted_out"

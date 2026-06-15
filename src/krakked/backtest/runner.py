@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import copy
-import math
 import logging
+import math
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -422,9 +422,7 @@ class BacktestMarketData(MarketDataAPI):
                         warmup_first_at = datetime.fromtimestamp(
                             warmup_first_ts, tz=UTC
                         )
-                        warmup_last_at = datetime.fromtimestamp(
-                            warmup_last_ts, tz=UTC
-                        )
+                        warmup_last_at = datetime.fromtimestamp(warmup_last_ts, tz=UTC)
                         frame_seconds = _timeframe_seconds(timeframe)
                         start_ok = (
                             frame_seconds <= 0
@@ -1710,13 +1708,9 @@ def backtest_strict_data_details(preflight: BacktestPreflight) -> List[str]:
     if preflight.partial_series:
         details.append("partial: " + ", ".join(preflight.partial_series))
     if preflight.warmup_missing_series:
-        details.append(
-            "warmup missing: " + ", ".join(preflight.warmup_missing_series)
-        )
+        details.append("warmup missing: " + ", ".join(preflight.warmup_missing_series))
     if preflight.warmup_partial_series:
-        details.append(
-            "warmup partial: " + ", ".join(preflight.warmup_partial_series)
-        )
+        details.append("warmup partial: " + ", ".join(preflight.warmup_partial_series))
     return details
 
 
@@ -1917,9 +1911,10 @@ def _build_strategy_summary(
         entry["realized_pnl_usd"] = float(pnl)
 
     for record in getattr(portfolio, "realized_pnl_history", []):
-        strategy_id = getattr(record, "strategy_tag", None)
-        if not strategy_id or strategy_id == "manual":
+        record_strategy_id = getattr(record, "strategy_tag", None)
+        if not record_strategy_id or record_strategy_id == "manual":
             continue
+        strategy_id = str(record_strategy_id)
         entry = summary.setdefault(strategy_id, _new_strategy_summary_entry())
         entry["trade_count"] = int(entry["trade_count"]) + 1
         pnl_quote = float(getattr(record, "pnl_quote", 0.0))
@@ -2035,32 +2030,19 @@ def _build_trend_core_warmup_warnings(
         warmup_by_key = {
             (item.pair, item.timeframe): item for item in preflight.warmup_coverage
         }
-        deficits = [
-            (
-                pair,
-                warmup_by_key.get((pair, params.regime_timeframe)).status
-                if warmup_by_key.get((pair, params.regime_timeframe)) is not None
-                else "missing",
-                warmup_by_key.get((pair, params.regime_timeframe)).bar_count
-                if warmup_by_key.get((pair, params.regime_timeframe)) is not None
-                else 0,
-            )
-            for pair in strategy_pairs
-            if (
-                warmup_by_key.get((pair, params.regime_timeframe)) is None
-                or warmup_by_key.get((pair, params.regime_timeframe)).status != "ok"
-                or warmup_by_key.get((pair, params.regime_timeframe)).bar_count
-                < required_bars
-            )
-        ]
+        deficits: list[tuple[str, str, int]] = []
+        for pair in strategy_pairs:
+            item = warmup_by_key.get((pair, params.regime_timeframe))
+            status = item.status if item is not None else "missing"
+            bar_count = item.bar_count if item is not None else 0
+            if item is None or status != "ok" or bar_count < required_bars:
+                deficits.append((pair, status, bar_count))
         if not deficits:
             return []
         pair_list = ", ".join(pair for pair, _, _ in deficits)
         statuses = sorted({status for _, status, _ in deficits})
         counts = sorted({count for _, _, count in deficits})
-        count_text = (
-            str(counts[0]) if len(counts) == 1 else f"{counts[0]}-{counts[-1]}"
-        )
+        count_text = str(counts[0]) if len(counts) == 1 else f"{counts[0]}-{counts[-1]}"
         return [
             "Strategy trend_core may be under-warmed on "
             f"{params.regime_timeframe}: requires about {required_bars} pre-window "
@@ -2071,16 +2053,16 @@ def _build_trend_core_warmup_warnings(
     coverage_by_key = {
         (item.pair, item.timeframe): item.bar_count for item in preflight.coverage
     }
-    deficits = [
+    coverage_deficits = [
         (pair, coverage_by_key.get((pair, params.regime_timeframe), 0))
         for pair in strategy_pairs
         if coverage_by_key.get((pair, params.regime_timeframe), 0) < required_bars
     ]
-    if not deficits:
+    if not coverage_deficits:
         return []
 
-    pair_list = ", ".join(pair for pair, _ in deficits)
-    counts = sorted({count for _, count in deficits})
+    pair_list = ", ".join(pair for pair, _ in coverage_deficits)
+    counts = sorted({count for _, count in coverage_deficits})
     count_text = str(counts[0]) if len(counts) == 1 else f"{counts[0]}-{counts[-1]}"
     return [
         "Strategy trend_core may be under-warmed on "
