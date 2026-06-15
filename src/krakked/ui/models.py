@@ -240,6 +240,9 @@ class StrategyStatePayload(BaseModel):
     strategy_id: str
     label: str
     enabled: bool
+    evidence_status: Optional[str] = None
+    evidence_label: Optional[str] = None
+    evidence_note: Optional[str] = None
     last_intents_at: Optional[datetime]
     last_actions_at: Optional[datetime]
     last_evaluated_at: Optional[datetime] = None
@@ -444,6 +447,39 @@ class CockpitMarketDataPayload(BaseModel):
     message: Optional[str] = None
 
 
+class RiskSignalPayload(BaseModel):
+    available: bool
+    status: Literal[
+        "ready",
+        "insufficient_data",
+        "stale_data",
+        "pair_unavailable",
+        "error",
+    ]
+    source: str
+    benchmark_pair: str
+    timeframe: str
+    generated_at: datetime
+    latest_bar_time: Optional[datetime] = None
+    latest_bar_age_seconds: Optional[float] = None
+    bars_used: int = 0
+    lookback_bars: int
+    min_bars: int
+    horizon_bars: int
+    ewma_lambda: float
+    ewma_per_bar_variance: Optional[float] = None
+    ewma_per_bar_volatility_pct: Optional[float] = None
+    ewma_horizon_variance: Optional[float] = None
+    ewma_horizon_volatility_pct: Optional[float] = None
+    volatility_percentile: Optional[float] = None
+    risk_level: Optional[Literal["normal", "elevated", "stressed"]] = None
+    thresholds: Dict[str, Optional[float]] = Field(default_factory=dict)
+    display_only: bool = True
+    trading_effect: bool = False
+    runtime_wiring_approved: bool = False
+    notes: List[str] = Field(default_factory=list)
+
+
 class LiveReadinessCheckPayload(BaseModel):
     id: str
     label: str
@@ -470,5 +506,6 @@ class CockpitSnapshotPayload(BaseModel):
     activity: Optional[CockpitActivityPayload] = None
     replay: Optional[ReplayLatestPayload] = None
     market_data: Optional[CockpitMarketDataPayload] = None
+    risk_signal: Optional[RiskSignalPayload] = None
     live_readiness: Optional[LiveReadinessPayload] = None
     section_errors: Dict[str, str] = Field(default_factory=dict)

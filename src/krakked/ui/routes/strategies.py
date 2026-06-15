@@ -9,6 +9,7 @@ from pydantic import ValidationError
 
 from krakked.config import dump_runtime_overrides
 from krakked.strategy.catalog import CANONICAL_STRATEGIES
+from krakked.strategy.evidence import strategy_evidence_for
 from krakked.strategy.risk_profiles import profile_to_definition
 from krakked.ui.logging import build_request_log_extra
 from krakked.ui.models import (
@@ -50,7 +51,9 @@ async def get_strategies(request: Request) -> ApiEnvelope[list[StrategyStatePayl
     def _read_strategies() -> list[StrategyStatePayload]:
         return [
             StrategyStatePayload(
-                label=_strategy_label(ctx, state.strategy_id), **state.__dict__
+                label=_strategy_label(ctx, state.strategy_id),
+                **state.__dict__,
+                **strategy_evidence_for(state.strategy_id),
             )
             for state in ctx.strategy_engine.get_cached_strategy_state()
         ]

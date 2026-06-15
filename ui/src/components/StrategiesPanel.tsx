@@ -89,21 +89,28 @@ export function StrategiesPanel({
 
   const drawdownBadge = (value?: number) => {
     if (value === undefined) return { label: 'Unknown', tone: 'pill--neutral' as const };
-    if (value < 10) return { label: 'OK', tone: 'pill--long' as const };
-    if (value < 25) return { label: 'Cooling', tone: 'pill--warning' as const };
+    if (value < 10) return { label: 'Controlled', tone: 'pill--long' as const };
+    if (value < 25) return { label: 'Elevated', tone: 'pill--warning' as const };
     return { label: 'In trouble', tone: 'pill--danger' as const };
   };
 
   const momentumBadge = (strategy: StrategyState, realizedPnl?: number, drawdownPct?: number) => {
     if (!strategy.enabled) return { label: 'Paused', tone: 'pill--neutral' as const };
     if (strategy.conflict_summary?.some((entry) => entry.outcome === 'winner')) {
-      return { label: 'Leading', tone: 'pill--long' as const };
+      return { label: 'Conflict winner', tone: 'pill--long' as const };
     }
     if ((drawdownPct ?? 0) >= 25) return { label: 'Under pressure', tone: 'pill--danger' as const };
     if ((realizedPnl ?? 0) < 0 || (drawdownPct ?? 0) >= 10) {
-      return { label: 'Cooling', tone: 'pill--warning' as const };
+      return { label: 'Needs review', tone: 'pill--warning' as const };
     }
     return { label: 'Stable', tone: 'pill--info' as const };
+  };
+
+  const evidenceBadgeClass = (strategy: StrategyState) => {
+    if (strategy.evidence_status === 'data_not_ready') return 'pill--warning';
+    if (strategy.evidence_status === 'utility') return 'pill--info';
+    if (strategy.evidence_status === 'research_stage') return 'pill--muted';
+    return 'pill--neutral';
   };
 
   const setWeightDraft = (strategyId: string, value: number) => {
@@ -141,13 +148,12 @@ export function StrategiesPanel({
       <div className="panel__header">
         <div>
           <h2>Strategies</h2>
-          <p className="panel__hint">Toggle strategies, tune weights, and see which strategies are currently leading or cooling.</p>
+          <p className="panel__hint">Toggle strategies, tune weights, and review their evidence posture.</p>
         </div>
       </div>
       <p className="panel__description">
-        Enable or pause each strategy, choose a simple relative weight, and set its risk profile. The profile-level ML
-        switch lives in Startup strategy setup while the session is stopped. Learning here only controls continuous
-        training for enabled ML strategies.
+        Enable or pause each strategy, choose a simple relative weight, and set its risk profile. Evidence labels show
+        the current promotion posture; strategy controls still apply immediately when changed.
       </p>
       {liveMode ? (
         <div className="feedback feedback--warning strategy-panel__warning">
@@ -180,6 +186,11 @@ export function StrategiesPanel({
                     {strategy.enabled ? 'Active' : 'Paused'}
                   </span>
                   <span className={`pill ${momentum.tone}`}>{momentum.label}</span>
+                  {strategy.evidence_label ? (
+                    <span className={`pill ${evidenceBadgeClass(strategy)}`} title={strategy.evidence_note ?? undefined}>
+                      {strategy.evidence_label}
+                    </span>
+                  ) : null}
                   {STRATEGY_TAGS[strategy.strategy_id] ? (
                     <span className="pill pill--muted strategy__tag">
                       {STRATEGY_TAGS[strategy.strategy_id]}
@@ -233,6 +244,12 @@ export function StrategiesPanel({
                 <div>
                   <span>Last evaluated</span>
                   <strong>{lastEvaluated ? formatTimestamp(lastEvaluated) : 'Not yet'}</strong>
+                </div>
+                <div>
+                  <span>Evidence</span>
+                  <strong title={strategy.evidence_note ?? undefined}>
+                    {strategy.evidence_label ?? 'Unreviewed'}
+                  </strong>
                 </div>
               </div>
 

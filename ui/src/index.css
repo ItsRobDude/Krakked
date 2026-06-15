@@ -1877,6 +1877,11 @@ body {
   align-items: start;
 }
 
+.dashboard-grid__stack {
+  display: grid;
+  gap: 0.85rem;
+}
+
 .dashboard-grid--primary {
   grid-template-columns: minmax(0, 1.45fr) minmax(320px, 0.95fr);
 }
@@ -2167,6 +2172,49 @@ body {
   grid-column: 1 / -1;
 }
 
+.risk-signal-panel {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.risk-signal-panel__badges {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.risk-signal-panel__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.65rem;
+}
+
+.risk-signal-panel__item {
+  padding: 0.85rem 0.9rem;
+  border-radius: 12px;
+  border: 1px solid rgba(146, 162, 183, 0.12);
+  background: rgba(16, 24, 35, 0.78);
+}
+
+.risk-signal-panel__item span {
+  display: block;
+  margin: 0;
+  color: #91a4b8;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.risk-signal-panel__item strong {
+  display: block;
+  margin: 0.25rem 0 0;
+  color: #f8fafc;
+  font-weight: 800;
+  font-size: 1rem;
+}
+
 .log-panel__list {
   margin-top: 0.2rem;
 }
@@ -2262,6 +2310,10 @@ body {
   }
 
   .snapshot-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .risk-signal-panel__grid {
     grid-template-columns: 1fr;
   }
 }

@@ -397,3 +397,13 @@ Decision:
 - Keep the command and importer as research infrastructure. Display-only,
   anomaly-detection, or drawdown-probability lanes would need separate
   pre-registered targets and bars.
+
+## 2026-06-15: EWMA Risk Context Productized As Display-Only
+
+The useful baseline from the closed volatility lane was promoted only as a
+cockpit context signal: BTC/USD `4h` RiskMetrics EWMA volatility with
+`trading_effect=false` and `runtime_wiring_approved=false`.
+
+This is not an ML model, an exposure rule, a veto, or a strategy selector. It is
+operator context only, and any future trading influence still needs a separate
+pre-registered research gate.

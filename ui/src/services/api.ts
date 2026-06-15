@@ -198,6 +198,33 @@ export type CockpitMarketDataSnapshot = {
   message: string | null;
 };
 
+export type MarketRiskSignal = {
+  available: boolean;
+  status: 'ready' | 'insufficient_data' | 'stale_data' | 'pair_unavailable' | 'error';
+  source: string;
+  benchmark_pair: string;
+  timeframe: string;
+  generated_at: string;
+  latest_bar_time: string | null;
+  latest_bar_age_seconds: number | null;
+  bars_used: number;
+  lookback_bars: number;
+  min_bars: number;
+  horizon_bars: number;
+  ewma_lambda: number;
+  ewma_per_bar_variance: number | null;
+  ewma_per_bar_volatility_pct: number | null;
+  ewma_horizon_variance: number | null;
+  ewma_horizon_volatility_pct: number | null;
+  volatility_percentile: number | null;
+  risk_level: 'normal' | 'elevated' | 'stressed' | null;
+  thresholds: Record<string, number | null>;
+  display_only: boolean;
+  trading_effect: boolean;
+  runtime_wiring_approved: boolean;
+  notes: string[];
+};
+
 export type LiveReadinessStatus = 'blocked' | 'warning' | 'ready';
 
 export type LiveReadinessCheck = {
@@ -226,6 +253,7 @@ export type CockpitSnapshot = {
   activity: CockpitActivitySnapshot | null;
   replay: ReplayLatestSummary | null;
   market_data: CockpitMarketDataSnapshot | null;
+  risk_signal?: MarketRiskSignal | null;
   live_readiness?: LiveReadinessPayload | null;
   section_errors: Record<string, string>;
 };
@@ -254,6 +282,9 @@ export type StrategyState = {
   strategy_id: string;
   label: string;
   enabled: boolean;
+  evidence_status?: string | null;
+  evidence_label?: string | null;
+  evidence_note?: string | null;
   last_intents_at: string | null;
   last_actions_at: string | null;
   last_evaluated_at: string | null;

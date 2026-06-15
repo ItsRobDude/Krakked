@@ -566,12 +566,30 @@ def test_cockpit_snapshot_returns_expected_sections(client, system_context):
     assert data["activity"]["recent_executions"] == []
     assert data["activity"]["risk_decisions"] == []
     assert data["replay"]["available"] is False
+    assert data["risk_signal"]["available"] is False
+    assert data["risk_signal"]["status"] == "insufficient_data"
+    assert data["risk_signal"]["display_only"] is True
+    assert data["risk_signal"]["trading_effect"] is False
     assert data["market_data"]["classification"] == "healthy"
     assert data["market_data"]["session_critical"] is False
     assert data["live_readiness"]["status"] == "blocked"
     assert any(
         check["id"] == "live_gates" for check in data["live_readiness"]["blockers"]
     )
+
+
+def test_cockpit_snapshot_isolates_risk_signal_failure(client, system_context):
+    system_context.market_data.get_ohlc.side_effect = RuntimeError("cache unavailable")
+    system_context.portfolio.get_strategy_performance.return_value = {}
+    system_context.execution_service.get_recent_executions.return_value = []
+    system_context.portfolio.get_decisions.return_value = []
+
+    response = client.get("/api/system/cockpit")
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["risk_signal"] is None
+    assert data["section_errors"]["risk_signal"] == "Risk signal unavailable"
 
 
 def test_live_readiness_reports_normal_paper_mode_as_blocked(client, system_context):
@@ -1039,9 +1057,9 @@ def test_setup_config_uses_starter_universe_when_none_provided(
     ]
     assert config_data["strategies"]["enabled"] == [
         "trend_core",
-        "vol_breakout",
         "majors_mean_rev",
     ]
+    assert config_data["strategies"]["configs"]["vol_breakout"]["enabled"] is False
     assert config_data["strategies"]["configs"]["rs_rotation"]["enabled"] is False
 
 

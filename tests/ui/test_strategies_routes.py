@@ -43,6 +43,8 @@ def test_get_strategies_enveloped(client, strategy_context):
     assert payload["error"] is None
     assert payload["data"][0]["strategy_id"] == "trend_core"
     assert payload["data"][0]["label"] == "Trend Core"
+    assert payload["data"][0]["evidence_status"] == "research_stage"
+    assert payload["data"][0]["evidence_label"] == "Research stage"
     assert payload["data"][0]["configured_weight"] == 100
     assert payload["data"][0]["conflict_summary"][0]["pair"] == "BTC/USD"
 

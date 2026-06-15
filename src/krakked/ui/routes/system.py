@@ -45,11 +45,13 @@ from krakked.connection.exceptions import (
 from krakked.credentials import CredentialStatus
 from krakked.execution.adapter import get_live_trading_block_reason
 from krakked.market_data.api import MarketDataStatus
+from krakked.market_data.exceptions import PairNotFoundError
 from krakked.password_store import (
     delete_master_password,
     get_saved_master_password,
     save_master_password,
 )
+from krakked.risk_signal import EWMARiskSignalParams, build_ewma_risk_signal
 from krakked.secrets import (
     SecretsDecryptionError,
     delete_secrets,
@@ -57,6 +59,7 @@ from krakked.secrets import (
     set_session_master_password,
     unlock_secrets,
 )
+from krakked.strategy.evidence import strategy_evidence_for
 from krakked.ui.logging import build_request_log_extra
 from krakked.ui.models import (
     ApiEnvelope,
@@ -76,6 +79,7 @@ from krakked.ui.models import (
     ReplayLatestPayload,
     RiskConfigPayload,
     RiskDecisionPayload,
+    RiskSignalPayload,
     RiskStatusPayload,
     SessionStatePayload,
     StrategyExposureBreakdown,
@@ -562,7 +566,9 @@ def _build_risk_config_payload(ctx) -> RiskConfigPayload:
 def _build_strategy_state_payload(ctx) -> list[StrategyStatePayload]:
     return [
         StrategyStatePayload(
-            label=_strategy_label(ctx, state.strategy_id), **state.__dict__
+            label=_strategy_label(ctx, state.strategy_id),
+            **state.__dict__,
+            **strategy_evidence_for(state.strategy_id),
         )
         for state in ctx.strategy_engine.get_cached_strategy_state()
     ]
@@ -593,6 +599,32 @@ def _build_latest_replay_payload() -> ReplayLatestPayload:
     payload = load_backtest_report(report_path)
     summary = summarize_latest_backtest_report(payload, resolved_path=report_path)
     return ReplayLatestPayload(**summary)
+
+
+def _build_risk_signal_payload(ctx) -> RiskSignalPayload:
+    params = EWMARiskSignalParams()
+    generated_at = datetime.now(timezone.utc)
+    try:
+        bars = ctx.market_data.get_ohlc(
+            params.benchmark_pair,
+            params.timeframe,
+            lookback=int(params.lookback_bars),
+        )
+    except PairNotFoundError:
+        payload = build_ewma_risk_signal([], params=params, generated_at=generated_at)
+        payload["status"] = "pair_unavailable"
+        payload["notes"] = [
+            f"{params.benchmark_pair} is unavailable in the current market-data universe.",
+            "Display-only context; does not alter strategy selection, sizing, or order flow.",
+        ]
+        return RiskSignalPayload(**payload)
+
+    payload = build_ewma_risk_signal(
+        bars,
+        params=params,
+        generated_at=generated_at,
+    )
+    return RiskSignalPayload(**payload)
 
 
 def _canonical_market_pair(pair: str | None) -> str:
@@ -1092,6 +1124,7 @@ _COCKPIT_SECTION_ERROR_MESSAGES = {
     "activity.risk_decisions": "Risk decisions unavailable",
     "replay.latest": "Latest replay unavailable",
     "market_data.scope": "Market data scope unavailable",
+    "risk_signal": "Risk signal unavailable",
     "live_readiness": "Live readiness unavailable",
 }
 
@@ -1830,6 +1863,11 @@ async def cockpit_snapshot(request: Request) -> ApiEnvelope[CockpitSnapshotPaylo
                 positions,
             ),
         )
+        risk_signal = _read_section(
+            section_errors,
+            "risk_signal",
+            lambda: _build_risk_signal_payload(ctx),
+        )
         live_readiness = _read_section(
             section_errors,
             "live_readiness",
@@ -1867,6 +1905,7 @@ async def cockpit_snapshot(request: Request) -> ApiEnvelope[CockpitSnapshotPaylo
             ),
             replay=replay,
             market_data=market_data,
+            risk_signal=risk_signal,
             live_readiness=live_readiness,
             section_errors=section_errors,
         )

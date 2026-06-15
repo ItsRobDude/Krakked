@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { KpiGrid, Kpi } from './components/KpiGrid';
 import { Layout } from './components/Layout';
 import { RiskPanel } from './components/RiskPanel';
+import { RiskSignalPanel } from './components/RiskSignalPanel';
 import { ReplaySummaryPanel } from './components/ReplaySummaryPanel';
 import { LogEntry, LogPanel } from './components/LogPanel';
 import { PositionRow, PositionsTable } from './components/PositionsTable';
@@ -30,6 +31,7 @@ import {
   RecentExecution,
   RiskDecision,
   CockpitMarketDataSnapshot,
+  MarketRiskSignal,
   LiveReadinessPayload,
   RiskPresetName,
   StrategyRiskProfile,
@@ -61,7 +63,7 @@ const DASHBOARD_REFRESH_MS = Number(import.meta.env.VITE_REFRESH_DASHBOARD_MS ??
 const ORDERS_REFRESH_MS = Number(import.meta.env.VITE_REFRESH_ORDERS_MS ?? 5000) || 5000;
 const ACTIVE_DASHBOARD_REFRESH_MS = Math.min(DASHBOARD_REFRESH_MS, ORDERS_REFRESH_MS);
 const ACTIVE_RESOURCE_TIMEOUT_MS = 3500;
-const STARTER_STRATEGY_IDS = ['trend_core', 'vol_breakout', 'majors_mean_rev', 'rs_rotation'] as const;
+const STARTER_STRATEGY_IDS = ['trend_core', 'majors_mean_rev'] as const;
 type SystemMessage = { tone: 'info' | 'error' | 'success'; message: string };
 type DashboardAlert = { id: string; tone: 'danger' | 'warning' | 'info'; title: string; message: string };
 type CockpitTab = 'overview' | 'positions' | 'strategies' | 'risk' | 'activity';
@@ -186,8 +188,8 @@ const recomputeEffectiveWeights = (nextStrategies: StrategyState[]) => {
 
 const getDrawdownState = (drawdownPct?: number) => {
   if (drawdownPct === undefined) return { label: 'No data', tone: 'neutral' as const };
-  if (drawdownPct < 10) return { label: 'Leading', tone: 'success' as const };
-  if (drawdownPct < 25) return { label: 'Cooling', tone: 'warning' as const };
+  if (drawdownPct < 10) return { label: 'Controlled', tone: 'success' as const };
+  if (drawdownPct < 25) return { label: 'Elevated', tone: 'warning' as const };
   return { label: 'Under pressure', tone: 'danger' as const };
 };
 
@@ -196,15 +198,22 @@ const getStrategyMomentum = (strategy: StrategyState, performance?: StrategyPerf
     return { label: 'Paused', tone: 'neutral' as const };
   }
   if ((strategy.conflict_summary?.some((entry) => entry.outcome === 'winner'))) {
-    return { label: 'Leading', tone: 'success' as const };
+    return { label: 'Conflict winner', tone: 'success' as const };
   }
   if ((performance?.max_drawdown_pct ?? 0) >= 25) {
     return { label: 'Under pressure', tone: 'danger' as const };
   }
   if ((performance?.realized_pnl_quote ?? 0) < 0 || (performance?.max_drawdown_pct ?? 0) >= 10) {
-    return { label: 'Cooling', tone: 'warning' as const };
+    return { label: 'Needs review', tone: 'warning' as const };
   }
   return { label: 'Stable', tone: 'info' as const };
+};
+
+const getEvidencePillClass = (strategy: StrategyState) => {
+  if (strategy.evidence_status === 'data_not_ready') return 'pill--warning';
+  if (strategy.evidence_status === 'utility') return 'pill--info';
+  if (strategy.evidence_status === 'research_stage') return 'pill--muted';
+  return 'pill--neutral';
 };
 
 const getStrategyEvaluationAt = (strategy: StrategyState) =>
@@ -373,6 +382,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
   const [connectionState, setConnectionState] = useState<'connected' | 'degraded'>('degraded');
   const [health, setHealth] = useState<SystemHealth | null>(null);
   const [marketDataScope, setMarketDataScope] = useState<CockpitMarketDataSnapshot | null>(null);
+  const [riskSignal, setRiskSignal] = useState<MarketRiskSignal | null>(null);
   const [liveReadiness, setLiveReadiness] = useState<LiveReadinessPayload | null>(null);
   const [summary, setSummary] = useState<PortfolioSummary | null>(null);
   const [latestReplay, setLatestReplay] = useState<ReplayLatestSummary | null>(null);
@@ -546,10 +556,17 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
         const decisions = snapshot.activity?.risk_decisions ?? null;
         const latestReplaySummary = snapshot.replay;
         const marketDataSnapshot = snapshot.market_data ?? null;
+        const riskSignalSnapshot = snapshot.risk_signal ?? null;
         const liveReadinessSnapshot = snapshot.live_readiness ?? null;
         const dashboardFailures: string[] = [];
 
         setMarketDataScope(marketDataSnapshot);
+        setRiskSignal(riskSignalSnapshot);
+        if (riskSignalSnapshot) {
+          updateRefreshIssue('risk-signal', null);
+        } else if (sectionErrors.risk_signal) {
+          updateRefreshIssue('risk-signal', `Risk signal refresh failed: ${sectionErrors.risk_signal}`);
+        }
         if (liveReadinessSnapshot) {
           setLiveReadiness(liveReadinessSnapshot);
           updateRefreshIssue('live-readiness', null);
@@ -1988,7 +2005,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
           <div className="panel__header">
             <div>
               <h2>Strategy Summary</h2>
-              <p className="panel__hint">Starter-pack posture, current leaders, and conflict winners at a glance.</p>
+              <p className="panel__hint">Starter-pack posture, evidence labels, and current conflict winners at a glance.</p>
             </div>
           </div>
           {strategySummary.length === 0 || noActiveStrategies ? (
@@ -2040,6 +2057,14 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
                         >
                           {momentum.label}
                         </span>
+                        {strategy.evidence_label ? (
+                          <span
+                            className={`pill ${getEvidencePillClass(strategy)}`}
+                            title={strategy.evidence_note ?? undefined}
+                          >
+                            {strategy.evidence_label}
+                          </span>
+                        ) : null}
                       </div>
                     </div>
                     <div className="strategy-scorecard__metrics">
@@ -2117,44 +2142,47 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
           ) : null}
         </section>
 
-        <section className="panel risk-snapshot-panel">
-          <div className="panel__header">
-            <div>
-              <h2>Risk Snapshot</h2>
-              <p className="panel__hint">What matters before you decide whether to intervene.</p>
+        <div className="dashboard-grid__stack">
+          <section className="panel risk-snapshot-panel">
+            <div className="panel__header">
+              <div>
+                <h2>Risk Snapshot</h2>
+                <p className="panel__hint">What matters before you decide whether to intervene.</p>
+              </div>
             </div>
-          </div>
-          <div className="snapshot-grid">
-            <div className="snapshot-grid__item">
-              <span className="snapshot-grid__label">{risk?.kill_switch_active ? 'Trading state' : 'Trading permission'}</span>
-              <span className={`snapshot-grid__value${risk?.kill_switch_active ? ' text--danger' : ' text--success'}`}>
-                {risk?.kill_switch_active ? 'Trading paused' : 'Trading allowed'}
-              </span>
+            <div className="snapshot-grid">
+              <div className="snapshot-grid__item">
+                <span className="snapshot-grid__label">{risk?.kill_switch_active ? 'Trading state' : 'Trading permission'}</span>
+                <span className={`snapshot-grid__value${risk?.kill_switch_active ? ' text--danger' : ' text--success'}`}>
+                  {risk?.kill_switch_active ? 'Trading paused' : 'Trading allowed'}
+                </span>
+              </div>
+              <div className="snapshot-grid__item">
+                <span className="snapshot-grid__label">Total exposure</span>
+                <span className="snapshot-grid__value">{risk ? `${risk.total_exposure_pct.toFixed(1)}%` : '—'}</span>
+              </div>
+              <div className="snapshot-grid__item">
+                <span className="snapshot-grid__label">Daily drawdown</span>
+                <span className={`snapshot-grid__value${(risk?.daily_drawdown_pct ?? 0) > 0 ? ' text--danger' : ''}`}>
+                  {risk ? `${risk.daily_drawdown_pct.toFixed(1)}%` : '—'}
+                </span>
+              </div>
+              <div className="snapshot-grid__item">
+                <span className="snapshot-grid__label">Preset</span>
+                <span className="snapshot-grid__value">
+                  {currentPreset ? RISK_PRESET_META[currentPreset].label : 'Custom'}
+                </span>
+              </div>
+              <div className="snapshot-grid__item snapshot-grid__item--wide">
+                <span className="snapshot-grid__label">Top strategy exposure</span>
+                <span className="snapshot-grid__value">
+                  {topStrategyExposure ? `${topStrategyExposure[0]} ${topStrategyExposure[1].toFixed(1)}%` : 'No strategy exposure'}
+                </span>
+              </div>
             </div>
-            <div className="snapshot-grid__item">
-              <span className="snapshot-grid__label">Total exposure</span>
-              <span className="snapshot-grid__value">{risk ? `${risk.total_exposure_pct.toFixed(1)}%` : '—'}</span>
-            </div>
-            <div className="snapshot-grid__item">
-              <span className="snapshot-grid__label">Daily drawdown</span>
-              <span className={`snapshot-grid__value${(risk?.daily_drawdown_pct ?? 0) > 0 ? ' text--danger' : ''}`}>
-                {risk ? `${risk.daily_drawdown_pct.toFixed(1)}%` : '—'}
-              </span>
-            </div>
-            <div className="snapshot-grid__item">
-              <span className="snapshot-grid__label">Preset</span>
-              <span className="snapshot-grid__value">
-                {currentPreset ? RISK_PRESET_META[currentPreset].label : 'Custom'}
-              </span>
-            </div>
-            <div className="snapshot-grid__item snapshot-grid__item--wide">
-              <span className="snapshot-grid__label">Top strategy exposure</span>
-              <span className="snapshot-grid__value">
-                {topStrategyExposure ? `${topStrategyExposure[0]} ${topStrategyExposure[1].toFixed(1)}%` : 'No strategy exposure'}
-              </span>
-            </div>
-          </div>
-        </section>
+          </section>
+          <RiskSignalPanel riskSignal={riskSignal} />
+        </div>
       </div>
 
       <section className="panel replay-toggle-panel cockpit-tab-panel" hidden={activeCockpitTab !== 'activity'}>

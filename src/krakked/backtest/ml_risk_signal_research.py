@@ -19,6 +19,8 @@ from krakked.market_regime import (
     _clean_pairs,
     _default_pairs,
 )
+from krakked.risk_signal import ewma_per_bar_variances as _shared_ewma_per_bar_variances
+from krakked.risk_signal import squared_log_return as _shared_squared_log_return
 
 from .evidence_windows import (
     REQUIRED_REGIME_BUCKETS,
@@ -475,28 +477,15 @@ def _ewma_per_bar_variances(
     *,
     params: MLRiskSignalResearchParams,
 ) -> list[float]:
-    if not bars:
-        return []
-    values = [float(params.epsilon_variance)] * len(bars)
-    current = float(params.epsilon_variance)
-    for index in range(1, len(bars)):
-        squared_return = _squared_log_return(bars[index - 1], bars[index])
-        if index == 1:
-            current = max(squared_return, float(params.epsilon_variance))
-        else:
-            current = (
-                float(params.ewma_lambda) * current
-                + (1.0 - float(params.ewma_lambda)) * squared_return
-            )
-            current = max(current, float(params.epsilon_variance))
-        values[index] = current
-    return values
+    return _shared_ewma_per_bar_variances(
+        bars,
+        ewma_lambda=float(params.ewma_lambda),
+        epsilon=float(params.epsilon_variance),
+    )
 
 
 def _squared_log_return(previous: OHLCBar, current: OHLCBar) -> float:
-    if previous.close <= 0.0 or current.close <= 0.0:
-        return 0.0
-    return math.log(float(current.close) / float(previous.close)) ** 2
+    return _shared_squared_log_return(previous, current)
 
 
 def _fit_har_rv_model(

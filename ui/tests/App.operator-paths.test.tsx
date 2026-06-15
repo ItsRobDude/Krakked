@@ -117,6 +117,9 @@ const strategy = (overrides: Partial<StrategyState>): StrategyState => ({
   params: { pairs: ['BTC/USD', 'ETH/USD'] },
   configured_weight: 100,
   effective_weight_pct: 50,
+  evidence_status: 'utility',
+  evidence_label: 'Utility overlay',
+  evidence_note: 'Operational overlay rather than a promoted alpha strategy.',
   ...overrides,
 });
 
@@ -127,6 +130,9 @@ const baseStrategies = [
     label: 'Trend Core',
     pnl_summary: { realized_pnl_usd: 0, exposure_pct: 0 },
     params: { risk_profile: 'balanced', pairs: [] },
+    evidence_status: 'research_stage',
+    evidence_label: 'Research stage',
+    evidence_note: 'Replay evidence has not promoted this strategy beyond research-stage operation.',
   }),
   strategy({
     strategy_id: 'ai_predictor',
@@ -137,6 +143,9 @@ const baseStrategies = [
     pnl_summary: { realized_pnl_usd: 0, exposure_pct: 0 },
     params: { continuous_learning: true, risk_profile: 'balanced', pairs: [] },
     effective_weight_pct: null,
+    evidence_status: 'research_stage',
+    evidence_label: 'Research only',
+    evidence_note: 'ML strategy lanes are research-only until a pre-registered evidence gate passes.',
   }),
 ];
 
@@ -264,6 +273,37 @@ const buildCockpit = (overrides: Partial<CockpitSnapshot> = {}): CockpitSnapshot
     session_critical: false,
     message: null,
   },
+  risk_signal: {
+    available: true,
+    status: 'ready',
+    source: 'riskmetrics_ewma',
+    benchmark_pair: 'BTC/USD',
+    timeframe: '4h',
+    generated_at: '2026-05-02T03:01:00Z',
+    latest_bar_time: '2026-05-02T00:00:00Z',
+    latest_bar_age_seconds: 10800,
+    bars_used: 120,
+    lookback_bars: 720,
+    min_bars: 84,
+    horizon_bars: 6,
+    ewma_lambda: 0.94,
+    ewma_per_bar_variance: 0.0001,
+    ewma_per_bar_volatility_pct: 1,
+    ewma_horizon_variance: 0.0006,
+    ewma_horizon_volatility_pct: 2.45,
+    volatility_percentile: 65,
+    risk_level: 'normal',
+    thresholds: {
+      elevated_percentile: 75,
+      stressed_percentile: 90,
+      elevated_horizon_volatility_pct: 3,
+      stressed_horizon_volatility_pct: 5,
+    },
+    display_only: true,
+    trading_effect: false,
+    runtime_wiring_approved: false,
+    notes: ['Display-only context; does not alter strategy selection, sizing, or order flow.'],
+  },
   live_readiness: {
     status: 'blocked',
     generated_at: '2026-05-02T03:01:00Z',
@@ -375,6 +415,17 @@ describe('cockpit operator paths', () => {
     expect(screen.getAllByText('No action chosen').length).toBeGreaterThanOrEqual(2);
     expect(screen.getAllByText('Not running').length).toBeGreaterThan(0);
     expect(screen.getAllByText('Not yet').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Research stage').length).toBeGreaterThan(0);
+  });
+
+  test('shows display-only EWMA market risk context', async () => {
+    await renderActiveCockpit();
+
+    const panel = screen.getByRole('region', { name: 'BTC Risk Signal' });
+    expect(within(panel).getByText('Normal')).toBeInTheDocument();
+    expect(within(panel).getByText('Display only')).toBeInTheDocument();
+    expect(within(panel).getByText('2.45%')).toBeInTheDocument();
+    expect(within(panel).getByText('65.00%')).toBeInTheDocument();
   });
 
   test('keeps runtime trust healthy for watchlist-only stale market data', async () => {

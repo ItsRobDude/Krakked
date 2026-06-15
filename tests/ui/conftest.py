@@ -142,6 +142,7 @@ def build_test_context(
     market_data.get_cached_data_status.return_value = _mock_data_status()
     market_data.get_health_status.return_value = None
     market_data.get_cached_health_status.return_value = None
+    market_data.get_ohlc.return_value = []
 
     portfolio = MagicMock(name="portfolio_service")
     portfolio.get_equity.return_value = _mock_equity()
