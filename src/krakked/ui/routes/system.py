@@ -595,12 +595,22 @@ def _build_risk_decisions_payload(ctx, limit: int = 50) -> list[RiskDecisionPayl
     return [_serialize_decision(record) for record in decisions]
 
 
-def _limited_reasons(values: list[str], *, limit: int = 4) -> list[str]:
+def _limited_strings(
+    values: list[str], *, limit: int = 4, hidden_label: str = "item(s)"
+) -> list[str]:
     reasons = unique_strings(values)
     if len(reasons) <= limit:
         return reasons
     hidden = len(reasons) - limit
-    return [*reasons[:limit], f"{hidden} more reason(s)"]
+    return [*reasons[:limit], f"{hidden} more {hidden_label}"]
+
+
+def _limited_reasons(values: list[str], *, limit: int = 4) -> list[str]:
+    return _limited_strings(values, limit=limit, hidden_label="reason(s)")
+
+
+def _limited_messages(values: list[str], *, limit: int = 4) -> list[str]:
+    return _limited_strings(values, limit=limit, hidden_label="message(s)")
 
 
 _TRACE_ACTIONABLE_TYPES = {"open", "increase", "reduce", "close"}
@@ -758,6 +768,18 @@ def _build_decision_trace_payloads(
                         plans_by_id[plan_id] = plan
     except (AttributeError, RuntimeError, TypeError, ValueError):
         plans_by_id = {}
+    plan_reader = getattr(ctx.portfolio, "get_execution_plan", None)
+    if callable(plan_reader):
+        missing_plan_ids = [
+            plan_id for plan_id in plan_ids if plan_id not in plans_by_id
+        ]
+        for plan_id in missing_plan_ids:
+            try:
+                plan = plan_reader(plan_id)
+            except (AttributeError, RuntimeError, TypeError, ValueError):
+                continue
+            if plan is not None:
+                plans_by_id[plan_id] = plan
 
     traces: list[DecisionTracePayload] = []
     for plan_id in plan_ids:
@@ -870,6 +892,17 @@ def _build_decision_trace_payloads(
                 or float(order.cumulative_base_filled or 0.0) > 0.0
             ]
         )
+        risk_detail_reasons = _limited_reasons(
+            [
+                *blocked_reasons,
+                *[
+                    reason
+                    for decision in plan_decisions
+                    if decision.blocked
+                    for reason in decision.block_reasons
+                ],
+            ]
+        )
         risk_reasons = _limited_reasons(
             [
                 *blocked_reasons,
@@ -884,8 +917,12 @@ def _build_decision_trace_payloads(
         )
         clamp_reasons = _limited_reasons(clamp_reasons)
         no_op_reasons = _limited_reasons(no_op_reasons)
-        execution_errors = list(execution.errors if execution else [])
-        execution_warnings = list(execution.warnings if execution else [])
+        execution_errors = _limited_messages(
+            list(execution.errors if execution else [])
+        )
+        execution_warnings = _limited_messages(
+            list(execution.warnings if execution else [])
+        )
         status = _execution_trace_status(
             actionable_action_count=actionable_action_count,
             blocked_action_count=blocked_action_count,
@@ -907,8 +944,8 @@ def _build_decision_trace_payloads(
             details.append(
                 f"OMS orders: {order_count} sent, {filled_order_count} with fills."
             )
-        if risk_reasons:
-            details.extend([f"Risk reason: {reason}" for reason in risk_reasons])
+        if risk_detail_reasons:
+            details.extend([f"Risk reason: {reason}" for reason in risk_detail_reasons])
         if clamp_reasons:
             details.extend([f"Risk clamped: {reason}" for reason in clamp_reasons])
         if no_op_reasons:

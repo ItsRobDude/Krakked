@@ -744,6 +744,7 @@ def _trace_execution(
     plan_id: str = "PLAN-1",
     orders: list[LocalOrder] | None = None,
     errors: list[str] | None = None,
+    warnings: list[str] | None = None,
 ) -> ExecutionResult:
     return ExecutionResult(
         plan_id=plan_id,
@@ -752,6 +753,7 @@ def _trace_execution(
         success=not errors,
         orders=orders or [],
         errors=errors or [],
+        warnings=warnings or [],
     )
 
 
@@ -841,6 +843,31 @@ def test_cockpit_snapshot_groups_decision_trace(client, system_context):
     assert trace["risk_reasons"] == ["Max per asset limit"]
     assert trace["trace_quality"] == "complete"
     assert "1/2 actionable action(s) cleared risk" in trace["summary"]
+
+
+def test_cockpit_snapshot_falls_back_to_exact_plan_lookup(client, system_context):
+    decided_at = datetime(2026, 5, 2, 3, 0, tzinfo=timezone.utc)
+    plan = ExecutionPlan(
+        plan_id="PLAN-1",
+        generated_at=decided_at,
+        actions=[_trace_action(action_type="open", reason="breakout")],
+    )
+    _configure_trace(
+        system_context,
+        decided_at=decided_at,
+        plan=plan,
+        decisions=[_trace_decision(decided_at, action_type="open")],
+        execution=_trace_execution(decided_at, orders=[_trace_order()]),
+    )
+    system_context.portfolio.get_execution_plans.return_value = []
+
+    trace = _fetch_first_trace(client)
+
+    system_context.portfolio.get_execution_plans.assert_called_once()
+    system_context.portfolio.get_execution_plan.assert_called_once_with("PLAN-1")
+    assert trace["trace_quality"] == "complete"
+    assert trace["actionable_action_count"] == 1
+    assert trace["status"] == "orders_sent"
 
 
 def test_cockpit_snapshot_marks_none_only_plan_as_no_action(client, system_context):
@@ -940,8 +967,11 @@ def test_cockpit_snapshot_surfaces_clamped_actions(client, system_context):
     assert trace["actionable_action_count"] == 1
     assert trace["allowed_action_count"] == 1
     assert trace["clamped_action_count"] == 1
+    assert trace["risk_reasons"] == ["Max per asset limit"]
     assert trace["clamp_reasons"] == ["Max per asset limit"]
     assert "clamped by risk" in trace["summary"]
+    assert "Risk reason: Max per asset limit" not in trace["details"]
+    assert "Risk clamped: Max per asset limit" in trace["details"]
 
 
 def test_cockpit_snapshot_reports_execution_failed_trace(client, system_context):
@@ -964,6 +994,46 @@ def test_cockpit_snapshot_reports_execution_failed_trace(client, system_context)
     assert trace["status"] == "execution_failed"
     assert trace["execution_errors"] == ["adapter unavailable"]
     assert "Execution failed" in trace["summary"]
+
+
+def test_cockpit_snapshot_limits_execution_messages(client, system_context):
+    decided_at = datetime(2026, 5, 2, 3, 0, tzinfo=timezone.utc)
+    plan = ExecutionPlan(
+        plan_id="PLAN-1",
+        generated_at=decided_at,
+        actions=[_trace_action(action_type="open")],
+    )
+    _configure_trace(
+        system_context,
+        decided_at=decided_at,
+        plan=plan,
+        decisions=[_trace_decision(decided_at, action_type="open")],
+        execution=_trace_execution(
+            decided_at,
+            errors=[f"error-{index}" for index in range(6)],
+            warnings=[f"warning-{index}" for index in range(5)],
+        ),
+    )
+
+    trace = _fetch_first_trace(client)
+
+    assert trace["status"] == "execution_failed"
+    assert trace["execution_errors"] == [
+        "error-0",
+        "error-1",
+        "error-2",
+        "error-3",
+        "2 more message(s)",
+    ]
+    assert trace["execution_warnings"] == [
+        "warning-0",
+        "warning-1",
+        "warning-2",
+        "warning-3",
+        "1 more message(s)",
+    ]
+    assert "Execution error: error-4" not in trace["details"]
+    assert "Execution warning: warning-4" not in trace["details"]
 
 
 def test_cockpit_snapshot_marks_decisions_only_trace_degraded(client, system_context):
