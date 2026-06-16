@@ -1,5 +1,10 @@
 import { useMemo, useState } from 'react';
-import type { ExecutionMode, ProfileSummary, SessionConfigRequest } from '../services/api';
+import type {
+  ExecutionMode,
+  LiveReadinessPayload,
+  ProfileSummary,
+  SessionConfigRequest,
+} from '../services/api';
 
 export type StartupScreenProps = {
   profiles: ProfileSummary[];
@@ -9,6 +14,7 @@ export type StartupScreenProps = {
   modeBusy?: boolean;
   systemMessage?: { tone: 'info' | 'success' | 'error'; message: string } | null;
   startupMlEnabled?: boolean;
+  liveReadiness?: LiveReadinessPayload | null;
   onCreateProfile: (name: string) => Promise<void>;
   onProfileChange: (name: string) => Promise<void> | void;
   onSaveConfig: () => Promise<void>;
@@ -26,6 +32,7 @@ export function StartupScreen({
   modeBusy,
   systemMessage,
   startupMlEnabled = true,
+  liveReadiness,
   onCreateProfile,
   onProfileChange,
   onSaveConfig,
@@ -47,6 +54,23 @@ export function StartupScreen({
     () => profiles.find((profile) => profile.name === selectedProfile),
     [profiles, selectedProfile],
   );
+  const liveBlocked = mode === 'live' && liveReadiness?.status === 'blocked';
+  const readinessLabel =
+    liveReadiness?.status === 'ready'
+      ? 'Ready'
+      : liveReadiness?.status === 'warning'
+        ? 'Needs review'
+        : liveReadiness?.status === 'blocked'
+          ? 'Blocked'
+          : 'Checking';
+  const readinessPill =
+    liveReadiness?.status === 'ready'
+      ? 'pill--success'
+      : liveReadiness?.status === 'warning'
+        ? 'pill--warning'
+        : liveReadiness?.status === 'blocked'
+          ? 'pill--danger'
+          : 'pill--muted';
 
   const handleProfileSelect = async (name: string) => {
     if (readOnly) {
@@ -129,6 +153,11 @@ export function StartupScreen({
 
     if (!selectedProfile) {
       setError('Select a profile to start.');
+      return;
+    }
+
+    if (liveBlocked) {
+      setError('Live automation is blocked. Resolve the readiness blockers first.');
       return;
     }
 
@@ -277,9 +306,42 @@ export function StartupScreen({
             </select>
             <p className="field__hint">Trading remains paused until you hit Start.</p>
             {mode === 'live' ? (
-              <p className="field__hint field__hint--warn">
-                Start live automation only when the selected profile, strategy caps, and Kraken credentials are ready.
-              </p>
+              <div className="startup-live-readiness">
+                <div className="startup-live-readiness__header">
+                  <span>Live readiness</span>
+                  <span className={`pill ${readinessPill}`}>{readinessLabel}</span>
+                </div>
+                {liveReadiness ? (
+                  <>
+                    <p className="field__hint">
+                      {liveReadiness.passed.length} checks passed.
+                      {liveReadiness.blockers.length > 0
+                        ? ` ${liveReadiness.blockers.length} blocker(s) must be resolved.`
+                        : ''}
+                      {liveReadiness.warnings.length > 0
+                        ? ` ${liveReadiness.warnings.length} warning(s) need review.`
+                        : ''}
+                    </p>
+                    {liveReadiness.blockers.length > 0 ? (
+                      <ul className="startup-live-readiness__list">
+                        {liveReadiness.blockers.slice(0, 3).map((check) => (
+                          <li key={check.id}>{check.message}</li>
+                        ))}
+                      </ul>
+                    ) : liveReadiness.warnings.length > 0 ? (
+                      <ul className="startup-live-readiness__list">
+                        {liveReadiness.warnings.slice(0, 3).map((check) => (
+                          <li key={check.id}>{check.message}</li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="field__hint">No live blockers reported. Start remains a single explicit action.</p>
+                    )}
+                  </>
+                ) : (
+                  <p className="field__hint">Checking live readiness before start.</p>
+                )}
+              </div>
             ) : null}
           </div>
 
@@ -338,7 +400,7 @@ export function StartupScreen({
             type="button"
             className="primary-button"
             onClick={handleStart}
-            disabled={busy || modeBusy || readOnly || !selectedProfile}
+            disabled={busy || modeBusy || readOnly || !selectedProfile || liveBlocked}
             aria-busy={busy}
           >
             {busy ? 'Starting…' : mode === 'live' ? 'Start live automation' : 'Start session'}

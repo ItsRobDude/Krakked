@@ -3,6 +3,75 @@
 This log captures the durable conclusions from ignored `reports/ml/` evidence.
 Generated walk-forward JSON reports and fold databases stay local and untracked.
 
+## 2026-06-16: HAR-RV Volatility Forecast Closeout
+
+Tool:
+
+- `krakked ml-risk-signal-research --strict-data`
+- Local ignored artifact:
+  `reports/ml-risk-signal-20260616-strict-recheck/aggregate.json`
+
+Configuration:
+
+- Target: next-window realized volatility on `BTC/USD`
+- Timeframe: `4h`
+- Horizon: `6` bars
+- Model: HAR-RV-style ordinary least squares on prior 1/6/42-bar realized-vol
+  features
+- Baselines: previous-horizon realized vol, rolling 42-bar realized vol, and
+  RiskMetrics EWMA with `lambda=0.94`
+- Gate: model must beat EWMA QLIKE by at least `2%` in at least two non-current
+  regime buckets and not be worse than EWMA by more than `1%` on the current
+  rolling window
+
+Readiness:
+
+- `forecast_verdict_readiness.status=ready_for_verdict`
+- `strict_data_ready=true`
+- `regime_coverage_sufficient=true`
+- model evaluation observations: `605`
+- model-ready windows: `5 / 6`
+- the first Dec/Jan window was `insufficient_training`, so the Jan crash
+  downtrend window was trained only on the prior calm/uptrend month available to
+  the chronological harness
+
+Observed result:
+
+| slice | model vs EWMA QLIKE improvement |
+| --- | ---: |
+| overall | `-9981.53%` |
+| chop_or_transition | `+3.32%` |
+| current_rolling | `-10.03%` |
+| downtrend | `-41195.91%` |
+| uptrend | `-9.23%` |
+
+Readout:
+
+- The `-9981.53%` overall scalar is outlier-dominated by the Jan downtrend/crash
+  window. Do not quote it without the bucket breakdown.
+- The model beat EWMA in the chop/transition bucket, which had the largest
+  sample. It still failed the pre-registered gate because it lagged EWMA in the
+  uptrend and current rolling buckets and catastrophically under-forecast the
+  downtrend bucket.
+- This is a valid failure of the registered HAR-RV slice, not proof that every
+  possible regime-aware volatility model is impossible.
+
+Gate outcome:
+
+- `exposure_research_gate.passed=false`
+- `display_only_gate.passed=false`
+- `lane_status=close_volatility_forecast_lane`
+
+Decision:
+
+- Close this volatility-forecasting ML lane for trading influence.
+- Do not iterate HAR/linear variants on the same target hoping for a different
+  answer.
+- Keep ML infrastructure available, but require a genuinely new written
+  hypothesis before reopening ML research.
+- Keep EWMA as the honest display-only market-risk signal. It has no trading
+  effect.
+
 ## 2026-05-24: `ohlc_v3` PA Regression Baseline
 
 Configuration:

@@ -30,7 +30,7 @@ from krakked.ui.context import AppContext, SessionState
 
 
 def _build_app_config(
-    *, auth_enabled: bool, auth_token: str, read_only: bool
+    *, auth_enabled: bool, auth_token: str | None, read_only: bool
 ) -> AppConfig:
     """Create a lightweight in-memory :class:`AppConfig` for UI tests."""
 
@@ -65,7 +65,7 @@ def _build_app_config(
             host="127.0.0.1",
             port=8080,
             base_path="/",
-            auth=UIAuthConfig(enabled=auth_enabled, token=auth_token),
+            auth=UIAuthConfig(enabled=auth_enabled, token=auth_token or ""),
             read_only=read_only,
             refresh_intervals=UIRefreshConfig(),
         ),
@@ -126,7 +126,7 @@ def _mock_risk_status() -> SimpleNamespace:
 
 
 def build_test_context(
-    *, auth_enabled: bool, auth_token: str, read_only: bool
+    *, auth_enabled: bool, auth_token: str | None, read_only: bool
 ) -> AppContext:
     """Construct an :class:`AppContext` populated with mocked services."""
 
@@ -155,6 +155,8 @@ def build_test_context(
     portfolio.get_cached_asset_exposure.return_value = []
     portfolio.get_trade_history.return_value = []
     portfolio.get_decisions.return_value = []
+    portfolio.get_execution_plan.return_value = None
+    portfolio.get_execution_plans.return_value = []
     portfolio.get_strategy_performance.return_value = {}
     portfolio.create_snapshot.return_value = _mock_snapshot()
     portfolio.get_exchange_reference_summary.return_value = None

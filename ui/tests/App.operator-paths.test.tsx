@@ -13,6 +13,7 @@ import type {
 
 const apiMocks = vi.hoisted(() => ({
   fetchCockpitSnapshot: vi.fn(),
+  fetchLiveReadiness: vi.fn(),
   fetchSystemHealth: vi.fn(),
   fetchSessionState: vi.fn(),
   fetchProfiles: vi.fn(),
@@ -54,7 +55,7 @@ const activeSession: SessionStateResponse = {
 const inactiveSession: SessionStateResponse = {
   ...activeSession,
   active: false,
-  lifecycle: 'stopped',
+  lifecycle: 'ready',
 };
 
 const liveActiveSession: SessionStateResponse = {
@@ -257,6 +258,36 @@ const buildCockpit = (overrides: Partial<CockpitSnapshot> = {}): CockpitSnapshot
         kill_switch_active: false,
       },
     ],
+    decision_traces: [
+      {
+        plan_id: 'plan_1',
+        generated_at: '2026-05-02T02:56:31Z',
+        completed_at: '2026-05-02T02:56:51Z',
+        status: 'risk_blocked',
+        summary: 'Risk blocked all 2 actionable action(s); no orders sent.',
+        strategy_ids: ['dca_overlay'],
+        pairs: ['ETH/USD', 'BTC/USD'],
+        action_count: 2,
+        actionable_action_count: 2,
+        allowed_action_count: 0,
+        blocked_action_count: 2,
+        no_op_action_count: 0,
+        clamped_action_count: 0,
+        order_count: 0,
+        filled_order_count: 0,
+        risk_reasons: ['Max per asset limit (718.36 > 500.77)'],
+        clamp_reasons: [],
+        no_op_reasons: [],
+        execution_errors: [],
+        execution_warnings: [],
+        details: [
+          'Signal/risk actions: 2 actionable, 0 allowed, 2 blocked, 0 no-op.',
+          'Risk reason: Max per asset limit (718.36 > 500.77)',
+        ],
+        trace_quality: 'complete',
+        degraded_reason: null,
+      },
+    ],
   },
   replay: {
     available: false,
@@ -383,6 +414,7 @@ beforeEach(() => {
   apiMocks.fetchProfiles.mockResolvedValue([]);
   apiMocks.fetchSystemHealth.mockResolvedValue(healthyHealth);
   apiMocks.fetchSystemConfig.mockResolvedValue(null);
+  apiMocks.fetchLiveReadiness.mockResolvedValue(buildCockpit().live_readiness);
 });
 
 afterEach(() => {
@@ -491,6 +523,12 @@ describe('cockpit operator paths', () => {
     await renderActiveCockpit();
     await user.click(await screen.findByTestId('cockpit-tab-activity'));
 
+    const trace = screen.getByRole('region', { name: 'Decision Trace' });
+    expect(within(trace).getByText('Risk blocked')).toBeInTheDocument();
+    expect(within(trace).getByText('Risk blocked all 2 actionable action(s); no orders sent.')).toBeInTheDocument();
+    expect(within(trace).getByText('0 allowed / 2 blocked / 0 no-op')).toBeInTheDocument();
+    expect(within(trace).getByText('0 sent / 0 filled')).toBeInTheDocument();
+
     expect(
       screen.getByText('plan_1: no orders placed, blocked by risk limits'),
     ).toBeInTheDocument();
@@ -500,6 +538,84 @@ describe('cockpit operator paths', () => {
     expect(
       screen.getByText('BTC/USD: Max per asset limit (718.36 > 500.77)'),
     ).toBeInTheDocument();
+  });
+
+  test('renders no-op, clamped, and limited trace states', async () => {
+    const user = userEvent.setup();
+    const base = buildCockpit();
+
+    await renderActiveCockpit(buildCockpit({
+      activity: {
+        ...base.activity!,
+        decision_traces: [
+          {
+            plan_id: 'plan_noop',
+            generated_at: '2026-05-02T02:56:31Z',
+            completed_at: '2026-05-02T02:56:51Z',
+            status: 'no_action',
+            summary: 'Strategies evaluated 1 no-op action(s); no orders sent.',
+            strategy_ids: ['trend_core'],
+            pairs: ['BTC/USD'],
+            action_count: 1,
+            actionable_action_count: 0,
+            allowed_action_count: 0,
+            blocked_action_count: 0,
+            no_op_action_count: 1,
+            clamped_action_count: 0,
+            order_count: 0,
+            filled_order_count: 0,
+            risk_reasons: [],
+            clamp_reasons: [],
+            no_op_reasons: ['No action because conflict netted out'],
+            execution_errors: [],
+            execution_warnings: [],
+            details: [
+              'Signal/risk actions: 0 actionable, 0 allowed, 0 blocked, 1 no-op.',
+              'No action: No action because conflict netted out',
+            ],
+            trace_quality: 'complete',
+            degraded_reason: null,
+          },
+          {
+            plan_id: 'plan_clamped',
+            generated_at: '2026-05-02T02:57:31Z',
+            completed_at: '2026-05-02T02:57:51Z',
+            status: 'orders_sent',
+            summary: '1/1 actionable action(s) cleared risk; 1 action(s) clamped by risk; 1 order(s) sent, 1 filled.',
+            strategy_ids: ['trend_core'],
+            pairs: ['ETH/USD'],
+            action_count: 1,
+            actionable_action_count: 1,
+            allowed_action_count: 1,
+            blocked_action_count: 0,
+            no_op_action_count: 0,
+            clamped_action_count: 1,
+            order_count: 1,
+            filled_order_count: 1,
+            risk_reasons: ['Max per asset limit'],
+            clamp_reasons: ['Max per asset limit'],
+            no_op_reasons: [],
+            execution_errors: [],
+            execution_warnings: [],
+            details: [
+              'Signal/risk actions: 1 actionable, 1 allowed, 0 blocked, 0 no-op.',
+              'Risk clamped 1 action(s).',
+              'Risk clamped: Max per asset limit',
+            ],
+            trace_quality: 'decisions_only',
+            degraded_reason: 'Execution plan record unavailable; trace is reconstructed from persisted risk decisions.',
+          },
+        ],
+      },
+    }));
+    await user.click(await screen.findByTestId('cockpit-tab-activity'));
+
+    const trace = screen.getByRole('region', { name: 'Decision Trace' });
+    expect(within(trace).getByText('No action')).toBeInTheDocument();
+    expect(within(trace).getByText('0 allowed / 0 blocked / 1 no-op')).toBeInTheDocument();
+    expect(within(trace).getByText('1 allowed / 0 blocked / 0 no-op / 1 clamped')).toBeInTheDocument();
+    expect(within(trace).getByText('Limited trace')).toBeInTheDocument();
+    expect(within(trace).getByText('Risk clamped: Max per asset limit')).toBeInTheDocument();
   });
 
   test('renders live readiness from the cockpit snapshot without mutation actions', async () => {
@@ -525,7 +641,7 @@ describe('cockpit operator paths', () => {
       configured: true,
       secrets_exist: true,
       unlocked: true,
-      lifecycle: 'stopped',
+      lifecycle: 'ready',
     });
     apiMocks.fetchSessionState.mockResolvedValue(inactiveSession);
     apiMocks.fetchProfiles.mockResolvedValue([{ name: 'Rob', description: 'Primary paper profile' }]);
@@ -533,6 +649,20 @@ describe('cockpit operator paths', () => {
       .mockResolvedValueOnce(healthyHealth)
       .mockResolvedValue(liveHealthyHealth);
     apiMocks.fetchSystemConfig.mockResolvedValue({ ml: { enabled: false } });
+    apiMocks.fetchLiveReadiness.mockResolvedValue({
+      status: 'ready',
+      generated_at: '2026-05-02T03:01:00Z',
+      blockers: [],
+      warnings: [],
+      passed: [
+        {
+          id: 'live_gates',
+          label: 'Live submission gates',
+          status: 'passed',
+          message: 'Live submission gates are open in configuration.',
+        },
+      ],
+    });
     apiMocks.setExecutionMode.mockResolvedValue({
       mode: 'live',
       validate_only: false,
@@ -558,6 +688,33 @@ describe('cockpit operator paths', () => {
     });
     expect(screen.queryByLabelText(/master password/i)).not.toBeInTheDocument();
     expect(apiMocks.startSession).toHaveBeenCalledTimes(1);
+  });
+
+  test('shows live readiness blockers on the startup screen', async () => {
+    const user = userEvent.setup();
+
+    apiMocks.fetchSetupStatus.mockResolvedValue({
+      configured: true,
+      secrets_exist: true,
+      unlocked: true,
+      lifecycle: 'ready',
+    });
+    apiMocks.fetchSessionState.mockResolvedValue(inactiveSession);
+    apiMocks.fetchProfiles.mockResolvedValue([{ name: 'Rob', description: 'Primary profile' }]);
+    apiMocks.fetchSystemHealth.mockResolvedValue(healthyHealth);
+    apiMocks.fetchSystemConfig.mockResolvedValue({ ml: { enabled: false } });
+    apiMocks.fetchLiveReadiness.mockResolvedValue(buildCockpit().live_readiness);
+
+    render(<App />);
+
+    await screen.findByRole('heading', { name: 'Start a session' });
+    await user.selectOptions(screen.getByLabelText('Mode'), 'live');
+
+    expect(screen.getByText('Live readiness')).toBeInTheDocument();
+    await screen.findByText('Blocked');
+    expect(screen.getByText(/live submission gates are closed/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Start live automation' })).toBeDisabled();
+    expect(apiMocks.startSession).not.toHaveBeenCalled();
   });
 
   test('shows warning and ready live-readiness states distinctly', async () => {
