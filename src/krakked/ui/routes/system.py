@@ -197,7 +197,6 @@ class ModeChangePayload(BaseModel):
 
     mode: Literal["paper", "live"]
     # Optional guard fields for live mode transition
-    password: Optional[str] = None
     confirmation: Optional[str] = None
     certify_paper_tests_completed: bool = False
 
@@ -2440,7 +2439,7 @@ async def set_execution_mode(
         getattr(execution_config, "paper_tests_completed", False)
     )
     repairing_live_state = new_mode == "live" and (
-        (not current_allow_live and bool(payload.password or payload.confirmation))
+        (not current_allow_live and bool(payload.confirmation))
         or (not current_paper_tests_completed and payload.certify_paper_tests_completed)
     )
 
@@ -2453,10 +2452,8 @@ async def set_execution_mode(
             error=None,
         )
 
-    account_id = ctx.session.account_id
     next_allow_live_trading = current_allow_live
     next_paper_tests_completed = current_paper_tests_completed
-    session_password_to_cache: Optional[str] = None
 
     # GUARD: Switching TO live mode
     if new_mode == "live":
@@ -2470,29 +2467,17 @@ async def set_execution_mode(
                 )
             next_paper_tests_completed = True
 
-        # Only require password + confirmation if we aren't already allowed to trade live.
-        # This allows switching back and forth if already authenticated/unlocked.
+        # Only require explicit operator confirmation if we aren't already allowed
+        # to trade live. Setup/unlock already established access to this account.
         if not next_allow_live_trading:
-            # Check credentials and phrase
-            if not payload.password or not payload.confirmation:
+            if not payload.confirmation:
                 return ApiEnvelope(
-                    data=None,
-                    error="Live mode requires password and confirmation phrase",
+                    data=None, error="Live mode requires explicit confirmation"
                 )
 
             if payload.confirmation != "ENABLE LIVE TRADING":
                 return ApiEnvelope(data=None, error="Invalid confirmation phrase")
 
-            try:
-                secrets_path = resolve_secrets_path(None, account_id)
-                unlock_secrets(payload.password, secrets_path=secrets_path)
-                session_password_to_cache = payload.password
-            except Exception:
-                logger.warning(
-                    "Live mode auth failed",
-                    extra=build_request_log_extra(request, event="live_auth_failed"),
-                )
-                return ApiEnvelope(data=None, error="Invalid password")
             next_allow_live_trading = True
 
     target_path = _resolve_execution_config_path(ctx)
@@ -2513,9 +2498,6 @@ async def set_execution_mode(
         )
     except Exception as e:
         return ApiEnvelope(data=None, error=f"Failed to persist mode: {e}")
-
-    if session_password_to_cache:
-        set_session_master_password(account_id, session_password_to_cache)
 
     # Update in-memory state so subsequent calls reflect the change immediately
     # We do this AFTER successful persistence to avoid split-brain if write fails.

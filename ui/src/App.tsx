@@ -11,7 +11,6 @@ import { StrategiesPanel } from './components/StrategiesPanel';
 import { StartupScreen } from './components/StartupScreen';
 import { SetupWizard } from './components/SetupWizard';
 import { PasswordScreen } from './components/PasswordScreen';
-import { LiveModeModal } from './components/LiveModeModal';
 import {
   fetchCockpitSnapshot,
   fetchSystemHealth,
@@ -459,8 +458,6 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
   const [loopIntervalDraft, setLoopIntervalDraft] = useState<number>(15);
   const [startupMlEnabled, setStartupMlEnabled] = useState(true);
 
-  const [showLiveModal, setShowLiveModal] = useState(false);
-  const [pendingLiveStart, setPendingLiveStart] = useState<SessionConfigRequest | null>(null);
   const dashboardRefreshInFlightRef = useRef(false);
   const dashboardAbortRef = useRef<AbortController | null>(null);
 
@@ -909,13 +906,12 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
 
   const performModeSwitch = async (
     mode: ExecutionMode,
-    password?: string,
     certifyPaperTestsCompleted = false,
   ) => {
     setModeBusy(true);
     try {
       const confirmation = mode === 'live' ? 'ENABLE LIVE TRADING' : undefined;
-      await setExecutionMode(mode, password, confirmation, certifyPaperTestsCompleted);
+      await setExecutionMode(mode, confirmation, certifyPaperTestsCompleted);
 
       const latest = await waitForExecutionMode(mode);
       if (latest) {
@@ -955,9 +951,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
     const liveReady = currentMode === 'live' && Boolean(health?.execution_ok);
 
     if (config.mode === 'live' && !liveReady) {
-      setPendingLiveStart(config);
-      setShowLiveModal(true);
-      return;
+      await performModeSwitch('live', true);
     }
 
     if (config.mode === 'paper' && currentMode === 'live') {
@@ -976,37 +970,6 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
     }
 
     await applyStartedSession(startedSession);
-  };
-
-  const handleConfirmLiveStart = async (
-    password: string,
-    certifyPaperTestsCompleted: boolean,
-  ) => {
-    if (!pendingLiveStart) {
-      setShowLiveModal(false);
-      return;
-    }
-
-    await performModeSwitch('live', password, certifyPaperTestsCompleted);
-    const updated = await updateSessionConfig(pendingLiveStart);
-    if (!updated) {
-      throw new Error('Unable to configure session.');
-    }
-
-    const next = await startSession();
-    const startedSession = next?.active ? next : await waitForSessionActivation();
-    if (!startedSession) {
-      throw new Error('Unable to start session.');
-    }
-
-    await applyStartedSession(startedSession);
-    setPendingLiveStart(null);
-    setShowLiveModal(false);
-  };
-
-  const handleCloseLiveModal = () => {
-    setShowLiveModal(false);
-    setPendingLiveStart(null);
   };
 
   const handleCreateProfile = async (name: string) => {
@@ -1620,23 +1583,20 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
 
   if (!session?.active) {
     return (
-      <>
-        <StartupScreen
-          profiles={profiles}
-          activeProfileName={session?.profile_name ?? null}
-          readOnly={Boolean(health?.ui_read_only)}
-          systemMode={resolveExecutionMode(health)}
-          modeBusy={modeBusy || startupReloading}
-          systemMessage={systemMessage}
-          startupMlEnabled={startupMlEnabled}
-          onCreateProfile={handleCreateProfile}
-          onProfileChange={handleProfileChange}
-          onSaveConfig={handleSaveConfig}
-          onMlToggle={handleStartupMlToggle}
-          onStart={handleStartSession}
-        />
-        <LiveModeModal isOpen={showLiveModal} onClose={handleCloseLiveModal} onConfirm={handleConfirmLiveStart} />
-      </>
+      <StartupScreen
+        profiles={profiles}
+        activeProfileName={session?.profile_name ?? null}
+        readOnly={Boolean(health?.ui_read_only)}
+        systemMode={resolveExecutionMode(health)}
+        modeBusy={modeBusy || startupReloading}
+        systemMessage={systemMessage}
+        startupMlEnabled={startupMlEnabled}
+        onCreateProfile={handleCreateProfile}
+        onProfileChange={handleProfileChange}
+        onSaveConfig={handleSaveConfig}
+        onMlToggle={handleStartupMlToggle}
+        onStart={handleStartSession}
+      />
     );
   }
 

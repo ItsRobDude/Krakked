@@ -1326,8 +1326,8 @@ def test_mode_change_to_live_can_certify_paper_tests_completed(
     system_context.config.execution.allow_live_trading = False
     system_context.config.execution.paper_tests_completed = False
 
-    monkeypatch.setattr("krakked.ui.routes.system.resolve_secrets_path", MagicMock())
-    monkeypatch.setattr("krakked.ui.routes.system.unlock_secrets", MagicMock())
+    unlock_secrets_mock = MagicMock()
+    monkeypatch.setattr("krakked.ui.routes.system.unlock_secrets", unlock_secrets_mock)
     remember_password = MagicMock()
     monkeypatch.setattr(
         "krakked.ui.routes.system.set_session_master_password",
@@ -1341,7 +1341,6 @@ def test_mode_change_to_live_can_certify_paper_tests_completed(
         "/api/system/mode",
         json={
             "mode": "live",
-            "password": "secret",
             "confirmation": "ENABLE LIVE TRADING",
             "certify_paper_tests_completed": True,
         },
@@ -1354,17 +1353,35 @@ def test_mode_change_to_live_can_certify_paper_tests_completed(
     assert payload["data"]["paper_tests_completed"] is True
     assert system_context.config.execution.paper_tests_completed is True
     assert system_context.execution_service.adapter.config.paper_tests_completed is True
-    remember_password.assert_called_once_with("default", "secret")
+    assert system_context.config.execution.allow_live_trading is True
+    assert system_context.execution_service.adapter.config.allow_live_trading is True
+    unlock_secrets_mock.assert_not_called()
+    remember_password.assert_not_called()
 
 
-def test_mode_change_does_not_cache_password_if_persist_fails(
+def test_mode_change_to_live_requires_confirmation_phrase(client, system_context):
+    system_context.config.execution.allow_live_trading = False
+    system_context.config.execution.paper_tests_completed = True
+
+    response = client.post(
+        "/api/system/mode",
+        json={"mode": "live", "certify_paper_tests_completed": True},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["data"] is None
+    assert "explicit confirmation" in payload["error"]
+    assert system_context.config.execution.mode == "paper"
+    assert system_context.config.execution.allow_live_trading is False
+
+
+def test_mode_change_does_not_open_live_gate_if_persist_fails(
     monkeypatch, client, system_context, temp_config_dir
 ):
     system_context.config.execution.allow_live_trading = False
     system_context.config.execution.paper_tests_completed = False
 
-    monkeypatch.setattr("krakked.ui.routes.system.resolve_secrets_path", MagicMock())
-    monkeypatch.setattr("krakked.ui.routes.system.unlock_secrets", MagicMock())
     remember_password = MagicMock()
     monkeypatch.setattr(
         "krakked.ui.routes.system.set_session_master_password",
@@ -1382,7 +1399,6 @@ def test_mode_change_does_not_cache_password_if_persist_fails(
         "/api/system/mode",
         json={
             "mode": "live",
-            "password": "secret",
             "confirmation": "ENABLE LIVE TRADING",
             "certify_paper_tests_completed": True,
         },

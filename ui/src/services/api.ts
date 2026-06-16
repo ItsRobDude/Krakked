@@ -595,7 +595,6 @@ export async function setKillSwitch(active: boolean): Promise<RiskStatus | null>
 
 export async function setExecutionMode(
   mode: ExecutionMode,
-  password?: string,
   confirmation?: string,
   certifyPaperTestsCompleted = false,
 ): Promise<ExecutionModeUpdate> {
@@ -603,7 +602,6 @@ export async function setExecutionMode(
     method: 'POST',
     body: JSON.stringify({
       mode,
-      password,
       confirmation,
       certify_paper_tests_completed: certifyPaperTestsCompleted,
     }),

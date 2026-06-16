@@ -51,6 +51,17 @@ const activeSession: SessionStateResponse = {
   emergency_flatten: false,
 };
 
+const inactiveSession: SessionStateResponse = {
+  ...activeSession,
+  active: false,
+  lifecycle: 'stopped',
+};
+
+const liveActiveSession: SessionStateResponse = {
+  ...activeSession,
+  mode: 'live',
+};
+
 const healthyHealth: SystemHealth = {
   app_version: '0.1.0',
   execution_mode: 'paper',
@@ -75,6 +86,12 @@ const healthyHealth: SystemHealth = {
   portfolio_baseline: 'paper_wallet',
   drift_detected: false,
   drift_reason: null,
+};
+
+const liveHealthyHealth: SystemHealth = {
+  ...healthyHealth,
+  execution_mode: 'live',
+  current_mode: 'live',
 };
 
 const healthyRisk: RiskStatus = {
@@ -499,6 +516,48 @@ describe('cockpit operator paths', () => {
 
     expect(apiMocks.setExecutionMode).not.toHaveBeenCalled();
     expect(apiMocks.startSession).not.toHaveBeenCalled();
+  });
+
+  test('starts live automation without a second password prompt', async () => {
+    const user = userEvent.setup();
+
+    apiMocks.fetchSetupStatus.mockResolvedValue({
+      configured: true,
+      secrets_exist: true,
+      unlocked: true,
+      lifecycle: 'stopped',
+    });
+    apiMocks.fetchSessionState.mockResolvedValue(inactiveSession);
+    apiMocks.fetchProfiles.mockResolvedValue([{ name: 'Rob', description: 'Primary paper profile' }]);
+    apiMocks.fetchSystemHealth
+      .mockResolvedValueOnce(healthyHealth)
+      .mockResolvedValue(liveHealthyHealth);
+    apiMocks.fetchSystemConfig.mockResolvedValue({ ml: { enabled: false } });
+    apiMocks.setExecutionMode.mockResolvedValue({
+      mode: 'live',
+      validate_only: false,
+      paper_tests_completed: true,
+      reloading: true,
+    });
+    apiMocks.updateSessionConfig.mockResolvedValue(liveActiveSession);
+    apiMocks.startSession.mockResolvedValue(liveActiveSession);
+    apiMocks.getRiskStatus.mockResolvedValue(healthyRisk);
+
+    render(<App />);
+
+    await screen.findByRole('heading', { name: 'Start a session' });
+    await user.selectOptions(screen.getByLabelText('Mode'), 'live');
+    await user.click(screen.getByRole('button', { name: 'Start live automation' }));
+
+    await waitFor(() => {
+      expect(apiMocks.setExecutionMode).toHaveBeenCalledWith(
+        'live',
+        'ENABLE LIVE TRADING',
+        true,
+      );
+    });
+    expect(screen.queryByLabelText(/master password/i)).not.toBeInTheDocument();
+    expect(apiMocks.startSession).toHaveBeenCalledTimes(1);
   });
 
   test('shows warning and ready live-readiness states distinctly', async () => {

@@ -278,8 +278,7 @@ export function StartupScreen({
             <p className="field__hint">Trading remains paused until you hit Start.</p>
             {mode === 'live' ? (
               <p className="field__hint field__hint--warn">
-                Live is meant for cautious rollout. The shipped live example starts from a smaller enabled strategy set,
-                while research strategies remain available for deliberate manual enablement.
+                Start live automation only when the selected profile, strategy caps, and Kraken credentials are ready.
               </p>
             ) : null}
           </div>
@@ -342,7 +341,7 @@ export function StartupScreen({
             disabled={busy || modeBusy || readOnly || !selectedProfile}
             aria-busy={busy}
           >
-            {busy ? 'Starting…' : 'Start session'}
+            {busy ? 'Starting…' : mode === 'live' ? 'Start live automation' : 'Start session'}
           </button>
 
           <button
