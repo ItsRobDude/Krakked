@@ -695,100 +695,304 @@ def test_cockpit_snapshot_returns_expected_sections(client, system_context):
     )
 
 
+def _trace_action(
+    *,
+    pair: str = "BTC/USD",
+    action_type: str = "open",
+    blocked: bool = False,
+    blocked_reasons: list[str] | None = None,
+    clamped: bool = False,
+    reason: str = "signal",
+) -> RiskAdjustedAction:
+    return RiskAdjustedAction(
+        pair=pair,
+        strategy_id="trend_core",
+        action_type=action_type,
+        target_base_size=0.01 if action_type != "none" else 0.0,
+        target_notional_usd=500.0 if action_type != "none" else 0.0,
+        current_base_size=0.0,
+        reason=reason,
+        blocked=blocked,
+        blocked_reasons=blocked_reasons or [],
+        clamped=clamped,
+    )
+
+
+def _trace_decision(
+    decided_at: datetime,
+    *,
+    plan_id: str = "PLAN-1",
+    pair: str = "BTC/USD",
+    action_type: str = "open",
+    blocked: bool = False,
+    block_reason: str | None = None,
+) -> DecisionRecord:
+    raw_json = (
+        json.dumps({"blocked_reasons": [block_reason]})
+        if block_reason
+        else "{}"
+    )
+    return DecisionRecord(
+        time=int(decided_at.timestamp()),
+        plan_id=plan_id,
+        strategy_name="trend_core",
+        pair=pair,
+        action_type=action_type,
+        target_position_usd=500.0,
+        blocked=blocked,
+        block_reason=block_reason,
+        kill_switch_active=False,
+        raw_json=raw_json,
+    )
+
+
+def _trace_execution(
+    decided_at: datetime,
+    *,
+    plan_id: str = "PLAN-1",
+    orders: list[LocalOrder] | None = None,
+    errors: list[str] | None = None,
+) -> ExecutionResult:
+    return ExecutionResult(
+        plan_id=plan_id,
+        started_at=decided_at,
+        completed_at=datetime(2026, 5, 2, 3, 0, 2, tzinfo=timezone.utc),
+        success=not errors,
+        orders=orders or [],
+        errors=errors or [],
+    )
+
+
+def _trace_order(*, plan_id: str = "PLAN-1") -> LocalOrder:
+    return LocalOrder(
+        local_id="order-1",
+        plan_id=plan_id,
+        strategy_id="trend_core",
+        pair="BTC/USD",
+        side="buy",
+        order_type="market",
+        status="filled",
+        cumulative_base_filled=0.01,
+    )
+
+
+def _configure_trace(
+    system_context,
+    *,
+    decided_at: datetime,
+    plan: ExecutionPlan | None,
+    decisions: list[DecisionRecord],
+    execution: ExecutionResult | None,
+) -> None:
+    system_context.portfolio.get_execution_plan.return_value = plan
+    system_context.portfolio.get_decisions.return_value = decisions
+    system_context.execution_service.get_recent_executions.return_value = (
+        [execution] if execution else []
+    )
+
+
+def _fetch_first_trace(client) -> dict:
+    response = client.get("/api/system/cockpit")
+    assert response.status_code == 200
+    return response.json()["data"]["activity"]["decision_traces"][0]
+
+
 def test_cockpit_snapshot_groups_decision_trace(client, system_context):
     decided_at = datetime(2026, 5, 2, 3, 0, tzinfo=timezone.utc)
-    completed_at = datetime(2026, 5, 2, 3, 0, 2, tzinfo=timezone.utc)
     plan = ExecutionPlan(
         plan_id="PLAN-1",
         generated_at=decided_at,
         actions=[
-            RiskAdjustedAction(
-                pair="BTC/USD",
-                strategy_id="trend_core",
-                action_type="open",
-                target_base_size=0.01,
-                target_notional_usd=500.0,
-                current_base_size=0.0,
-                reason="breakout",
-                blocked=False,
-                blocked_reasons=[],
-            ),
-            RiskAdjustedAction(
+            _trace_action(pair="BTC/USD", action_type="open", reason="breakout"),
+            _trace_action(
                 pair="ETH/USD",
-                strategy_id="trend_core",
                 action_type="open",
-                target_base_size=0.1,
-                target_notional_usd=500.0,
-                current_base_size=0.0,
-                reason="breakout",
                 blocked=True,
                 blocked_reasons=["Max per asset limit"],
+                reason="breakout",
             ),
         ],
     )
-    system_context.portfolio.get_execution_plan.return_value = plan
-    system_context.portfolio.get_decisions.return_value = [
-        DecisionRecord(
-            time=int(decided_at.timestamp()),
-            plan_id="PLAN-1",
-            strategy_name="trend_core",
-            pair="BTC/USD",
-            action_type="open",
-            target_position_usd=500.0,
-            blocked=False,
-            block_reason=None,
-            kill_switch_active=False,
-            raw_json="{}",
-        ),
-        DecisionRecord(
-            time=int(decided_at.timestamp()),
-            plan_id="PLAN-1",
-            strategy_name="trend_core",
-            pair="ETH/USD",
-            action_type="open",
-            target_position_usd=500.0,
-            blocked=True,
-            block_reason="Max per asset limit",
-            kill_switch_active=False,
-            raw_json='{"blocked_reasons":["Max per asset limit"]}',
-        ),
-    ]
-    system_context.execution_service.get_recent_executions.return_value = [
-        ExecutionResult(
-            plan_id="PLAN-1",
-            started_at=decided_at,
-            completed_at=completed_at,
-            success=True,
-            orders=[
-                LocalOrder(
-                    local_id="order-1",
-                    plan_id="PLAN-1",
-                    strategy_id="trend_core",
-                    pair="BTC/USD",
-                    side="buy",
-                    order_type="market",
-                    status="filled",
-                    cumulative_base_filled=0.01,
-                )
-            ],
-        )
-    ]
+    _configure_trace(
+        system_context,
+        decided_at=decided_at,
+        plan=plan,
+        decisions=[
+            _trace_decision(decided_at, pair="BTC/USD", action_type="open"),
+            _trace_decision(
+                decided_at,
+                pair="ETH/USD",
+                action_type="open",
+                blocked=True,
+                block_reason="Max per asset limit",
+            ),
+        ],
+        execution=_trace_execution(decided_at, orders=[_trace_order()]),
+    )
 
-    response = client.get("/api/system/cockpit")
-
-    assert response.status_code == 200
-    trace = response.json()["data"]["activity"]["decision_traces"][0]
+    trace = _fetch_first_trace(client)
     assert trace["plan_id"] == "PLAN-1"
     assert trace["status"] == "orders_sent"
     assert trace["action_count"] == 2
+    assert trace["actionable_action_count"] == 2
     assert trace["allowed_action_count"] == 1
     assert trace["blocked_action_count"] == 1
+    assert trace["no_op_action_count"] == 0
+    assert trace["clamped_action_count"] == 0
     assert trace["order_count"] == 1
     assert trace["filled_order_count"] == 1
     assert trace["strategy_ids"] == ["trend_core"]
     assert trace["pairs"] == ["BTC/USD", "ETH/USD"]
     assert trace["risk_reasons"] == ["Max per asset limit"]
-    assert "1/2 action(s) cleared risk" in trace["summary"]
+    assert trace["trace_quality"] == "complete"
+    assert "1/2 actionable action(s) cleared risk" in trace["summary"]
+
+
+def test_cockpit_snapshot_marks_none_only_plan_as_no_action(client, system_context):
+    decided_at = datetime(2026, 5, 2, 3, 0, tzinfo=timezone.utc)
+    plan = ExecutionPlan(
+        plan_id="PLAN-1",
+        generated_at=decided_at,
+        actions=[
+            _trace_action(
+                action_type="none",
+                reason="No action because conflict netted out",
+            )
+        ],
+    )
+    _configure_trace(
+        system_context,
+        decided_at=decided_at,
+        plan=plan,
+        decisions=[_trace_decision(decided_at, action_type="none")],
+        execution=_trace_execution(decided_at),
+    )
+
+    trace = _fetch_first_trace(client)
+
+    assert trace["status"] == "no_action"
+    assert trace["action_count"] == 1
+    assert trace["actionable_action_count"] == 0
+    assert trace["no_op_action_count"] == 1
+    assert trace["allowed_action_count"] == 0
+    assert trace["no_op_reasons"] == ["No action because conflict netted out"]
+    assert "no-op action" in trace["summary"]
+
+
+def test_cockpit_snapshot_treats_blocked_none_as_risk_blocked(client, system_context):
+    decided_at = datetime(2026, 5, 2, 3, 0, tzinfo=timezone.utc)
+    plan = ExecutionPlan(
+        plan_id="PLAN-1",
+        generated_at=decided_at,
+        actions=[
+            _trace_action(
+                action_type="none",
+                blocked=True,
+                blocked_reasons=["Manual Kill Switch"],
+                reason="Blocked by Kill Switch",
+            )
+        ],
+    )
+    _configure_trace(
+        system_context,
+        decided_at=decided_at,
+        plan=plan,
+        decisions=[
+            _trace_decision(
+                decided_at,
+                action_type="none",
+                blocked=True,
+                block_reason="Manual Kill Switch",
+            )
+        ],
+        execution=_trace_execution(decided_at),
+    )
+
+    trace = _fetch_first_trace(client)
+
+    assert trace["status"] == "risk_blocked"
+    assert trace["actionable_action_count"] == 1
+    assert trace["no_op_action_count"] == 0
+    assert trace["blocked_action_count"] == 1
+    assert trace["risk_reasons"] == ["Manual Kill Switch"]
+
+
+def test_cockpit_snapshot_surfaces_clamped_actions(client, system_context):
+    decided_at = datetime(2026, 5, 2, 3, 0, tzinfo=timezone.utc)
+    plan = ExecutionPlan(
+        plan_id="PLAN-1",
+        generated_at=decided_at,
+        actions=[
+            _trace_action(
+                action_type="increase",
+                blocked_reasons=["Max per asset limit"],
+                clamped=True,
+                reason="Clamped: Max per asset limit",
+            )
+        ],
+    )
+    _configure_trace(
+        system_context,
+        decided_at=decided_at,
+        plan=plan,
+        decisions=[_trace_decision(decided_at, action_type="increase")],
+        execution=_trace_execution(decided_at, orders=[_trace_order()]),
+    )
+
+    trace = _fetch_first_trace(client)
+
+    assert trace["status"] == "orders_sent"
+    assert trace["actionable_action_count"] == 1
+    assert trace["allowed_action_count"] == 1
+    assert trace["clamped_action_count"] == 1
+    assert trace["clamp_reasons"] == ["Max per asset limit"]
+    assert "clamped by risk" in trace["summary"]
+
+
+def test_cockpit_snapshot_reports_execution_failed_trace(client, system_context):
+    decided_at = datetime(2026, 5, 2, 3, 0, tzinfo=timezone.utc)
+    plan = ExecutionPlan(
+        plan_id="PLAN-1",
+        generated_at=decided_at,
+        actions=[_trace_action(action_type="open")],
+    )
+    _configure_trace(
+        system_context,
+        decided_at=decided_at,
+        plan=plan,
+        decisions=[_trace_decision(decided_at, action_type="open")],
+        execution=_trace_execution(decided_at, errors=["adapter unavailable"]),
+    )
+
+    trace = _fetch_first_trace(client)
+
+    assert trace["status"] == "execution_failed"
+    assert trace["execution_errors"] == ["adapter unavailable"]
+    assert "Execution failed" in trace["summary"]
+
+
+def test_cockpit_snapshot_marks_decisions_only_trace_degraded(client, system_context):
+    decided_at = datetime(2026, 5, 2, 3, 0, tzinfo=timezone.utc)
+    _configure_trace(
+        system_context,
+        decided_at=decided_at,
+        plan=None,
+        decisions=[
+            _trace_decision(
+                decided_at,
+                action_type="none",
+                blocked=True,
+                block_reason="Manual Kill Switch",
+            )
+        ],
+        execution=_trace_execution(decided_at),
+    )
+
+    trace = _fetch_first_trace(client)
+
+    assert trace["status"] == "risk_blocked"
+    assert trace["trace_quality"] == "decisions_only"
+    assert "Execution plan record unavailable" in trace["degraded_reason"]
 
 
 def test_cockpit_snapshot_isolates_risk_signal_failure(client, system_context):

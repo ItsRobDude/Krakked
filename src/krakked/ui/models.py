@@ -482,14 +482,21 @@ class DecisionTracePayload(BaseModel):
     strategy_ids: List[str] = Field(default_factory=list)
     pairs: List[str] = Field(default_factory=list)
     action_count: int = 0
+    actionable_action_count: int = 0
     allowed_action_count: int = 0
     blocked_action_count: int = 0
+    no_op_action_count: int = 0
+    clamped_action_count: int = 0
     order_count: int = 0
     filled_order_count: int = 0
     risk_reasons: List[str] = Field(default_factory=list)
+    clamp_reasons: List[str] = Field(default_factory=list)
+    no_op_reasons: List[str] = Field(default_factory=list)
     execution_errors: List[str] = Field(default_factory=list)
     execution_warnings: List[str] = Field(default_factory=list)
     details: List[str] = Field(default_factory=list)
+    trace_quality: Literal["complete", "decisions_only", "execution_only"] = "complete"
+    degraded_reason: Optional[str] = None
 
 
 class CockpitActivityPayload(BaseModel):

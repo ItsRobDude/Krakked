@@ -206,14 +206,21 @@ export type DecisionTrace = {
   strategy_ids: string[];
   pairs: string[];
   action_count: number;
+  actionable_action_count: number;
   allowed_action_count: number;
   blocked_action_count: number;
+  no_op_action_count: number;
+  clamped_action_count: number;
   order_count: number;
   filled_order_count: number;
   risk_reasons: string[];
+  clamp_reasons: string[];
+  no_op_reasons: string[];
   execution_errors: string[];
   execution_warnings: string[];
   details: string[];
+  trace_quality: 'complete' | 'decisions_only' | 'execution_only';
+  degraded_reason: string | null;
 };
 
 export type CockpitActivitySnapshot = {

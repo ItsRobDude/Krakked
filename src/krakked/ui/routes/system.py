@@ -613,9 +613,67 @@ def _limited_reasons(values: list[str], *, limit: int = 4) -> list[str]:
     return [*reasons[:limit], f"{hidden} more reason(s)"]
 
 
+_TRACE_ACTIONABLE_TYPES = {"open", "increase", "reduce", "close"}
+
+
+def _trace_action_type(action) -> str:
+    return str(getattr(action, "action_type", "") or "").strip().lower()
+
+
+def _trace_action_blocked(action) -> bool:
+    return bool(getattr(action, "blocked", False))
+
+
+def _trace_action_clamped(action) -> bool:
+    return bool(getattr(action, "clamped", False))
+
+
+def _trace_action_is_actionable(action) -> bool:
+    return (
+        _trace_action_type(action) in _TRACE_ACTIONABLE_TYPES
+        or _trace_action_blocked(action)
+        or _trace_action_clamped(action)
+    )
+
+
+def _trace_action_is_no_op(action) -> bool:
+    return (
+        _trace_action_type(action) == "none"
+        and not _trace_action_blocked(action)
+        and not _trace_action_clamped(action)
+    )
+
+
+def _trace_decision_is_actionable(decision: RiskDecisionPayload) -> bool:
+    action_type = str(decision.action_type or "").strip().lower()
+    return action_type in _TRACE_ACTIONABLE_TYPES or bool(decision.blocked)
+
+
+def _trace_decision_is_no_op(decision: RiskDecisionPayload) -> bool:
+    action_type = str(decision.action_type or "").strip().lower()
+    return action_type == "none" and not decision.blocked
+
+
+def _trace_reason_values(values) -> list[str]:
+    return [str(value) for value in (values or []) if str(value).strip()]
+
+
+def _trace_datetime(value) -> datetime | None:
+    if not isinstance(value, datetime):
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _earliest_trace_datetime(values: list[datetime | None]) -> datetime | None:
+    cleaned = [value for value in (_trace_datetime(value) for value in values) if value]
+    return min(cleaned) if cleaned else None
+
+
 def _execution_trace_status(
     *,
-    action_count: int,
+    actionable_action_count: int,
     blocked_action_count: int,
     order_count: int,
     execution_errors: list[str],
@@ -625,9 +683,9 @@ def _execution_trace_status(
         return "execution_failed"
     if order_count > 0:
         return "orders_sent"
-    if action_count > 0 and blocked_action_count >= action_count:
+    if actionable_action_count > 0 and blocked_action_count >= actionable_action_count:
         return "risk_blocked"
-    if action_count == 0 and execution_present:
+    if actionable_action_count == 0:
         return "no_action"
     return "pending"
 
@@ -635,24 +693,43 @@ def _execution_trace_status(
 def _execution_trace_summary(
     *,
     status: str,
-    action_count: int,
+    actionable_action_count: int,
     allowed_action_count: int,
     blocked_action_count: int,
+    no_op_action_count: int,
+    clamped_action_count: int,
     order_count: int,
     filled_order_count: int,
 ) -> str:
     if status == "execution_failed":
         return f"Execution failed after {order_count} order(s)."
     if status == "orders_sent":
+        clamped = (
+            f" {clamped_action_count} action(s) clamped by risk;"
+            if clamped_action_count
+            else ""
+        )
         return (
-            f"{allowed_action_count}/{action_count} action(s) cleared risk; "
+            f"{allowed_action_count}/{actionable_action_count} actionable "
+            "action(s) cleared risk;"
+            f"{clamped} "
             f"{order_count} order(s) sent, {filled_order_count} filled."
         )
     if status == "risk_blocked":
-        return f"Risk blocked all {blocked_action_count} action(s); no orders sent."
+        return (
+            f"Risk blocked all {blocked_action_count} actionable action(s); "
+            "no orders sent."
+        )
     if status == "no_action":
+        if no_op_action_count > 0:
+            return (
+                f"Strategies evaluated {no_op_action_count} no-op action(s); "
+                "no orders sent."
+            )
         return "No strategy actions reached order routing."
-    return "Decision chain is still pending execution evidence."
+    return (
+        f"{actionable_action_count} actionable action(s) awaiting execution evidence."
+    )
 
 
 def _build_decision_trace_payloads(
@@ -697,13 +774,96 @@ def _build_decision_trace_payloads(
             plan = None
             raw_actions = None
         actions = raw_actions or []
-        action_count = len(actions) if plan is not None else len(plan_decisions)
-        blocked_action_count = (
-            len([action for action in actions if getattr(action, "blocked", False)])
-            if plan is not None
-            else len([decision for decision in plan_decisions if decision.blocked])
+        trace_quality: Literal["complete", "decisions_only", "execution_only"]
+        degraded_reason: str | None = None
+        if plan is not None:
+            trace_quality = "complete"
+            action_count = len(actions)
+            actionable_actions = [
+                action for action in actions if _trace_action_is_actionable(action)
+            ]
+            no_op_actions = [
+                action for action in actions if _trace_action_is_no_op(action)
+            ]
+            clamped_actions = [
+                action for action in actionable_actions if _trace_action_clamped(action)
+            ]
+            blocked_action_count = len(
+                [
+                    action
+                    for action in actionable_actions
+                    if _trace_action_blocked(action)
+                ]
+            )
+            actionable_action_count = len(actionable_actions)
+            no_op_action_count = len(no_op_actions)
+            clamped_action_count = len(clamped_actions)
+            blocked_reasons = [
+                reason
+                for action in actionable_actions
+                if _trace_action_blocked(action)
+                for reason in _trace_reason_values(
+                    getattr(action, "blocked_reasons", [])
+                )
+            ]
+            clamp_reasons = [
+                reason
+                for action in clamped_actions
+                for reason in _trace_reason_values(
+                    getattr(action, "blocked_reasons", [])
+                )
+            ]
+            no_op_reasons = [
+                str(getattr(action, "reason", "") or "")
+                for action in no_op_actions
+                if str(getattr(action, "reason", "") or "").strip()
+            ]
+        else:
+            action_count = len(plan_decisions)
+            actionable_decisions = [
+                decision
+                for decision in plan_decisions
+                if _trace_decision_is_actionable(decision)
+            ]
+            no_op_decisions = [
+                decision
+                for decision in plan_decisions
+                if _trace_decision_is_no_op(decision)
+            ]
+            blocked_action_count = len(
+                [decision for decision in actionable_decisions if decision.blocked]
+            )
+            actionable_action_count = len(actionable_decisions)
+            no_op_action_count = len(no_op_decisions)
+            clamped_action_count = 0
+            blocked_reasons = [
+                reason
+                for decision in actionable_decisions
+                if decision.blocked
+                for reason in decision.block_reasons
+            ]
+            clamp_reasons = []
+            no_op_reasons = [
+                f"{decision.pair}: {decision.action_type}"
+                for decision in no_op_decisions
+            ]
+            if plan_decisions:
+                trace_quality = "decisions_only"
+                degraded_reason = (
+                    "Execution plan record unavailable; trace is reconstructed from "
+                    "persisted risk decisions."
+                )
+            else:
+                trace_quality = "execution_only"
+                degraded_reason = (
+                    "Execution plan and risk decisions unavailable; trace is "
+                    "reconstructed from execution results only."
+                )
+
+        allowed_action_count = max(
+            actionable_action_count - blocked_action_count,
+            0,
         )
-        allowed_action_count = max(action_count - blocked_action_count, 0)
         orders = list(execution.orders if execution else [])
         order_count = len(orders)
         filled_order_count = len(
@@ -716,36 +876,50 @@ def _build_decision_trace_payloads(
         )
         risk_reasons = _limited_reasons(
             [
-                *[
-                    reason
-                    for action in actions
-                    for reason in (getattr(action, "blocked_reasons", []) or [])
-                ],
+                *blocked_reasons,
+                *clamp_reasons,
                 *[
                     reason
                     for decision in plan_decisions
+                    if decision.blocked
                     for reason in decision.block_reasons
                 ],
             ]
         )
+        clamp_reasons = _limited_reasons(clamp_reasons)
+        no_op_reasons = _limited_reasons(no_op_reasons)
         execution_errors = list(execution.errors if execution else [])
         execution_warnings = list(execution.warnings if execution else [])
         status = _execution_trace_status(
-            action_count=action_count,
+            actionable_action_count=actionable_action_count,
             blocked_action_count=blocked_action_count,
             order_count=order_count,
             execution_errors=execution_errors,
             execution_present=execution is not None,
         )
         details = [
-            f"Signal/risk actions: {allowed_action_count} allowed, {blocked_action_count} blocked.",
+            (
+                "Signal/risk actions: "
+                f"{actionable_action_count} actionable, "
+                f"{allowed_action_count} allowed, "
+                f"{blocked_action_count} blocked, "
+                f"{no_op_action_count} no-op."
+            ),
         ]
+        if clamped_action_count > 0:
+            details.append(f"Risk clamped {clamped_action_count} action(s).")
         if order_count > 0:
             details.append(
                 f"OMS orders: {order_count} sent, {filled_order_count} with fills."
             )
         if risk_reasons:
-            details.extend([f"Risk: {reason}" for reason in risk_reasons])
+            details.extend([f"Risk reason: {reason}" for reason in risk_reasons])
+        if clamp_reasons:
+            details.extend([f"Risk clamped: {reason}" for reason in clamp_reasons])
+        if no_op_reasons:
+            details.extend([f"No action: {reason}" for reason in no_op_reasons])
+        if degraded_reason:
+            details.append(f"Trace quality: {degraded_reason}")
         if execution_errors:
             details.extend([f"Execution error: {error}" for error in execution_errors])
         if execution_warnings:
@@ -755,21 +929,27 @@ def _build_decision_trace_payloads(
 
         generated_at = getattr(plan, "generated_at", None)
         if generated_at is None and plan_decisions:
-            generated_at = min(decision.decided_at for decision in plan_decisions)
+            generated_at = _earliest_trace_datetime(
+                [decision.decided_at for decision in plan_decisions]
+            )
         if generated_at is None and execution is not None:
             generated_at = execution.started_at
+        generated_at = _trace_datetime(generated_at)
+        completed_at = _trace_datetime(execution.completed_at) if execution else None
 
         traces.append(
             DecisionTracePayload(
                 plan_id=plan_id,
                 generated_at=generated_at,
-                completed_at=execution.completed_at if execution else None,
+                completed_at=completed_at,
                 status=status,
                 summary=_execution_trace_summary(
                     status=status,
-                    action_count=action_count,
+                    actionable_action_count=actionable_action_count,
                     allowed_action_count=allowed_action_count,
                     blocked_action_count=blocked_action_count,
+                    no_op_action_count=no_op_action_count,
+                    clamped_action_count=clamped_action_count,
                     order_count=order_count,
                     filled_order_count=filled_order_count,
                 ),
@@ -788,14 +968,21 @@ def _build_decision_trace_payloads(
                     ]
                 ),
                 action_count=action_count,
+                actionable_action_count=actionable_action_count,
                 allowed_action_count=allowed_action_count,
                 blocked_action_count=blocked_action_count,
+                no_op_action_count=no_op_action_count,
+                clamped_action_count=clamped_action_count,
                 order_count=order_count,
                 filled_order_count=filled_order_count,
                 risk_reasons=risk_reasons,
+                clamp_reasons=clamp_reasons,
+                no_op_reasons=no_op_reasons,
                 execution_errors=execution_errors,
                 execution_warnings=execution_warnings,
                 details=details,
+                trace_quality=trace_quality,
+                degraded_reason=degraded_reason,
             )
         )
 

@@ -34,6 +34,18 @@ const formatTraceTime = (timestamp: string | null) => {
 
 const formatList = (values: string[]) => (values.length > 0 ? values.join(', ') : 'None');
 
+const formatActionCounts = (trace: DecisionTrace) => {
+  const parts = [
+    `${trace.allowed_action_count} allowed`,
+    `${trace.blocked_action_count} blocked`,
+    `${trace.no_op_action_count} no-op`,
+  ];
+  if (trace.clamped_action_count > 0) {
+    parts.push(`${trace.clamped_action_count} clamped`);
+  }
+  return parts.join(' / ');
+};
+
 export function DecisionTracePanel({ traces }: DecisionTracePanelProps) {
   return (
     <section className="panel decision-trace-panel" aria-label="Decision Trace">
@@ -55,7 +67,12 @@ export function DecisionTracePanel({ traces }: DecisionTracePanelProps) {
                   <p className="decision-trace-panel__plan">{trace.plan_id}</p>
                   <p className="decision-trace-panel__summary">{trace.summary}</p>
                 </div>
-                <span className={`pill ${statusClass[trace.status]}`}>{statusLabel[trace.status]}</span>
+                <div className="decision-trace-panel__badges">
+                  {trace.trace_quality !== 'complete' ? (
+                    <span className="pill pill--warning">Limited trace</span>
+                  ) : null}
+                  <span className={`pill ${statusClass[trace.status]}`}>{statusLabel[trace.status]}</span>
+                </div>
               </div>
 
               <div className="decision-trace-panel__grid">
@@ -69,9 +86,7 @@ export function DecisionTracePanel({ traces }: DecisionTracePanelProps) {
                 </div>
                 <div>
                   <span>Actions</span>
-                  <strong>
-                    {trace.allowed_action_count} allowed / {trace.blocked_action_count} blocked
-                  </strong>
+                  <strong>{formatActionCounts(trace)}</strong>
                 </div>
                 <div>
                   <span>Orders</span>
