@@ -2027,6 +2027,30 @@ body {
   font-size: 0.9rem;
 }
 
+.operator-truth-note {
+  display: grid;
+  gap: 0.22rem;
+  padding: 0.72rem 0.8rem;
+  border-radius: 8px;
+  border: 1px solid rgba(245, 158, 11, 0.22);
+  background: rgba(245, 158, 11, 0.08);
+  color: #d5dfeb;
+  font-size: 0.9rem;
+}
+
+.operator-truth-note strong {
+  color: #f8fafc;
+  font-size: 0.86rem;
+}
+
+.operator-truth-note span {
+  color: #a8b7c8;
+}
+
+.operator-truth-note--compact {
+  padding: 0.62rem 0.7rem;
+}
+
 .strategy-scorecard__empty {
   display: grid;
   gap: 0.6rem;

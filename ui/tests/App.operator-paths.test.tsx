@@ -416,6 +416,9 @@ describe('cockpit operator paths', () => {
     expect(screen.getAllByText('Not running').length).toBeGreaterThan(0);
     expect(screen.getAllByText('Not yet').length).toBeGreaterThan(0);
     expect(screen.getAllByText('Research stage').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Can paper-trade; unproven').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('No trading effect while paused').length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/not a profitability endorsement/i).length).toBeGreaterThan(0);
   });
 
   test('shows display-only EWMA market risk context', async () => {
@@ -424,6 +427,9 @@ describe('cockpit operator paths', () => {
     const panel = screen.getByRole('region', { name: 'BTC Risk Signal' });
     expect(within(panel).getByText('Normal')).toBeInTheDocument();
     expect(within(panel).getByText('Display only')).toBeInTheDocument();
+    expect(within(panel).getByText('No trading effect')).toBeInTheDocument();
+    expect(within(panel).getByText('Not wired to trading')).toBeInTheDocument();
+    expect(within(panel).getByText(/does not change strategy selection, sizing, risk limits, or order flow/i)).toBeInTheDocument();
     expect(within(panel).getByText('2.45%')).toBeInTheDocument();
     expect(within(panel).getByText('65.00%')).toBeInTheDocument();
   });

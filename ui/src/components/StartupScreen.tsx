@@ -314,16 +314,20 @@ export function StartupScreen({
                 disabled={readOnly || modeBusy || !activeProfileName}
                 onChange={(event) => handleMlToggle(event.target.checked)}
               />
-              Enable ML strategies for this profile
+              Enable ML research strategies for this profile
             </label>
             <p className="field__hint">
-              Profile-level strategy setting. It controls whether ML strategies participate for the active profile.
+              Profile-level research setting. It controls whether ML strategy rows can participate for the active
+              profile; it is not proof that ML has a promoted trading edge.
             </p>
             <p className="field__hint">
               Changes apply when the stopped session reloads or starts. Turning this off removes ML strategies from the
               enabled strategy set at config load time.
             </p>
-            <p className="field__hint">Per-strategy Learning only controls continuous training for enabled ML strategies.</p>
+            <p className="field__hint">
+              Per-strategy Learning only controls continuous training for enabled ML strategies. ML lanes remain
+              research-stage until a pre-registered evidence gate promotes them.
+            </p>
             {!activeProfileName && (
               <p className="field__hint field__hint--warn">Select and activate a profile to change ML settings.</p>
             )}

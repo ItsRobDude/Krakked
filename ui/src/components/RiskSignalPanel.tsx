@@ -45,6 +45,11 @@ const statusPillClass = (riskSignal: MarketRiskSignal | null) => {
 
 export function RiskSignalPanel({ riskSignal }: RiskSignalPanelProps) {
   const note = riskSignal?.notes?.[0] ?? null;
+  const tradingEffectLabel = riskSignal?.trading_effect ? 'Trading effect reported' : 'No trading effect';
+  const wiringLabel = riskSignal?.runtime_wiring_approved ? 'Runtime wiring approved' : 'Not wired to trading';
+  const truthNote = riskSignal?.trading_effect
+    ? 'This signal is reported as trading-active. Review runtime wiring before relying on it.'
+    : 'Shown for market context only. It does not change strategy selection, sizing, risk limits, or order flow.';
 
   return (
     <section className="panel risk-signal-panel" aria-label="BTC Risk Signal">
@@ -60,7 +65,15 @@ export function RiskSignalPanel({ riskSignal }: RiskSignalPanelProps) {
         <div className="risk-signal-panel__badges">
           <span className={`pill ${statusPillClass(riskSignal)}`}>{statusLabel(riskSignal)}</span>
           <span className="pill pill--muted">Display only</span>
+          <span className={`pill ${riskSignal?.trading_effect ? 'pill--danger' : 'pill--success'}`}>
+            {tradingEffectLabel}
+          </span>
         </div>
+      </div>
+
+      <div className="operator-truth-note">
+        <strong>{wiringLabel}</strong>
+        <span>{truthNote}</span>
       </div>
 
       <div className="risk-signal-panel__grid">

@@ -58,6 +58,7 @@ import {
 } from './services/api';
 import { RISK_PRESET_META, formatPresetSummary } from './constants/riskPresets';
 import { getRuntimeTrust } from './utils/operatorTrust';
+import { getStrategyTradingEffect, getStrategyTruthNote } from './utils/strategyTruth';
 
 const DASHBOARD_REFRESH_MS = Number(import.meta.env.VITE_REFRESH_DASHBOARD_MS ?? 5000) || 5000;
 const ORDERS_REFRESH_MS = Number(import.meta.env.VITE_REFRESH_ORDERS_MS ?? 5000) || 5000;
@@ -1861,8 +1862,11 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
             </span>
           )}
 
-          <span className={mlEnabled ? 'pill pill--info' : 'pill pill--muted'}>
-            ML: {mlEnabled ? 'On' : 'Off'}
+          <span
+            className={mlEnabled ? 'pill pill--info' : 'pill pill--muted'}
+            title="ML strategies are research-stage unless a pre-registered evidence gate promotes them."
+          >
+            ML research: {mlEnabled ? 'On' : 'Off'}
           </span>
 
           <span className="pill pill--muted">Loop: {session.loop_interval_sec.toFixed(1)}s</span>
@@ -2089,6 +2093,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
                 const momentum = getStrategyMomentum(strategy, perf);
                 const drawdown = getDrawdownState(perf?.max_drawdown_pct);
                 const evaluatedAt = getStrategyEvaluationAt(strategy);
+                const effect = getStrategyTradingEffect(strategy, session.mode === 'live');
                 return (
                   <article key={strategy.strategy_id} className="strategy-scorecard">
                     <div className="strategy-scorecard__header">
@@ -2122,6 +2127,10 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
                           </span>
                         ) : null}
                       </div>
+                    </div>
+                    <div className="operator-truth-note operator-truth-note--compact">
+                      <strong>{effect.label}</strong>
+                      <span>{getStrategyTruthNote(strategy)}</span>
                     </div>
                     <div className="strategy-scorecard__metrics">
                       <div>
@@ -2170,6 +2179,10 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
                           ? `${latestConflict.pair}: ${latestConflict.winning_reason}`
                           : 'No active conflict'}
                       </span>
+                    </div>
+                    <div className="strategy-scorecard__detail-row">
+                      <span className="strategy-scorecard__detail-label">Trading effect</span>
+                      <span className={effect.className}>{effect.label}</span>
                     </div>
                   </article>
                 );

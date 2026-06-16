@@ -5,6 +5,7 @@ import type {
   StrategyState,
 } from '../services/api';
 import { STRATEGY_TAGS } from '../constants/strategies';
+import { getStrategyTradingEffect, getStrategyTruthNote } from '../utils/strategyTruth';
 
 const riskProfiles: StrategyRiskProfile[] = ['conservative', 'balanced', 'aggressive'];
 
@@ -153,7 +154,7 @@ export function StrategiesPanel({
       </div>
       <p className="panel__description">
         Enable or pause each strategy, choose a simple relative weight, and set its risk profile. Evidence labels show
-        the current promotion posture; strategy controls still apply immediately when changed.
+        the current promotion posture; enabled unproven strategies can still influence paper order flow.
       </p>
       {liveMode ? (
         <div className="feedback feedback--warning strategy-panel__warning">
@@ -173,6 +174,7 @@ export function StrategiesPanel({
           const latestConflict = strategy.conflict_summary?.[0];
           const momentum = momentumBadge(strategy, perf?.realized_pnl_quote, perf?.max_drawdown_pct);
           const learningEnabled = learningSelections[strategy.strategy_id] ?? true;
+          const effect = getStrategyTradingEffect(strategy, liveMode);
 
           return (
             <article key={strategy.strategy_id} className="strategy-control-card">
@@ -197,6 +199,11 @@ export function StrategiesPanel({
                     </span>
                   ) : null}
                 </div>
+              </div>
+
+              <div className="operator-truth-note operator-truth-note--compact">
+                <strong>{effect.label}</strong>
+                <span>{getStrategyTruthNote(strategy)}</span>
               </div>
 
               <div className="strategy-control-card__metrics">
@@ -250,6 +257,10 @@ export function StrategiesPanel({
                   <strong title={strategy.evidence_note ?? undefined}>
                     {strategy.evidence_label ?? 'Unreviewed'}
                   </strong>
+                </div>
+                <div>
+                  <span>Trading effect</span>
+                  <strong><span className={effect.className}>{effect.label}</span></strong>
                 </div>
               </div>
 
