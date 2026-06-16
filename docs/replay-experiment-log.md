@@ -4,6 +4,78 @@ This log captures durable conclusions from local offline replay evidence. Saved
 JSON reports and ad-hoc probe outputs remain local unless they become part of a
 reviewed report fixture.
 
+## 2026-06-16: Multi-Pair Data Recheck And 4h Strategy Evidence Probe
+
+Context:
+
+- Prior `reports/strategy-evidence-scoreboard-20260615` had `0 / 6` ready
+  windows because the local cache only had enough `BTC/USD@4h` data. The
+  default starter evidence path also requires `1h` and `1d` series for
+  `BTC/USD`, `ETH/USD`, `SOL/USD`, and `ADA/USD`.
+- Local ignored import artifact:
+  `reports/data-coverage-recheck-20260616/ohlc_import_refresh_summary.json`
+- Local ignored strategy artifact:
+  `reports/strategy-evidence-scoreboard-20260616-4h-rs-rotation/aggregate.json`
+
+Data maintenance:
+
+- Imported Kraken Q4 2025 and Q1 2026 OHLCVT archives for `BTC/USD`,
+  `ETH/USD`, `SOL/USD`, and `ADA/USD` on `1h`, `4h`, and `1d`.
+- Stored `14,278` new historical bars with zero import errors.
+- Refreshed the REST tail across the same pairs/timeframes, fetching `5,032`
+  bars with zero failures.
+
+Continuity readout:
+
+- `4h`: continuous for all four pairs from `2025-12-01T00:00Z` through
+  `2026-06-16T08:00Z`.
+- `1d`: continuous for all four pairs from `2025-12-01T00:00Z` through
+  `2026-06-15T00:00Z`.
+- `1h`: one hard gap for all four pairs from `2026-03-31T23:00Z` to
+  `2026-05-17T13:00Z`.
+
+Interpretation:
+
+- The original zero-ready scoreboard was a real strict-data failure, not a
+  scoreboard bug.
+- The default 1h strategy evidence path remains legitimately blocked until Q2
+  `1h` history is imported or a supported strict window is chosen.
+- Do not loosen strict coverage. Fix or choose data intentionally.
+
+Smallest useful strategy probe:
+
+- Temporary report-local config enabled only `rs_rotation` on `4h` for the four
+  starter pairs.
+- Command shape:
+
+  ```bash
+  poetry run krakked strategy-evidence-scoreboard \
+    --config reports/data-coverage-recheck-20260616/config-4h-rs-rotation.yaml \
+    --window-set regime_diverse_4h \
+    --group configured \
+    --pair BTC/USD --pair ETH/USD --pair SOL/USD --pair ADA/USD \
+    --strict-data \
+    --save-dir reports/strategy-evidence-scoreboard-20260616-4h-rs-rotation \
+    --json
+  ```
+
+Result:
+
+- Strategy windows ready: `6 / 6`
+- Buy-hold usable windows: `6 / 6`
+- `rs_rotation` action windows: `6 / 6`
+- `rs_rotation` fill windows: `6 / 6`
+- Average ready-window return: `-0.4445%`
+- Positive ready windows: `0 / 6`
+- Evidence status: `unproven`
+
+Decision:
+
+- The 4h replay/evidence path works after data maintenance.
+- `rs_rotation` remains research-stage and disabled by default.
+- The next useful strategy work is operator traceability and explicit strategy
+  configuration, not parameter wandering.
+
 ## 2026-05-25: Starter Strategy Replay Truth Pass
 
 Context:

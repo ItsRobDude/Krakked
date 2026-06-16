@@ -84,12 +84,16 @@ export type RecentExecution = {
   completed_at: string | null;
   success: boolean;
   orders: Array<{
+    plan_id?: string | null;
+    strategy_id?: string | null;
     pair: string;
     side: string;
+    order_type?: string;
     requested_base_size: number;
     requested_price: number | null;
     status: string;
     created_at: string;
+    cumulative_base_filled?: number;
   }>;
   errors: string[];
   warnings: string[];
@@ -193,9 +197,29 @@ export type CockpitStrategiesSnapshot = {
   performance: StrategyPerformance[] | null;
 };
 
+export type DecisionTrace = {
+  plan_id: string;
+  generated_at: string | null;
+  completed_at: string | null;
+  status: 'orders_sent' | 'risk_blocked' | 'execution_failed' | 'no_action' | 'pending';
+  summary: string;
+  strategy_ids: string[];
+  pairs: string[];
+  action_count: number;
+  allowed_action_count: number;
+  blocked_action_count: number;
+  order_count: number;
+  filled_order_count: number;
+  risk_reasons: string[];
+  execution_errors: string[];
+  execution_warnings: string[];
+  details: string[];
+};
+
 export type CockpitActivitySnapshot = {
   recent_executions: RecentExecution[] | null;
   risk_decisions: RiskDecision[] | null;
+  decision_traces: DecisionTrace[] | null;
 };
 
 export type CockpitMarketDataSnapshot = {

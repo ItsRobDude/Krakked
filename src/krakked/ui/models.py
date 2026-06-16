@@ -467,9 +467,35 @@ class CockpitStrategiesPayload(BaseModel):
     performance: Optional[List[StrategyPerformancePayload]] = None
 
 
+class DecisionTracePayload(BaseModel):
+    plan_id: str
+    generated_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    status: Literal[
+        "orders_sent",
+        "risk_blocked",
+        "execution_failed",
+        "no_action",
+        "pending",
+    ]
+    summary: str
+    strategy_ids: List[str] = Field(default_factory=list)
+    pairs: List[str] = Field(default_factory=list)
+    action_count: int = 0
+    allowed_action_count: int = 0
+    blocked_action_count: int = 0
+    order_count: int = 0
+    filled_order_count: int = 0
+    risk_reasons: List[str] = Field(default_factory=list)
+    execution_errors: List[str] = Field(default_factory=list)
+    execution_warnings: List[str] = Field(default_factory=list)
+    details: List[str] = Field(default_factory=list)
+
+
 class CockpitActivityPayload(BaseModel):
     recent_executions: Optional[List[ExecutionResultPayload]] = None
     risk_decisions: Optional[List[RiskDecisionPayload]] = None
+    decision_traces: Optional[List[DecisionTracePayload]] = None
 
 
 class CockpitMarketDataPayload(BaseModel):

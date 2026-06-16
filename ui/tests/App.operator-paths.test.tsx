@@ -13,6 +13,7 @@ import type {
 
 const apiMocks = vi.hoisted(() => ({
   fetchCockpitSnapshot: vi.fn(),
+  fetchLiveReadiness: vi.fn(),
   fetchSystemHealth: vi.fn(),
   fetchSessionState: vi.fn(),
   fetchProfiles: vi.fn(),
@@ -257,6 +258,29 @@ const buildCockpit = (overrides: Partial<CockpitSnapshot> = {}): CockpitSnapshot
         kill_switch_active: false,
       },
     ],
+    decision_traces: [
+      {
+        plan_id: 'plan_1',
+        generated_at: '2026-05-02T02:56:31Z',
+        completed_at: '2026-05-02T02:56:51Z',
+        status: 'risk_blocked',
+        summary: 'Risk blocked all 2 action(s); no orders sent.',
+        strategy_ids: ['dca_overlay'],
+        pairs: ['ETH/USD', 'BTC/USD'],
+        action_count: 2,
+        allowed_action_count: 0,
+        blocked_action_count: 2,
+        order_count: 0,
+        filled_order_count: 0,
+        risk_reasons: ['Max per asset limit (718.36 > 500.77)'],
+        execution_errors: [],
+        execution_warnings: [],
+        details: [
+          'Signal/risk actions: 0 allowed, 2 blocked.',
+          'Risk: Max per asset limit (718.36 > 500.77)',
+        ],
+      },
+    ],
   },
   replay: {
     available: false,
@@ -383,6 +407,7 @@ beforeEach(() => {
   apiMocks.fetchProfiles.mockResolvedValue([]);
   apiMocks.fetchSystemHealth.mockResolvedValue(healthyHealth);
   apiMocks.fetchSystemConfig.mockResolvedValue(null);
+  apiMocks.fetchLiveReadiness.mockResolvedValue(buildCockpit().live_readiness);
 });
 
 afterEach(() => {
@@ -491,6 +516,12 @@ describe('cockpit operator paths', () => {
     await renderActiveCockpit();
     await user.click(await screen.findByTestId('cockpit-tab-activity'));
 
+    const trace = screen.getByRole('region', { name: 'Decision Trace' });
+    expect(within(trace).getByText('Risk blocked')).toBeInTheDocument();
+    expect(within(trace).getByText('Risk blocked all 2 action(s); no orders sent.')).toBeInTheDocument();
+    expect(within(trace).getByText('0 allowed / 2 blocked')).toBeInTheDocument();
+    expect(within(trace).getByText('0 sent / 0 filled')).toBeInTheDocument();
+
     expect(
       screen.getByText('plan_1: no orders placed, blocked by risk limits'),
     ).toBeInTheDocument();
@@ -533,6 +564,20 @@ describe('cockpit operator paths', () => {
       .mockResolvedValueOnce(healthyHealth)
       .mockResolvedValue(liveHealthyHealth);
     apiMocks.fetchSystemConfig.mockResolvedValue({ ml: { enabled: false } });
+    apiMocks.fetchLiveReadiness.mockResolvedValue({
+      status: 'ready',
+      generated_at: '2026-05-02T03:01:00Z',
+      blockers: [],
+      warnings: [],
+      passed: [
+        {
+          id: 'live_gates',
+          label: 'Live submission gates',
+          status: 'passed',
+          message: 'Live submission gates are open in configuration.',
+        },
+      ],
+    });
     apiMocks.setExecutionMode.mockResolvedValue({
       mode: 'live',
       validate_only: false,
@@ -558,6 +603,33 @@ describe('cockpit operator paths', () => {
     });
     expect(screen.queryByLabelText(/master password/i)).not.toBeInTheDocument();
     expect(apiMocks.startSession).toHaveBeenCalledTimes(1);
+  });
+
+  test('shows live readiness blockers on the startup screen', async () => {
+    const user = userEvent.setup();
+
+    apiMocks.fetchSetupStatus.mockResolvedValue({
+      configured: true,
+      secrets_exist: true,
+      unlocked: true,
+      lifecycle: 'stopped',
+    });
+    apiMocks.fetchSessionState.mockResolvedValue(inactiveSession);
+    apiMocks.fetchProfiles.mockResolvedValue([{ name: 'Rob', description: 'Primary profile' }]);
+    apiMocks.fetchSystemHealth.mockResolvedValue(healthyHealth);
+    apiMocks.fetchSystemConfig.mockResolvedValue({ ml: { enabled: false } });
+    apiMocks.fetchLiveReadiness.mockResolvedValue(buildCockpit().live_readiness);
+
+    render(<App />);
+
+    await screen.findByRole('heading', { name: 'Start a session' });
+    await user.selectOptions(screen.getByLabelText('Mode'), 'live');
+
+    expect(screen.getByText('Live readiness')).toBeInTheDocument();
+    await screen.findByText('Blocked');
+    expect(screen.getByText(/live submission gates are closed/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Start live automation' })).toBeDisabled();
+    expect(apiMocks.startSession).not.toHaveBeenCalled();
   });
 
   test('shows warning and ready live-readiness states distinctly', async () => {

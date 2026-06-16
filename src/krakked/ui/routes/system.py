@@ -71,6 +71,7 @@ from krakked.ui.models import (
     CockpitRiskPayload,
     CockpitSnapshotPayload,
     CockpitStrategiesPayload,
+    DecisionTracePayload,
     ExecutionResultPayload,
     ExposureBreakdown,
     LiveReadinessCheckPayload,
@@ -590,6 +591,215 @@ def _build_recent_executions_payload(ctx) -> list:
 def _build_risk_decisions_payload(ctx, limit: int = 50) -> list[RiskDecisionPayload]:
     decisions = ctx.portfolio.get_decisions(limit=limit)
     return [_serialize_decision(record) for record in decisions]
+
+
+def _unique_strings(values: list[str | None]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        cleaned = str(value).strip() if value else ""
+        if not cleaned or cleaned in seen:
+            continue
+        result.append(cleaned)
+        seen.add(cleaned)
+    return result
+
+
+def _limited_reasons(values: list[str], *, limit: int = 4) -> list[str]:
+    reasons = _unique_strings(values)
+    if len(reasons) <= limit:
+        return reasons
+    hidden = len(reasons) - limit
+    return [*reasons[:limit], f"{hidden} more reason(s)"]
+
+
+def _execution_trace_status(
+    *,
+    action_count: int,
+    blocked_action_count: int,
+    order_count: int,
+    execution_errors: list[str],
+    execution_present: bool,
+) -> Literal["orders_sent", "risk_blocked", "execution_failed", "no_action", "pending"]:
+    if execution_errors:
+        return "execution_failed"
+    if order_count > 0:
+        return "orders_sent"
+    if action_count > 0 and blocked_action_count >= action_count:
+        return "risk_blocked"
+    if action_count == 0 and execution_present:
+        return "no_action"
+    return "pending"
+
+
+def _execution_trace_summary(
+    *,
+    status: str,
+    action_count: int,
+    allowed_action_count: int,
+    blocked_action_count: int,
+    order_count: int,
+    filled_order_count: int,
+) -> str:
+    if status == "execution_failed":
+        return f"Execution failed after {order_count} order(s)."
+    if status == "orders_sent":
+        return (
+            f"{allowed_action_count}/{action_count} action(s) cleared risk; "
+            f"{order_count} order(s) sent, {filled_order_count} filled."
+        )
+    if status == "risk_blocked":
+        return f"Risk blocked all {blocked_action_count} action(s); no orders sent."
+    if status == "no_action":
+        return "No strategy actions reached order routing."
+    return "Decision chain is still pending execution evidence."
+
+
+def _build_decision_trace_payloads(
+    ctx,
+    *,
+    recent_executions: list[ExecutionResultPayload] | None,
+    risk_decisions: list[RiskDecisionPayload] | None,
+    limit: int = 8,
+) -> list[DecisionTracePayload]:
+    executions = recent_executions or []
+    decisions = risk_decisions or []
+    executions_by_plan = {
+        execution.plan_id: execution
+        for execution in executions
+        if execution.plan_id
+    }
+    decisions_by_plan: dict[str, list[RiskDecisionPayload]] = {}
+    for decision in decisions:
+        if not decision.plan_id:
+            continue
+        decisions_by_plan.setdefault(decision.plan_id, []).append(decision)
+
+    plan_ids = _unique_strings(
+        [
+            *[execution.plan_id for execution in executions],
+            *[decision.plan_id for decision in decisions],
+        ]
+    )[:limit]
+
+    traces: list[DecisionTracePayload] = []
+    for plan_id in plan_ids:
+        execution = executions_by_plan.get(plan_id)
+        plan_decisions = decisions_by_plan.get(plan_id, [])
+        plan = None
+        try:
+            plan = ctx.portfolio.get_execution_plan(plan_id)
+        except (AttributeError, RuntimeError, TypeError, ValueError):
+            plan = None
+
+        raw_actions = getattr(plan, "actions", None) if plan is not None else None
+        if plan is not None and not isinstance(raw_actions, list):
+            plan = None
+            raw_actions = None
+        actions = raw_actions or []
+        action_count = len(actions) if plan is not None else len(plan_decisions)
+        blocked_action_count = (
+            len([action for action in actions if getattr(action, "blocked", False)])
+            if plan is not None
+            else len([decision for decision in plan_decisions if decision.blocked])
+        )
+        allowed_action_count = max(action_count - blocked_action_count, 0)
+        orders = list(execution.orders if execution else [])
+        order_count = len(orders)
+        filled_order_count = len(
+            [
+                order
+                for order in orders
+                if str(order.status).lower() in {"filled", "closed"}
+                or float(order.cumulative_base_filled or 0.0) > 0.0
+            ]
+        )
+        risk_reasons = _limited_reasons(
+            [
+                *[
+                    reason
+                    for action in actions
+                    for reason in (getattr(action, "blocked_reasons", []) or [])
+                ],
+                *[
+                    reason
+                    for decision in plan_decisions
+                    for reason in decision.block_reasons
+                ],
+            ]
+        )
+        execution_errors = list(execution.errors if execution else [])
+        execution_warnings = list(execution.warnings if execution else [])
+        status = _execution_trace_status(
+            action_count=action_count,
+            blocked_action_count=blocked_action_count,
+            order_count=order_count,
+            execution_errors=execution_errors,
+            execution_present=execution is not None,
+        )
+        details = [
+            f"Signal/risk actions: {allowed_action_count} allowed, {blocked_action_count} blocked.",
+        ]
+        if order_count > 0:
+            details.append(
+                f"OMS orders: {order_count} sent, {filled_order_count} with fills."
+            )
+        if risk_reasons:
+            details.extend([f"Risk: {reason}" for reason in risk_reasons])
+        if execution_errors:
+            details.extend([f"Execution error: {error}" for error in execution_errors])
+        if execution_warnings:
+            details.extend(
+                [f"Execution warning: {warning}" for warning in execution_warnings]
+            )
+
+        generated_at = getattr(plan, "generated_at", None)
+        if generated_at is None and plan_decisions:
+            generated_at = min(decision.decided_at for decision in plan_decisions)
+        if generated_at is None and execution is not None:
+            generated_at = execution.started_at
+
+        traces.append(
+            DecisionTracePayload(
+                plan_id=plan_id,
+                generated_at=generated_at,
+                completed_at=execution.completed_at if execution else None,
+                status=status,
+                summary=_execution_trace_summary(
+                    status=status,
+                    action_count=action_count,
+                    allowed_action_count=allowed_action_count,
+                    blocked_action_count=blocked_action_count,
+                    order_count=order_count,
+                    filled_order_count=filled_order_count,
+                ),
+                strategy_ids=_unique_strings(
+                    [
+                        *[getattr(action, "strategy_id", None) for action in actions],
+                        *[decision.strategy_id for decision in plan_decisions],
+                        *[order.strategy_id for order in orders],
+                    ]
+                ),
+                pairs=_unique_strings(
+                    [
+                        *[getattr(action, "pair", None) for action in actions],
+                        *[decision.pair for decision in plan_decisions],
+                        *[order.pair for order in orders],
+                    ]
+                ),
+                action_count=action_count,
+                allowed_action_count=allowed_action_count,
+                blocked_action_count=blocked_action_count,
+                order_count=order_count,
+                filled_order_count=filled_order_count,
+                risk_reasons=risk_reasons,
+                execution_errors=execution_errors,
+                execution_warnings=execution_warnings,
+                details=details,
+            )
+        )
+
+    return traces
 
 
 def _build_latest_replay_payload() -> ReplayLatestPayload:
@@ -1123,6 +1333,7 @@ _COCKPIT_SECTION_ERROR_MESSAGES = {
     "strategies.performance": "Strategy performance unavailable",
     "activity.recent_executions": "Recent executions unavailable",
     "activity.risk_decisions": "Risk decisions unavailable",
+    "activity.decision_traces": "Decision traces unavailable",
     "replay.latest": "Latest replay unavailable",
     "market_data.scope": "Market data scope unavailable",
     "risk_signal": "Risk signal unavailable",
@@ -1851,6 +2062,15 @@ async def cockpit_snapshot(request: Request) -> ApiEnvelope[CockpitSnapshotPaylo
             "activity.risk_decisions",
             lambda: _build_risk_decisions_payload(ctx),
         )
+        decision_traces = _read_section(
+            section_errors,
+            "activity.decision_traces",
+            lambda: _build_decision_trace_payloads(
+                ctx,
+                recent_executions=recent_executions,
+                risk_decisions=risk_decisions,
+            ),
+        )
 
         replay = _read_section(
             section_errors, "replay.latest", _build_latest_replay_payload
@@ -1903,6 +2123,7 @@ async def cockpit_snapshot(request: Request) -> ApiEnvelope[CockpitSnapshotPaylo
             activity=CockpitActivityPayload(
                 recent_executions=recent_executions,
                 risk_decisions=risk_decisions,
+                decision_traces=decision_traces,
             ),
             replay=replay,
             market_data=market_data,

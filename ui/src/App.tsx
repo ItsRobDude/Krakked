@@ -5,6 +5,7 @@ import { RiskPanel } from './components/RiskPanel';
 import { RiskSignalPanel } from './components/RiskSignalPanel';
 import { ReplaySummaryPanel } from './components/ReplaySummaryPanel';
 import { LogEntry, LogPanel } from './components/LogPanel';
+import { DecisionTracePanel } from './components/DecisionTracePanel';
 import { PositionRow, PositionsTable } from './components/PositionsTable';
 import { Sidebar } from './components/Sidebar';
 import { StrategiesPanel } from './components/StrategiesPanel';
@@ -13,6 +14,7 @@ import { SetupWizard } from './components/SetupWizard';
 import { PasswordScreen } from './components/PasswordScreen';
 import {
   fetchCockpitSnapshot,
+  fetchLiveReadiness,
   fetchSystemHealth,
   fetchSessionState,
   fetchProfiles, ProfileSummary,
@@ -31,6 +33,7 @@ import {
   RiskDecision,
   CockpitMarketDataSnapshot,
   MarketRiskSignal,
+  DecisionTrace,
   LiveReadinessPayload,
   RiskPresetName,
   StrategyRiskProfile,
@@ -423,6 +426,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
   const [dustPositions, setDustPositions] = useState<PositionRow[]>([]);
   const [exposure, setExposure] = useState<ExposureBreakdown | null>(null);
   const [logs, setLogs] = useState<LogEntry[]>([]);
+  const [decisionTraces, setDecisionTraces] = useState<DecisionTrace[]>([]);
   const [connectionState, setConnectionState] = useState<'connected' | 'degraded'>('degraded');
   const [health, setHealth] = useState<SystemHealth | null>(null);
   const [marketDataScope, setMarketDataScope] = useState<CockpitMarketDataSnapshot | null>(null);
@@ -492,10 +496,11 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
       return;
     }
 
-    const [profileSummaries, systemHealth, systemConfig] = await Promise.all([
+    const [profileSummaries, systemHealth, systemConfig, readiness] = await Promise.all([
       fetchProfiles(),
       fetchSystemHealth({ timeoutMs: ACTIVE_RESOURCE_TIMEOUT_MS }),
       fetchSystemConfig({ timeoutMs: ACTIVE_RESOURCE_TIMEOUT_MS }).catch(() => null),
+      fetchLiveReadiness({ timeoutMs: ACTIVE_RESOURCE_TIMEOUT_MS }).catch(() => null),
     ]);
 
     if (systemHealth) {
@@ -512,6 +517,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
 
     setProfiles(profileSummaries);
     setStartupMlEnabled(extractMlEnabledFromConfig(systemConfig, sessionState?.ml_enabled ?? true));
+    setLiveReadiness(readiness);
     setSessionLoading(false);
   }, [updateRefreshIssue]);
 
@@ -547,6 +553,25 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
       clearInterval(interval);
     };
   }, [startupReloading, loadSession]);
+
+  useEffect(() => {
+    if (sessionLoading || session?.active) return;
+
+    let cancelled = false;
+
+    const loadStartupReadiness = async () => {
+      const readiness = await fetchLiveReadiness({ timeoutMs: ACTIVE_RESOURCE_TIMEOUT_MS }).catch(() => null);
+      if (!cancelled) {
+        setLiveReadiness(readiness);
+      }
+    };
+
+    void loadStartupReadiness();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [session?.active, sessionLoading]);
 
   useEffect(() => {
     if (!session?.active) return;
@@ -596,6 +621,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
         const perf = snapshot.strategies?.performance ?? null;
         const executions = snapshot.activity?.recent_executions ?? null;
         const decisions = snapshot.activity?.risk_decisions ?? null;
+        const traces = snapshot.activity?.decision_traces ?? null;
         const latestReplaySummary = snapshot.replay;
         const marketDataSnapshot = snapshot.market_data ?? null;
         const riskSignalSnapshot = snapshot.risk_signal ?? null;
@@ -765,7 +791,15 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
             (a, b) => (b.sortKey ?? 0) - (a.sortKey ?? 0),
           );
           setLogs(merged);
-          updateRefreshIssue('activity', null);
+          setDecisionTraces(traces ?? []);
+          if (sectionErrors['activity.decision_traces']) {
+            updateRefreshIssue(
+              'activity',
+              `Decision trace refresh failed: ${sectionErrors['activity.decision_traces']}`,
+            );
+          } else {
+            updateRefreshIssue('activity', null);
+          }
         } else {
           updateRefreshIssue(
             'activity',
@@ -1591,6 +1625,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
         modeBusy={modeBusy || startupReloading}
         systemMessage={systemMessage}
         startupMlEnabled={startupMlEnabled}
+        liveReadiness={liveReadiness}
         onCreateProfile={handleCreateProfile}
         onProfileChange={handleProfileChange}
         onSaveConfig={handleSaveConfig}
@@ -2234,7 +2269,12 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
         {showReplayPanel || !latestReplay?.available ? <ReplaySummaryPanel replay={latestReplay} /> : null}
       </section>
 
-      <section id="activity" className="dashboard-anchor cockpit-tab-panel" hidden={activeCockpitTab !== 'activity'}>
+      <section
+        id="activity"
+        className="dashboard-anchor cockpit-tab-panel activity-stack"
+        hidden={activeCockpitTab !== 'activity'}
+      >
+        <DecisionTracePanel traces={decisionTraces} />
         <LogPanel
           entries={logs}
           title="Activity Log"

@@ -17,8 +17,10 @@ from krakked.connection.exceptions import (
     ServiceUnavailableError,
 )
 from krakked.credentials import CredentialResult, CredentialStatus
+from krakked.execution.models import ExecutionResult, LocalOrder
 from krakked.market_data.api import MarketDataStatus
 from krakked.metrics import SystemMetrics
+from krakked.strategy.models import DecisionRecord, ExecutionPlan, RiskAdjustedAction
 from krakked.ui.api import create_api
 from tests.ui.conftest import build_test_context
 
@@ -679,6 +681,7 @@ def test_cockpit_snapshot_returns_expected_sections(client, system_context):
     assert data["strategies"]["performance"] == []
     assert data["activity"]["recent_executions"] == []
     assert data["activity"]["risk_decisions"] == []
+    assert data["activity"]["decision_traces"] == []
     assert data["replay"]["available"] is False
     assert data["risk_signal"]["available"] is False
     assert data["risk_signal"]["status"] == "insufficient_data"
@@ -690,6 +693,102 @@ def test_cockpit_snapshot_returns_expected_sections(client, system_context):
     assert any(
         check["id"] == "live_gates" for check in data["live_readiness"]["blockers"]
     )
+
+
+def test_cockpit_snapshot_groups_decision_trace(client, system_context):
+    decided_at = datetime(2026, 5, 2, 3, 0, tzinfo=timezone.utc)
+    completed_at = datetime(2026, 5, 2, 3, 0, 2, tzinfo=timezone.utc)
+    plan = ExecutionPlan(
+        plan_id="PLAN-1",
+        generated_at=decided_at,
+        actions=[
+            RiskAdjustedAction(
+                pair="BTC/USD",
+                strategy_id="trend_core",
+                action_type="open",
+                target_base_size=0.01,
+                target_notional_usd=500.0,
+                current_base_size=0.0,
+                reason="breakout",
+                blocked=False,
+                blocked_reasons=[],
+            ),
+            RiskAdjustedAction(
+                pair="ETH/USD",
+                strategy_id="trend_core",
+                action_type="open",
+                target_base_size=0.1,
+                target_notional_usd=500.0,
+                current_base_size=0.0,
+                reason="breakout",
+                blocked=True,
+                blocked_reasons=["Max per asset limit"],
+            ),
+        ],
+    )
+    system_context.portfolio.get_execution_plan.return_value = plan
+    system_context.portfolio.get_decisions.return_value = [
+        DecisionRecord(
+            time=int(decided_at.timestamp()),
+            plan_id="PLAN-1",
+            strategy_name="trend_core",
+            pair="BTC/USD",
+            action_type="open",
+            target_position_usd=500.0,
+            blocked=False,
+            block_reason=None,
+            kill_switch_active=False,
+            raw_json="{}",
+        ),
+        DecisionRecord(
+            time=int(decided_at.timestamp()),
+            plan_id="PLAN-1",
+            strategy_name="trend_core",
+            pair="ETH/USD",
+            action_type="open",
+            target_position_usd=500.0,
+            blocked=True,
+            block_reason="Max per asset limit",
+            kill_switch_active=False,
+            raw_json='{"blocked_reasons":["Max per asset limit"]}',
+        ),
+    ]
+    system_context.execution_service.get_recent_executions.return_value = [
+        ExecutionResult(
+            plan_id="PLAN-1",
+            started_at=decided_at,
+            completed_at=completed_at,
+            success=True,
+            orders=[
+                LocalOrder(
+                    local_id="order-1",
+                    plan_id="PLAN-1",
+                    strategy_id="trend_core",
+                    pair="BTC/USD",
+                    side="buy",
+                    order_type="market",
+                    status="filled",
+                    cumulative_base_filled=0.01,
+                )
+            ],
+        )
+    ]
+
+    response = client.get("/api/system/cockpit")
+
+    assert response.status_code == 200
+    trace = response.json()["data"]["activity"]["decision_traces"][0]
+    assert trace["plan_id"] == "PLAN-1"
+    assert trace["status"] == "orders_sent"
+    assert trace["action_count"] == 2
+    assert trace["allowed_action_count"] == 1
+    assert trace["blocked_action_count"] == 1
+    assert trace["order_count"] == 1
+    assert trace["filled_order_count"] == 1
+    assert trace["strategy_ids"] == ["trend_core"]
+    assert trace["pairs"] == ["BTC/USD", "ETH/USD"]
+    assert trace["risk_reasons"] == ["Max per asset limit"]
+    assert "1/2 action(s) cleared risk" in trace["summary"]
 
 
 def test_cockpit_snapshot_isolates_risk_signal_failure(client, system_context):

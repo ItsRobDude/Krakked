@@ -334,6 +334,93 @@ p {
   line-height: 1.45;
 }
 
+.decision-trace-panel {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.decision-trace-panel__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--space-3);
+}
+
+.decision-trace-panel__item {
+  border: 1px solid rgba(146, 162, 183, 0.12);
+  border-radius: 12px;
+  background: rgba(16, 24, 35, 0.78);
+  padding: var(--space-3);
+}
+
+.decision-trace-panel__topline {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: var(--space-3);
+}
+
+.decision-trace-panel__plan {
+  margin: 0;
+  font-family: var(--font-mono);
+  color: #dbeafe;
+  font-size: 0.85rem;
+}
+
+.decision-trace-panel__summary {
+  margin: 0.3rem 0 0;
+  color: #f8fafc;
+  font-weight: 800;
+}
+
+.decision-trace-panel__grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+
+.decision-trace-panel__grid div {
+  border: 1px solid rgba(146, 162, 183, 0.1);
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.58);
+  padding: var(--space-2);
+  min-width: 0;
+}
+
+.decision-trace-panel__grid span {
+  display: block;
+  color: #91a4b8;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.decision-trace-panel__grid strong {
+  display: block;
+  margin-top: 0.25rem;
+  color: #f8fafc;
+  font-size: 0.92rem;
+  overflow-wrap: anywhere;
+}
+
+.decision-trace-panel__details {
+  display: grid;
+  gap: 0.25rem;
+  margin: var(--space-3) 0 0;
+  padding-left: 1rem;
+  color: #a8b7c8;
+  font-size: 0.9rem;
+}
+
+.decision-trace-panel__meta {
+  margin: var(--space-3) 0 0;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+}
+
 .panel__hint {
   margin: 0;
   color: var(--text-muted);
@@ -341,6 +428,11 @@ p {
 }
 
 .risk-panel {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.activity-stack {
   display: grid;
   gap: var(--space-3);
 }
@@ -2306,6 +2398,7 @@ body {
 
   .dashboard-grid--primary,
   .dashboard-grid--secondary,
+  .decision-trace-panel__grid,
   .live-readiness-panel__grid,
   .settings-panel__grid {
     grid-template-columns: 1fr;
@@ -2463,6 +2556,35 @@ body {
   display: flex;
   gap: var(--space-2);
   justify-content: flex-start;
+}
+
+.startup-live-readiness {
+  display: grid;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+  border: 1px solid rgba(146, 162, 183, 0.16);
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.58);
+  padding: 0.75rem;
+}
+
+.startup-live-readiness__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  color: #f8fafc;
+  font-weight: 800;
+}
+
+.startup-live-readiness__list {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0;
+  padding-left: 1rem;
+  color: #a8b7c8;
+  font-size: 0.9rem;
+  line-height: 1.4;
 }
 
 @media (max-width: 760px) {

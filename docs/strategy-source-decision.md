@@ -114,3 +114,27 @@ Forward path:
   the regime-aware unified scoreboard — a future program, not another small gate.
 - Do not iterate ML overlay features on the `trend_rank_proxy` source; a
   defensive rule already beats it across regimes.
+
+## 2026-06-16 Update: Data Recheck And Vol-Forecast ML Closeout
+
+Follow-up checks after importing multi-pair Kraken history clarified the
+remaining blockers:
+
+- The `4h`/`1d` data path for the four starter pairs is now usable and
+  continuous from `2025-12-01` through the current tail.
+- The default `1h` evidence path still has a real April/May 2026 gap, so strict
+  scoreboards that require `1h` remain data-blocked until Q2 history is
+  imported.
+- A strict `4h` `rs_rotation` probe over `regime_diverse_4h` ran with `6 / 6`
+  ready windows and traded in all six, but had `0 / 6` positive windows and
+  stayed `unproven`.
+- The HAR-RV volatility forecast lane reached `ready_for_verdict` with strict
+  data and failed EWMA badly (`lane_status=close_volatility_forecast_lane`).
+
+Updated operating boundary:
+
+- Do not restart ML or strategy tuning loops from these results.
+- Keep bundled strategies truth-labeled as research-stage/unproven.
+- Treat EWMA as display-only risk context, not strategy edge.
+- Shift active work to operator trust, live automation usability, normal
+  session reliability, and evidence traceability.

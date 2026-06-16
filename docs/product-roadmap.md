@@ -51,9 +51,10 @@ This is a product and engineering constraint, not a claim that California law ca
      cash/buy-hold baselines before any runtime wiring discussion.
    - Cross-strategy claims should use the unified evidence scoreboard, not an
      ML-only report in isolation.
-   - The next ML hypothesis is exposure/risk scaling under regime-diverse
-     evidence, benchmarked against the simple hand-coded top-2 `target_scale`
-     overlay, not standalone trade prediction from sparse events.
+   - The 2026-06-16 volatility-forecasting slice reached a real verdict and
+     closed for trading influence. The HAR-RV model failed the EWMA benchmark
+     under strict data, so ML should not affect exposure or display risk until
+     a genuinely new written hypothesis is proposed.
 
 5. Live-trading readiness
    - Paper mode remains the proving ground.
@@ -79,6 +80,12 @@ Implemented or substantially in place:
 - Operator cockpit shell that now prefers one cockpit snapshot, partial rendering, and local section degradation over global loading deadlocks
 - Paper mode now uses a profile-scoped persistent synthetic wallet, with live exchange balances kept only as optional reference context
 - Strategy-source evidence currently does not support runtime promotion for the tested bundled/source candidates
+- Strict cached `4h` and `1d` OHLC now covers `BTC/USD`, `ETH/USD`,
+  `SOL/USD`, and `ADA/USD` from `2025-12-01` through the current tail; `1h`
+  still has a hard `2026-03-31T23:00Z -> 2026-05-17T13:00Z` gap until deeper
+  Q2 history is imported.
+- The EWMA market-risk signal is display-only and explicitly has no trading
+  effect.
 
 Still needing real-world validation or product work:
 
@@ -91,6 +98,8 @@ Still needing real-world validation or product work:
 - Unified strategy evidence reporting with explicit cost semantics and
   cash/buy-hold comparisons
 - Live-trading readiness drills and operator runbooks after paper/execution reliability is proven
+- Live automation UX polish so a prepared operator can start live automation
+  from the UI with one obvious start action after readiness is visible.
 - Commercial packaging, licensing, and legal/business review
 
 ## Current Operator Reality
@@ -100,7 +109,12 @@ Krakked is now closer to an operator-facing control room than a hobby bot shell,
 - Paper mode is a local persistent synthetic wallet that can exercise the strategy, risk, OMS, and portfolio loops without transmitting live orders.
 - Exchange balances are now optional reference context in paper mode, not the paper account baseline.
 - Current strategy-source evidence does not yet support runtime promotion of `rs_rotation`, `rs_rotation_v2`, `trend_core` signal-quality claims, global top-N momentum proxies, or pair-local source variants.
-- ML remains in scope, but current models stay research-only until unified evidence beats cash, buy-hold baselines, and the simple hand-coded market-state overlay baseline under explicit cost semantics.
+- ML remains in scope as infrastructure, but the current volatility-forecasting
+  lane is closed for runtime influence: the 2026-06-16 strict rerun was ready
+  for verdict and failed EWMA by a wide margin. Do not iterate variants on that
+  same target.
+- The honest current risk display is the EWMA card: calibrated enough to show
+  operator context, but explicitly display-only with no trading effect.
 - The active dashboard now has cockpit snapshot V1 for coherent active-session refreshes, operator-safe section degradation, and visible snapshot freshness. Remaining cockpit work is mostly around startup/setup fan-out and clearer first-run lifecycle states.
 - Startup, unlock, and session-start flows have improved significantly, but they still need a tighter lifecycle model before the product feels fully polished for a first-time operator.
 
@@ -132,15 +146,17 @@ Use a simple user-facing weighting model:
 
 ## ML Recommendation
 
-Continuous learning is in scope, but it should be implemented as a crash-safe pipeline:
+Continuous learning is in scope as infrastructure, but it is not the next
+operator-value lane. The current rule is:
 
 - Training state must checkpoint atomically.
 - Interrupted training must resume cleanly after restart.
 - Inference should keep using the last known-good model if training is interrupted.
 - New model versions must pass cross-window, cost-aware, cash/buy-hold baseline proof before any active-trading plan is written.
-- The next research target is a minimal regime/exposure-scale model. It should
-  be compared against the hand-coded top-2 soft `target_scale` overlay before
-  any richer meta-labeling or runtime-control plan is considered.
+- The failed volatility-forecasting target should stay closed unless a new
+  written hypothesis changes the target, data, or product use materially.
+- ML must not affect trading, exposure, strategy selection, or risk display
+  until a pre-registered gate beats the relevant simple baseline.
 
 ## Distribution Recommendation
 
@@ -170,6 +186,9 @@ The next milestones are product-facing rather than architecture-facing:
    - Improve strategy toggles, weights, and per-strategy attribution in the UI without implying proven production edge.
    - Make EWMA risk display explicitly display-only with no trading effect.
    - Make strategy evidence labels plainly show research-stage/unproven status.
+   - Turn live automation into a readiness-first start path: one clear
+     operator action from the startup screen after blockers are visible, with
+     backend safety gates and audit logs preserved.
    - Continue cockpit snapshot V1 polish by trimming remaining startup/setup fan-out and tightening first-run lifecycle states.
    - Introduce a clearer Simple vs Advanced presentation model.
    - Surface ML status and training/checkpoint information more directly.
@@ -177,8 +196,14 @@ The next milestones are product-facing rather than architecture-facing:
 3. Reliability and Live-Readiness Plumbing
    - Formalize operational runbooks and pre-live checklists.
    - Tighten live-mode guidance, safety prompts, and emergency control flows.
+   - Add a normal-trading soak path: active paper session, restart persistence,
+     strategy/control changes, pause/resume, and fresh backup before any small
+     live smoke.
    - Practice rollback, restore, and upgrade drills on realistic deployments.
    - Make the startup/unlock/session lifecycle trustworthy enough that operators can confidently distinguish slow warmup from a real fault.
+
+See [`operator-trust-and-trading-next-steps.md`](./operator-trust-and-trading-next-steps.md)
+for the current next-lane plan.
 
 4. Commercial Packaging
    - Define the self-hosted licensing/update model.
