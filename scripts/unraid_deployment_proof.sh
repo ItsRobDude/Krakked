@@ -8,6 +8,7 @@ MODE="source"
 RECREATE="true"
 SKIP_RUN_ONCE="false"
 SKIP_RESTORE="false"
+WAIT_TIMEOUT_SECONDS="${KRAKKED_PROOF_WAIT_TIMEOUT_SECONDS:-180}"
 
 usage() {
   cat <<'USAGE'
@@ -24,12 +25,14 @@ Options:
   --no-recreate          Start without forcing container recreation
   --skip-run-once        Skip the forced-safe paper run-once check
   --skip-restore         Skip the export/import restore round-trip
+  --wait-timeout SECONDS Seconds to wait for container/API readiness, default 180
   -h, --help             Show this help
 
 Environment overrides:
   KRAKKED_UNRAID_APPDATA_DIR=/mnt/user/appdata/krakked
   KRAKKED_UNRAID_COMPOSE_FILE=compose.unraid.yaml
   KRAKKED_PROOF_HOST_URL=http://127.0.0.1:8088
+  KRAKKED_PROOF_WAIT_TIMEOUT_SECONDS=180
 USAGE
 }
 
@@ -60,6 +63,10 @@ while [ "$#" -gt 0 ]; do
     --skip-restore)
       SKIP_RESTORE="true"
       ;;
+    --wait-timeout)
+      shift
+      WAIT_TIMEOUT_SECONDS="${1:-}"
+      ;;
     -h|--help)
       usage
       exit 0
@@ -80,6 +87,11 @@ fi
 
 if [ "$MODE" != "source" ] && [ "$MODE" != "image" ]; then
   echo "ERROR: --mode must be either 'source' or 'image'." >&2
+  exit 2
+fi
+
+if ! printf '%s' "$WAIT_TIMEOUT_SECONDS" | grep -Eq '^[0-9]+$' || [ "$WAIT_TIMEOUT_SECONDS" -le 0 ]; then
+  echo "ERROR: --wait-timeout must be a positive integer." >&2
   exit 2
 fi
 
@@ -141,6 +153,33 @@ fetch_url() {
   fi
   echo "Neither curl nor wget is available." >&2
   return 1
+}
+
+wait_for_endpoint() {
+  local label="$1"
+  local url="$2"
+  local pattern="$3"
+  local deadline
+  local payload
+  deadline=$((SECONDS + WAIT_TIMEOUT_SECONDS))
+  payload=""
+
+  while true; do
+    payload="$(fetch_url "$url" 2>&1)" && {
+      if printf '%s\n' "$payload" | grep -Eiq "$pattern"; then
+        printf '%s\n' "$payload"
+        return 0
+      fi
+    }
+
+    if [ "$SECONDS" -ge "$deadline" ]; then
+      echo "Timed out waiting for $label at $url" >&2
+      printf '%s\n' "$payload" >&2
+      return 1
+    fi
+
+    sleep 5
+  done
 }
 
 env_value() {
@@ -290,25 +329,37 @@ start_stack() {
 }
 
 check_container_running() {
-  local id status health
-  id="$(container_id)"
-  if [ -z "$id" ]; then
-    echo "No running krakked container was found." >&2
-    return 1
-  fi
+  local id status health deadline last_state
+  deadline=$((SECONDS + WAIT_TIMEOUT_SECONDS))
+  last_state=""
 
-  status="$(docker inspect -f '{{.State.Status}}' "$id")"
-  health="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$id")"
-  printf 'container=%s status=%s health=%s\n' "$id" "$status" "$health"
+  while true; do
+    id="$(container_id)"
+    if [ -n "$id" ]; then
+      status="$(docker inspect -f '{{.State.Status}}' "$id")"
+      health="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$id")"
+      last_state="container=$id status=$status health=$health"
 
-  if [ "$health" = "healthy" ]; then
-    return 0
-  fi
-  if [ "$health" = "none" ] && [ "$status" = "running" ]; then
-    warn "Container has no Docker healthcheck in this runtime mode; API health check will be the readiness source."
-    return 0
-  fi
-  return 1
+      if [ "$health" = "healthy" ]; then
+        printf '%s\n' "$last_state"
+        return 0
+      fi
+      if [ "$health" = "none" ] && [ "$status" = "running" ]; then
+        printf '%s\n' "$last_state"
+        warn "Container has no Docker healthcheck in this runtime mode; API health check will be the readiness source."
+        return 0
+      fi
+    else
+      last_state="No running krakked container was found."
+    fi
+
+    if [ "$SECONDS" -ge "$deadline" ]; then
+      printf '%s\n' "$last_state" >&2
+      return 1
+    fi
+
+    sleep 5
+  done
 }
 
 check_mounts() {
@@ -321,23 +372,24 @@ check_mounts() {
 }
 
 check_health() {
-  local payload
-  payload="$(fetch_url "$HOST_URL/api/health")" || return 1
-  printf '%s\n' "$payload"
-  printf '%s\n' "$payload" | grep -q '"status"[[:space:]]*:[[:space:]]*"ok"'
+  wait_for_endpoint \
+    "health endpoint" \
+    "$HOST_URL/api/health" \
+    '"status"[[:space:]]*:[[:space:]]*"ok"'
 }
 
 check_ui() {
-  local payload
-  payload="$(fetch_url "$HOST_URL/")" || return 1
-  printf '%s\n' "$payload" | grep -Eiq '(<div id="root"|Krakked)'
+  wait_for_endpoint \
+    "UI root" \
+    "$HOST_URL/" \
+    '(<div id="root"|Krakked)'
 }
 
 check_setup_status() {
-  local payload
-  payload="$(fetch_url "$HOST_URL/api/system/setup/status")" || return 1
-  printf '%s\n' "$payload"
-  printf '%s\n' "$payload" | grep -q '"configured"[[:space:]]*:[[:space:]]*true'
+  wait_for_endpoint \
+    "setup status" \
+    "$HOST_URL/api/system/setup/status" \
+    '"configured"[[:space:]]*:[[:space:]]*true'
 }
 
 run_once_check() {
@@ -487,6 +539,7 @@ printf 'host_url=%s\n' "$HOST_URL"
 printf 'appdata_dir=%s\n' "$APPDATA_DIR"
 printf 'compose_file=%s\n' "$COMPOSE_FILE"
 printf 'mode=%s recreate=%s\n' "$MODE" "$RECREATE"
+printf 'wait_timeout_seconds=%s\n' "$WAIT_TIMEOUT_SECONDS"
 printf 'log=%s\n' "$LOG_FILE"
 
 run_check "Repo checkout and commit identity" check_repo
