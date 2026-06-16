@@ -300,6 +300,24 @@ class SystemHealthPayload(BaseModel):
     app_version: Optional[str] = Field(
         None, description="Application semantic version reported to the UI."
     )
+    build_git_sha: Optional[str] = Field(
+        None, description="Git commit SHA embedded in or provided to the runtime."
+    )
+    build_git_ref: Optional[str] = Field(
+        None, description="Git ref embedded in or provided to the runtime."
+    )
+    image_name: Optional[str] = Field(
+        None, description="Container image name reported by the runtime."
+    )
+    image_tag: Optional[str] = Field(
+        None, description="Container image tag reported by the runtime."
+    )
+    image_digest: Optional[str] = Field(
+        None, description="Container image digest when the runtime knows it."
+    )
+    runtime_source: Optional[str] = Field(
+        None, description="Deployment source, such as source, image, or unknown."
+    )
     execution_mode: Optional[str] = Field(
         None,
         description="execution_mode reflects the configured trading mode: dry-run, paper, or live.",

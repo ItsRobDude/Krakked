@@ -191,7 +191,13 @@ run_docker_start() {
   env_name="$(env_value KRAKKED_ENV paper)"
 
   if [ "$MODE" = "source" ]; then
-    docker build -t "$image_ref" .
+    docker build \
+      --build-arg "KRAKKED_BUILD_GIT_SHA=$(env_value KRAKKED_BUILD_GIT_SHA unknown)" \
+      --build-arg "KRAKKED_BUILD_GIT_REF=$(env_value KRAKKED_BUILD_GIT_REF unknown)" \
+      --build-arg "KRAKKED_RUNTIME_IMAGE=$(env_value KRAKKED_IMAGE "$image_name")" \
+      --build-arg "KRAKKED_RUNTIME_IMAGE_TAG=$(env_value KRAKKED_IMAGE_TAG "$image_tag")" \
+      --build-arg "KRAKKED_RUNTIME_SOURCE=$(env_value KRAKKED_RUNTIME_SOURCE source)" \
+      -t "$image_ref" .
   else
     docker pull "$image_ref"
   fi
@@ -216,6 +222,10 @@ run_docker_start() {
     -e "KRAKKED_DATA_DIR=/krakked/data" \
     -e "KRAKKED_UI_HOST=${ui_host}" \
     -e "KRAKKED_UI_PORT=${ui_port}" \
+    -e "KRAKKED_RUNTIME_IMAGE=$(env_value KRAKKED_IMAGE "$image_name")" \
+    -e "KRAKKED_RUNTIME_IMAGE_TAG=$(env_value KRAKKED_IMAGE_TAG "$image_tag")" \
+    -e "KRAKKED_RUNTIME_IMAGE_DIGEST=$(env_value KRAKKED_IMAGE_DIGEST "")" \
+    -e "KRAKKED_RUNTIME_SOURCE=$(env_value KRAKKED_RUNTIME_SOURCE "$MODE")" \
     -e "KRAKKED_SECRET_PW=$(env_value KRAKKED_SECRET_PW "")" \
     -e "KRAKEN_API_KEY=$(env_value KRAKEN_API_KEY "")" \
     -e "KRAKEN_API_SECRET=$(env_value KRAKEN_API_SECRET "")" \
@@ -237,6 +247,32 @@ write_file() {
 
   printf '%s\n' "$contents" > "$path"
   echo "Wrote $path"
+}
+
+write_generated_file() {
+  local path="$1"
+  local contents="$2"
+
+  printf '%s\n' "$contents" > "$path"
+  echo "Wrote generated $path"
+}
+
+set_env_key() {
+  local key="$1"
+  local value="$2"
+  local tmp=".env.tmp.$$"
+
+  if [ ! -f .env ]; then
+    printf '%s=%s\n' "$key" "$value" > .env
+    return
+  fi
+
+  awk -v key="$key" -v value="$value" '
+    BEGIN { found = 0 }
+    $0 ~ "^" key "=" { print key "=" value; found = 1; next }
+    { print }
+    END { if (!found) print key "=" value }
+  ' .env > "$tmp" && mv "$tmp" .env
 }
 
 seed_file() {
@@ -344,12 +380,18 @@ normalize_container_config
 say "Writing Unraid Compose file"
 if [ "$MODE" = "source" ]; then
   build_block='    build:
-      context: .'
+      context: .
+      args:
+        KRAKKED_BUILD_GIT_SHA: ${KRAKKED_BUILD_GIT_SHA:-unknown}
+        KRAKKED_BUILD_GIT_REF: ${KRAKKED_BUILD_GIT_REF:-unknown}
+        KRAKKED_RUNTIME_IMAGE: ${KRAKKED_IMAGE:-krakked}
+        KRAKKED_RUNTIME_IMAGE_TAG: ${KRAKKED_IMAGE_TAG:-unraid-local}
+        KRAKKED_RUNTIME_SOURCE: ${KRAKKED_RUNTIME_SOURCE:-source}'
 else
   build_block=''
 fi
 
-write_file "$COMPOSE_FILE" "services:
+write_generated_file "$COMPOSE_FILE" "services:
   krakked:
     image: \${KRAKKED_IMAGE:-krakked}:\${KRAKKED_IMAGE_TAG:-unraid-local}
 ${build_block}
@@ -362,6 +404,10 @@ ${build_block}
       KRAKKED_DATA_DIR: /krakked/data
       KRAKKED_UI_HOST: \${KRAKKED_UI_HOST:-0.0.0.0}
       KRAKKED_UI_PORT: \${KRAKKED_UI_PORT:-8080}
+      KRAKKED_RUNTIME_IMAGE: \${KRAKKED_IMAGE:-krakked}
+      KRAKKED_RUNTIME_IMAGE_TAG: \${KRAKKED_IMAGE_TAG:-unraid-local}
+      KRAKKED_RUNTIME_IMAGE_DIGEST: \${KRAKKED_IMAGE_DIGEST:-}
+      KRAKKED_RUNTIME_SOURCE: \${KRAKKED_RUNTIME_SOURCE:-${MODE}}
       KRAKKED_SECRET_PW: \${KRAKKED_SECRET_PW:-}
       KRAKEN_API_KEY: \${KRAKEN_API_KEY:-}
       KRAKEN_API_SECRET: \${KRAKEN_API_SECRET:-}
@@ -392,8 +438,17 @@ else
   image_tag="v0.1.0"
 fi
 
+build_git_sha="$(git rev-parse HEAD 2>/dev/null || printf 'unknown')"
+build_git_ref="$(git branch --show-current 2>/dev/null || true)"
+if [ -z "$build_git_ref" ]; then
+  build_git_ref="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || printf 'unknown')"
+fi
+
 write_file ".env" "KRAKKED_IMAGE=${image_name}
 KRAKKED_IMAGE_TAG=${image_tag}
+KRAKKED_BUILD_GIT_SHA=${build_git_sha}
+KRAKKED_BUILD_GIT_REF=${build_git_ref}
+KRAKKED_RUNTIME_SOURCE=${MODE}
 KRAKKED_PORT=8088
 KRAKKED_UI_HOST=0.0.0.0
 KRAKKED_UI_PORT=8080
@@ -403,6 +458,9 @@ KRAKEN_API_KEY=
 KRAKEN_API_SECRET="
 
 normalize_env_line_endings
+set_env_key "KRAKKED_BUILD_GIT_SHA" "$build_git_sha"
+set_env_key "KRAKKED_BUILD_GIT_REF" "$build_git_ref"
+set_env_key "KRAKKED_RUNTIME_SOURCE" "$MODE"
 ensure_unraid_port
 detect_runtime
 

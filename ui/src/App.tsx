@@ -108,6 +108,46 @@ const formatDateTime = (timestamp: string | null | undefined) => {
   });
 };
 
+const normalizeRuntimeValue = (value: string | null | undefined) => {
+  const cleaned = value?.trim();
+  if (!cleaned || cleaned.toLowerCase() === 'unknown') return null;
+  return cleaned;
+};
+
+const shortGitSha = (value: string | null | undefined) => {
+  const cleaned = normalizeRuntimeValue(value);
+  if (!cleaned) return null;
+  return cleaned.length > 8 ? cleaned.slice(0, 8) : cleaned;
+};
+
+const formatRuntimeProvenance = (health: SystemHealth | null) => {
+  const version = normalizeRuntimeValue(health?.app_version) ?? 'version unknown';
+  const build = shortGitSha(health?.build_git_sha) ?? normalizeRuntimeValue(health?.build_git_ref) ?? 'build unknown';
+  const runtimeSource = normalizeRuntimeValue(health?.runtime_source);
+  const imageTag = normalizeRuntimeValue(health?.image_tag);
+  const source =
+    runtimeSource === 'image'
+      ? `image:${imageTag ?? 'tag unknown'}`
+      : runtimeSource === 'source'
+        ? 'source checkout'
+        : imageTag
+          ? `image:${imageTag}`
+          : 'runtime unknown';
+  return `${version} - ${build} - ${source}`;
+};
+
+const formatRuntimeProvenanceHint = (health: SystemHealth | null) => {
+  const imageName = normalizeRuntimeValue(health?.image_name);
+  const digest = normalizeRuntimeValue(health?.image_digest);
+  const ref = normalizeRuntimeValue(health?.build_git_ref);
+  const details = [
+    ref ? `ref ${ref}` : null,
+    imageName ? `image ${imageName}` : null,
+    digest ? `digest ${digest}` : null,
+  ].filter(Boolean);
+  return details.length > 0 ? details.join(' | ') : 'Runtime build identity is unavailable.';
+};
+
 const getConnectionStateFromHealth = (state: SystemHealth | null): 'connected' | 'degraded' => {
   if (!state) return 'degraded';
   if (state.market_data_status === 'warming_up') {
@@ -1673,6 +1713,8 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
   ).length;
   const noActiveStrategies = strategies.every((strategy) => !strategy.enabled);
   const runtimeTrust = getRuntimeTrust(health, connectionState, marketDataScope);
+  const runtimeProvenance = formatRuntimeProvenance(health);
+  const runtimeProvenanceHint = formatRuntimeProvenanceHint(health);
 
   const systemStatusItems = [
     {
@@ -1680,6 +1722,12 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
       value: runtimeTrust.label,
       tone: runtimeTrust.sidebarTone,
       hint: runtimeTrust.hint,
+    },
+    {
+      label: 'Build',
+      value: runtimeProvenance,
+      tone: 'muted' as const,
+      hint: runtimeProvenanceHint,
     },
     {
       label: 'Mode',
@@ -1814,6 +1862,10 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
           </span>
 
           <span className="pill pill--muted">Loop: {session.loop_interval_sec.toFixed(1)}s</span>
+
+          <span className="pill pill--muted" title={runtimeProvenanceHint}>
+            Build: {runtimeProvenance}
+          </span>
 
           {health?.ui_read_only && <span className="pill pill--warning">Read-only</span>}
 

@@ -87,6 +87,12 @@ jobs:
           push: ${{ startsWith(github.ref, 'refs/tags/v') }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            KRAKKED_BUILD_GIT_SHA=${{ github.sha }}
+            KRAKKED_BUILD_GIT_REF=${{ github.ref_name }}
+            KRAKKED_RUNTIME_IMAGE=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+            KRAKKED_RUNTIME_IMAGE_TAG=${{ github.ref_name }}
+            KRAKKED_RUNTIME_SOURCE=image
 
   github-release:
     if: startsWith(github.ref, 'refs/tags/v')

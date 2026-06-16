@@ -79,6 +79,63 @@ def test_health_endpoints_are_public_when_auth_enabled():
     assert system_health.json()["error"] is None
 
 
+def test_health_endpoints_report_runtime_provenance(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("KRAKKED_BUILD_GIT_SHA", "abcdef1234567890")
+    monkeypatch.setenv("KRAKKED_BUILD_GIT_REF", "main")
+    monkeypatch.setenv("KRAKKED_RUNTIME_IMAGE", "ghcr.io/itsrobdude/krakked")
+    monkeypatch.setenv("KRAKKED_RUNTIME_IMAGE_TAG", "v0.1.0")
+    monkeypatch.setenv("KRAKKED_RUNTIME_IMAGE_DIGEST", "sha256:feedface")
+    monkeypatch.setenv("KRAKKED_RUNTIME_SOURCE", "image")
+
+    context = build_test_context(
+        auth_enabled=False, auth_token=None, read_only=False
+    )
+    app = create_api(context)
+    client = TestClient(app)
+
+    for path in ("/api/health", "/api/system/health"):
+        response = client.get(path)
+        assert response.status_code == 200
+        data = response.json()["data"]
+        assert data["app_version"]
+        assert data["build_git_sha"] == "abcdef1234567890"
+        assert data["build_git_ref"] == "main"
+        assert data["image_name"] == "ghcr.io/itsrobdude/krakked"
+        assert data["image_tag"] == "v0.1.0"
+        assert data["image_digest"] == "sha256:feedface"
+        assert data["runtime_source"] == "image"
+
+
+def test_health_endpoints_default_unknown_provenance(monkeypatch: pytest.MonkeyPatch):
+    for name in (
+        "KRAKKED_BUILD_GIT_SHA",
+        "KRAKKED_BUILD_GIT_REF",
+        "KRAKKED_RUNTIME_IMAGE",
+        "KRAKKED_IMAGE",
+        "KRAKKED_RUNTIME_IMAGE_TAG",
+        "KRAKKED_IMAGE_TAG",
+        "KRAKKED_RUNTIME_IMAGE_DIGEST",
+        "KRAKKED_IMAGE_DIGEST",
+        "KRAKKED_RUNTIME_SOURCE",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    context = build_test_context(
+        auth_enabled=False, auth_token=None, read_only=False
+    )
+    app = create_api(context)
+    client = TestClient(app)
+
+    data = client.get("/api/health").json()["data"]
+
+    assert data["build_git_sha"] == "unknown"
+    assert data["build_git_ref"] == "unknown"
+    assert data["image_name"] == "unknown"
+    assert data["image_tag"] == "unknown"
+    assert data["image_digest"] is None
+    assert data["runtime_source"] == "unknown"
+
+
 def test_root_health_alias_available_when_base_path_is_set():
     context = build_test_context(
         auth_enabled=True, auth_token="secret", read_only=False

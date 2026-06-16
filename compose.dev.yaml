@@ -2,3 +2,9 @@ services:
   krakked:
     build:
       context: .
+      args:
+        KRAKKED_BUILD_GIT_SHA: ${KRAKKED_BUILD_GIT_SHA:-unknown}
+        KRAKKED_BUILD_GIT_REF: ${KRAKKED_BUILD_GIT_REF:-unknown}
+        KRAKKED_RUNTIME_IMAGE: ${KRAKKED_IMAGE:-krakked}
+        KRAKKED_RUNTIME_IMAGE_TAG: ${KRAKKED_IMAGE_TAG:-local}
+        KRAKKED_RUNTIME_SOURCE: ${KRAKKED_RUNTIME_SOURCE:-source}

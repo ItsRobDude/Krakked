@@ -15,6 +15,8 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from krakked import APP_VERSION
+from krakked.runtime_provenance import build_runtime_provenance
 from krakked.ui.context import AppContext
 from krakked.ui.logging import build_request_log_extra
 from krakked.ui.middleware import LifecycleMiddleware, SecurityHeadersMiddleware
@@ -131,7 +133,10 @@ def create_api(context: AppContext) -> FastAPI:
         return response
 
     async def healthcheck():
-        return {"data": {"status": "ok"}, "error": None}
+        return {
+            "data": {"status": "ok", **build_runtime_provenance(APP_VERSION)},
+            "error": None,
+        }
 
     health_router = APIRouter()
     for api_prefix in dict.fromkeys(api_prefixes):

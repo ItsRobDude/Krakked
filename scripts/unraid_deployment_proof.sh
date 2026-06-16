@@ -107,6 +107,8 @@ FAIL_COUNT=0
 WARN_COUNT=0
 RUNTIME_MODE=""
 COMPOSE_DISPLAY=""
+HEALTH_PROVENANCE_JSON=""
+SYSTEM_HEALTH_PROVENANCE_JSON=""
 
 mkdir -p "$STATE_DIR"
 exec > >(tee -a "$LOG_FILE") 2>&1
@@ -249,6 +251,10 @@ container_run() {
     -e "KRAKKED_DATA_DIR=/krakked/data" \
     -e "KRAKKED_UI_HOST=$(env_value KRAKKED_UI_HOST 0.0.0.0)" \
     -e "KRAKKED_UI_PORT=$(env_value KRAKKED_UI_PORT 8080)" \
+    -e "KRAKKED_RUNTIME_IMAGE=$(env_value KRAKKED_IMAGE krakked)" \
+    -e "KRAKKED_RUNTIME_IMAGE_TAG=$(env_value KRAKKED_IMAGE_TAG unraid-local)" \
+    -e "KRAKKED_RUNTIME_IMAGE_DIGEST=$(env_value KRAKKED_IMAGE_DIGEST "")" \
+    -e "KRAKKED_RUNTIME_SOURCE=$(env_value KRAKKED_RUNTIME_SOURCE "$MODE")" \
     -e "KRAKKED_SECRET_PW=$(env_value KRAKKED_SECRET_PW "")" \
     -e "KRAKEN_API_KEY=$(env_value KRAKEN_API_KEY "")" \
     -e "KRAKEN_API_SECRET=$(env_value KRAKEN_API_SECRET "")" \
@@ -271,6 +277,10 @@ python_in_container() {
     -e "KRAKKED_ENV=$(env_value KRAKKED_ENV paper)" \
     -e "KRAKKED_CONFIG_DIR=/krakked/config" \
     -e "KRAKKED_DATA_DIR=/krakked/data" \
+    -e "KRAKKED_RUNTIME_IMAGE=$(env_value KRAKKED_IMAGE krakked)" \
+    -e "KRAKKED_RUNTIME_IMAGE_TAG=$(env_value KRAKKED_IMAGE_TAG unraid-local)" \
+    -e "KRAKKED_RUNTIME_IMAGE_DIGEST=$(env_value KRAKKED_IMAGE_DIGEST "")" \
+    -e "KRAKKED_RUNTIME_SOURCE=$(env_value KRAKKED_RUNTIME_SOURCE "$MODE")" \
     -v "$APPDATA_DIR/config:/krakked/config" \
     -v "$APPDATA_DIR/data:/krakked/data" \
     -v "$APPDATA_DIR/state:/krakked/state" \
@@ -376,6 +386,26 @@ check_health() {
     "health endpoint" \
     "$HOST_URL/api/health" \
     '"status"[[:space:]]*:[[:space:]]*"ok"'
+}
+
+check_runtime_provenance() {
+  local field
+  HEALTH_PROVENANCE_JSON="$(fetch_url "$HOST_URL/api/health" | tr -d '\n')" || return 1
+  SYSTEM_HEALTH_PROVENANCE_JSON="$(fetch_url "$HOST_URL/api/system/health" | tr -d '\n')" || return 1
+
+  printf 'health_payload=%s\n' "$HEALTH_PROVENANCE_JSON"
+  printf 'system_health_payload=%s\n' "$SYSTEM_HEALTH_PROVENANCE_JSON"
+
+  for field in app_version build_git_sha build_git_ref image_name image_tag image_digest runtime_source; do
+    if ! printf '%s\n' "$HEALTH_PROVENANCE_JSON" | grep -q "\"$field\""; then
+      echo "Missing $field in /api/health" >&2
+      return 1
+    fi
+    if ! printf '%s\n' "$SYSTEM_HEALTH_PROVENANCE_JSON" | grep -q "\"$field\""; then
+      echo "Missing $field in /api/system/health" >&2
+      return 1
+    fi
+  done
 }
 
 check_ui() {
@@ -526,6 +556,14 @@ write_summary() {
     printf 'appdata_dir=%s\n' "$APPDATA_DIR"
     printf 'compose_file=%s\n' "$COMPOSE_FILE"
     printf 'mode=%s\n' "$MODE"
+    printf 'skip_run_once=%s\n' "$SKIP_RUN_ONCE"
+    printf 'skip_restore=%s\n' "$SKIP_RESTORE"
+    if [ -n "$HEALTH_PROVENANCE_JSON" ]; then
+      printf 'health_payload=%s\n' "$HEALTH_PROVENANCE_JSON"
+    fi
+    if [ -n "$SYSTEM_HEALTH_PROVENANCE_JSON" ]; then
+      printf 'system_health_payload=%s\n' "$SYSTEM_HEALTH_PROVENANCE_JSON"
+    fi
     if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
       printf 'commit=%s\n' "$(git rev-parse --short HEAD)"
     fi
@@ -548,6 +586,7 @@ run_check "Bootstrap and start paper stack" start_stack
 run_check "Container running and healthy" check_container_running
 run_check "Persistent appdata mounts exist and are writable" check_mounts
 run_check "Health endpoint returns ok" check_health
+run_check "Runtime provenance is reported" check_runtime_provenance
 run_check "UI root is reachable" check_ui
 run_check "Setup status is readable" check_setup_status
 run_check "Forced-safe paper run-once completes" run_once_check

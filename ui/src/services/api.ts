@@ -98,6 +98,12 @@ export type RecentExecution = {
 
 export type SystemHealth = {
   app_version?: string | null;
+  build_git_sha?: string | null;
+  build_git_ref?: string | null;
+  image_name?: string | null;
+  image_tag?: string | null;
+  image_digest?: string | null;
+  runtime_source?: string | null;
   execution_mode?: string | null;
   lifecycle: 'locked' | 'initializing' | 'ready' | 'starting_session' | 'active' | 'stopping_session';
   rest_api_reachable: boolean;

@@ -51,6 +51,7 @@ from krakked.password_store import (
     get_saved_master_password,
     save_master_password,
 )
+from krakked.runtime_provenance import build_runtime_provenance
 from krakked.risk_signal import EWMARiskSignalParams, build_ewma_risk_signal
 from krakked.secrets import (
     SecretsDecryptionError,
@@ -352,9 +353,10 @@ def _session_payload(ctx) -> SessionStatePayload:
 
 
 def _build_system_health_payload(ctx) -> SystemHealthPayload:
+    provenance = build_runtime_provenance(APP_VERSION)
     if ctx.is_setup_mode:
         return SystemHealthPayload(
-            app_version=APP_VERSION,
+            **provenance,
             execution_mode="setup",
             lifecycle=_resolve_lifecycle(ctx),
             rest_api_reachable=False,
@@ -461,7 +463,7 @@ def _build_system_health_payload(ctx) -> SystemHealthPayload:
     portfolio_last_sync_at = getattr(ctx.portfolio, "last_sync_at", None)
     portfolio_baseline = getattr(ctx.portfolio, "baseline_source", None)
     return SystemHealthPayload(
-        app_version=APP_VERSION,
+        **provenance,
         execution_mode=getattr(execution_config, "mode", None),
         lifecycle=_resolve_lifecycle(ctx),
         rest_api_reachable=data_status.rest_api_reachable,
