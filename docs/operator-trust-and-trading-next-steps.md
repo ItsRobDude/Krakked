@@ -34,6 +34,9 @@ Implemented in the local working tree after this note was first drafted:
   blockers.
 - The activity tab now includes a grouped decision trace from strategy/risk
   actions through OMS/order result, while preserving the raw activity log.
+- The decision trace distinguishes actionable, blocked, clamped, no-op, and
+  degraded evidence states. In particular, "strategy evaluated and chose no
+  trade" is now `no_action`, not `pending`, and risk clamping is visible.
 
 ## Implemented Lane: Live Automation Start Path
 
@@ -58,8 +61,9 @@ Implementation notes:
 - Keep `/api/system/mode` as the protected state change, but make the UI own the
   confirmation payload instead of making the operator type ceremony text.
 - Keep `/api/system/live-readiness` read-only and visible before start.
-- Add tests for paper start, live-ready start, live-blocked start, and no extra
-  password prompt after unlock.
+- Tests cover live-ready start, live-blocked start, no extra password prompt
+  after unlock, decision trace no-op, blocked, clamped, execution-failed, and
+  degraded evidence states.
 
 Acceptance check:
 
@@ -69,6 +73,11 @@ Acceptance check:
 4. Click Start live automation.
 5. Session becomes active, health reports live mode, and readiness/provenance
    stay visible.
+
+Verification commands used for this local lane:
+
+- `poetry run pytest tests/ui/test_system_routes.py -k "cockpit_snapshot"`
+- `npm run test:run -- App.operator-paths.test.tsx`
 
 ## Next Lane: Normal Trading Reliability
 
