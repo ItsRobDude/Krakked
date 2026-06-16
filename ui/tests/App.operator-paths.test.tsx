@@ -55,7 +55,7 @@ const activeSession: SessionStateResponse = {
 const inactiveSession: SessionStateResponse = {
   ...activeSession,
   active: false,
-  lifecycle: 'stopped',
+  lifecycle: 'ready',
 };
 
 const liveActiveSession: SessionStateResponse = {
@@ -641,7 +641,7 @@ describe('cockpit operator paths', () => {
       configured: true,
       secrets_exist: true,
       unlocked: true,
-      lifecycle: 'stopped',
+      lifecycle: 'ready',
     });
     apiMocks.fetchSessionState.mockResolvedValue(inactiveSession);
     apiMocks.fetchProfiles.mockResolvedValue([{ name: 'Rob', description: 'Primary paper profile' }]);
@@ -697,7 +697,7 @@ describe('cockpit operator paths', () => {
       configured: true,
       secrets_exist: true,
       unlocked: true,
-      lifecycle: 'stopped',
+      lifecycle: 'ready',
     });
     apiMocks.fetchSessionState.mockResolvedValue(inactiveSession);
     apiMocks.fetchProfiles.mockResolvedValue([{ name: 'Rob', description: 'Primary profile' }]);

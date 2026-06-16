@@ -93,9 +93,7 @@ def test_health_endpoints_report_runtime_provenance(monkeypatch: pytest.MonkeyPa
     monkeypatch.setenv("KRAKKED_EXPECTED_BUILD_GIT_SHA", "abcdef1234567890")
     monkeypatch.setenv("KRAKKED_EXPECTED_RUNTIME_SOURCE", "image")
 
-    context = build_test_context(
-        auth_enabled=False, auth_token=None, read_only=False
-    )
+    context = build_test_context(auth_enabled=False, auth_token=None, read_only=False)
     app = create_api(context)
     client = TestClient(app)
 
@@ -136,9 +134,7 @@ def test_health_endpoints_default_unknown_provenance(monkeypatch: pytest.MonkeyP
     ):
         monkeypatch.delenv(name, raising=False)
 
-    context = build_test_context(
-        auth_enabled=False, auth_token=None, read_only=False
-    )
+    context = build_test_context(auth_enabled=False, auth_token=None, read_only=False)
     app = create_api(context)
     client = TestClient(app)
 
@@ -171,9 +167,7 @@ def test_health_endpoints_report_deployment_drift(
     monkeypatch.setenv("KRAKKED_EXPECTED_BUILD_GIT_SHA", "expected-sha")
     monkeypatch.setenv("KRAKKED_EXPECTED_RUNTIME_SOURCE", "image")
 
-    context = build_test_context(
-        auth_enabled=False, auth_token=None, read_only=False
-    )
+    context = build_test_context(auth_enabled=False, auth_token=None, read_only=False)
     app = create_api(context)
     client = TestClient(app)
 
@@ -184,15 +178,17 @@ def test_health_endpoints_report_deployment_drift(
         if path == "/api/system/health":
             assert data["drift_detected"] is False
         assert data["deployment_drift_detected"] is True
-        assert "image_tag expected v0.1.1, got v0.1.0" in data[
-            "deployment_drift_reason"
-        ]
-        assert "build_git_sha expected expected-sha, got actual-sha" in data[
-            "deployment_drift_reason"
-        ]
-        assert "runtime_source expected image, got source" in data[
-            "deployment_drift_reason"
-        ]
+        assert (
+            "image_tag expected v0.1.1, got v0.1.0" in data["deployment_drift_reason"]
+        )
+        assert (
+            "build_git_sha expected expected-sha, got actual-sha"
+            in data["deployment_drift_reason"]
+        )
+        assert (
+            "runtime_source expected image, got source"
+            in data["deployment_drift_reason"]
+        )
 
 
 def test_root_health_alias_available_when_base_path_is_set():
@@ -727,11 +723,7 @@ def _trace_decision(
     blocked: bool = False,
     block_reason: str | None = None,
 ) -> DecisionRecord:
-    raw_json = (
-        json.dumps({"blocked_reasons": [block_reason]})
-        if block_reason
-        else "{}"
-    )
+    raw_json = json.dumps({"blocked_reasons": [block_reason]}) if block_reason else "{}"
     return DecisionRecord(
         time=int(decided_at.timestamp()),
         plan_id=plan_id,

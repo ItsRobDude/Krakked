@@ -3,7 +3,23 @@
 from __future__ import annotations
 
 import os
-from typing import Optional
+from typing import Optional, TypedDict
+
+
+class RuntimeProvenance(TypedDict):
+    app_version: str
+    build_git_sha: Optional[str]
+    build_git_ref: Optional[str]
+    image_name: Optional[str]
+    image_tag: Optional[str]
+    image_digest: Optional[str]
+    runtime_source: Optional[str]
+    expected_image_name: Optional[str]
+    expected_image_tag: Optional[str]
+    expected_build_git_sha: Optional[str]
+    expected_runtime_source: Optional[str]
+    deployment_drift_detected: bool
+    deployment_drift_reason: Optional[str]
 
 
 def _clean(value: Optional[str]) -> Optional[str]:
@@ -47,7 +63,7 @@ def _deployment_drift_reason(
 
 def build_runtime_provenance(
     app_version: Optional[str],
-) -> dict[str, Optional[str] | bool]:
+) -> RuntimeProvenance:
     """Return operator-visible identity for the running process."""
 
     app_version_value = _clean(app_version) or "unknown"

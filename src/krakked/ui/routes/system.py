@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterable
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -51,8 +52,8 @@ from krakked.password_store import (
     get_saved_master_password,
     save_master_password,
 )
-from krakked.runtime_provenance import build_runtime_provenance
 from krakked.risk_signal import EWMARiskSignalParams, build_ewma_risk_signal
+from krakked.runtime_provenance import build_runtime_provenance
 from krakked.secrets import (
     SecretsDecryptionError,
     delete_secrets,
@@ -730,9 +731,7 @@ def _build_decision_trace_payloads(
     executions = recent_executions or []
     decisions = risk_decisions or []
     executions_by_plan = {
-        execution.plan_id: execution
-        for execution in executions
-        if execution.plan_id
+        execution.plan_id: execution for execution in executions if execution.plan_id
     }
     decisions_by_plan: dict[str, list[RiskDecisionPayload]] = {}
     for decision in decisions:
@@ -747,14 +746,16 @@ def _build_decision_trace_payloads(
         ]
     )[:limit]
 
-    plans_by_id = {}
+    plans_by_id: dict[str, Any] = {}
     try:
         plan_reader = getattr(ctx.portfolio, "get_execution_plans", None)
         if callable(plan_reader):
-            for plan in plan_reader(limit=max(50, limit * 4)):
-                plan_id = getattr(plan, "plan_id", None)
-                if plan_id in plan_ids:
-                    plans_by_id[plan_id] = plan
+            plans_result = plan_reader(limit=max(50, limit * 4))
+            if isinstance(plans_result, Iterable):
+                for plan in plans_result:
+                    plan_id = getattr(plan, "plan_id", None)
+                    if plan_id in plan_ids:
+                        plans_by_id[plan_id] = plan
     except (AttributeError, RuntimeError, TypeError, ValueError):
         plans_by_id = {}
 

@@ -30,7 +30,7 @@ from krakked.ui.context import AppContext, SessionState
 
 
 def _build_app_config(
-    *, auth_enabled: bool, auth_token: str, read_only: bool
+    *, auth_enabled: bool, auth_token: str | None, read_only: bool
 ) -> AppConfig:
     """Create a lightweight in-memory :class:`AppConfig` for UI tests."""
 
@@ -65,7 +65,7 @@ def _build_app_config(
             host="127.0.0.1",
             port=8080,
             base_path="/",
-            auth=UIAuthConfig(enabled=auth_enabled, token=auth_token),
+            auth=UIAuthConfig(enabled=auth_enabled, token=auth_token or ""),
             read_only=read_only,
             refresh_intervals=UIRefreshConfig(),
         ),
@@ -126,7 +126,7 @@ def _mock_risk_status() -> SimpleNamespace:
 
 
 def build_test_context(
-    *, auth_enabled: bool, auth_token: str, read_only: bool
+    *, auth_enabled: bool, auth_token: str | None, read_only: bool
 ) -> AppContext:
     """Construct an :class:`AppContext` populated with mocked services."""
 
