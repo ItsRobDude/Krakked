@@ -70,6 +70,9 @@ Implemented or substantially in place:
 - Full internal `krakked` rename
 - Docker-oriented install and runtime docs
 - GitHub Actions CI plus a tag-driven release workflow
+- Runtime deployment provenance in health payloads
+- Passing Unraid pinned-image deploy/upgrade/rollback proof with hard
+  run-once and restore checks enabled
 - Strategy weighting support in the runtime
 - Crash-safe ML checkpoint/resume foundations
 - Backup, export, import, and upgrade-oriented operator tooling
@@ -79,7 +82,7 @@ Implemented or substantially in place:
 
 Still needing real-world validation or product work:
 
-- Docker smoke testing on an actual deployment host
+- Repeatable release sign-off on future pinned image tags
 - More polished strategy-management and attribution UX
 - Remaining cockpit polish around startup/setup fan-out and first-run lifecycle edges
 - A cleaner startup/unlock/session lifecycle model so first-run and reinitialization states stay explicit and predictable
@@ -154,16 +157,19 @@ This keeps custody and exchange credentials with the customer while making the p
 
 The next milestones are product-facing rather than architecture-facing:
 
-1. Deployment Proof
-   - Run Krakked end-to-end on a real Docker host.
-   - Validate first boot, persistence, upgrades, backups, and restore.
-   - Confirm the published-image path works cleanly for a non-developer operator.
-   - This is the current first deliverable. Drill checklist and acceptance
-     criteria live in [`deployment-proof.md`](./deployment-proof.md) (Unraid,
-     paper mode).
+1. Deployment Trust
+   - Maintain the passing Unraid pinned-image baseline as the release sign-off
+     standard.
+   - For future release candidates, validate first boot, persistence, upgrades,
+     rollback, backups, restore, and runtime provenance using
+     [`deployment-proof.md`](./deployment-proof.md).
+   - Treat source-mode host checks as development sanity, not customer-ready
+     proof.
 
-2. Operator UX
+2. Operator UX And Truth Labels
    - Improve strategy toggles, weights, and per-strategy attribution in the UI without implying proven production edge.
+   - Make EWMA risk display explicitly display-only with no trading effect.
+   - Make strategy evidence labels plainly show research-stage/unproven status.
    - Continue cockpit snapshot V1 polish by trimming remaining startup/setup fan-out and tightening first-run lifecycle states.
    - Introduce a clearer Simple vs Advanced presentation model.
    - Surface ML status and training/checkpoint information more directly.

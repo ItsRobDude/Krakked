@@ -67,20 +67,25 @@ Use this only when you intentionally want the helper to recreate the starter fil
 
 ## Published Image Mode
 
-The default helper mode builds from the local checkout because that is easiest while the product is still being proven. Later, for a pinned release image:
+The default helper mode builds from the local checkout because it is convenient
+while developing. For operator-style installs and release sign-off, use a pinned
+published image:
 
 ```bash
-bash scripts/unraid_bootstrap.sh --mode image --start
+bash scripts/unraid_bootstrap.sh --mode image --start --recreate
 ```
 
 Then edit `.env` if the image tag should be something other than the starter value:
 
 ```dotenv
 KRAKKED_IMAGE=ghcr.io/itsrobdude/krakked
-KRAKKED_IMAGE_TAG=v0.1.0
+KRAKKED_IMAGE_TAG=v0.1.1
 ```
 
-Keep image tags pinned. Do not rely on `latest` for a home server you want to trust.
+Keep image tags pinned. Do not rely on `latest` for a home server you want to
+trust. The running app reports `runtime_source`, image name/tag, build SHA, and
+deployment drift fields in `/api/health` and `/api/system/health`; image-mode
+proofs fail when those values do not match expectations.
 
 ## First Good Backup
 
@@ -107,7 +112,8 @@ The export lands under:
 
 ## Current-main Proof
 
-After pulling a new commit or before treating a build as operator-ready, run:
+After pulling a new commit or before treating a source checkout as development
+ready, run:
 
 ```bash
 git pull --ff-only
@@ -119,6 +125,33 @@ existing appdata config. It checks health, UI reachability, persisted mounts,
 forced-safe paper `run-once`, synthetic store evidence, live gates, restart
 persistence, export, and restore into scratch paths. It prints
 `DEPLOYMENT_PROOF_RESULT=PASS` only when all required checks pass.
+
+For release/operator sign-off, prefer image mode with explicit expected
+provenance:
+
+```bash
+bash scripts/unraid_deployment_proof.sh \
+  --mode image \
+  --image ghcr.io/itsrobdude/krakked \
+  --image-tag v0.1.1 \
+  --expected-build-git-sha <release-commit-sha> \
+  --host-url http://<your-unraid-ip>:8088
+```
+
+For an upgrade/rollback drill using the same persistent appdata:
+
+```bash
+bash scripts/unraid_image_upgrade_rollback_drill.sh \
+  --image ghcr.io/itsrobdude/krakked \
+  --from-tag v0.1.1 \
+  --to-tag v0.1.2 \
+  --from-sha <from-release-sha> \
+  --to-sha <to-release-sha> \
+  --host-url http://<your-unraid-ip>:8088
+```
+
+The drill must end with `IMAGE_UPGRADE_ROLLBACK_RESULT=PASS`, `fail=0`, and
+three phase summaries whose hard checks were not skipped.
 
 ## Cautions
 
@@ -132,4 +165,6 @@ persistence, export, and restore into scratch paths. It prints
   `/usr/local/lib/docker/cli-plugins/`), it may not survive an Unraid reboot.
   Make that install persistent (e.g. via a `go`/User Scripts boot step) or
   reinstall after reboots.
-- This streamlines the Unraid terminal path, but the actual Unraid host smoke test still needs to be run on your box. The first run is recorded in [`deployment-proof.md`](./deployment-proof.md).
+- The latest recorded Unraid pinned-image upgrade/rollback proof is in
+  [`deployment-proof.md`](./deployment-proof.md). Add new dated proof records
+  there when release candidates are promoted.

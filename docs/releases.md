@@ -10,7 +10,11 @@ On every `v*` git tag push, the workflow:
 - uploads those build artifacts to the GitHub workflow run
 - creates a GitHub Release and attaches the built artifacts
 - builds a Docker image from the repo root
-- publishes the image to `ghcr.io/<owner>/<repo>` with version, `sha-*`, and `latest` tags
+- publishes the image to `ghcr.io/itsrobdude/krakked` with version, `sha-*`,
+  and `latest` tags
+- embeds build provenance so the running app can report the git SHA/ref, image
+  name/tag, runtime source, and expected deployment values through health
+  endpoints
 
 On `workflow_dispatch`, the same workflow performs a dry-run style build so we can validate release packaging without publishing.
 
@@ -48,16 +52,39 @@ git push origin v0.1.0
 ```
 
 7. Confirm the GitHub Release and GHCR image both published successfully.
+8. Run the Unraid image-mode proof for the new tag, using
+   `--expected-build-git-sha`.
+9. Before promoting an operator-facing tag, run the pinned-image
+   upgrade/rollback drill against the previous trusted tag:
+
+```bash
+bash scripts/unraid_image_upgrade_rollback_drill.sh \
+  --image ghcr.io/itsrobdude/krakked \
+  --from-tag <previous-trusted-tag> \
+  --to-tag <candidate-tag> \
+  --from-sha <previous-trusted-sha> \
+  --to-sha <candidate-sha> \
+  --host-url http://<unraid-ip>:8088
+```
+
+The drill must report `IMAGE_UPGRADE_ROLLBACK_RESULT=PASS`, `fail=0`, and
+phase summaries with `DEPLOYMENT_PROOF_RESULT=PASS`, `skip_run_once=false`, and
+`skip_restore=false`.
 
 ## Image Naming
 
 The workflow publishes to:
 
-- `ghcr.io/<owner>/<repo>:vX.Y.Z`
-- `ghcr.io/<owner>/<repo>:sha-<gitsha>`
-- `ghcr.io/<owner>/<repo>:latest`
+- `ghcr.io/itsrobdude/krakked:vX.Y.Z`
+- `ghcr.io/itsrobdude/krakked:sha-<gitsha>`
+- `ghcr.io/itsrobdude/krakked:latest`
 
 For operators, pin `KRAKKED_IMAGE_TAG` to the explicit version tag in `.env` rather than `latest`.
+
+The first recorded pinned-image drill used `v0.1.1-rc.1` ->
+`v0.1.1-rc.2` -> `v0.1.1-rc.1` and passed on Unraid with exact SHA
+provenance. See [`docs/deployment-proof.md`](deployment-proof.md) for the
+evidence paths.
 
 ## Human Follow-Up
 

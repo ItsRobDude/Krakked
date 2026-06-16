@@ -1,15 +1,48 @@
 # Deployment Proof V1 (Unraid, paper mode)
 
 First product-pivot deliverable. The goal is to prove that Krakked actually runs
-end to end as a Docker-first self-hosted product on a real Unraid host — first
-boot, persistence, paper safety, operator visibility, backup/restore, and
-live-gates-closed-by-default — and to capture any gaps the drill exposes.
+end to end as a Docker-first self-hosted product on a real Unraid host: first
+boot, pinned-image deployment, upgrade, rollback, persistence, paper safety,
+operator visibility, backup/restore, and live-gates-closed-by-default.
+
+Status: the source-mode and pinned-image Unraid proofs have passed. The current
+trusted baseline is the pinned-image upgrade/rollback drill recorded below.
+
+## Current proven baseline
+
+Latest pinned-image drill:
+
+- Result: `IMAGE_UPGRADE_ROLLBACK_RESULT=PASS`, `fail=0`.
+- Date run: `2026-06-15 20:15:58-20:22:27 America/Los_Angeles`.
+- Host URL: `http://192.168.50.78:8088`.
+- Image: `ghcr.io/itsrobdude/krakked`.
+- Tags tested: `v0.1.1-rc.1` -> `v0.1.1-rc.2` -> `v0.1.1-rc.1`.
+- Build SHA for both tags:
+  `35645cf4f8a2b4e41e363b6106ce3fe5484b936b`.
+- Wrapper summary:
+  `/mnt/user/appdata/krakked/state/image-upgrade-rollback-20260615-201558.summary`.
+- Phase summaries:
+  - `/mnt/user/appdata/krakked/state/deployment-proof-20260615-201558.summary`
+  - `/mnt/user/appdata/krakked/state/deployment-proof-20260615-201810.summary`
+  - `/mnt/user/appdata/krakked/state/deployment-proof-20260615-202023.summary`
+- Each phase reported `DEPLOYMENT_PROOF_RESULT=PASS`, `pass=18`,
+  `fail=0`, `warn=0`, `mode=image`, `skip_run_once=false`,
+  `skip_restore=false`, and `deployment_drift_detected=false`.
+- The final running host was left on `runtime_source=image`,
+  `image_tag=v0.1.1-rc.1`, with the expected image tag/SHA/source matching
+  actual provenance.
+- Persistent state stayed on the same DB path,
+  `/mnt/user/appdata/krakked/state/portfolio.db`; size was `58433536` bytes
+  before and after every phase.
+
+This is now the proof standard for deployability. A source-mode proof is useful
+for development sanity, but release sign-off should use image mode plus the
+upgrade/rollback wrapper.
 
 ## Current-main proof runner
 
-The historical V1 result below proves commit `40c21ea`. For any current branch
-or release candidate, run the host-side proof runner from the Krakked checkout
-on Unraid:
+For any current branch or release candidate, run the host-side proof runner from
+the Krakked checkout on Unraid:
 
 ```bash
 git pull --ff-only
@@ -47,9 +80,8 @@ Release sign-off requires `fail=0`, no skip warnings, `skip_run_once=false`, and
 
 This is an operator drill you run on the Unraid box. Fill in the Results column
 and the Findings section. It changes no runtime behavior by itself; it is the
-acceptance test for "Krakked installs and runs cleanly for a non-developer
-operator," which the [product roadmap](./product-roadmap.md) lists as the first
-next milestone.
+acceptance test for "Krakked installs, upgrades, rolls back, and runs cleanly
+for a non-developer operator."
 
 See [`unraid.md`](./unraid.md) for the low-terminal install path and
 [`docker.md`](./docker.md) for the generic compose flow.
@@ -65,9 +97,7 @@ See [`unraid.md`](./unraid.md) for the low-terminal install path and
 - Health endpoint: `http://<unraid-ip>:8088/api/health`.
 - Mode: paper (default). Live gates must stay closed for this drill.
 
-Record the build under test:
-
-Historical V1 result:
+Historical V1 source-mode result:
 
 - Commit / image tag: `40c21ea` / `krakked:local`
 - Date run: `2026-05-31 10:50:49-10:52:02 America/Los_Angeles`
@@ -169,7 +199,9 @@ docker compose -f compose.unraid.yaml run -T --rm krakked import-install \
 - [x] All acceptance steps pass → Deployment Proof V1 achieved.
 - [ ] Partial → record blockers in Findings and open narrow follow-ups.
 
-Status: `PASS` (`13` pass, `0` fail, `0` warn).
+Status: latest pinned-image baseline `PASS`; historical source-mode V1 also
+passed. Future release candidates should add a dated summary above rather than
+editing away prior proof records.
 
 ## Findings / fixes needed
 

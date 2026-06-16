@@ -4,7 +4,7 @@ Krakked is a modular Kraken trading system for California and broader U.S. use, 
 
 ## 🚀 Current Status
 
-This repository includes working, test-covered implementations across the core trading stack. Phases 1-7 are substantially implemented: the repo has connection/auth, market data, portfolio accounting, strategy/risk, OMS execution, a FastAPI control plane, orchestrator/runtime guardrails, metrics, schema checks, CI, packaging, and a documented Docker-first deployment path. Recent work also added strategy weighting, crash-safe ML checkpoint/resume foundations, release automation, and export/import-style operator tooling.
+This repository includes working, test-covered implementations across the core trading stack. Phases 1-7 are substantially implemented: the repo has connection/auth, market data, portfolio accounting, strategy/risk, OMS execution, a FastAPI control plane, orchestrator/runtime guardrails, metrics, schema checks, CI, packaging, and a documented Docker-first deployment path. Recent work also added strategy weighting, crash-safe ML checkpoint/resume foundations, release automation, export/import-style operator tooling, runtime provenance, and a passing pinned-image Unraid upgrade/rollback proof.
 
 | Module | Status | Notes |
 | :--- | :--- | :--- |
@@ -15,11 +15,12 @@ This repository includes working, test-covered implementations across the core t
 | **Phase 5: Execution** | ✅ Implemented | OMS with market-data-driven routing, retries/backoff, dead-man switch hooks, panic cancel, and SQLite persistence; paper now uses a persistent synthetic account by default, with explicit `allow_live_trading` gates for live submission. |
 | **Phase 6: UI/Control** | ✅ Implemented | CLI/web interface for monitoring and manual control. See [Phase 6 contract](docs/phases/phase6.md#status--todo) for the completed scope and API details. |
 | **Phase 7: Ops & Runtime** | ✅ Implemented with follow-up validation | Orchestrator, structured logging, metrics, schema guard, CI, packaging, release workflow, backup/export/import, and Docker deployment docs are in place. |
-| **Current Product Track** | 🚧 In progress | The main remaining work is deployment proof on a real Docker host, operator visibility, paper/execution reliability, ML/research reporting, and commercial/distribution polish. |
+| **Current Product Track** | 🚧 In progress | Pinned-image Unraid deploy/upgrade/rollback proof has passed; the main remaining work is operator truth-labeling, paper/execution polish, strategy evidence reporting, ML/research reporting, and commercial/distribution polish. |
 
 The repo now has a strong engineering base and has moved past the original phase plan. The current work is less about building missing architecture and more about productization:
 
 * Docker-first install, upgrade, backup, and release docs now exist.
+* The Unraid pinned-image deployment path has passed upgrade/rollback proof with hard backup/restore and paper run-once checks enabled.
 * GitHub Actions covers CI and tag-driven release publishing.
 * Strategy weighting and ML checkpoint/resume foundations are present in code.
 * Current bundled strategies are research-stage; recent unified evidence has not yet shown a production edge.
