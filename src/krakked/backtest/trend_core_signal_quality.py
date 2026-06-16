@@ -7,7 +7,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from statistics import mean, median
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Mapping, Sequence
 
 from krakked.config import AppConfig, StrategyConfig
 from krakked.market_data.ohlc_fetcher import TIMEFRAME_MAP
@@ -16,6 +16,7 @@ from krakked.portfolio.models import SpotPosition
 from krakked.strategy.base import StrategyContext
 from krakked.strategy.regime import infer_regime
 from krakked.strategy.strategies.demo_strategy import TrendFollowingStrategy
+from krakked.utils.strings import unique_strings as _unique_strings
 
 from .market_regime_overlay import _preflight_to_dict
 from .runner import BacktestMarketData, backtest_strict_data_details
@@ -667,10 +668,3 @@ def _optional_float(value: Any) -> float | None:
         return None
 
 
-def _unique_strings(values: Iterable[str]) -> list[str]:
-    unique: list[str] = []
-    for value in values:
-        text = str(value).strip()
-        if text and text not in unique:
-            unique.append(text)
-    return unique

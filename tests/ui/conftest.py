@@ -156,6 +156,7 @@ def build_test_context(
     portfolio.get_trade_history.return_value = []
     portfolio.get_decisions.return_value = []
     portfolio.get_execution_plan.return_value = None
+    portfolio.get_execution_plans.return_value = []
     portfolio.get_strategy_performance.return_value = {}
     portfolio.create_snapshot.return_value = _mock_snapshot()
     portfolio.get_exchange_reference_summary.return_value = None

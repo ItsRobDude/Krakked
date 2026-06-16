@@ -106,6 +106,7 @@ from krakked.scripts import run_strategy_once
 from krakked.strategy.features import ML_FEATURE_PROFILES
 from krakked.strategy.ml_pruning import find_stale_ml_artifact_groups
 from krakked.utils.io import backup_file
+from krakked.utils.strings import unique_strings as _unique_strings
 
 DEFAULT_DB_PATH = "portfolio.db"
 EXPORT_MANIFEST_NAME = "manifest.json"
@@ -3927,14 +3928,6 @@ def _trend_core_signal_quality_command(args: argparse.Namespace) -> int:
     else:
         _print_trend_core_signal_quality_summary(payload, saved_report_path)
     return 0
-
-
-def _unique_strings(values: list[str]) -> list[str]:
-    unique: list[str] = []
-    for value in values:
-        if value not in unique:
-            unique.append(value)
-    return unique
 
 
 def _market_regime_exposure_sweep_aggregate(

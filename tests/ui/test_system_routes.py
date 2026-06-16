@@ -785,6 +785,7 @@ def _configure_trace(
     execution: ExecutionResult | None,
 ) -> None:
     system_context.portfolio.get_execution_plan.return_value = plan
+    system_context.portfolio.get_execution_plans.return_value = [plan] if plan else []
     system_context.portfolio.get_decisions.return_value = decisions
     system_context.execution_service.get_recent_executions.return_value = (
         [execution] if execution else []
@@ -831,6 +832,8 @@ def test_cockpit_snapshot_groups_decision_trace(client, system_context):
     )
 
     trace = _fetch_first_trace(client)
+    system_context.portfolio.get_execution_plans.assert_called_once()
+    system_context.portfolio.get_execution_plan.assert_not_called()
     assert trace["plan_id"] == "PLAN-1"
     assert trace["status"] == "orders_sent"
     assert trace["action_count"] == 2

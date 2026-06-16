@@ -100,6 +100,7 @@ from krakked.utils.io import (
     deep_merge_dicts,
     sanitize_filename,
 )
+from krakked.utils.strings import unique_strings
 
 logger = logging.getLogger(__name__)
 
@@ -593,20 +594,8 @@ def _build_risk_decisions_payload(ctx, limit: int = 50) -> list[RiskDecisionPayl
     return [_serialize_decision(record) for record in decisions]
 
 
-def _unique_strings(values: list[str | None]) -> list[str]:
-    seen: set[str] = set()
-    result: list[str] = []
-    for value in values:
-        cleaned = str(value).strip() if value else ""
-        if not cleaned or cleaned in seen:
-            continue
-        result.append(cleaned)
-        seen.add(cleaned)
-    return result
-
-
 def _limited_reasons(values: list[str], *, limit: int = 4) -> list[str]:
-    reasons = _unique_strings(values)
+    reasons = unique_strings(values)
     if len(reasons) <= limit:
         return reasons
     hidden = len(reasons) - limit
@@ -677,7 +666,6 @@ def _execution_trace_status(
     blocked_action_count: int,
     order_count: int,
     execution_errors: list[str],
-    execution_present: bool,
 ) -> Literal["orders_sent", "risk_blocked", "execution_failed", "no_action", "pending"]:
     if execution_errors:
         return "execution_failed"
@@ -752,22 +740,29 @@ def _build_decision_trace_payloads(
             continue
         decisions_by_plan.setdefault(decision.plan_id, []).append(decision)
 
-    plan_ids = _unique_strings(
+    plan_ids = unique_strings(
         [
             *[execution.plan_id for execution in executions],
             *[decision.plan_id for decision in decisions],
         ]
     )[:limit]
 
+    plans_by_id = {}
+    try:
+        plan_reader = getattr(ctx.portfolio, "get_execution_plans", None)
+        if callable(plan_reader):
+            for plan in plan_reader(limit=max(50, limit * 4)):
+                plan_id = getattr(plan, "plan_id", None)
+                if plan_id in plan_ids:
+                    plans_by_id[plan_id] = plan
+    except (AttributeError, RuntimeError, TypeError, ValueError):
+        plans_by_id = {}
+
     traces: list[DecisionTracePayload] = []
     for plan_id in plan_ids:
         execution = executions_by_plan.get(plan_id)
         plan_decisions = decisions_by_plan.get(plan_id, [])
-        plan = None
-        try:
-            plan = ctx.portfolio.get_execution_plan(plan_id)
-        except (AttributeError, RuntimeError, TypeError, ValueError):
-            plan = None
+        plan = plans_by_id.get(plan_id)
 
         raw_actions = getattr(plan, "actions", None) if plan is not None else None
         if plan is not None and not isinstance(raw_actions, list):
@@ -895,7 +890,6 @@ def _build_decision_trace_payloads(
             blocked_action_count=blocked_action_count,
             order_count=order_count,
             execution_errors=execution_errors,
-            execution_present=execution is not None,
         )
         details = [
             (
@@ -953,14 +947,14 @@ def _build_decision_trace_payloads(
                     order_count=order_count,
                     filled_order_count=filled_order_count,
                 ),
-                strategy_ids=_unique_strings(
+                strategy_ids=unique_strings(
                     [
                         *[getattr(action, "strategy_id", None) for action in actions],
                         *[decision.strategy_id for decision in plan_decisions],
                         *[order.strategy_id for order in orders],
                     ]
                 ),
-                pairs=_unique_strings(
+                pairs=unique_strings(
                     [
                         *[getattr(action, "pair", None) for action in actions],
                         *[decision.pair for decision in plan_decisions],
