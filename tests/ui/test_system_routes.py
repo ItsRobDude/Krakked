@@ -86,6 +86,10 @@ def test_health_endpoints_report_runtime_provenance(monkeypatch: pytest.MonkeyPa
     monkeypatch.setenv("KRAKKED_RUNTIME_IMAGE_TAG", "v0.1.0")
     monkeypatch.setenv("KRAKKED_RUNTIME_IMAGE_DIGEST", "sha256:feedface")
     monkeypatch.setenv("KRAKKED_RUNTIME_SOURCE", "image")
+    monkeypatch.setenv("KRAKKED_EXPECTED_IMAGE", "ghcr.io/itsrobdude/krakked")
+    monkeypatch.setenv("KRAKKED_EXPECTED_IMAGE_TAG", "v0.1.0")
+    monkeypatch.setenv("KRAKKED_EXPECTED_BUILD_GIT_SHA", "abcdef1234567890")
+    monkeypatch.setenv("KRAKKED_EXPECTED_RUNTIME_SOURCE", "image")
 
     context = build_test_context(
         auth_enabled=False, auth_token=None, read_only=False
@@ -104,6 +108,12 @@ def test_health_endpoints_report_runtime_provenance(monkeypatch: pytest.MonkeyPa
         assert data["image_tag"] == "v0.1.0"
         assert data["image_digest"] == "sha256:feedface"
         assert data["runtime_source"] == "image"
+        assert data["expected_image_name"] == "ghcr.io/itsrobdude/krakked"
+        assert data["expected_image_tag"] == "v0.1.0"
+        assert data["expected_build_git_sha"] == "abcdef1234567890"
+        assert data["expected_runtime_source"] == "image"
+        assert data["deployment_drift_detected"] is False
+        assert data["deployment_drift_reason"] is None
 
 
 def test_health_endpoints_default_unknown_provenance(monkeypatch: pytest.MonkeyPatch):
@@ -117,6 +127,10 @@ def test_health_endpoints_default_unknown_provenance(monkeypatch: pytest.MonkeyP
         "KRAKKED_RUNTIME_IMAGE_DIGEST",
         "KRAKKED_IMAGE_DIGEST",
         "KRAKKED_RUNTIME_SOURCE",
+        "KRAKKED_EXPECTED_IMAGE",
+        "KRAKKED_EXPECTED_IMAGE_TAG",
+        "KRAKKED_EXPECTED_BUILD_GIT_SHA",
+        "KRAKKED_EXPECTED_RUNTIME_SOURCE",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -134,6 +148,49 @@ def test_health_endpoints_default_unknown_provenance(monkeypatch: pytest.MonkeyP
     assert data["image_tag"] == "unknown"
     assert data["image_digest"] is None
     assert data["runtime_source"] == "unknown"
+    assert data["expected_image_name"] == "unknown"
+    assert data["expected_image_tag"] == "unknown"
+    assert data["expected_build_git_sha"] == "unknown"
+    assert data["expected_runtime_source"] == "unknown"
+    assert data["deployment_drift_detected"] is False
+    assert data["deployment_drift_reason"] is None
+
+
+def test_health_endpoints_report_deployment_drift(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("KRAKKED_BUILD_GIT_SHA", "actual-sha")
+    monkeypatch.setenv("KRAKKED_BUILD_GIT_REF", "main")
+    monkeypatch.setenv("KRAKKED_RUNTIME_IMAGE", "ghcr.io/itsrobdude/krakked")
+    monkeypatch.setenv("KRAKKED_RUNTIME_IMAGE_TAG", "v0.1.0")
+    monkeypatch.setenv("KRAKKED_RUNTIME_SOURCE", "source")
+    monkeypatch.setenv("KRAKKED_EXPECTED_IMAGE", "ghcr.io/itsrobdude/krakked")
+    monkeypatch.setenv("KRAKKED_EXPECTED_IMAGE_TAG", "v0.1.1")
+    monkeypatch.setenv("KRAKKED_EXPECTED_BUILD_GIT_SHA", "expected-sha")
+    monkeypatch.setenv("KRAKKED_EXPECTED_RUNTIME_SOURCE", "image")
+
+    context = build_test_context(
+        auth_enabled=False, auth_token=None, read_only=False
+    )
+    app = create_api(context)
+    client = TestClient(app)
+
+    for path in ("/api/health", "/api/system/health"):
+        response = client.get(path)
+        assert response.status_code == 200
+        data = response.json()["data"]
+        if path == "/api/system/health":
+            assert data["drift_detected"] is False
+        assert data["deployment_drift_detected"] is True
+        assert "image_tag expected v0.1.1, got v0.1.0" in data[
+            "deployment_drift_reason"
+        ]
+        assert "build_git_sha expected expected-sha, got actual-sha" in data[
+            "deployment_drift_reason"
+        ]
+        assert "runtime_source expected image, got source" in data[
+            "deployment_drift_reason"
+        ]
 
 
 def test_root_health_alias_available_when_base_path_is_set():

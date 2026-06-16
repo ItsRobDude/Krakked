@@ -27,15 +27,21 @@ persistence, export, restore into scratch state paths, and final health.
 Useful variants:
 
 ```bash
-# Published-image proof once KRAKKED_IMAGE / KRAKKED_IMAGE_TAG are pinned in .env
-bash scripts/unraid_deployment_proof.sh --mode image --host-url http://<unraid-ip>:8088
+# Published-image proof with explicit expected provenance
+bash scripts/unraid_deployment_proof.sh \
+  --mode image \
+  --image ghcr.io/itsrobdude/krakked \
+  --image-tag v0.1.1 \
+  --expected-build-git-sha <release-commit-sha> \
+  --host-url http://<unraid-ip>:8088
 
 # Use only when the host is already recreated and you want a non-recreate check
 bash scripts/unraid_deployment_proof.sh --no-recreate --host-url http://<unraid-ip>:8088
 ```
 
 Paste back the `DEPLOYMENT_PROOF_RESULT`, pass/fail/warn counts, commit, runtime
-provenance payloads, and log path from the summary when recording a new proof.
+provenance payloads, expected/actual image fields, Docker image ID/digests, and
+log path from the summary when recording a new proof.
 Release sign-off requires `fail=0`, no skip warnings, `skip_run_once=false`, and
 `skip_restore=false`.
 
@@ -88,17 +94,30 @@ Historical V1 result:
 
 Use this after a source-mode proof passes and a GHCR image tag exists.
 
-1. Pin `.env` to the published image, for example
-   `KRAKKED_IMAGE=ghcr.io/itsrobdude/krakked` and
-   `KRAKKED_IMAGE_TAG=v0.1.0`.
-2. Run `bash scripts/unraid_deployment_proof.sh --mode image --host-url http://<unraid-ip>:8088`
-   with no skip flags.
-3. Change only `KRAKKED_IMAGE_TAG` to the next version or `sha-*` tag and rerun
-   the same image-mode proof.
-4. Change `KRAKKED_IMAGE_TAG` back to the prior pinned tag and rerun the same
-   image-mode proof.
-5. Record all three summaries and confirm the same appdata stayed mounted, the
-   provenance changed as expected, and backup/restore/run-once checks all passed.
+1. Ensure both image tags were published by the tag-driven release workflow.
+2. Run the wrapper with explicit tags:
+
+   ```bash
+   bash scripts/unraid_image_upgrade_rollback_drill.sh \
+     --image ghcr.io/itsrobdude/krakked \
+     --from-tag v0.1.1-rc.1 \
+     --to-tag v0.1.1-rc.2 \
+     --host-url http://<unraid-ip>:8088
+   ```
+
+3. If known, add `--from-sha` and `--to-sha` to require exact build SHA
+   provenance in addition to tag/source checks.
+4. The wrapper performs: deploy `from-tag`, deploy `to-tag`, roll back to
+   `from-tag`, using the same appdata root for all three phases.
+5. Record the wrapper summary plus all three deployment proof summaries. The
+   drill passes only when every phase reports `DEPLOYMENT_PROOF_RESULT=PASS`,
+   `fail=0`, `skip_run_once=false`, `skip_restore=false`, `actual_runtime_source=image`,
+   and the expected tag.
+
+Deployment provenance drift is separate from portfolio drift. The existing
+`drift_detected` field still means portfolio/accounting drift; deployment
+mismatch is reported as `deployment_drift_detected` with
+`deployment_drift_reason`.
 
 ## Acceptance criteria / drill steps
 

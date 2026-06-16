@@ -226,6 +226,10 @@ run_docker_start() {
     -e "KRAKKED_RUNTIME_IMAGE_TAG=$(env_value KRAKKED_IMAGE_TAG "$image_tag")" \
     -e "KRAKKED_RUNTIME_IMAGE_DIGEST=$(env_value KRAKKED_IMAGE_DIGEST "")" \
     -e "KRAKKED_RUNTIME_SOURCE=$(env_value KRAKKED_RUNTIME_SOURCE "$MODE")" \
+    -e "KRAKKED_EXPECTED_IMAGE=$(env_value KRAKKED_EXPECTED_IMAGE "")" \
+    -e "KRAKKED_EXPECTED_IMAGE_TAG=$(env_value KRAKKED_EXPECTED_IMAGE_TAG "")" \
+    -e "KRAKKED_EXPECTED_BUILD_GIT_SHA=$(env_value KRAKKED_EXPECTED_BUILD_GIT_SHA "")" \
+    -e "KRAKKED_EXPECTED_RUNTIME_SOURCE=$(env_value KRAKKED_EXPECTED_RUNTIME_SOURCE "")" \
     -e "KRAKKED_SECRET_PW=$(env_value KRAKKED_SECRET_PW "")" \
     -e "KRAKEN_API_KEY=$(env_value KRAKEN_API_KEY "")" \
     -e "KRAKEN_API_SECRET=$(env_value KRAKEN_API_SECRET "")" \
@@ -408,6 +412,10 @@ ${build_block}
       KRAKKED_RUNTIME_IMAGE_TAG: \${KRAKKED_IMAGE_TAG:-unraid-local}
       KRAKKED_RUNTIME_IMAGE_DIGEST: \${KRAKKED_IMAGE_DIGEST:-}
       KRAKKED_RUNTIME_SOURCE: \${KRAKKED_RUNTIME_SOURCE:-${MODE}}
+      KRAKKED_EXPECTED_IMAGE: \${KRAKKED_EXPECTED_IMAGE:-}
+      KRAKKED_EXPECTED_IMAGE_TAG: \${KRAKKED_EXPECTED_IMAGE_TAG:-}
+      KRAKKED_EXPECTED_BUILD_GIT_SHA: \${KRAKKED_EXPECTED_BUILD_GIT_SHA:-}
+      KRAKKED_EXPECTED_RUNTIME_SOURCE: \${KRAKKED_EXPECTED_RUNTIME_SOURCE:-}
       KRAKKED_SECRET_PW: \${KRAKKED_SECRET_PW:-}
       KRAKEN_API_KEY: \${KRAKEN_API_KEY:-}
       KRAKEN_API_SECRET: \${KRAKEN_API_SECRET:-}
@@ -443,12 +451,20 @@ build_git_ref="$(git branch --show-current 2>/dev/null || true)"
 if [ -z "$build_git_ref" ]; then
   build_git_ref="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || printf 'unknown')"
 fi
+expected_build_git_sha=""
+if [ "$MODE" = "source" ]; then
+  expected_build_git_sha="$build_git_sha"
+fi
 
 write_file ".env" "KRAKKED_IMAGE=${image_name}
 KRAKKED_IMAGE_TAG=${image_tag}
 KRAKKED_BUILD_GIT_SHA=${build_git_sha}
 KRAKKED_BUILD_GIT_REF=${build_git_ref}
 KRAKKED_RUNTIME_SOURCE=${MODE}
+KRAKKED_EXPECTED_IMAGE=${image_name}
+KRAKKED_EXPECTED_IMAGE_TAG=${image_tag}
+KRAKKED_EXPECTED_BUILD_GIT_SHA=${expected_build_git_sha}
+KRAKKED_EXPECTED_RUNTIME_SOURCE=${MODE}
 KRAKKED_PORT=8088
 KRAKKED_UI_HOST=0.0.0.0
 KRAKKED_UI_PORT=8080
@@ -461,6 +477,12 @@ normalize_env_line_endings
 set_env_key "KRAKKED_BUILD_GIT_SHA" "$build_git_sha"
 set_env_key "KRAKKED_BUILD_GIT_REF" "$build_git_ref"
 set_env_key "KRAKKED_RUNTIME_SOURCE" "$MODE"
+set_env_key "KRAKKED_EXPECTED_IMAGE" "$(env_value KRAKKED_IMAGE "$image_name")"
+set_env_key "KRAKKED_EXPECTED_IMAGE_TAG" "$(env_value KRAKKED_IMAGE_TAG "$image_tag")"
+set_env_key "KRAKKED_EXPECTED_RUNTIME_SOURCE" "$MODE"
+if [ "$MODE" = "source" ]; then
+  set_env_key "KRAKKED_EXPECTED_BUILD_GIT_SHA" "$build_git_sha"
+fi
 ensure_unraid_port
 detect_runtime
 

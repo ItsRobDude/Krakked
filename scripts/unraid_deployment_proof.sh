@@ -9,6 +9,9 @@ RECREATE="true"
 SKIP_RUN_ONCE="false"
 SKIP_RESTORE="false"
 WAIT_TIMEOUT_SECONDS="${KRAKKED_PROOF_WAIT_TIMEOUT_SECONDS:-180}"
+PIN_IMAGE=""
+PIN_IMAGE_TAG=""
+EXPECTED_BUILD_GIT_SHA=""
 
 usage() {
   cat <<'USAGE'
@@ -22,6 +25,10 @@ Options:
   --appdata-dir PATH     Appdata root, default /mnt/user/appdata/krakked
   --compose-file PATH    Compose file, default compose.unraid.yaml
   --mode source|image    Pass through to unraid_bootstrap.sh, default source
+  --image IMAGE          Pin KRAKKED_IMAGE in .env before starting the stack
+  --image-tag TAG        Pin KRAKKED_IMAGE_TAG in .env before starting the stack
+  --expected-build-git-sha SHA
+                          Require the app to report this build SHA
   --no-recreate          Start without forcing container recreation
   --skip-run-once        Skip the forced-safe paper run-once check
   --skip-restore         Skip the export/import restore round-trip
@@ -53,6 +60,18 @@ while [ "$#" -gt 0 ]; do
     --mode)
       shift
       MODE="${1:-}"
+      ;;
+    --image)
+      shift
+      PIN_IMAGE="${1:-}"
+      ;;
+    --image-tag)
+      shift
+      PIN_IMAGE_TAG="${1:-}"
+      ;;
+    --expected-build-git-sha)
+      shift
+      EXPECTED_BUILD_GIT_SHA="${1:-}"
       ;;
     --no-recreate)
       RECREATE="false"
@@ -109,6 +128,19 @@ RUNTIME_MODE=""
 COMPOSE_DISPLAY=""
 HEALTH_PROVENANCE_JSON=""
 SYSTEM_HEALTH_PROVENANCE_JSON=""
+ACTUAL_IMAGE_NAME=""
+ACTUAL_IMAGE_TAG=""
+ACTUAL_BUILD_GIT_SHA=""
+ACTUAL_RUNTIME_SOURCE=""
+EXPECTED_IMAGE_NAME=""
+EXPECTED_IMAGE_TAG=""
+EXPECTED_BUILD_SHA_REPORTED=""
+EXPECTED_RUNTIME_SOURCE_REPORTED=""
+DEPLOYMENT_DRIFT_DETECTED=""
+DEPLOYMENT_DRIFT_REASON=""
+IMAGE_REF_REPORTED=""
+IMAGE_ID_REPORTED=""
+IMAGE_REPO_DIGESTS_REPORTED=""
 
 mkdir -p "$STATE_DIR"
 exec > >(tee -a "$LOG_FILE") 2>&1
@@ -200,6 +232,45 @@ env_value() {
   printf '%s' "$default"
 }
 
+set_env_key() {
+  local key="$1"
+  local value="$2"
+  local tmp=".env.tmp.$$"
+
+  if [ ! -f .env ]; then
+    printf '%s=%s\n' "$key" "$value" > .env
+    return
+  fi
+
+  awk -v key="$key" -v value="$value" '
+    BEGIN { found = 0 }
+    $0 ~ "^" key "=" { print key "=" value; found = 1; next }
+    { print }
+    END { if (!found) print key "=" value }
+  ' .env > "$tmp" && mv "$tmp" .env
+}
+
+apply_pinned_image_inputs() {
+  if [ -n "$PIN_IMAGE" ]; then
+    set_env_key "KRAKKED_IMAGE" "$PIN_IMAGE"
+    set_env_key "KRAKKED_EXPECTED_IMAGE" "$PIN_IMAGE"
+  fi
+  if [ -n "$PIN_IMAGE_TAG" ]; then
+    set_env_key "KRAKKED_IMAGE_TAG" "$PIN_IMAGE_TAG"
+    set_env_key "KRAKKED_EXPECTED_IMAGE_TAG" "$PIN_IMAGE_TAG"
+  fi
+  if [ -n "$EXPECTED_BUILD_GIT_SHA" ]; then
+    set_env_key "KRAKKED_EXPECTED_BUILD_GIT_SHA" "$EXPECTED_BUILD_GIT_SHA"
+  fi
+  if [ "$MODE" = "image" ]; then
+    set_env_key "KRAKKED_RUNTIME_SOURCE" "image"
+    set_env_key "KRAKKED_EXPECTED_RUNTIME_SOURCE" "image"
+    if [ -z "$EXPECTED_BUILD_GIT_SHA" ]; then
+      set_env_key "KRAKKED_EXPECTED_BUILD_GIT_SHA" ""
+    fi
+  fi
+}
+
 image_ref() {
   if [ "$MODE" = "source" ]; then
     printf '%s:%s' "$(env_value KRAKKED_IMAGE krakked)" "$(env_value KRAKKED_IMAGE_TAG unraid-local)"
@@ -255,6 +326,10 @@ container_run() {
     -e "KRAKKED_RUNTIME_IMAGE_TAG=$(env_value KRAKKED_IMAGE_TAG unraid-local)" \
     -e "KRAKKED_RUNTIME_IMAGE_DIGEST=$(env_value KRAKKED_IMAGE_DIGEST "")" \
     -e "KRAKKED_RUNTIME_SOURCE=$(env_value KRAKKED_RUNTIME_SOURCE "$MODE")" \
+    -e "KRAKKED_EXPECTED_IMAGE=$(env_value KRAKKED_EXPECTED_IMAGE "")" \
+    -e "KRAKKED_EXPECTED_IMAGE_TAG=$(env_value KRAKKED_EXPECTED_IMAGE_TAG "")" \
+    -e "KRAKKED_EXPECTED_BUILD_GIT_SHA=$(env_value KRAKKED_EXPECTED_BUILD_GIT_SHA "")" \
+    -e "KRAKKED_EXPECTED_RUNTIME_SOURCE=$(env_value KRAKKED_EXPECTED_RUNTIME_SOURCE "")" \
     -e "KRAKKED_SECRET_PW=$(env_value KRAKKED_SECRET_PW "")" \
     -e "KRAKEN_API_KEY=$(env_value KRAKEN_API_KEY "")" \
     -e "KRAKEN_API_SECRET=$(env_value KRAKEN_API_SECRET "")" \
@@ -281,6 +356,10 @@ python_in_container() {
     -e "KRAKKED_RUNTIME_IMAGE_TAG=$(env_value KRAKKED_IMAGE_TAG unraid-local)" \
     -e "KRAKKED_RUNTIME_IMAGE_DIGEST=$(env_value KRAKKED_IMAGE_DIGEST "")" \
     -e "KRAKKED_RUNTIME_SOURCE=$(env_value KRAKKED_RUNTIME_SOURCE "$MODE")" \
+    -e "KRAKKED_EXPECTED_IMAGE=$(env_value KRAKKED_EXPECTED_IMAGE "")" \
+    -e "KRAKKED_EXPECTED_IMAGE_TAG=$(env_value KRAKKED_EXPECTED_IMAGE_TAG "")" \
+    -e "KRAKKED_EXPECTED_BUILD_GIT_SHA=$(env_value KRAKKED_EXPECTED_BUILD_GIT_SHA "")" \
+    -e "KRAKKED_EXPECTED_RUNTIME_SOURCE=$(env_value KRAKKED_EXPECTED_RUNTIME_SOURCE "")" \
     -v "$APPDATA_DIR/config:/krakked/config" \
     -v "$APPDATA_DIR/data:/krakked/data" \
     -v "$APPDATA_DIR/state:/krakked/state" \
@@ -388,6 +467,31 @@ check_health() {
     '"status"[[:space:]]*:[[:space:]]*"ok"'
 }
 
+json_string_field() {
+  local payload="$1"
+  local field="$2"
+  printf '%s' "$payload" | sed -n "s/.*\"$field\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p"
+}
+
+json_bool_field() {
+  local payload="$1"
+  local field="$2"
+  printf '%s' "$payload" | sed -n "s/.*\"$field\"[[:space:]]*:[[:space:]]*\(true\|false\).*/\1/p"
+}
+
+record_image_metadata() {
+  local ref
+  local digests
+  ref="$(image_ref)"
+  IMAGE_REF_REPORTED="$ref"
+  IMAGE_ID_REPORTED="$(docker image inspect -f '{{.Id}}' "$ref" 2>/dev/null || true)"
+  digests="$(docker image inspect -f '{{range .RepoDigests}}{{println .}}{{end}}' "$ref" 2>/dev/null || true)"
+  IMAGE_REPO_DIGESTS_REPORTED="$(printf '%s\n' "$digests" | awk 'NF { values = values sep $0; sep = "," } END { print values }')"
+  printf 'image_ref=%s\n' "$IMAGE_REF_REPORTED"
+  printf 'image_id=%s\n' "${IMAGE_ID_REPORTED:-unknown}"
+  printf 'image_repo_digests=%s\n' "${IMAGE_REPO_DIGESTS_REPORTED:-none}"
+}
+
 check_runtime_provenance() {
   local field
   HEALTH_PROVENANCE_JSON="$(fetch_url "$HOST_URL/api/health" | tr -d '\n')" || return 1
@@ -396,7 +500,7 @@ check_runtime_provenance() {
   printf 'health_payload=%s\n' "$HEALTH_PROVENANCE_JSON"
   printf 'system_health_payload=%s\n' "$SYSTEM_HEALTH_PROVENANCE_JSON"
 
-  for field in app_version build_git_sha build_git_ref image_name image_tag image_digest runtime_source; do
+  for field in app_version build_git_sha build_git_ref image_name image_tag image_digest runtime_source expected_image_name expected_image_tag expected_build_git_sha expected_runtime_source deployment_drift_detected deployment_drift_reason; do
     if ! printf '%s\n' "$HEALTH_PROVENANCE_JSON" | grep -q "\"$field\""; then
       echo "Missing $field in /api/health" >&2
       return 1
@@ -406,6 +510,37 @@ check_runtime_provenance() {
       return 1
     fi
   done
+
+  ACTUAL_IMAGE_NAME="$(json_string_field "$HEALTH_PROVENANCE_JSON" image_name)"
+  ACTUAL_IMAGE_TAG="$(json_string_field "$HEALTH_PROVENANCE_JSON" image_tag)"
+  ACTUAL_BUILD_GIT_SHA="$(json_string_field "$HEALTH_PROVENANCE_JSON" build_git_sha)"
+  ACTUAL_RUNTIME_SOURCE="$(json_string_field "$HEALTH_PROVENANCE_JSON" runtime_source)"
+  EXPECTED_IMAGE_NAME="$(json_string_field "$HEALTH_PROVENANCE_JSON" expected_image_name)"
+  EXPECTED_IMAGE_TAG="$(json_string_field "$HEALTH_PROVENANCE_JSON" expected_image_tag)"
+  EXPECTED_BUILD_SHA_REPORTED="$(json_string_field "$HEALTH_PROVENANCE_JSON" expected_build_git_sha)"
+  EXPECTED_RUNTIME_SOURCE_REPORTED="$(json_string_field "$HEALTH_PROVENANCE_JSON" expected_runtime_source)"
+  DEPLOYMENT_DRIFT_DETECTED="$(json_bool_field "$HEALTH_PROVENANCE_JSON" deployment_drift_detected)"
+  DEPLOYMENT_DRIFT_REASON="$(json_string_field "$HEALTH_PROVENANCE_JSON" deployment_drift_reason)"
+
+  printf 'actual_image_name=%s\n' "$ACTUAL_IMAGE_NAME"
+  printf 'actual_image_tag=%s\n' "$ACTUAL_IMAGE_TAG"
+  printf 'actual_build_git_sha=%s\n' "$ACTUAL_BUILD_GIT_SHA"
+  printf 'actual_runtime_source=%s\n' "$ACTUAL_RUNTIME_SOURCE"
+  printf 'expected_image_name=%s\n' "$EXPECTED_IMAGE_NAME"
+  printf 'expected_image_tag=%s\n' "$EXPECTED_IMAGE_TAG"
+  printf 'expected_build_git_sha=%s\n' "$EXPECTED_BUILD_SHA_REPORTED"
+  printf 'expected_runtime_source=%s\n' "$EXPECTED_RUNTIME_SOURCE_REPORTED"
+  printf 'deployment_drift_detected=%s\n' "$DEPLOYMENT_DRIFT_DETECTED"
+  printf 'deployment_drift_reason=%s\n' "${DEPLOYMENT_DRIFT_REASON:-none}"
+
+  if [ "$MODE" = "image" ] && [ "$ACTUAL_RUNTIME_SOURCE" != "image" ]; then
+    echo "Image-mode proof requires runtime_source=image; got ${ACTUAL_RUNTIME_SOURCE:-unknown}" >&2
+    return 1
+  fi
+  if [ "$DEPLOYMENT_DRIFT_DETECTED" = "true" ]; then
+    echo "Deployment provenance drift detected: ${DEPLOYMENT_DRIFT_REASON:-unknown}" >&2
+    return 1
+  fi
 }
 
 check_ui() {
@@ -558,6 +693,19 @@ write_summary() {
     printf 'mode=%s\n' "$MODE"
     printf 'skip_run_once=%s\n' "$SKIP_RUN_ONCE"
     printf 'skip_restore=%s\n' "$SKIP_RESTORE"
+    printf 'actual_image_name=%s\n' "$ACTUAL_IMAGE_NAME"
+    printf 'actual_image_tag=%s\n' "$ACTUAL_IMAGE_TAG"
+    printf 'actual_build_git_sha=%s\n' "$ACTUAL_BUILD_GIT_SHA"
+    printf 'actual_runtime_source=%s\n' "$ACTUAL_RUNTIME_SOURCE"
+    printf 'expected_image_name=%s\n' "$EXPECTED_IMAGE_NAME"
+    printf 'expected_image_tag=%s\n' "$EXPECTED_IMAGE_TAG"
+    printf 'expected_build_git_sha=%s\n' "$EXPECTED_BUILD_SHA_REPORTED"
+    printf 'expected_runtime_source=%s\n' "$EXPECTED_RUNTIME_SOURCE_REPORTED"
+    printf 'deployment_drift_detected=%s\n' "$DEPLOYMENT_DRIFT_DETECTED"
+    printf 'deployment_drift_reason=%s\n' "${DEPLOYMENT_DRIFT_REASON:-}"
+    printf 'image_ref=%s\n' "$IMAGE_REF_REPORTED"
+    printf 'image_id=%s\n' "$IMAGE_ID_REPORTED"
+    printf 'image_repo_digests=%s\n' "$IMAGE_REPO_DIGESTS_REPORTED"
     if [ -n "$HEALTH_PROVENANCE_JSON" ]; then
       printf 'health_payload=%s\n' "$HEALTH_PROVENANCE_JSON"
     fi
@@ -582,11 +730,13 @@ printf 'log=%s\n' "$LOG_FILE"
 
 run_check "Repo checkout and commit identity" check_repo
 run_check "Docker runtime available" detect_runtime
+run_check "Pinned image inputs are applied" apply_pinned_image_inputs
 run_check "Bootstrap and start paper stack" start_stack
 run_check "Container running and healthy" check_container_running
 run_check "Persistent appdata mounts exist and are writable" check_mounts
 run_check "Health endpoint returns ok" check_health
 run_check "Runtime provenance is reported" check_runtime_provenance
+run_check "Docker image metadata is recorded" record_image_metadata
 run_check "UI root is reachable" check_ui
 run_check "Setup status is readable" check_setup_status
 run_check "Forced-safe paper run-once completes" run_once_check

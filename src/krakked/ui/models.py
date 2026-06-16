@@ -318,6 +318,25 @@ class SystemHealthPayload(BaseModel):
     runtime_source: Optional[str] = Field(
         None, description="Deployment source, such as source, image, or unknown."
     )
+    expected_image_name: Optional[str] = Field(
+        None, description="Expected container image name for deployment drift checks."
+    )
+    expected_image_tag: Optional[str] = Field(
+        None, description="Expected container image tag for deployment drift checks."
+    )
+    expected_build_git_sha: Optional[str] = Field(
+        None, description="Expected build git SHA for deployment drift checks."
+    )
+    expected_runtime_source: Optional[str] = Field(
+        None, description="Expected runtime source for deployment drift checks."
+    )
+    deployment_drift_detected: bool = Field(
+        False,
+        description="Whether the running deployment provenance differs from expected values.",
+    )
+    deployment_drift_reason: Optional[str] = Field(
+        None, description="Reason deployment provenance differs from expected values."
+    )
     execution_mode: Optional[str] = Field(
         None,
         description="execution_mode reflects the configured trading mode: dry-run, paper, or live.",

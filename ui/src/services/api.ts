@@ -104,6 +104,12 @@ export type SystemHealth = {
   image_tag?: string | null;
   image_digest?: string | null;
   runtime_source?: string | null;
+  expected_image_name?: string | null;
+  expected_image_tag?: string | null;
+  expected_build_git_sha?: string | null;
+  expected_runtime_source?: string | null;
+  deployment_drift_detected?: boolean;
+  deployment_drift_reason?: string | null;
   execution_mode?: string | null;
   lifecycle: 'locked' | 'initializing' | 'ready' | 'starting_session' | 'active' | 'stopping_session';
   rest_api_reachable: boolean;

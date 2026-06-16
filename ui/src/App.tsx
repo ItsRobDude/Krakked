@@ -133,10 +133,14 @@ const formatRuntimeProvenance = (health: SystemHealth | null) => {
         : imageTag
           ? `image:${imageTag}`
           : 'runtime unknown';
-  return `${version} - ${build} - ${source}`;
+  const drift = health?.deployment_drift_detected ? ' - mismatch' : '';
+  return `${version} - ${build} - ${source}${drift}`;
 };
 
 const formatRuntimeProvenanceHint = (health: SystemHealth | null) => {
+  if (health?.deployment_drift_detected) {
+    return health.deployment_drift_reason || 'Runtime build identity differs from the expected deployment.';
+  }
   const imageName = normalizeRuntimeValue(health?.image_name);
   const digest = normalizeRuntimeValue(health?.image_digest);
   const ref = normalizeRuntimeValue(health?.build_git_ref);
