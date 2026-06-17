@@ -37,7 +37,10 @@ Latest pinned-image drill:
   tag/SHA/source matching actual provenance and
   `deployment_drift_detected=false`.
 - Final running-host proof summary:
-  `/mnt/user/appdata/krakked/state/deployment-proof-20260616-172527.summary`.
+  `/mnt/user/appdata/krakked/state/deployment-proof-20260616-174944.summary`.
+- The final running-host proof reported `DEPLOYMENT_PROOF_RESULT=PASS`,
+  `pass=19`, `fail=0`, `warn=0`, `compose_persistence_result=PASS`,
+  `compose_hash_match=true`, and `compose_go_block_present=true`.
 - Persistent state stayed on the same DB path,
   `/mnt/user/appdata/krakked/state/portfolio.db`; size was `58433536` bytes
   before and after every phase.
