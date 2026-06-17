@@ -141,6 +141,15 @@ DEPLOYMENT_DRIFT_REASON=""
 IMAGE_REF_REPORTED=""
 IMAGE_ID_REPORTED=""
 IMAGE_REPO_DIGESTS_REPORTED=""
+COMPOSE_PERSISTENCE_RESULT=""
+COMPOSE_VERSION_REPORTED=""
+COMPOSE_RUNTIME_PATH_REPORTED=""
+COMPOSE_FLASH_PATH_REPORTED=""
+COMPOSE_GO_FILE_REPORTED=""
+COMPOSE_RUNTIME_SHA256_REPORTED=""
+COMPOSE_FLASH_SHA256_REPORTED=""
+COMPOSE_HASH_MATCH_REPORTED=""
+COMPOSE_GO_BLOCK_PRESENT_REPORTED=""
 
 mkdir -p "$STATE_DIR"
 exec > >(tee -a "$LOG_FILE") 2>&1
@@ -230,6 +239,19 @@ env_value() {
   fi
 
   printf '%s' "$default"
+}
+
+summary_value_from_text() {
+  local text="$1"
+  local key="$2"
+  printf '%s\n' "$text" | awk -F= -v key="$key" '
+    $1 == key {
+      print substr($0, index($0, "=") + 1)
+      found = 1
+      exit
+    }
+    END { if (!found) exit 1 }
+  ' || true
 }
 
 set_env_key() {
@@ -492,6 +514,37 @@ record_image_metadata() {
   printf 'image_repo_digests=%s\n' "${IMAGE_REPO_DIGESTS_REPORTED:-none}"
 }
 
+check_compose_persistence() {
+  local output
+  local rc=0
+  if [ ! -f scripts/unraid_compose_persistence.sh ]; then
+    echo "Missing scripts/unraid_compose_persistence.sh" >&2
+    COMPOSE_PERSISTENCE_RESULT="missing_helper"
+    return 1
+  fi
+
+  output="$(bash scripts/unraid_compose_persistence.sh check 2>&1)" || rc=$?
+  printf '%s\n' "$output"
+
+  COMPOSE_PERSISTENCE_RESULT="$(summary_value_from_text "$output" compose_persistence_result)"
+  COMPOSE_VERSION_REPORTED="$(summary_value_from_text "$output" compose_version)"
+  COMPOSE_RUNTIME_PATH_REPORTED="$(summary_value_from_text "$output" compose_runtime_path)"
+  COMPOSE_FLASH_PATH_REPORTED="$(summary_value_from_text "$output" compose_flash_path)"
+  COMPOSE_GO_FILE_REPORTED="$(summary_value_from_text "$output" compose_go_file)"
+  COMPOSE_RUNTIME_SHA256_REPORTED="$(summary_value_from_text "$output" compose_runtime_sha256)"
+  COMPOSE_FLASH_SHA256_REPORTED="$(summary_value_from_text "$output" compose_flash_sha256)"
+  COMPOSE_HASH_MATCH_REPORTED="$(summary_value_from_text "$output" compose_hash_match)"
+  COMPOSE_GO_BLOCK_PRESENT_REPORTED="$(summary_value_from_text "$output" compose_go_block_present)"
+
+  if [ "$rc" -ne 0 ]; then
+    return "$rc"
+  fi
+  if [ "$COMPOSE_PERSISTENCE_RESULT" != "PASS" ]; then
+    echo "Docker Compose persistence check did not pass: ${COMPOSE_PERSISTENCE_RESULT:-unknown}" >&2
+    return 1
+  fi
+}
+
 check_runtime_provenance() {
   local field
   HEALTH_PROVENANCE_JSON="$(fetch_url "$HOST_URL/api/health" | tr -d '\n')" || return 1
@@ -706,6 +759,15 @@ write_summary() {
     printf 'image_ref=%s\n' "$IMAGE_REF_REPORTED"
     printf 'image_id=%s\n' "$IMAGE_ID_REPORTED"
     printf 'image_repo_digests=%s\n' "$IMAGE_REPO_DIGESTS_REPORTED"
+    printf 'compose_persistence_result=%s\n' "$COMPOSE_PERSISTENCE_RESULT"
+    printf 'compose_version=%s\n' "$COMPOSE_VERSION_REPORTED"
+    printf 'compose_runtime_path=%s\n' "$COMPOSE_RUNTIME_PATH_REPORTED"
+    printf 'compose_flash_path=%s\n' "$COMPOSE_FLASH_PATH_REPORTED"
+    printf 'compose_go_file=%s\n' "$COMPOSE_GO_FILE_REPORTED"
+    printf 'compose_runtime_sha256=%s\n' "$COMPOSE_RUNTIME_SHA256_REPORTED"
+    printf 'compose_flash_sha256=%s\n' "$COMPOSE_FLASH_SHA256_REPORTED"
+    printf 'compose_hash_match=%s\n' "$COMPOSE_HASH_MATCH_REPORTED"
+    printf 'compose_go_block_present=%s\n' "$COMPOSE_GO_BLOCK_PRESENT_REPORTED"
     if [ -n "$HEALTH_PROVENANCE_JSON" ]; then
       printf 'health_payload=%s\n' "$HEALTH_PROVENANCE_JSON"
     fi
@@ -730,6 +792,7 @@ printf 'log=%s\n' "$LOG_FILE"
 
 run_check "Repo checkout and commit identity" check_repo
 run_check "Docker runtime available" detect_runtime
+run_check "Docker Compose reboot persistence is configured" check_compose_persistence
 run_check "Pinned image inputs are applied" apply_pinned_image_inputs
 run_check "Bootstrap and start paper stack" start_stack
 run_check "Container running and healthy" check_container_running

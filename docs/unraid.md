@@ -122,8 +122,9 @@ bash scripts/unraid_deployment_proof.sh --host-url http://<your-unraid-ip>:8088
 
 The proof runner recreates the paper container by default while preserving
 existing appdata config. It checks health, UI reachability, persisted mounts,
-forced-safe paper `run-once`, synthetic store evidence, live gates, restart
-persistence, export, and restore into scratch paths. It prints
+Docker Compose reboot persistence, forced-safe paper `run-once`, synthetic store
+evidence, live gates, restart persistence, export, and restore into scratch
+paths. It prints
 `DEPLOYMENT_PROOF_RESULT=PASS` only when all required checks pass.
 
 For release/operator sign-off, prefer image mode with explicit expected
@@ -153,6 +154,34 @@ bash scripts/unraid_image_upgrade_rollback_drill.sh \
 The drill must end with `IMAGE_UPGRADE_ROLLBACK_RESULT=PASS`, `fail=0`, and
 three phase summaries whose hard checks were not skipped.
 
+## Docker Compose boot persistence
+
+Unraid's runtime plugin directory is not the durable source of truth across
+reboots. Krakked keeps the Docker Compose CLI plugin on the flash-backed
+`/boot/config` path and restores it through a marked `/boot/config/go` block.
+
+Check the current host without changing it:
+
+```bash
+bash scripts/unraid_compose_persistence.sh check
+```
+
+Install or refresh that boot contract:
+
+```bash
+bash scripts/unraid_compose_persistence.sh install
+```
+
+Repair only the runtime plugin from the flash-backed copy:
+
+```bash
+bash scripts/unraid_compose_persistence.sh repair-runtime
+```
+
+The deployment proof records the runtime path, flash path, SHA-256 hashes,
+hash-match status, Compose version, and whether the boot restore block is
+present.
+
 ## Cautions
 
 - Start in paper mode on the server. Live mode is a later operational decision.
@@ -161,10 +190,10 @@ three phase summaries whose hard checks were not skipped.
 - The bootstrap now normalizes `.env` to LF on each run. If you hand-edit `.env`
   from Windows, keep it LF-only — a trailing CR on `KRAKKED_IMAGE` corrupts the
   Compose image reference.
-- If Docker Compose was installed manually (the CLI plugin under
-  `/usr/local/lib/docker/cli-plugins/`), it may not survive an Unraid reboot.
-  Make that install persistent (e.g. via a `go`/User Scripts boot step) or
-  reinstall after reboots.
+- If Docker Compose stops working after a reboot, run
+  `bash scripts/unraid_compose_persistence.sh check` first. Use `install` to
+  restore the flash-backed boot contract or `repair-runtime` when only the
+  runtime plugin path is missing.
 - The latest recorded Unraid pinned-image upgrade/rollback proof is in
   [`deployment-proof.md`](./deployment-proof.md). Add new dated proof records
   there when release candidates are promoted.

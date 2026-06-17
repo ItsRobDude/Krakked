@@ -33,8 +33,41 @@ def test_unraid_deployment_proof_records_image_identity_in_summary():
         "image_ref",
         "image_id",
         "image_repo_digests",
+        "compose_persistence_result",
+        "compose_version",
+        "compose_runtime_path",
+        "compose_flash_path",
+        "compose_runtime_sha256",
+        "compose_flash_sha256",
+        "compose_hash_match",
+        "compose_go_block_present",
     ):
         assert f"printf '{field}=%s\\n'" in script
+
+
+def test_unraid_deployment_proof_requires_compose_reboot_persistence():
+    script = _script_text("unraid_deployment_proof.sh")
+
+    assert "Docker Compose reboot persistence is configured" in script
+    assert "scripts/unraid_compose_persistence.sh check" in script
+    assert "COMPOSE_PERSISTENCE_RESULT" in script
+    assert "Docker Compose persistence check did not pass" in script
+
+
+def test_unraid_compose_persistence_helper_is_idempotent_and_marked():
+    script = _script_text("unraid_compose_persistence.sh")
+
+    assert "BEGIN krakked docker compose cli persistence" in script
+    assert "END krakked docker compose cli persistence" in script
+    assert "check_persistence()" in script
+    assert "install_persistence()" in script
+    assert "repair_runtime()" in script
+    assert "compose_persistence_result=%s" in script
+    assert "compose_runtime_sha256=%s" in script
+    assert "compose_flash_sha256=%s" in script
+    assert "compose_hash_match=%s" in script
+    assert "docker compose version" in script
+    assert "awk -v begin=" in script
 
 
 def test_unraid_upgrade_rollback_drill_requires_hard_checks_and_tag_round_trip():

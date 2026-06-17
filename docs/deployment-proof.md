@@ -60,9 +60,10 @@ By default the runner calls `scripts/unraid_bootstrap.sh --recreate --start`,
 keeps existing appdata config, writes a dated log and summary under
 `/mnt/user/appdata/krakked/state`, and exits non-zero if a required acceptance
 check fails. It checks the same deployment contract as V1: first boot/recreate,
-container health, persisted mounts, UI/health endpoints, forced-safe paper
-`run-once`, synthetic portfolio-store evidence, live gates closed, restart
-persistence, export, restore into scratch state paths, and final health.
+container health, persisted mounts, Docker Compose reboot persistence,
+UI/health endpoints, forced-safe paper `run-once`, synthetic portfolio-store
+evidence, live gates closed, restart persistence, export, restore into scratch
+state paths, and final health.
 
 Useful variants:
 
@@ -84,6 +85,13 @@ provenance payloads, expected/actual image fields, Docker image ID/digests, and
 log path from the summary when recording a new proof.
 Release sign-off requires `fail=0`, no skip warnings, `skip_run_once=false`, and
 `skip_restore=false`.
+
+The proof also records Docker Compose reboot-persistence evidence:
+`compose_persistence_result`, `compose_version`, runtime and flash-copy paths,
+runtime and flash-copy SHA-256 hashes, hash-match status, and whether the marked
+`/boot/config/go` restore block is present. A passing Unraid image proof should
+report `compose_persistence_result=PASS`, `compose_hash_match=true`, and
+`compose_go_block_present=true`.
 
 This is an operator drill you run on the Unraid box. Fill in the Results column
 and the Findings section. It changes no runtime behavior by itself; it is the
@@ -156,6 +164,30 @@ Deployment provenance drift is separate from portfolio drift. The existing
 mismatch is reported as `deployment_drift_detected` with
 `deployment_drift_reason`.
 
+## Docker Compose reboot persistence
+
+The Unraid proof assumes `docker compose` is available after reboot. Unraid's
+runtime filesystem is not the same as the flash-backed `/boot/config`, so the
+Compose CLI plugin must be restored from flash during boot.
+
+Use the helper to verify or repair that contract:
+
+```bash
+# Read-only check
+bash scripts/unraid_compose_persistence.sh check
+
+# Install or refresh the flash-backed copy and /boot/config/go restore block
+bash scripts/unraid_compose_persistence.sh install
+
+# Restore only the runtime plugin from the flash-backed copy
+bash scripts/unraid_compose_persistence.sh repair-runtime
+```
+
+The helper is idempotent and uses a marked block in `/boot/config/go`, bounded by
+`BEGIN krakked docker compose cli persistence` and
+`END krakked docker compose cli persistence`, so future edits can replace that
+block without touching unrelated Unraid boot commands.
+
 ## Acceptance criteria / drill steps
 
 Run top to bottom. Each step lists the command/check and what "pass" looks like.
@@ -224,7 +256,7 @@ gaps, not just to get a green checklist. Likely candidates to watch:
 
 | Finding | Severity | Proposed fix / follow-up |
 |---------|----------|--------------------------|
-| Compose was missing on the Unraid host. | Medium | Installed Docker Compose CLI plugin `v5.1.4` at `/usr/local/lib/docker/cli-plugins/docker-compose`. Follow up by making the Compose install persistent across Unraid reboots. |
+| Compose was missing on the Unraid host. | Medium | Installed Docker Compose CLI plugin `v5.1.4` at `/usr/local/lib/docker/cli-plugins/docker-compose`. Persistence is now managed by `scripts/unraid_compose_persistence.sh` and checked by the deployment proof. |
 | Windows-written `.env` files can introduce CRLF and corrupt Compose image references. | Medium | Keep `.env` LF-only on the Unraid checkout. Consider normalizing `.env` in the bootstrap helper when preserving an existing file. |
 | `krakked run-once` initially failed because the one-shot WebSocket stub did not expose every field expected by market-data status checks. | High | Fixed locally and mirrored to the Unraid source under test: `_WsStub` now exposes `subscription_status` and instance-owned cache fields. |
 | `krakked run-once` needed explicit one-shot resource cleanup. | Medium | Fixed locally and mirrored to the Unraid source under test: `run_strategy_once()` now closes the portfolio store and shuts down market data in `finally`. |
