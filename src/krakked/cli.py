@@ -93,7 +93,10 @@ from krakked.connection.rest_client import KrakenRESTClient
 from krakked.credentials import CredentialResult, CredentialStatus
 from krakked.main import run as run_orchestrator
 from krakked.market_data.api import MarketDataAPI
-from krakked.market_data.ohlc_import import parse_kraken_ohlcvt_files
+from krakked.market_data.ohlc_import import (
+    analyze_ohlc_continuity,
+    parse_kraken_ohlcvt_files,
+)
 from krakked.portfolio.exceptions import PortfolioSchemaError
 from krakked.portfolio.store import (
     CURRENT_SCHEMA_VERSION,
@@ -763,10 +766,68 @@ def _print_ohlc_import_summary(payload: dict[str, Any]) -> None:
         f"Range: {parse.get('first_bar_at') or 'n/a'} -> "
         f"{parse.get('last_bar_at') or 'n/a'} | status={parse['status']}"
     )
+    _print_ohlc_continuity_summary("Parsed continuity", parse.get("continuity"))
+    _print_ohlc_continuity_summary(
+        "Cache continuity",
+        payload.get("cache_continuity"),
+    )
     if parse.get("errors"):
         print("Errors:")
         for error in parse["errors"]:
             print(f"- {error}")
+
+
+def _print_ohlc_continuity_summary(
+    label: str,
+    continuity: dict[str, Any] | None,
+) -> None:
+    if not continuity:
+        return
+    print(
+        f"{label}: {continuity['status']} | bars={continuity['bar_count']} | "
+        f"expected={continuity.get('expected_bar_count_between_first_last') or 'n/a'} | "
+        f"missing intervals={continuity['missing_interval_count']} | "
+        f"gaps={continuity['gap_count']}"
+    )
+    gaps = list(continuity.get("gaps") or [])
+    for gap in gaps[:10]:
+        print(
+            "  gap: "
+            f"{gap['previous_bar_at']} -> {gap['next_bar_at']} | "
+            f"missing {gap['missing_interval_count']} intervals "
+            f"({gap['missing_start_at']} -> {gap['missing_end_at']})"
+        )
+    if len(gaps) > 10:
+        print(f"  ... {len(gaps) - 10} more gaps omitted from text output")
+
+
+def _print_ohlc_continuity_payload(payload: dict[str, Any]) -> None:
+    print("OHLC continuity report.")
+    if payload.get("requested_start_at") or payload.get("requested_end_at"):
+        print(
+            "Requested window: "
+            f"{payload.get('requested_start_at') or 'beginning'} -> "
+            f"{payload.get('requested_end_at') or 'latest'}"
+        )
+    for series in payload["series"]:
+        _print_ohlc_continuity_summary(
+            f"{series['pair']}@{series['timeframe']}",
+            series,
+        )
+
+
+def _filter_ohlc_window(
+    bars: list[Any],
+    *,
+    start_ts: int | None,
+    end_ts: int | None,
+) -> list[Any]:
+    return [
+        bar
+        for bar in bars
+        if (start_ts is None or int(bar.timestamp) >= start_ts)
+        and (end_ts is None or int(bar.timestamp) < end_ts)
+    ]
 
 
 def _refresh_ohlc_command(args: argparse.Namespace) -> int:
@@ -830,6 +891,7 @@ def _import_ohlc_command(args: argparse.Namespace) -> int:
         )
         submitted_bars = 0
         new_bars_stored = 0
+        cache_continuity: dict[str, Any] | None = None
         if parsed.bars and not bool(args.dry_run) and parsed.status == "ready":
             submitted_bars = len(parsed.bars)
             _, new_bars_stored = market_data.append_ohlc_bars(
@@ -837,6 +899,25 @@ def _import_ohlc_command(args: argparse.Namespace) -> int:
                 str(args.timeframe),
                 parsed.bars,
             )
+        if parsed.bars and parsed.status == "ready":
+            cache_start_ts = start_ts
+            if cache_start_ts is None:
+                cache_start_ts = min(int(bar.timestamp) for bar in parsed.bars)
+            cache_bars = market_data.get_ohlc_since(
+                str(args.pair),
+                str(args.timeframe),
+                cache_start_ts,
+            )
+            cache_bars = _filter_ohlc_window(
+                cache_bars,
+                start_ts=cache_start_ts,
+                end_ts=end_ts,
+            )
+            cache_continuity = analyze_ohlc_continuity(
+                cache_bars,
+                timeframe=str(args.timeframe),
+                pair=canonical_pair,
+            ).to_dict()
     except Exception as exc:  # noqa: BLE001
         return _print_error(f"OHLC import failed: {exc}")
     finally:
@@ -850,6 +931,7 @@ def _import_ohlc_command(args: argparse.Namespace) -> int:
         "new_bars_stored": new_bars_stored,
         "imported_bars": new_bars_stored,
         "parse": parsed.to_dict(),
+        "cache_continuity": cache_continuity,
     }
     if args.json:
         print(json.dumps(payload, indent=2))
@@ -857,6 +939,86 @@ def _import_ohlc_command(args: argparse.Namespace) -> int:
         _print_ohlc_import_summary(payload)
 
     return 0 if parsed.status == "ready" else 1
+
+
+def _ohlc_continuity_command(args: argparse.Namespace) -> int:
+    try:
+        start_ts = (
+            int(_parse_datetime_arg(args.start).timestamp()) if args.start else None
+        )
+        end_ts = int(_parse_datetime_arg(args.end).timestamp()) if args.end else None
+        if start_ts is not None and end_ts is not None and end_ts <= start_ts:
+            raise ValueError("--end must be after --start")
+    except ValueError as exc:
+        return _print_error(f"Invalid OHLC continuity window: {exc}")
+
+    market_data: MarketDataAPI | None = None
+    try:
+        config_path = Path(args.config).expanduser().resolve() if args.config else None
+        config = load_config(config_path=config_path)
+        market_data = MarketDataAPI(config)
+        market_data.refresh_universe()
+        series: list[dict[str, Any]] = []
+        for pair in args.pair:
+            canonical_pair = market_data.normalize_pair(str(pair))
+            for timeframe in args.timeframe:
+                if start_ts is None:
+                    bars = market_data.get_ohlc(str(pair), str(timeframe), 1_000_000)
+                else:
+                    bars = market_data.get_ohlc_since(
+                        str(pair),
+                        str(timeframe),
+                        start_ts,
+                    )
+                bars = _filter_ohlc_window(
+                    list(bars),
+                    start_ts=start_ts,
+                    end_ts=end_ts,
+                )
+                report = analyze_ohlc_continuity(
+                    bars,
+                    timeframe=str(timeframe),
+                    pair=canonical_pair,
+                ).to_dict()
+                report["requested_pair"] = str(pair)
+                series.append(report)
+    except Exception as exc:  # noqa: BLE001
+        return _print_error(f"OHLC continuity failed: {exc}")
+    finally:
+        if market_data is not None:
+            market_data.shutdown()
+
+    payload = {
+        "generated_at": datetime.now(UTC).isoformat(),
+        "requested_start_timestamp": start_ts,
+        "requested_start_at": (
+            datetime.fromtimestamp(start_ts, tz=UTC).isoformat()
+            if start_ts is not None
+            else None
+        ),
+        "requested_end_timestamp": end_ts,
+        "requested_end_at": (
+            datetime.fromtimestamp(end_ts, tz=UTC).isoformat()
+            if end_ts is not None
+            else None
+        ),
+        "series": series,
+        "summary": {
+            "series_count": len(series),
+            "gapped_series_count": sum(
+                1 for item in series if item.get("status") == "gapped"
+            ),
+            "missing_interval_count": sum(
+                int(item.get("missing_interval_count") or 0) for item in series
+            ),
+        },
+    }
+    if args.json:
+        print(json.dumps(payload, indent=2))
+    else:
+        _print_ohlc_continuity_payload(payload)
+
+    return 0
 
 
 def _load_backtest_config(args: argparse.Namespace) -> AppConfig:
@@ -4877,6 +5039,41 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Print the import result payload as JSON",
     )
     import_ohlc_parser.set_defaults(func=_import_ohlc_command)
+
+    continuity_parser = subparsers.add_parser(
+        "ohlc-continuity",
+        help="Report cached OHLC timestamp continuity by pair and timeframe",
+    )
+    continuity_parser.add_argument(
+        "--config",
+        help="Optional path to the base config.yaml to use for market-data reads",
+    )
+    continuity_parser.add_argument(
+        "--pair",
+        action="append",
+        required=True,
+        help="Pair to inspect; may be supplied multiple times",
+    )
+    continuity_parser.add_argument(
+        "--timeframe",
+        action="append",
+        required=True,
+        help="OHLC timeframe to inspect; may be supplied multiple times",
+    )
+    continuity_parser.add_argument(
+        "--start",
+        help="Optional inclusive continuity start time in ISO-8601 form",
+    )
+    continuity_parser.add_argument(
+        "--end",
+        help="Optional exclusive continuity end time in ISO-8601 form",
+    )
+    continuity_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print the continuity result payload as JSON",
+    )
+    continuity_parser.set_defaults(func=_ohlc_continuity_command)
 
     backtest_preflight_parser = subparsers.add_parser(
         "backtest-preflight",

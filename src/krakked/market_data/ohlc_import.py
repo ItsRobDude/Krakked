@@ -24,6 +24,143 @@ KRAKEN_INTERVAL_BY_TIMEFRAME: dict[str, int] = {
 }
 
 
+@dataclass(frozen=True)
+class OHLCContinuityGap:
+    previous_bar_timestamp: int
+    next_bar_timestamp: int
+    missing_start_timestamp: int
+    missing_end_timestamp: int
+    missing_interval_count: int
+    actual_delta_seconds: int
+    expected_delta_seconds: int
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "previous_bar_timestamp": self.previous_bar_timestamp,
+            "previous_bar_at": _timestamp_to_text(self.previous_bar_timestamp),
+            "next_bar_timestamp": self.next_bar_timestamp,
+            "next_bar_at": _timestamp_to_text(self.next_bar_timestamp),
+            "missing_start_timestamp": self.missing_start_timestamp,
+            "missing_start_at": _timestamp_to_text(self.missing_start_timestamp),
+            "missing_end_timestamp": self.missing_end_timestamp,
+            "missing_end_at": _timestamp_to_text(self.missing_end_timestamp),
+            "missing_interval_count": self.missing_interval_count,
+            "actual_delta_seconds": self.actual_delta_seconds,
+            "expected_delta_seconds": self.expected_delta_seconds,
+        }
+
+
+@dataclass(frozen=True)
+class OHLCContinuityReport:
+    pair: str | None
+    timeframe: str
+    expected_interval_seconds: int
+    input_bar_count: int
+    bar_count: int
+    duplicate_timestamp_count: int
+    first_bar_timestamp: int | None
+    last_bar_timestamp: int | None
+    expected_bar_count_between_first_last: int | None
+    missing_interval_count: int
+    gaps: list[OHLCContinuityGap]
+
+    @property
+    def status(self) -> str:
+        if self.bar_count == 0:
+            return "empty"
+        if self.gaps:
+            return "gapped"
+        return "continuous"
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "pair": self.pair,
+            "timeframe": self.timeframe,
+            "expected_interval_seconds": self.expected_interval_seconds,
+            "input_bar_count": self.input_bar_count,
+            "bar_count": self.bar_count,
+            "duplicate_timestamp_count": self.duplicate_timestamp_count,
+            "first_bar_timestamp": self.first_bar_timestamp,
+            "first_bar_at": _timestamp_to_text(self.first_bar_timestamp),
+            "last_bar_timestamp": self.last_bar_timestamp,
+            "last_bar_at": _timestamp_to_text(self.last_bar_timestamp),
+            "expected_bar_count_between_first_last": (
+                self.expected_bar_count_between_first_last
+            ),
+            "missing_interval_count": self.missing_interval_count,
+            "gap_count": len(self.gaps),
+            "status": self.status,
+            "gaps": [gap.to_dict() for gap in self.gaps],
+        }
+
+
+def analyze_ohlc_continuity(
+    bars: Iterable[OHLCBar],
+    *,
+    timeframe: str,
+    pair: str | None = None,
+) -> OHLCContinuityReport:
+    """Report timestamp continuity for observed OHLC bars.
+
+    Gaps are factual missing expected timestamps between adjacent observed bars;
+    callers decide whether a gap is acceptable for the market/source in question.
+    """
+
+    interval_minutes = KRAKEN_INTERVAL_BY_TIMEFRAME.get(timeframe)
+    if interval_minutes is None:
+        raise ValueError(
+            f"Unsupported timeframe for OHLC continuity: {timeframe}. "
+            f"Supported: {sorted(KRAKEN_INTERVAL_BY_TIMEFRAME)}"
+        )
+    interval_seconds = int(interval_minutes) * 60
+    timestamps = [int(bar.timestamp) for bar in bars]
+    unique_timestamps = sorted(set(timestamps))
+    duplicate_count = len(timestamps) - len(unique_timestamps)
+
+    gaps: list[OHLCContinuityGap] = []
+    missing_interval_count = 0
+    for previous, next_ in zip(unique_timestamps, unique_timestamps[1:]):
+        actual_delta = next_ - previous
+        if actual_delta <= interval_seconds:
+            continue
+        missing_count = max(1, (actual_delta - 1) // interval_seconds)
+        missing_interval_count += missing_count
+        missing_start = previous + interval_seconds
+        missing_end = previous + (missing_count * interval_seconds)
+        gaps.append(
+            OHLCContinuityGap(
+                previous_bar_timestamp=previous,
+                next_bar_timestamp=next_,
+                missing_start_timestamp=missing_start,
+                missing_end_timestamp=missing_end,
+                missing_interval_count=missing_count,
+                actual_delta_seconds=actual_delta,
+                expected_delta_seconds=interval_seconds,
+            )
+        )
+
+    first = unique_timestamps[0] if unique_timestamps else None
+    last = unique_timestamps[-1] if unique_timestamps else None
+    expected_bar_count = (
+        len(unique_timestamps) + missing_interval_count
+        if unique_timestamps
+        else None
+    )
+    return OHLCContinuityReport(
+        pair=pair,
+        timeframe=timeframe,
+        expected_interval_seconds=interval_seconds,
+        input_bar_count=len(timestamps),
+        bar_count=len(unique_timestamps),
+        duplicate_timestamp_count=duplicate_count,
+        first_bar_timestamp=first,
+        last_bar_timestamp=last,
+        expected_bar_count_between_first_last=expected_bar_count,
+        missing_interval_count=missing_interval_count,
+        gaps=gaps,
+    )
+
+
 @dataclass
 class OHLCImportParseResult:
     input_path: str
@@ -68,6 +205,11 @@ class OHLCImportParseResult:
             "first_bar_at": _timestamp_to_text(first),
             "last_bar_timestamp": last,
             "last_bar_at": _timestamp_to_text(last),
+            "continuity": analyze_ohlc_continuity(
+                self.bars,
+                timeframe=self.timeframe,
+                pair=self.canonical_pair,
+            ).to_dict(),
             "status": self.status,
             "errors": list(self.errors),
         }

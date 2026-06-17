@@ -537,6 +537,14 @@ def test_import_ohlc_subcommand_parses_and_appends_bars(
             captured["bars"] = bars
             return "XBTUSD", 1
 
+        def get_ohlc_since(
+            self, pair: str, timeframe: str, since_ts: int
+        ) -> list[Any]:
+            captured["cache_pair"] = pair
+            captured["cache_timeframe"] = timeframe
+            captured["cache_since_ts"] = since_ts
+            return list(captured["bars"])
+
         def shutdown(self) -> None:
             captured["shutdown"] = True
 
@@ -574,6 +582,74 @@ def test_import_ohlc_subcommand_parses_and_appends_bars(
     assert payload["imported_bars"] == 1
     assert payload["parse"]["canonical_pair"] == "XBTUSD"
     assert payload["parse"]["status"] == "ready"
+    assert payload["parse"]["continuity"]["status"] == "continuous"
+    assert payload["cache_continuity"]["status"] == "continuous"
+    assert captured["cache_pair"] == "BTC/USD"
+    assert captured["cache_timeframe"] == "4h"
+    assert captured["cache_since_ts"] == 1764547200
+
+
+def test_ohlc_continuity_subcommand_reports_cache_gaps(
+    monkeypatch: pytest.MonkeyPatch, capsys: Any
+) -> None:
+    captured: dict[str, Any] = {}
+
+    class _DummyMarketData:
+        def __init__(self, config: Any) -> None:
+            captured["config"] = config
+
+        def refresh_universe(self) -> None:
+            captured["refresh_universe"] = True
+
+        def normalize_pair(self, pair: str) -> str:
+            captured["normalize_pair"] = pair
+            return "XBTUSD"
+
+        def get_ohlc_since(
+            self, pair: str, timeframe: str, since_ts: int
+        ) -> list[Any]:
+            captured["get_ohlc_since"] = (pair, timeframe, since_ts)
+            return [
+                SimpleNamespace(timestamp=0),
+                SimpleNamespace(timestamp=3600),
+                SimpleNamespace(timestamp=10800),
+            ]
+
+        def shutdown(self) -> None:
+            captured["shutdown"] = True
+
+    monkeypatch.setattr(cli, "load_config", lambda config_path=None: object())
+    monkeypatch.setattr(cli, "MarketDataAPI", _DummyMarketData)
+
+    exit_code = cli.main(
+        [
+            "ohlc-continuity",
+            "--pair",
+            "BTC/USD",
+            "--timeframe",
+            "1h",
+            "--start",
+            "1970-01-01T00:00:00Z",
+            "--end",
+            "1970-01-01T04:00:00Z",
+            "--json",
+        ]
+    )
+
+    assert exit_code == 0
+    assert captured["refresh_universe"] is True
+    assert captured["normalize_pair"] == "BTC/USD"
+    assert captured["get_ohlc_since"] == ("BTC/USD", "1h", 0)
+    assert captured["shutdown"] is True
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["summary"]["series_count"] == 1
+    assert payload["summary"]["gapped_series_count"] == 1
+    assert payload["summary"]["missing_interval_count"] == 1
+    series = payload["series"][0]
+    assert series["pair"] == "XBTUSD"
+    assert series["requested_pair"] == "BTC/USD"
+    assert series["status"] == "gapped"
+    assert series["gaps"][0]["missing_start_at"] == "1970-01-01T02:00:00+00:00"
 
 
 def test_migrate_db_subcommand_upgrades_outdated_schema(tmp_path, capsys: Any) -> None:

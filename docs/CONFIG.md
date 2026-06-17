@@ -102,6 +102,22 @@ krakked refresh-ohlc
 
 Use `--pair`, `--timeframe`, `--since`, and `--json` for targeted replay prep or automation. The command uses public Kraken market-data endpoints only; it does not require private credentials and does not change live-trading gates.
 
+To prove cached OHLC continuity without running a replay, use:
+
+```bash
+krakked ohlc-continuity \
+  --pair BTC/USD --pair ETH/USD \
+  --timeframe 1h \
+  --start 2025-12-01T00:00:00Z \
+  --end 2026-06-16T01:00:00Z \
+  --json
+```
+
+The report shows first/last observed bars, expected interval, observed bar
+count, duplicate timestamp count, missing interval count, and exact gap ranges.
+Treat gaps as factual observations; the replay or operator gate decides whether
+they are acceptable for the source and market.
+
 Backtests now use cached pre-window OHLC for indicator, regime, and risk warmup by default. The replay still starts the synthetic wallet and decision timeline at the requested `--start`; warmup bars only feed `get_ohlc(...)` lookbacks. Use `--warmup-days 0` on `backtest` or `backtest-preflight` only when you intentionally want exact-window legacy behavior. With `--strict-data`, missing or partial warmup series fail the run the same way missing execution-window series do.
 
 ## Proving the runtime market-regime throttle
