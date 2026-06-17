@@ -36,9 +36,12 @@ Latest pinned-image drill:
   `f53ffed404fa0ca19ce724bbb09304fd6792b210`, with the expected image
   tag/SHA/source matching actual provenance and
   `deployment_drift_detected=false`.
-- Final running-host proof summary:
-  `/mnt/user/appdata/krakked/state/deployment-proof-20260616-174944.summary`.
-- The final running-host proof reported `DEPLOYMENT_PROOF_RESULT=PASS`,
+- Controlled reboot verification: host rebooted on
+  `2026-06-16 18:58 America/Los_Angeles`; SSH returned, Docker Compose was
+  restored from flash, and the pinned rc.4 container auto-started healthy.
+- Post-reboot no-recreate image proof summary:
+  `/mnt/user/appdata/krakked/state/deployment-proof-20260616-190146.summary`.
+- The post-reboot proof reported `DEPLOYMENT_PROOF_RESULT=PASS`,
   `pass=19`, `fail=0`, `warn=0`, `compose_persistence_result=PASS`,
   `compose_hash_match=true`, and `compose_go_block_present=true`.
 - Persistent state stayed on the same DB path,
