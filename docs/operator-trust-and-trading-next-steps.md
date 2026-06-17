@@ -95,6 +95,11 @@ Before optimizing strategy knobs, prove the normal loop is boring:
 This is the bridge between "the code works" and "I would trust this appliance to
 run unattended."
 
+For the stricter money-safety proof contract, use
+[`money-safety-proof-plan.md`](./money-safety-proof-plan.md). That document is
+the routing layer for live-capital readiness; this note remains the operator
+workflow lane.
+
 ## Standard Strategy Optimization Boundary
 
 Do not tune strategy parameters just because the current rows are unproven.

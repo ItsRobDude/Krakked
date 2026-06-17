@@ -60,6 +60,9 @@ This is a product and engineering constraint, not a claim that California law ca
    - Paper mode remains the proving ground.
    - Live mode must be operationally first-class if enabled later, not treated as an afterthought.
    - Emergency controls, audits, and runtime safety checks must stay intact in live mode.
+   - Money-safety readiness is tracked in
+     [`money-safety-proof-plan.md`](./money-safety-proof-plan.md); live UI polish
+     and strategy evidence do not replace the safety proof gates.
 
 ## Current Repo State
 
