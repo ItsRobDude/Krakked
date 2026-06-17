@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import zipfile
 from pathlib import Path
+from typing import Any, cast
 
 from krakked.market_data.models import OHLCBar
 from krakked.market_data.ohlc_import import (
@@ -63,7 +64,8 @@ def test_parse_kraken_ohlcvt_zip_filters_pair_interval_and_dates(
     assert result.bars[0].timestamp == 1764561600
     assert result.bars[0].open == 105.0
     assert result.bars[0].close == 108.0
-    assert result.to_dict()["continuity"]["status"] == "continuous"
+    continuity = cast(dict[str, Any], result.to_dict()["continuity"])
+    assert continuity["status"] == "continuous"
 
 
 def test_parse_kraken_ohlcvt_reports_no_matching_file(tmp_path: Path) -> None:

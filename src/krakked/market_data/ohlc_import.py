@@ -142,9 +142,7 @@ def analyze_ohlc_continuity(
     first = unique_timestamps[0] if unique_timestamps else None
     last = unique_timestamps[-1] if unique_timestamps else None
     expected_bar_count = (
-        len(unique_timestamps) + missing_interval_count
-        if unique_timestamps
-        else None
+        len(unique_timestamps) + missing_interval_count if unique_timestamps else None
     )
     return OHLCContinuityReport(
         pair=pair,

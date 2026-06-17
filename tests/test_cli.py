@@ -537,9 +537,7 @@ def test_import_ohlc_subcommand_parses_and_appends_bars(
             captured["bars"] = bars
             return "XBTUSD", 1
 
-        def get_ohlc_since(
-            self, pair: str, timeframe: str, since_ts: int
-        ) -> list[Any]:
+        def get_ohlc_since(self, pair: str, timeframe: str, since_ts: int) -> list[Any]:
             captured["cache_pair"] = pair
             captured["cache_timeframe"] = timeframe
             captured["cache_since_ts"] = since_ts
@@ -605,9 +603,7 @@ def test_ohlc_continuity_subcommand_reports_cache_gaps(
             captured["normalize_pair"] = pair
             return "XBTUSD"
 
-        def get_ohlc_since(
-            self, pair: str, timeframe: str, since_ts: int
-        ) -> list[Any]:
+        def get_ohlc_since(self, pair: str, timeframe: str, since_ts: int) -> list[Any]:
             captured["get_ohlc_since"] = (pair, timeframe, since_ts)
             return [
                 SimpleNamespace(timestamp=0),
