@@ -13,24 +13,31 @@ trusted baseline is the pinned-image upgrade/rollback drill recorded below.
 Latest pinned-image drill:
 
 - Result: `IMAGE_UPGRADE_ROLLBACK_RESULT=PASS`, `fail=0`.
-- Date run: `2026-06-15 20:15:58-20:22:27 America/Los_Angeles`.
+- Date run: `2026-06-16 17:18:33-17:24:50 America/Los_Angeles`.
 - Host URL: `http://192.168.50.78:8088`.
 - Image: `ghcr.io/itsrobdude/krakked`.
-- Tags tested: `v0.1.1-rc.1` -> `v0.1.1-rc.2` -> `v0.1.1-rc.1`.
-- Build SHA for both tags:
-  `35645cf4f8a2b4e41e363b6106ce3fe5484b936b`.
+- Tags tested: `v0.1.1-rc.3` -> `v0.1.1-rc.4` -> `v0.1.1-rc.3`.
+- Starting build SHA:
+  `4d96b65e0e383f90ad6ad423d051d0e81ef73dc9`.
+- Upgrade build SHA:
+  `f53ffed404fa0ca19ce724bbb09304fd6792b210`.
 - Wrapper summary:
-  `/mnt/user/appdata/krakked/state/image-upgrade-rollback-20260615-201558.summary`.
+  `/mnt/user/appdata/krakked/state/image-upgrade-rollback-20260616-171833.summary`.
 - Phase summaries:
-  - `/mnt/user/appdata/krakked/state/deployment-proof-20260615-201558.summary`
-  - `/mnt/user/appdata/krakked/state/deployment-proof-20260615-201810.summary`
-  - `/mnt/user/appdata/krakked/state/deployment-proof-20260615-202023.summary`
+  - `/mnt/user/appdata/krakked/state/deployment-proof-20260616-171833.summary`
+  - `/mnt/user/appdata/krakked/state/deployment-proof-20260616-172034.summary`
+  - `/mnt/user/appdata/krakked/state/deployment-proof-20260616-172246.summary`
 - Each phase reported `DEPLOYMENT_PROOF_RESULT=PASS`, `pass=18`,
   `fail=0`, `warn=0`, `mode=image`, `skip_run_once=false`,
   `skip_restore=false`, and `deployment_drift_detected=false`.
-- The final running host was left on `runtime_source=image`,
-  `image_tag=v0.1.1-rc.1`, with the expected image tag/SHA/source matching
-  actual provenance.
+- The rollback wrapper intentionally ended on `v0.1.1-rc.3`; a follow-up final
+  image-mode proof then left the running host on `runtime_source=image`,
+  `image_tag=v0.1.1-rc.4`, build SHA
+  `f53ffed404fa0ca19ce724bbb09304fd6792b210`, with the expected image
+  tag/SHA/source matching actual provenance and
+  `deployment_drift_detected=false`.
+- Final running-host proof summary:
+  `/mnt/user/appdata/krakked/state/deployment-proof-20260616-172527.summary`.
 - Persistent state stayed on the same DB path,
   `/mnt/user/appdata/krakked/state/portfolio.db`; size was `58433536` bytes
   before and after every phase.

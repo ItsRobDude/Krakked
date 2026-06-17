@@ -81,10 +81,10 @@ The workflow publishes to:
 
 For operators, pin `KRAKKED_IMAGE_TAG` to the explicit version tag in `.env` rather than `latest`.
 
-The first recorded pinned-image drill used `v0.1.1-rc.1` ->
-`v0.1.1-rc.2` -> `v0.1.1-rc.1` and passed on Unraid with exact SHA
-provenance. See [`docs/deployment-proof.md`](deployment-proof.md) for the
-evidence paths.
+The latest recorded pinned-image drill used `v0.1.1-rc.3` ->
+`v0.1.1-rc.4` -> `v0.1.1-rc.3`, then a final image-mode proof left the host
+running `v0.1.1-rc.4` with exact SHA provenance. See
+[`docs/deployment-proof.md`](deployment-proof.md) for the evidence paths.
 
 ## Human Follow-Up
 
