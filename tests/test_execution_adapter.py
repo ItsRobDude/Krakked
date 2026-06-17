@@ -63,6 +63,8 @@ def test_build_order_payload_live_market_excludes_validate_and_price(
 
     assert "validate" not in payload
     assert "price" not in payload
+    assert payload["cl_ord_id"] == sample_order.local_id
+    assert "userref" not in payload
 
 
 def test_submit_order_validate_only_sets_validated_status(sample_order, pair_metadata):

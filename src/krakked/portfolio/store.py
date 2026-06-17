@@ -1612,6 +1612,33 @@ class SQLitePortfolioStore(PortfolioStore):
 
         return self._row_to_local_order(row)
 
+    def get_order_by_client_order_id(
+        self, client_order_id: str
+    ) -> Optional["LocalOrder"]:
+        with self._lock:
+            conn = self._get_conn()
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT
+                    local_id, plan_id, strategy_id, pair, side, order_type, kraken_order_id, userref,
+                    requested_base_size, requested_price, status, created_at, updated_at,
+                    cumulative_base_filled, avg_fill_price, last_error, raw_request_json, raw_response_json
+                FROM execution_orders
+                WHERE raw_request_json LIKE ?
+                ORDER BY updated_at DESC
+                """,
+                (f"%{client_order_id}%",),
+            )
+            rows = cursor.fetchall()
+
+        for row in rows:
+            order = self._row_to_local_order(row)
+            if order.raw_request.get("cl_ord_id") == client_order_id:
+                return order
+
+        return None
+
     def get_decisions(
         self,
         plan_id: Optional[str] = None,
@@ -1917,6 +1944,8 @@ class SQLitePortfolioStore(PortfolioStore):
     ) -> List["LocalOrder"]:
         open_statuses = {
             "pending",
+            "pending_submit",
+            "submit_unknown",
             "submitted",
             "open",
             "partially_filled",

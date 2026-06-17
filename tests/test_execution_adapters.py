@@ -246,9 +246,11 @@ def test_kraken_execution_adapter_retries_on_transient_error_then_succeeds(monke
     assert client.add_order.call_count == 2
 
 
-def test_kraken_execution_adapter_retries_exhausted_sets_error(monkeypatch):
+def test_kraken_execution_adapter_live_service_unavailable_sets_submit_unknown():
     client = MagicMock()
     client.add_order.side_effect = ServiceUnavailableError("down")
+    client.get_open_orders.return_value = {"open": {}}
+    client.get_closed_orders.return_value = {"closed": {}}
     config = ExecutionConfig(
         mode="live",
         validate_only=False,
@@ -260,15 +262,15 @@ def test_kraken_execution_adapter_retries_exhausted_sets_error(monkeypatch):
     )
     adapter = KrakenExecutionAdapter(client=client, config=config)
 
-    monkeypatch.setattr("time.sleep", lambda _: None)
-
     order = _local_order(price=30.0, volume=1.0)
 
     with pytest.raises(ExecutionError):
         adapter.submit_order(order, _pair_metadata())
 
-    assert client.add_order.call_count == 2
-    assert order.status == "error"
+    assert client.add_order.call_count == 1
+    client.get_open_orders.assert_called_once_with({"cl_ord_id": order.local_id})
+    client.get_closed_orders.assert_called_once_with({"cl_ord_id": order.local_id})
+    assert order.status == "submit_unknown"
     assert order.last_error == "down"
 
 

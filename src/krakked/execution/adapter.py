@@ -133,7 +133,11 @@ class KrakenExecutionAdapter:
         When validate_only=True, the order is sent to Kraken with validate=True.
         In live mode, the order is executed only if allow_live_trading is enabled.
         """
-        payload: Dict[str, Any] = build_order_payload(order, self.config, pair_metadata)
+        payload: Dict[str, Any] = (
+            dict(order.raw_request)
+            if order.raw_request
+            else build_order_payload(order, self.config, pair_metadata)
+        )
         order.raw_request = payload
 
         assert self.client is not None
@@ -205,6 +209,7 @@ class KrakenExecutionAdapter:
         should_validate = payload.get("validate") == 1
         live_trading_block_reason = get_live_trading_block_reason(self.config)
         live_trading_allowed = live_trading_block_reason is None
+        live_submit = self.config.mode == "live" and not should_validate
 
         if self.config.dead_man_switch_seconds > 0:
             if live_trading_allowed:
@@ -275,7 +280,70 @@ class KrakenExecutionAdapter:
                 resp = self.client.add_order(payload)
                 order.raw_response = resp
                 break
-            except (RateLimitError, ServiceUnavailableError) as exc:
+            except RateLimitError as exc:
+                attempts += 1
+                if attempts > self.config.max_retries:
+                    order.status = "error"
+                    order.last_error = str(exc)
+                    logger.error(
+                        "Order submission retries exhausted",
+                        extra=structured_log_extra(
+                            event="order_retry_exhausted",
+                            plan_id=order.plan_id,
+                            strategy_id=order.strategy_id,
+                            pair=order.pair,
+                            local_order_id=order.local_id,
+                            retries=attempts - 1,
+                            error=order.last_error,
+                        ),
+                    )
+                    raise ExecutionError(f"Failed to submit order: {exc}") from exc
+
+                sleep_seconds = backoff_seconds * (
+                    self.config.retry_backoff_factor ** (attempts - 1)
+                )
+                logger.warning(
+                    "Transient error submitting order; retrying",
+                    extra=structured_log_extra(
+                        event="order_retry",
+                        plan_id=order.plan_id,
+                        strategy_id=order.strategy_id,
+                        pair=order.pair,
+                        local_order_id=order.local_id,
+                        attempt=attempts,
+                        sleep_seconds=sleep_seconds,
+                        error=str(exc),
+                    ),
+                )
+                time.sleep(sleep_seconds)
+            except ServiceUnavailableError as exc:
+                if live_submit:
+                    recovered = self._recover_ambiguous_live_submit(
+                        order=order,
+                        payload=payload,
+                        error=exc,
+                    )
+                    if recovered:
+                        return order
+
+                    order.status = "submit_unknown"
+                    order.last_error = str(exc)
+                    logger.error(
+                        "Live order submit state unknown; blocking until reconciliation",
+                        extra=structured_log_extra(
+                            event="order_submit_unknown",
+                            plan_id=order.plan_id,
+                            strategy_id=order.strategy_id,
+                            pair=order.pair,
+                            local_order_id=order.local_id,
+                            client_order_id=payload.get("cl_ord_id"),
+                            error=order.last_error,
+                        ),
+                    )
+                    raise ExecutionError(
+                        f"Live order submit state unknown: {exc}"
+                    ) from exc
+
                 attempts += 1
                 if attempts > self.config.max_retries:
                     order.status = "error"
@@ -381,6 +449,71 @@ class KrakenExecutionAdapter:
         order.status = "error"
         order.last_error = "Missing transaction id in Kraken response"
         raise ExecutionError(order.last_error)
+
+    def _recover_ambiguous_live_submit(
+        self,
+        *,
+        order: LocalOrder,
+        payload: Dict[str, Any],
+        error: ServiceUnavailableError,
+    ) -> bool:
+        """Try to find a live order after an ambiguous AddOrder failure."""
+
+        client_order_id = payload.get("cl_ord_id")
+        if not client_order_id or self.client is None:
+            return False
+
+        for endpoint_name, getter, result_key, is_closed in (
+            ("OpenOrders", self.client.get_open_orders, "open", False),
+            ("ClosedOrders", self.client.get_closed_orders, "closed", True),
+        ):
+            try:
+                remote = getter({"cl_ord_id": client_order_id})
+            except Exception as lookup_error:
+                logger.warning(
+                    "Could not reconcile ambiguous live submit",
+                    extra=structured_log_extra(
+                        event="order_submit_unknown_reconcile_error",
+                        plan_id=order.plan_id,
+                        strategy_id=order.strategy_id,
+                        pair=order.pair,
+                        local_order_id=order.local_id,
+                        client_order_id=client_order_id,
+                        endpoint=endpoint_name,
+                        error=str(lookup_error),
+                    ),
+                )
+                continue
+
+            matches = remote.get(result_key) or {}
+            if not matches:
+                continue
+
+            kraken_order_id, remote_payload = next(iter(matches.items()))
+            order.kraken_order_id = kraken_order_id
+            order.raw_response = remote_payload
+            order.status = remote_payload.get("status") or (
+                "closed" if is_closed else "open"
+            )
+            order.last_error = None
+            logger.info(
+                "Recovered live order after ambiguous submit",
+                extra=structured_log_extra(
+                    event="order_submit_recovered",
+                    plan_id=order.plan_id,
+                    strategy_id=order.strategy_id,
+                    pair=order.pair,
+                    local_order_id=order.local_id,
+                    kraken_order_id=kraken_order_id,
+                    client_order_id=client_order_id,
+                    original_error=str(error),
+                    endpoint=endpoint_name,
+                    status=order.status,
+                ),
+            )
+            return True
+
+        return False
 
     def cancel_order(self, order: LocalOrder) -> None:
         """

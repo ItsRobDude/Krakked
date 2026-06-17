@@ -13,13 +13,39 @@ from krakked.logging_config import structured_log_extra
 from krakked.market_data.api import MarketDataAPI
 from krakked.strategy.models import ExecutionPlan
 
-from .adapter import ExecutionAdapter, get_execution_adapter
+from .adapter import (
+    ExecutionAdapter,
+    get_execution_adapter,
+    get_live_trading_block_reason,
+)
 from .exceptions import ExecutionError
 from .models import ExecutionResult, LocalOrder
-from .router import build_order_from_plan_action
+from .router import build_order_from_plan_action, build_order_payload
 from .userref import resolve_userref
 
 logger = logging.getLogger(__name__)
+
+ACTIVE_ORDER_STATUSES = {
+    "pending",
+    "pending_submit",
+    "submit_unknown",
+    "submitted",
+    "open",
+    "partially_filled",
+    "pending_cancel",
+    "pending_cancellation",
+    "canceling",
+}
+SUBMIT_INTENT_STATUSES = {"pending_submit", "submit_unknown"}
+TERMINAL_ORDER_STATUSES = {
+    "canceled",
+    "closed",
+    "expired",
+    "rejected",
+    "filled",
+    "validated",
+    "error",
+}
 
 if TYPE_CHECKING:
     from krakked.portfolio.store import PortfolioStore
@@ -225,6 +251,65 @@ class ExecutionService:
 
         return kill_switch_active
 
+    def _live_submit_enabled(self) -> bool:
+        config = self._execution_config
+        return (
+            config.mode == "live"
+            and not config.validate_only
+            and get_live_trading_block_reason(config) is None
+        )
+
+    @staticmethod
+    def _client_order_id_for_order(order: LocalOrder) -> Optional[str]:
+        raw_request = order.raw_request or {}
+        client_order_id = raw_request.get("cl_ord_id")
+        if isinstance(client_order_id, str) and client_order_id.strip():
+            return client_order_id
+        return None
+
+    def _has_unresolved_opening_submit_intent(self) -> bool:
+        return any(
+            order.status in SUBMIT_INTENT_STATUSES and not order.risk_reducing
+            for order in self.open_orders.values()
+        )
+
+    def _reconcile_submit_intents(self) -> None:
+        """Try targeted reconciliation for pending/unknown submit intents."""
+
+        client = getattr(self.adapter, "client", None)
+        if client is None:
+            return
+
+        for order in list(self.open_orders.values()):
+            if order.status not in SUBMIT_INTENT_STATUSES:
+                continue
+
+            client_order_id = self._client_order_id_for_order(order)
+            if not client_order_id:
+                continue
+
+            for getter, result_key, is_closed in (
+                (client.get_open_orders, "open", False),
+                (client.get_closed_orders, "closed", True),
+            ):
+                try:
+                    remote = getter({"cl_ord_id": client_order_id})
+                except Exception:
+                    continue
+
+                matches = remote.get(result_key) or {}
+                if not matches:
+                    continue
+
+                for kraken_id, payload in matches.items():
+                    self._sync_remote_order(
+                        kraken_id,
+                        payload,
+                        is_closed=is_closed,
+                        client_order_id=client_order_id,
+                    )
+                break
+
     def _create_rejected_order(
         self,
         plan: ExecutionPlan,
@@ -370,6 +455,10 @@ class ExecutionService:
                 self.store.save_execution_result(result)
             return result
 
+        if self._live_submit_enabled():
+            self.load_open_orders_from_store()
+            self._reconcile_submit_intents()
+
         max_concurrent = getattr(adapter_config, "max_concurrent_orders", None)
         actions_to_process = eligible_actions
         truncated_actions: List["RiskAdjustedAction"] = []
@@ -477,6 +566,35 @@ class ExecutionService:
                 )
                 continue
 
+            if (
+                self._live_submit_enabled()
+                and not order.risk_reducing
+                and self._has_unresolved_opening_submit_intent()
+            ):
+                reason = (
+                    "Execution blocked by unresolved live submit intent; "
+                    "reconcile submit_unknown/pending_submit orders before "
+                    "opening new risk"
+                )
+                order.status = "rejected"
+                order.last_error = reason
+                order.updated_at = datetime.now(UTC)
+                result.errors.append(reason)
+                if self.store:
+                    self.store.save_order(order)
+                logger.error(
+                    "Order blocked by unresolved live submit intent",
+                    extra=structured_log_extra(
+                        event="order_blocked_submit_unknown",
+                        plan_id=plan.plan_id,
+                        strategy_id=action.strategy_id,
+                        pair=action.pair,
+                        local_order_id=order.local_id,
+                    ),
+                )
+                result.orders.append(order)
+                continue
+
             guardrail_reason = self._evaluate_guardrails(
                 action=action,
                 order_notional=max(action.target_notional_usd, 0.0),
@@ -568,6 +686,18 @@ class ExecutionService:
                             ),
                         )
 
+            if self._live_submit_enabled():
+                order.raw_request = build_order_payload(
+                    order,
+                    adapter_config,
+                    pair_metadata,
+                )
+                order.status = "pending_submit"
+                order.updated_at = datetime.now(UTC)
+                self.register_order(order)
+                if self.store:
+                    self.store.save_order(order)
+
             try:
                 logger.info(
                     "Submitting order",
@@ -607,9 +737,13 @@ class ExecutionService:
             except ExecutionError as exc:
                 message = str(exc)
                 order.last_error = message
-                order.status = "error"
+                if order.status not in SUBMIT_INTENT_STATUSES:
+                    order.status = "error"
                 order.updated_at = datetime.now(UTC)
                 result.errors.append(message)
+
+                if order.status in SUBMIT_INTENT_STATUSES:
+                    self.register_order(order)
 
                 if self.store:
                     self.store.save_order(order)
@@ -649,7 +783,7 @@ class ExecutionService:
     def register_order(self, order: LocalOrder) -> None:
         """Track an order locally and index it by Kraken order id when available."""
         # Track only actively working orders.
-        if order.status not in {"pending", "open", "partially_filled"}:
+        if order.status not in ACTIVE_ORDER_STATUSES:
             return
 
         self.open_orders[order.local_id] = order
@@ -712,7 +846,7 @@ class ExecutionService:
             order.kraken_order_id = kraken_order_id
             self.kraken_to_local[kraken_order_id] = local_id
 
-        if status in {"filled", "canceled", "rejected", "error", "validated"}:
+        if status in TERMINAL_ORDER_STATUSES:
             self.open_orders.pop(local_id, None)
 
         if self.store:
@@ -755,9 +889,14 @@ class ExecutionService:
             self._sync_remote_order(kraken_id, payload, is_closed=True)
 
     def _sync_remote_order(
-        self, kraken_id: str, payload: dict, is_closed: bool
+        self,
+        kraken_id: str,
+        payload: dict,
+        is_closed: bool,
+        client_order_id: Optional[str] = None,
     ) -> None:
         """Update a local order based on Kraken order payload."""
+        client_order_id = client_order_id or payload.get("cl_ord_id")
         userref_raw = payload.get("userref")
         userref = None
         if userref_raw is not None:
@@ -766,11 +905,10 @@ class ExecutionService:
             except (TypeError, ValueError):
                 userref = None
 
-        order = self._resolve_local_order(kraken_id, userref)
+        order = self._resolve_local_order(kraken_id, userref, client_order_id)
         if not order:
             return
 
-        self.register_order(order)
         order.kraken_order_id = kraken_id
         if userref is not None:
             order.userref = userref
@@ -796,15 +934,10 @@ class ExecutionService:
         except (TypeError, ValueError):
             pass
 
-        if is_closed or order.status in {
-            "canceled",
-            "closed",
-            "expired",
-            "rejected",
-            "filled",
-            "validated",
-        }:
+        if is_closed or order.status in TERMINAL_ORDER_STATUSES:
             self.open_orders.pop(order.local_id, None)
+        else:
+            self.register_order(order)
 
         logger.info(
             "Reconciled order state",
@@ -832,12 +965,29 @@ class ExecutionService:
             )
 
     def _resolve_local_order(
-        self, kraken_id: str, userref: Optional[int]
+        self,
+        kraken_id: str,
+        userref: Optional[int],
+        client_order_id: Optional[str] = None,
     ) -> Optional[LocalOrder]:
         """Find or reload a LocalOrder using known references."""
         local_id = self.kraken_to_local.get(kraken_id)
         if local_id and local_id in self.open_orders:
             return self.open_orders[local_id]
+
+        if client_order_id:
+            for order in self.open_orders.values():
+                if self._client_order_id_for_order(order) == client_order_id:
+                    self.kraken_to_local[kraken_id] = order.local_id
+                    return order
+
+            if self.store and hasattr(self.store, "get_order_by_client_order_id"):
+                stored_order = self.store.get_order_by_client_order_id(
+                    client_order_id
+                )
+                if stored_order:
+                    self.kraken_to_local[kraken_id] = stored_order.local_id
+                    return stored_order
 
         if userref is not None:
             for order in self.open_orders.values():

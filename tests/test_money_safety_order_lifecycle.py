@@ -1,13 +1,13 @@
 """Money-safety proof: order lifecycle and response-loss safety gap.
 
-These tests drive the REAL ExecutionService + REAL KrakenExecutionAdapter + a REAL
-temp SQLite PortfolioStore against the deterministic fake Kraken client, so the
-behavior proven here is the production code path, not a mock of it.
+These tests drive the REAL ExecutionService + REAL KrakenExecutionAdapter + a
+REAL temp SQLite PortfolioStore against the deterministic fake Kraken client, so
+the behavior proven here is the production code path, not a mock of it.
 
 See docs/money-safety-proof-plan.md, Milestones A and B. These tests establish
-the fake Kraken harness and prove the current duplicate-submit gap when a live
-order is accepted remotely but the local caller loses the response. They do not
-yet prove full process restart recovery.
+the fake Kraken harness and prove that one live submit intent does not blindly
+duplicate when the exchange accepts the order but the local caller loses the
+response.
 """
 
 from __future__ import annotations
@@ -16,8 +16,6 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any, Dict
 from unittest.mock import MagicMock
-
-import pytest
 
 from krakked.config import ExecutionConfig
 from krakked.execution.adapter import KrakenExecutionAdapter
@@ -145,17 +143,6 @@ def test_happy_path_live_order_lifecycle_persists_and_is_recoverable(tmp_path):
     assert persisted.kraken_order_id == order.kraken_order_id
 
 
-@pytest.mark.xfail(
-    reason=(
-        "GAP (money-safety plan Milestone B): when the exchange accepts an order "
-        "but the response is lost as a transient error, the adapter blindly "
-        "retries and submits one duplicate LIVE order per attempt "
-        "(max_retries + 1). A single intent must never create more than one live "
-        "order. Fix: persist submit-intent and reconcile by client order id before "
-        "(re)submitting. Remove this xfail when the fix lands."
-    ),
-    strict=True,
-)
 def test_lost_response_after_acceptance_never_creates_duplicate_live_orders(tmp_path):
     """A single intent must never result in more than one live order, even when
     the exchange accepts an order but the caller's response is lost.
@@ -167,10 +154,13 @@ def test_lost_response_after_acceptance_never_creates_duplicate_live_orders(tmp_
 
     service.execute_plan(_plan())
 
-    # Today this is max_retries + 1 (== 4) because the adapter retries a
-    # possibly-accepted order without reconciling it first.
     assert len(client.add_order_calls) == 1
-    assert client.open_count <= 1
+    assert client.open_count == 1
+
+    submitted = client.add_order_calls[0]
+    assert submitted["cl_ord_id"]
+    assert "userref" not in submitted
+    assert client.get_open_order_calls == [{"cl_ord_id": submitted["cl_ord_id"]}]
 
 
 def test_known_not_accepted_retry_boundary_can_submit_one_remote_order(tmp_path):
@@ -189,15 +179,6 @@ def test_known_not_accepted_retry_boundary_can_submit_one_remote_order(tmp_path)
     assert result.orders[0].status == "open"
 
 
-@pytest.mark.xfail(
-    reason=(
-        "GAP (money-safety plan Milestone B): a generic live AddOrder "
-        "ServiceUnavailableError is ambiguous. Current code retries blindly "
-        "even when no remote order is visible yet; a negative immediate query "
-        "is not proof that Kraken did not accept the order."
-    ),
-    strict=True,
-)
 def test_generic_service_unavailable_without_remote_match_is_not_retried(tmp_path):
     """A generic live submit uncertainty must not be retried blindly."""
 
@@ -213,16 +194,12 @@ def test_generic_service_unavailable_without_remote_match_is_not_retried(tmp_pat
     assert client.open_count == 0
     assert len(client.add_order_calls) == 1
 
+    unknown_orders = store.get_open_orders()
+    assert len(unknown_orders) == 1
+    assert unknown_orders[0].status == "submit_unknown"
+    assert unknown_orders[0].raw_request["cl_ord_id"] == unknown_orders[0].local_id
+    assert "userref" not in unknown_orders[0].raw_request
 
-@pytest.mark.xfail(
-    reason=(
-        "GAP (money-safety plan Milestone B): remote-accepted/local-unknown "
-        "orders are not persisted as submit intents before AddOrder, and restart "
-        "recovery cannot yet link exactly one remote order back into local "
-        "active tracking without duplicate submission."
-    ),
-    strict=True,
-)
 def test_lost_response_restart_recovery_links_single_remote_order(tmp_path):
     """A restart must recover the accepted remote order without re-submitting."""
 
@@ -245,3 +222,27 @@ def test_lost_response_restart_recovery_links_single_remote_order(tmp_path):
     assert persisted.status == "open"
     assert persisted.kraken_order_id is not None
     assert persisted.local_id in restarted.open_orders
+
+
+def test_unresolved_submit_unknown_blocks_new_opening_risk_after_restart(tmp_path):
+    """An unresolved live submit uncertainty blocks new opening risk."""
+
+    client = FakeKrakenRESTClient(add_order_mode=SERVICE_UNAVAILABLE)
+    store = SQLitePortfolioStore(str(tmp_path / "portfolio.db"))
+    service = _service(client, store)
+
+    first_result = service.execute_plan(_plan(plan_id="plan-unknown"))
+
+    assert first_result.errors
+    assert len(client.add_order_calls) == 1
+
+    client.add_order_mode = ACCEPT
+    restarted = _service(client, store)
+    restarted.load_open_orders_from_store()
+    second_result = restarted.execute_plan(_plan(plan_id="plan-new"))
+
+    assert second_result.errors
+    assert len(client.add_order_calls) == 1
+    assert second_result.orders
+    assert second_result.orders[0].status == "rejected"
+    assert "unresolved live submit intent" in (second_result.orders[0].last_error or "")
