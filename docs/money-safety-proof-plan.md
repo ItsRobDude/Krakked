@@ -31,9 +31,12 @@ the repo contains a deterministic proof that the behavior binds under failure.
 
 Current trust level: Level 0, research and paper only.
 
-- Milestone A, fake Kraken and fault harness: not started.
+- Milestone A, fake Kraken and fault harness: started. An initial
+  order-lifecycle fake exists for OMS/adapter/SQLite proofs; account balances,
+  trades, ledgers, partial fills, and stale-read modeling remain missing.
 - Milestones B-E, order lifecycle, reconciliation, risk limits, and emergency
-  operations: building blocks exist, but failure proofs remain incomplete.
+  operations: building blocks exist, and Milestone B now has strict failing
+  proofs for duplicate-submit/restart gaps, but behavior fixes remain incomplete.
 - Milestone F, data continuity: continuity tooling exists, but strict replay
   gates do not yet consume continuity gaps directly.
 - Milestone G, paper soak, validate-only drill, and tiny live smoke: not
@@ -41,8 +44,10 @@ Current trust level: Level 0, research and paper only.
 
 Known live blockers:
 
-- no deterministic fake Kraken/fault harness;
-- no crash-safe submit-intent proof for remote-accepted/local-unknown orders;
+- fake Kraken/fault harness is still order-lifecycle-only and does not yet model
+  full account state, fills, trades, ledgers, or stale reads;
+- no crash-safe submit-intent behavior for remote-accepted/local-unknown orders;
+  strict failing tests now demonstrate the gap;
 - live balance fetch failure can still fall back to local ledger state in some
   paths;
 - no tested out-of-band alert path for fail-closed events;
@@ -294,13 +299,19 @@ Current building blocks:
 - `KrakenRESTClient` centralizes private endpoint calls;
 - execution, portfolio, and UI tests already use fake clients and services in
   narrow places;
-- OMS and portfolio services can receive injected clients/stores.
+- OMS and portfolio services can receive injected clients/stores;
+- `tests/fakes/fake_kraken.py` now provides an initial deterministic fake for
+  AddOrder, OpenOrders, ClosedOrders, cancellation, and selected submit faults;
+- `tests/test_money_safety_order_lifecycle.py` drives real OMS, real execution
+  adapter, and real SQLite store through that fake.
 
-Proof gap:
+Remaining proof gap:
 
-- there is no single exchange simulator that models order lifecycle, account
-  balances, trades, ledgers, partial fills, rejects, stale reads, and crash
-  points together.
+- the current fake is enough for initial order-lifecycle proofs, but it does not
+  yet model account balances, trades, ledgers, partial fills, stale reads, or
+  portfolio reconciliation behavior together;
+- strict failing tests currently prove the duplicate-submit and restart recovery
+  gaps rather than proving the final safe behavior.
 
 Done when:
 
@@ -325,13 +336,15 @@ Current building blocks:
 - local order IDs are deterministic for plan actions;
 - `userref` is deterministic and persisted;
 - execution orders and results are saved to SQLite;
-- bootstrap loads persisted open orders and refreshes/reconciles order state.
+- bootstrap loads persisted open orders and refreshes/reconciles order state;
+- strict failing tests now cover remote-accepted/local-response-lost duplicate
+  submission and restart recovery gaps.
 
 Proof gap:
 
 - `userref` helps attribution and recovery, but it is not full idempotency;
 - there is no adversarial proof for "remote accepted, local died before storing
-  txid";
+  txid" passing safely yet;
 - there is no explicit persisted submit-intent state that proves exactly what
   was in flight at crash time.
 
@@ -552,27 +565,28 @@ Explicit non-goals:
 
 ## Immediate Next Slice
 
-The next engineering slice should be small but foundational:
+The initial fake Kraken/fault harness now exists, and it demonstrates the
+highest-risk order-lifecycle gap with strict failing tests. The next engineering
+slice should convert those failing proofs into safe production behavior without
+adding a schema migration unless the existing `local_id`, `status`, and
+`raw_request_json` fields prove insufficient.
 
-1. Add a fake Kraken/fault harness for private exchange behavior.
-2. Use it to prove one crash/restart order lifecycle case.
-3. Document exactly which money-safety claims remain unproven.
+Recommended next behavior slice:
 
-Recommended first scenario:
+1. Persist live submit intent before any non-validate `AddOrder` call.
+2. Use the deterministic local order ID as Kraken `cl_ord_id` where supported.
+3. Stop blind live retries for ambiguous `AddOrder` timeouts, network errors,
+   and service failures.
+4. Reconcile pending/unknown submit intents through OpenOrders and ClosedOrders
+   before any new opening risk is submitted.
+5. Fix recovered-order registration so a remotely open order re-enters
+   in-memory tracking after restart.
+6. Keep known-not-accepted retry behavior covered separately from ambiguous
+   submit uncertainty.
 
-- an eligible live-equivalent plan generates one order;
-- local intent is persisted before submit;
-- fake Kraken accepts the order and assigns a txid;
-- the client raises a timeout before the adapter receives the response;
-- the process is "restarted" by constructing fresh services from persisted
-  state;
-- recovery queries open/closed orders and links the remote order back to local
-  state;
-- no duplicate order is submitted;
-- new opening risk remains blocked until the in-flight state is reconciled.
-
-That scenario is intentionally narrower than the full program. It proves the
-harness is useful and attacks the highest-risk lifecycle gap first.
+That slice remains narrower than the full program. It attacks the current
+duplicate-submit proof gap without claiming full reconciliation, alerting,
+balance-drift, strategy-promotion, or live-readiness coverage.
 
 ## Documentation Rules For Future Work
 
