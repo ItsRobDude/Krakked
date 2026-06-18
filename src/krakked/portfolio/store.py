@@ -673,12 +673,16 @@ class PortfolioStore(abc.ABC):
         """Lookup a stored order by Kraken id or user reference."""
         pass
 
-    @abc.abstractmethod
     def get_order_by_client_order_id(
         self, client_order_id: str
     ) -> Optional["LocalOrder"]:
-        """Lookup a stored order by its persisted client order id."""
-        pass
+        """Lookup a stored order by its persisted client order id.
+
+        Stores that do not index client order ids return ``None``, which leaves
+        recovery to fall through to other identifiers (fail-safe). The SQLite
+        store overrides this with an indexed lookup.
+        """
+        return None
 
     @abc.abstractmethod
     def get_execution_plans(
