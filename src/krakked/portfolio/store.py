@@ -674,6 +674,13 @@ class PortfolioStore(abc.ABC):
         pass
 
     @abc.abstractmethod
+    def get_order_by_client_order_id(
+        self, client_order_id: str
+    ) -> Optional["LocalOrder"]:
+        """Lookup a stored order by its persisted client order id."""
+        pass
+
+    @abc.abstractmethod
     def get_execution_plans(
         self,
         plan_id: Optional[str] = None,
@@ -1417,8 +1424,7 @@ class SQLitePortfolioStore(PortfolioStore):
             raw_client_order_id = raw_request.get("cl_ord_id")
             client_order_id = (
                 raw_client_order_id.strip()
-                if isinstance(raw_client_order_id, str)
-                and raw_client_order_id.strip()
+                if isinstance(raw_client_order_id, str) and raw_client_order_id.strip()
                 else None
             )
 
@@ -1449,9 +1455,7 @@ class SQLitePortfolioStore(PortfolioStore):
                     order.avg_fill_price,
                     order.last_error,
                     client_order_id,
-                    (
-                        json.dumps(raw_request, default=str) if raw_request else None
-                    ),
+                    (json.dumps(raw_request, default=str) if raw_request else None),
                     (
                         json.dumps(order.raw_response, default=str)
                         if order.raw_response

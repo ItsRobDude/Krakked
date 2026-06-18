@@ -24,7 +24,6 @@ from krakked.execution.oms import ExecutionService
 from krakked.market_data.models import PairMetadata
 from krakked.portfolio.store import SQLitePortfolioStore
 from krakked.strategy.models import ExecutionPlan, RiskAdjustedAction
-
 from tests.fakes.fake_kraken import (
     ACCEPT,
     ACCEPT_THEN_LOST,
@@ -108,7 +107,9 @@ def _plan(plan_id: str = "plan-1") -> ExecutionPlan:
     )
 
 
-def _service(client: FakeKrakenRESTClient, store: SQLitePortfolioStore) -> ExecutionService:
+def _service(
+    client: FakeKrakenRESTClient, store: SQLitePortfolioStore
+) -> ExecutionService:
     config = _live_config()
     adapter = KrakenExecutionAdapter(
         client=cast(KrakenRESTClient, client), config=config
@@ -230,6 +231,7 @@ def test_generic_service_unavailable_without_remote_match_is_not_retried(tmp_pat
     assert unknown_orders[0].status == "submit_unknown"
     assert unknown_orders[0].raw_request["cl_ord_id"] == unknown_orders[0].local_id
     assert "userref" not in unknown_orders[0].raw_request
+
 
 def test_lost_response_restart_recovery_links_single_remote_order(tmp_path):
     """A restart must recover the accepted remote order without re-submitting."""

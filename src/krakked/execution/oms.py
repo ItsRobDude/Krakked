@@ -1053,9 +1053,7 @@ class ExecutionService:
                     return order
 
             if self.store and hasattr(self.store, "get_order_by_client_order_id"):
-                stored_order = self.store.get_order_by_client_order_id(
-                    client_order_id
-                )
+                stored_order = self.store.get_order_by_client_order_id(client_order_id)
                 if stored_order:
                     self.kraken_to_local[kraken_id] = stored_order.local_id
                     return stored_order

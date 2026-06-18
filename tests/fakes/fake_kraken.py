@@ -20,10 +20,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from krakked.connection.exceptions import (
-    RateLimitError,
-    ServiceUnavailableError,
-)
+from krakked.connection.exceptions import RateLimitError, ServiceUnavailableError
 
 # add_order fault modes
 ACCEPT = "accept"
@@ -99,7 +96,11 @@ class FakeKrakenRESTClient:
     # -------------------------------------------------- KrakenRESTClient surface
     def add_order(self, params: dict[str, Any]) -> dict[str, Any]:
         self.add_order_calls.append(dict(params))
-        mode = self._add_order_modes.pop(0) if self._add_order_modes else self.add_order_mode
+        mode = (
+            self._add_order_modes.pop(0)
+            if self._add_order_modes
+            else self.add_order_mode
+        )
 
         if mode == REJECT:
             return {"error": [self.reject_error]}

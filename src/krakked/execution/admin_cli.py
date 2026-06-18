@@ -10,7 +10,7 @@ from uuid import uuid4
 
 from krakked.bootstrap import bootstrap
 from krakked.config import load_config
-from krakked.execution.oms import ExecutionService, SUBMIT_INTENT_STATUSES
+from krakked.execution.oms import SUBMIT_INTENT_STATUSES, ExecutionService
 from krakked.execution.order_correlation import (
     CorrelationState,
     classify_client_order_id_matches,
@@ -607,7 +607,9 @@ def build_parser() -> argparse.ArgumentParser:
         "clear-submit-unknown",
         help="Mark one submit_unknown order absent after a confirmed Kraken no-match",
     )
-    clear_parser.add_argument("--local-id", required=True, help="Local order id to clear")
+    clear_parser.add_argument(
+        "--local-id", required=True, help="Local order id to clear"
+    )
     clear_parser.add_argument(
         "--confirmed-absent",
         action="store_true",
@@ -621,7 +623,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     force_link_parser.add_argument("--local-id", required=True, help="Local order id")
     force_link_parser.add_argument(
-        "--kraken-id", required=True, help="Kraken txid to link after manual verification"
+        "--kraken-id",
+        required=True,
+        help="Kraken txid to link after manual verification",
     )
     force_link_parser.add_argument(
         "--reason", required=True, help="Operator reason recorded in the audit trail"
@@ -649,7 +653,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     probe_parser.add_argument("--pair", required=True, help="Kraken pair, e.g. XBTUSD")
     probe_parser.add_argument("--volume", required=True, help="Validate-only volume")
-    probe_parser.add_argument("--price", required=True, help="Validate-only limit price")
+    probe_parser.add_argument(
+        "--price", required=True, help="Validate-only limit price"
+    )
     probe_parser.set_defaults(func=probe_client_order_id)
 
     cancel_parser = sub.add_parser(

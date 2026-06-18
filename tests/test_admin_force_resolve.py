@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 from typing import Any, Optional
-
 from unittest.mock import MagicMock
 
 import pytest
@@ -217,7 +216,9 @@ def _real_service(tmp_path: Any, client: Any) -> ExecutionService:
     config = ExecutionConfig(mode="paper", validate_only=False)
     adapter = KrakenExecutionAdapter(client=client, config=config)
     store = SQLitePortfolioStore(str(tmp_path / "portfolio.db"))
-    service = ExecutionService(adapter=adapter, store=store, config=config, market_data=md)
+    service = ExecutionService(
+        adapter=adapter, store=store, config=config, market_data=md
+    )
     return service
 
 

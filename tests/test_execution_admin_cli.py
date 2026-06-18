@@ -259,9 +259,7 @@ class _SubmitIntentClient:
 
 
 class _SubmitIntentService:
-    def __init__(
-        self, store: _SubmitIntentStore, client: _SubmitIntentClient
-    ) -> None:
+    def __init__(self, store: _SubmitIntentStore, client: _SubmitIntentClient) -> None:
         self.store = store
         self.adapter = SimpleNamespace(client=client)
         self.open_orders: dict[str, LocalOrder] = {
