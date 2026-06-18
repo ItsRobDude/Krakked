@@ -14,10 +14,11 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from types import SimpleNamespace
-from typing import Any, Dict
+from typing import Any, Dict, cast
 from unittest.mock import MagicMock
 
 from krakked.config import ExecutionConfig
+from krakked.connection.rest_client import KrakenRESTClient
 from krakked.execution.adapter import KrakenExecutionAdapter
 from krakked.execution.oms import ExecutionService
 from krakked.market_data.models import PairMetadata
@@ -109,13 +110,43 @@ def _plan(plan_id: str = "plan-1") -> ExecutionPlan:
 
 def _service(client: FakeKrakenRESTClient, store: SQLitePortfolioStore) -> ExecutionService:
     config = _live_config()
-    adapter = KrakenExecutionAdapter(client=client, config=config)
+    adapter = KrakenExecutionAdapter(
+        client=cast(KrakenRESTClient, client), config=config
+    )
     return ExecutionService(
         adapter=adapter,
         store=store,
         config=config,
         market_data=_market_data(),
         risk_status_provider=_inactive_risk,
+    )
+
+
+class _RecordingAlerts:
+    def __init__(self) -> None:
+        self.events: list[dict[str, Any]] = []
+
+    def send(self, **kwargs: Any) -> bool:
+        self.events.append(kwargs)
+        return True
+
+
+def _service_with_alerts(
+    client: FakeKrakenRESTClient,
+    store: SQLitePortfolioStore,
+    alerts: _RecordingAlerts,
+) -> ExecutionService:
+    config = _live_config()
+    adapter = KrakenExecutionAdapter(
+        client=cast(KrakenRESTClient, client), config=config
+    )
+    return ExecutionService(
+        adapter=adapter,
+        store=store,
+        config=config,
+        market_data=_market_data(),
+        risk_status_provider=_inactive_risk,
+        alert_notifier=alerts,
     )
 
 
@@ -246,3 +277,91 @@ def test_unresolved_submit_unknown_blocks_new_opening_risk_after_restart(tmp_pat
     assert second_result.orders
     assert second_result.orders[0].status == "rejected"
     assert "unresolved live submit intent" in (second_result.orders[0].last_error or "")
+
+
+def test_same_plan_block_does_not_overwrite_submit_unknown(tmp_path):
+    """Re-running the same plan must not replace the original submit_unknown row."""
+
+    client = FakeKrakenRESTClient(add_order_mode=SERVICE_UNAVAILABLE)
+    store = SQLitePortfolioStore(str(tmp_path / "portfolio.db"))
+    service = _service(client, store)
+
+    first_result = service.execute_plan(_plan(plan_id="same-plan"))
+
+    assert first_result.errors
+    original = store.get_open_orders()[0]
+    assert original.status == "submit_unknown"
+    original_client_order_id = original.raw_request["cl_ord_id"]
+
+    client.add_order_mode = ACCEPT
+    restarted = _service(client, store)
+    second_result = restarted.execute_plan(_plan(plan_id="same-plan"))
+
+    assert second_result.errors
+    assert len(client.add_order_calls) == 1
+    assert second_result.orders
+    assert second_result.orders[0].status == "rejected"
+    assert second_result.orders[0].local_id != original.local_id
+
+    persisted = store.get_order_by_client_order_id(original_client_order_id)
+    assert persisted is not None
+    assert persisted.local_id == original.local_id
+    assert persisted.status == "submit_unknown"
+    assert persisted.kraken_order_id is None
+
+
+def test_ambiguous_client_order_match_stays_submit_unknown(tmp_path):
+    """Multiple remote matches for one cl_ord_id must not adopt an arbitrary txid."""
+
+    client = FakeKrakenRESTClient(add_order_mode=ACCEPT_THEN_LOST)
+    client.duplicate_client_order_matches = True
+    store = SQLitePortfolioStore(str(tmp_path / "portfolio.db"))
+    service = _service(client, store)
+
+    result = service.execute_plan(_plan(plan_id="ambiguous-plan"))
+
+    assert result.errors
+    assert len(client.add_order_calls) == 1
+    unknown = store.get_open_orders()[0]
+    assert unknown.status == "submit_unknown"
+    assert unknown.kraken_order_id is None
+
+
+def test_submit_unknown_and_blocked_opening_emit_alerts(tmp_path):
+    client = FakeKrakenRESTClient(add_order_mode=SERVICE_UNAVAILABLE)
+    store = SQLitePortfolioStore(str(tmp_path / "portfolio.db"))
+    alerts = _RecordingAlerts()
+    service = _service_with_alerts(client, store, alerts)
+
+    service.execute_plan(_plan(plan_id="alert-unknown"))
+
+    assert [event["event"] for event in alerts.events] == ["order_submit_unknown"]
+
+    client.add_order_mode = ACCEPT
+    restarted_alerts = _RecordingAlerts()
+    restarted = _service_with_alerts(client, store, restarted_alerts)
+    restarted.execute_plan(_plan(plan_id="alert-blocked"))
+
+    assert [event["event"] for event in restarted_alerts.events] == [
+        "order_blocked_submit_unknown"
+    ]
+
+
+def test_lost_response_without_cl_ord_id_echo_is_not_adopted(tmp_path):
+    """If the exchange filters but does NOT echo cl_ord_id back, recovery must
+    refuse to adopt the single returned order and stay submit_unknown."""
+
+    client = FakeKrakenRESTClient(
+        add_order_mode=ACCEPT_THEN_LOST,
+        echo_client_order_id=False,
+    )
+    store = SQLitePortfolioStore(str(tmp_path / "portfolio.db"))
+    service = _service(client, store)
+
+    result = service.execute_plan(_plan())
+
+    # The exchange holds the order, but recovery could not attribute it.
+    assert client.open_count == 1
+    order = result.orders[0]
+    assert order.status == "submit_unknown"
+    assert order.kraken_order_id is None

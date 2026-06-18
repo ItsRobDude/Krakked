@@ -10,6 +10,7 @@ import appdirs  # type: ignore[import-untyped]
 import yaml  # type: ignore[import-untyped]
 
 from krakked.config_models import (
+    AlertConfig,
     AppConfig,
     ExecutionConfig,
     MarketDataConfig,
@@ -1521,6 +1522,37 @@ def parse_app_config(
 
     ui_config = _parse_ui_config(ui_data, default_ui, is_live_env, config_path)
 
+    alerts_data = raw_config.get("alerts") or {}
+    if not isinstance(alerts_data, dict):
+        logger.warning(
+            "Alerts config is not a mapping; using disabled defaults",
+            extra={"event": "config_invalid_alerts", "config_path": str(config_path)},
+        )
+        alerts_data = {}
+
+    alert_timeout = alerts_data.get("timeout_seconds", AlertConfig().timeout_seconds)
+    if not isinstance(alert_timeout, (int, float)) or float(alert_timeout) <= 0:
+        logger.warning(
+            "alerts.timeout_seconds is invalid; using default",
+            extra={
+                "event": "config_invalid_alert_timeout",
+                "config_path": str(config_path),
+            },
+        )
+        alert_timeout = AlertConfig().timeout_seconds
+
+    raw_webhook_url = alerts_data.get("webhook_url")
+    webhook_url = (
+        raw_webhook_url.strip()
+        if isinstance(raw_webhook_url, str) and raw_webhook_url.strip()
+        else None
+    )
+    alerts_config = AlertConfig(
+        enabled=bool(alerts_data.get("enabled", False)),
+        webhook_url=webhook_url,
+        timeout_seconds=float(alert_timeout),
+    )
+
     return AppConfig(
         region=RegionProfile(
             code=region_data.get("code", default_region.code),
@@ -1566,6 +1598,7 @@ def parse_app_config(
         profiles=profiles,
         session=session_config,
         ml=ml_config,
+        alerts=alerts_config,
     )
 
 

@@ -14,6 +14,7 @@ from krakked.market_data.models import PairMetadata
 
 from .exceptions import ExecutionError, OrderCancelError, OrderRejectedError
 from .models import LocalOrder
+from .order_correlation import CorrelationState, classify_client_order_id_matches
 from .router import build_order_payload
 
 logger = logging.getLogger(__name__)
@@ -486,11 +487,34 @@ class KrakenExecutionAdapter:
                 continue
 
             matches = remote.get(result_key) or {}
-            if not matches:
+            result = classify_client_order_id_matches(
+                matches, expected_client_order_id=client_order_id
+            )
+            if result.state is CorrelationState.NONE:
                 continue
+            if not result.is_exact:
+                # A returned-but-unattributable candidate means the
+                # endpoint/filter/echo contract is unproven. Do not adopt; leave
+                # the submit unknown for explicit reconciliation.
+                logger.error(
+                    "Unsafe client order id recovery result; leaving live submit unknown",
+                    extra=structured_log_extra(
+                        event="order_submit_unknown_unsafe_match",
+                        plan_id=order.plan_id,
+                        strategy_id=order.strategy_id,
+                        pair=order.pair,
+                        local_order_id=order.local_id,
+                        client_order_id=client_order_id,
+                        endpoint=endpoint_name,
+                        correlation_state=result.state.value,
+                        raw_count=result.raw_count,
+                        reason=result.reason,
+                    ),
+                )
+                return False
 
-            kraken_order_id, remote_payload = next(iter(matches.items()))
-            order.kraken_order_id = kraken_order_id
+            remote_payload = dict(result.payload or {})
+            order.kraken_order_id = result.kraken_order_id
             order.raw_response = remote_payload
             order.status = remote_payload.get("status") or (
                 "closed" if is_closed else "open"
@@ -504,7 +528,7 @@ class KrakenExecutionAdapter:
                     strategy_id=order.strategy_id,
                     pair=order.pair,
                     local_order_id=order.local_id,
-                    kraken_order_id=kraken_order_id,
+                    kraken_order_id=result.kraken_order_id,
                     client_order_id=client_order_id,
                     original_error=str(error),
                     endpoint=endpoint_name,

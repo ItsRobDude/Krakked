@@ -4,6 +4,7 @@ import threading
 from dataclasses import dataclass, field
 from typing import Optional
 
+from krakked.alerts import WebhookAlertNotifier
 from krakked.bootstrap import bootstrap
 from krakked.config import AppConfig
 from krakked.connection.rest_client import KrakenRESTClient
@@ -88,6 +89,7 @@ def build_app_context(allow_interactive_setup: bool = True) -> AppContext:
         store=portfolio.store,
         rate_limiter=rate_limiter,
         risk_status_provider=strategy_engine.get_risk_status,
+        alert_notifier=WebhookAlertNotifier(config.alerts),
     )
 
     metrics = SystemMetrics()

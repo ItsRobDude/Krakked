@@ -20,6 +20,7 @@ from .adapter import (
 )
 from .exceptions import ExecutionError
 from .models import ExecutionResult, LocalOrder
+from .order_correlation import CorrelationState, classify_client_order_id_matches
 from .router import build_order_from_plan_action, build_order_payload
 from .userref import resolve_userref
 
@@ -45,6 +46,7 @@ TERMINAL_ORDER_STATUSES = {
     "filled",
     "validated",
     "error",
+    "submit_absent",
 }
 
 if TYPE_CHECKING:
@@ -72,6 +74,7 @@ class ExecutionService:
         market_data: MarketDataAPI | None = None,
         rate_limiter: Optional[RateLimiter] = None,
         risk_status_provider: Optional[Callable[[], "RiskStatus"]] = None,
+        alert_notifier: Optional[Any] = None,
     ):
         self.adapter = adapter or get_execution_adapter(
             client=client, config=config or ExecutionConfig(), rate_limiter=rate_limiter
@@ -84,6 +87,7 @@ class ExecutionService:
         self.recent_executions: List[ExecutionResult] = []
         self.kraken_to_local: Dict[str, str] = {}
         self._risk_status_provider = risk_status_provider
+        self.alert_notifier = alert_notifier
         self._last_dead_man_refresh_at: Optional[datetime] = None
 
         adapter_config = getattr(self.adapter, "config", None)
@@ -259,6 +263,36 @@ class ExecutionService:
             and get_live_trading_block_reason(config) is None
         )
 
+    def _send_safety_alert(
+        self,
+        *,
+        event: str,
+        title: str,
+        message: str,
+        severity: str = "error",
+        context: Optional[dict[str, Any]] = None,
+    ) -> None:
+        notifier = self.alert_notifier
+        if notifier is None or not hasattr(notifier, "send"):
+            return
+        try:
+            notifier.send(
+                event=event,
+                title=title,
+                message=message,
+                severity=severity,
+                context=context or {},
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.error(
+                "Safety alert notifier failed",
+                extra=structured_log_extra(
+                    event="safety_alert_failed",
+                    alert_event=event,
+                    error=str(exc),
+                ),
+            )
+
     @staticmethod
     def _client_order_id_for_order(order: LocalOrder) -> Optional[str]:
         raw_request = order.raw_request or {}
@@ -298,16 +332,34 @@ class ExecutionService:
                     continue
 
                 matches = remote.get(result_key) or {}
-                if not matches:
+                result = classify_client_order_id_matches(
+                    matches, expected_client_order_id=client_order_id
+                )
+                if result.state is CorrelationState.NONE:
                     continue
-
-                for kraken_id, payload in matches.items():
-                    self._sync_remote_order(
-                        kraken_id,
-                        payload,
-                        is_closed=is_closed,
-                        client_order_id=client_order_id,
+                if not result.is_exact:
+                    # Returned-but-unattributable candidate: the filter/echo
+                    # contract is unproven, so do not adopt. Leave the intent
+                    # unresolved for explicit operator reconciliation.
+                    logger.error(
+                        "Unsafe client order id reconciliation result; leaving submit intent unresolved",
+                        extra=structured_log_extra(
+                            event="order_submit_unknown_unsafe_match",
+                            local_order_id=order.local_id,
+                            client_order_id=client_order_id,
+                            correlation_state=result.state.value,
+                            raw_count=result.raw_count,
+                            reason=result.reason,
+                        ),
                     )
+                    break
+
+                self._sync_remote_order(
+                    str(result.kraken_order_id),
+                    dict(result.payload or {}),
+                    is_closed=is_closed,
+                    client_order_id=client_order_id,
+                )
                 break
 
     def _create_rejected_order(
@@ -576,12 +628,8 @@ class ExecutionService:
                     "reconcile submit_unknown/pending_submit orders before "
                     "opening new risk"
                 )
-                order.status = "rejected"
-                order.last_error = reason
-                order.updated_at = datetime.now(UTC)
+                blocked_order = self._create_rejected_order(plan, action, reason)
                 result.errors.append(reason)
-                if self.store:
-                    self.store.save_order(order)
                 logger.error(
                     "Order blocked by unresolved live submit intent",
                     extra=structured_log_extra(
@@ -589,10 +637,21 @@ class ExecutionService:
                         plan_id=plan.plan_id,
                         strategy_id=action.strategy_id,
                         pair=action.pair,
-                        local_order_id=order.local_id,
+                        local_order_id=blocked_order.local_id,
                     ),
                 )
-                result.orders.append(order)
+                self._send_safety_alert(
+                    event="order_blocked_submit_unknown",
+                    title="Krakked blocked new live opening risk",
+                    message=reason,
+                    context={
+                        "plan_id": plan.plan_id,
+                        "strategy_id": action.strategy_id,
+                        "pair": action.pair,
+                        "blocked_order_id": blocked_order.local_id,
+                    },
+                )
+                result.orders.append(blocked_order)
                 continue
 
             guardrail_reason = self._evaluate_guardrails(
@@ -744,6 +803,18 @@ class ExecutionService:
 
                 if order.status in SUBMIT_INTENT_STATUSES:
                     self.register_order(order)
+                    self._send_safety_alert(
+                        event="order_submit_unknown",
+                        title="Krakked live order submit state unknown",
+                        message=message,
+                        context={
+                            "plan_id": order.plan_id,
+                            "strategy_id": order.strategy_id,
+                            "pair": order.pair,
+                            "local_order_id": order.local_id,
+                            "client_order_id": self._client_order_id_for_order(order),
+                        },
+                    )
 
                 if self.store:
                     self.store.save_order(order)

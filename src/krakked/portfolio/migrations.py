@@ -177,6 +177,7 @@ def migrate_4_to_5(conn: sqlite3.Connection) -> None:
             cumulative_base_filled REAL,
             avg_fill_price REAL,
             last_error TEXT,
+            client_order_id TEXT,
             raw_request_json TEXT,
             raw_response_json TEXT
         )
@@ -187,6 +188,9 @@ def migrate_4_to_5(conn: sqlite3.Connection) -> None:
     )
     cursor.execute(
         "CREATE INDEX IF NOT EXISTS idx_execution_orders_kraken_id ON execution_orders(kraken_order_id)"
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_execution_orders_client_order_id ON execution_orders(client_order_id)"
     )
 
     cursor.execute(
@@ -299,6 +303,7 @@ def run_migrations(
         7: migrate_7_to_8,
         8: migrate_8_to_9,
         9: migrate_9_to_10,
+        10: migrate_10_to_11,
     }
 
     for version in range(from_version, to_version):
@@ -514,5 +519,58 @@ def migrate_9_to_10(conn: sqlite3.Connection) -> None:
         """
         CREATE INDEX IF NOT EXISTS idx_ml_model_checkpoints_updated
             ON ml_model_checkpoints(strategy_id, model_key, updated_at)
+        """
+    )
+
+
+def migrate_10_to_11(conn: sqlite3.Connection) -> None:
+    """Add indexed client order id storage for live order reconciliation."""
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='execution_orders'"
+    )
+    if cursor.fetchone() is None:
+        return
+
+    columns = {
+        row[1]
+        for row in cursor.execute("PRAGMA table_info(execution_orders)").fetchall()
+    }
+
+    if "client_order_id" not in columns:
+        cursor.execute("ALTER TABLE execution_orders ADD COLUMN client_order_id TEXT")
+
+    rows = cursor.execute(
+        """
+        SELECT local_id, raw_request_json
+        FROM execution_orders
+        WHERE client_order_id IS NULL
+          AND raw_request_json IS NOT NULL
+        """
+    ).fetchall()
+    for local_id, raw_request_json in rows:
+        client_order_id = None
+        try:
+            raw_request = json.loads(raw_request_json)
+        except (TypeError, json.JSONDecodeError):
+            raw_request = {}
+        if isinstance(raw_request, dict):
+            raw_value = raw_request.get("cl_ord_id")
+            if isinstance(raw_value, str) and raw_value.strip():
+                client_order_id = raw_value.strip()
+        if client_order_id:
+            cursor.execute(
+                """
+                UPDATE execution_orders
+                SET client_order_id = ?
+                WHERE local_id = ?
+                """,
+                (client_order_id, local_id),
+            )
+
+    cursor.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_execution_orders_client_order_id
+            ON execution_orders(client_order_id)
         """
     )

@@ -36,9 +36,9 @@ Current trust level: Level 0, research and paper only.
   trades, ledgers, partial fills, and stale-read modeling remain missing.
 - Milestones B-E, order lifecycle, reconciliation, risk limits, and emergency
   operations: building blocks exist. Milestone B now has an initial passing
-  proof for AddOrder response-loss duplicate-submit prevention, but broader
-  crash/restart, fill, balance, reconciliation, and emergency-operation proofs
-  remain incomplete.
+  proof for AddOrder response-loss duplicate-submit prevention plus manual
+  `submit_unknown` recovery tooling, but broader crash/restart, fill, balance,
+  reconciliation, and emergency-operation proofs remain incomplete.
 - Milestone F, data continuity: continuity tooling exists, but strict replay
   gates do not yet consume continuity gaps directly.
 - Milestone G, paper soak, validate-only drill, and tiny live smoke: not
@@ -53,7 +53,8 @@ Known live blockers:
   incomplete;
 - live balance fetch failure can still fall back to local ledger state in some
   paths;
-- no tested out-of-band alert path for fail-closed events;
+- out-of-band alerting is only proved for `submit_unknown` and blocked opening
+  risk; broader fail-closed alert scenarios remain unproved;
 - no quantified live reconciliation staleness policy or relative drift
   threshold;
 - no enforced live strategy boundary that prevents research strategies from
@@ -67,7 +68,7 @@ Krakked has substantial safety and observability building blocks:
   `execution.allow_live_trading`;
 - OMS persistence for execution plans, local orders, order events, and execution
   results;
-- Kraken order tagging via `userref`;
+- Kraken order tagging via `userref` and live per-order `cl_ord_id`;
 - exchange order refresh/reconciliation hooks for open and closed orders;
 - portfolio sync from trades, ledgers, and balances;
 - drift detection and kill-switch wiring;
@@ -339,6 +340,18 @@ Current building blocks:
 - local order IDs are deterministic for plan actions;
 - live, non-validate AddOrder payloads use the deterministic local order ID as
   Kraken `cl_ord_id`;
+- SQLite stores `cl_ord_id` in an indexed `client_order_id` column for exact
+  local lookup;
+- a shared tri-state attribution helper classifies lookups as `none`, `exact`
+  (one candidate echoing the expected `cl_ord_id`), `unverified` (one candidate
+  missing/mismatched on `cl_ord_id`), or `ambiguous` (>1 candidate); adoption
+  is allowed only on `exact`, and `unverified` is kept distinct from `none`;
+- admin tooling can reconcile submit intents (adopt only on `exact`), clear to
+  `submit_absent` only when both endpoints are `none`, run a validate-only
+  `cl_ord_id` probe, and perform explicit, audited operator force-link /
+  force-clear recovery for `unverified`/`ambiguous` exchange state;
+- `submit_unknown` and blocked-opening events can emit a configured webhook
+  alert;
 - `userref` is deterministic and persisted;
 - execution orders and results are saved to SQLite;
 - bootstrap loads persisted open orders and refreshes/reconciles order state;
@@ -352,9 +365,16 @@ Proof gap:
 - the initial proof covers AddOrder response loss and service-unavailable
   ambiguity, but not every process-death point, fill timing, cancel timing, or
   stale exchange-read case;
-- submit-intent state is persisted in the existing execution order table, but
-  broader lifecycle drills still need to prove it across additional failure
-  points.
+- submit-intent state is persisted in the existing execution order table, and
+  manual confirmed-absent clearing exists, but broader lifecycle drills still
+  need to prove it across additional failure points;
+- the validate-only `cl_ord_id` probe proves Kraken *parameter* acceptance only;
+  it does not prove a live order is queryable by `cl_ord_id` or that Kraken
+  echoes it back in the order payload. Auto-recovery requires an exact echoed
+  `cl_ord_id`; missing/mismatched echo is treated as `unverified` and fails
+  closed. Whether Kraken echoes `cl_ord_id` in OpenOrders/ClosedOrders payloads
+  is unproven until a Level-4 tiny-live round trip confirms it; if it does not
+  echo, auto-recovery is effectively manual-only via the audited force path.
 
 Done when:
 
@@ -463,6 +483,8 @@ Current building blocks:
 - background emergency flatten loop;
 - dead-man switch heartbeat support;
 - admin CLI panic path.
+- webhook alert transport for initial submit-unknown and blocked-opening
+  fail-closed events.
 
 Proof gap:
 
@@ -470,8 +492,9 @@ Proof gap:
 - flatten can be unsafe if open orders remain, sync fails, or positions are
   stale;
 - dead-man heartbeat needs realistic live validation;
-- fail-closed events can stop/block without proving that the operator receives
-  an out-of-band notification;
+- only the submit-unknown and blocked-opening alert path is currently proved;
+  kill-switch, drift, stale reconciliation, dead-man, emergency-flatten, and
+  unexpected-stop alerts still need coverage;
 - runbooks and proof outputs should be tied to tests/drills.
 
 Done when:
@@ -573,9 +596,9 @@ Explicit non-goals:
 
 ## Immediate Next Slice
 
-The initial AddOrder response-loss proof is now green. The next engineering
-slice should widen the same fake-exchange harness toward reconciliation evidence
-without claiming full live readiness.
+The initial AddOrder response-loss and submit-unknown hardening proofs are now
+green. The next engineering slice should widen the same fake-exchange harness
+toward reconciliation evidence without claiming full live readiness.
 
 Recommended next behavior slice:
 
@@ -588,9 +611,9 @@ Recommended next behavior slice:
 4. Keep the scenario small: one pair, one order, one mismatch or stale-read
    condition, one expected block.
 
-That slice should advance Milestone C. It should not broaden into alerting,
-dashboard UI, strategy promotion, or data-continuity scoreboards until the
-reconciliation gate has a deterministic failing/passing proof.
+That slice should advance Milestone C. It should not broaden into dashboard UI,
+strategy promotion, extra alert scenarios, or data-continuity scoreboards until
+the reconciliation gate has a deterministic failing/passing proof.
 
 ## Documentation Rules For Future Work
 

@@ -354,6 +354,7 @@ CLI helpers default to the local `portfolio.db` SQLite file; pass `--db-path` to
 # Review open/pending orders and execution summaries
 poetry run python -m krakked.execution.admin_cli list-open
 poetry run python -m krakked.execution.admin_cli recent-executions
+poetry run python -m krakked.execution.admin_cli reconcile-submit-intents
 
 # Targeted or global cancels (remains safe in paper mode)
 poetry run python -m krakked.execution.admin_cli cancel --plan-id <id>
@@ -364,9 +365,9 @@ To query SQLite directly:
 
 ```bash
 sqlite3 portfolio.db \
-  "SELECT plan_id, local_id, kraken_order_id, status, volume, price FROM execution_orders ORDER BY created_at DESC LIMIT 5;"
+  "SELECT plan_id, local_id, client_order_id, kraken_order_id, status, requested_base_size, requested_price FROM execution_orders ORDER BY created_at DESC LIMIT 5;"
 sqlite3 portfolio.db \
-  "SELECT id, started_at, completed_at, status, summary FROM execution_results ORDER BY started_at DESC LIMIT 3;"
+  "SELECT plan_id, started_at, completed_at, success, errors_json FROM execution_results ORDER BY started_at DESC LIMIT 3;"
 ```
 
 Key tables to review are `execution_orders` (every `LocalOrder` snapshot), `execution_order_events` (state transitions), and `execution_results` (per-plan outcome summaries). The admin CLI mirrors that data without requiring SQL and performs a reconciliation pass after panic cancel-all.
@@ -403,6 +404,29 @@ Only adapters that submit orders honor live mode (`ExecutionAdapter`/`KrakenExec
 
 Before enabling live trading, run at least one paper `krakked run-once` cycle and review orders/results (via SQLite or the admin CLI) to validate sizing, tags, and guardrails.
 
+Existing installs must migrate the portfolio database before a live/paper
+restart after schema upgrades:
+
+```bash
+poetry run krakked migrate --db-path portfolio.db
+```
+
+The current order schema stores Kraken `cl_ord_id` in
+`execution_orders.client_order_id` for indexed recovery lookup.
+
+Optional fail-closed webhook alerts are disabled by default:
+
+```yaml
+alerts:
+  enabled: false
+  webhook_url: null
+  timeout_seconds: 5.0
+```
+
+When enabled, the first alert coverage is intentionally narrow:
+`submit_unknown` and blocked opening risk caused by unresolved submit intent.
+Other fail-closed scenarios remain live blockers until separately proved.
+
 ### ↩️ Disabling Live Trading
 
 To return to paper-only safety:
@@ -420,6 +444,11 @@ The execution admin CLI exposes operational levers that work against the SQLite 
 
 * `list-open`: Show persisted and in-memory open/pending orders to confirm exposure.
 * `recent-executions`: Inspect recent plan runs and their success/error summaries.
+* `reconcile-submit-intents`: Query Kraken OpenOrders/ClosedOrders by stored `cl_ord_id`. Auto-recovery adopts an order **only** on an exact match: exactly one returned candidate whose payload **echoes** the expected `cl_ord_id`. A single candidate that is missing/mismatched on `cl_ord_id` (`unverified`) or more than one candidate (`ambiguous`) is left unresolved and fails closed.
+* `clear-submit-unknown --local-id <id> --confirmed-absent`: Mark a local order `submit_absent` **only** when both OpenOrders and ClosedOrders return zero candidates. An exact match is refused (reconcile instead); an `unverified`/`ambiguous` candidate is refused (use the force path) so a possibly-live order is never declared absent.
+* `force-link-submit-unknown --local-id <id> --kraken-id <txid> --reason <text>`: Operator-confirmed, audited link of a submit intent to a Kraken txid after manual verification. Records the reason and a raw-candidate summary.
+* `force-clear-submit-unknown --local-id <id> --reason <text>`: Operator-confirmed, audited clear to `submit_absent` when the operator accepts the risk after inspecting raw Kraken state. Both force commands refuse without `--reason`.
+* `probe-cl-ord-id --pair <pair> --volume <vol> --price <price>`: Send a validate-only AddOrder with `cl_ord_id` and confirm the query endpoints accept the parameter without error. This proves **parameter acceptance only** — it does **not** prove a live order is queryable by `cl_ord_id` or that Kraken echoes it back. Only a Level-4 tiny-live round-trip proves echo/round-trip behavior; until then auto-recovery requires an echoed `cl_ord_id` and otherwise fails closed.
 * `cancel`: Cancel by plan, strategy, Kraken order id, local id, or `--all` (with optional filters) to target specific risk.
 * `panic`: Refresh/reconcile state, then cancel **all** open orders—useful for fast stop-the-bleed responses.
 
@@ -428,10 +457,13 @@ Invoke via `poetry run python -m krakked.execution.admin_cli <subcommand>`; pass
 ### ✅ Live Readiness Checklist
 
 * Paper mode: At least one full `krakked run-once` paper cycle completed without errors.
+* Database: `poetry run krakked migrate --db-path <db>` run after any schema bump and before live/paper restart.
 * Data review: SQLite `execution_orders` / `execution_results` inspected (or equivalent admin CLI checks) to verify sizing, tagging, and guardrails.
+* Order recovery: `probe-cl-ord-id` run successfully in validate-only mode, with the limitation above understood.
+* Alerts: webhook alerts configured and tested if the session is intended to run semi-unattended.
 * Config gates: `execution.mode="live"`, `execution.validate_only=false`, and `execution.allow_live_trading=true` intentionally set for production; revert any gate to disable.
 * Risk reviewed: Portfolio and per-strategy risk limits rechecked for live exposure tolerance.
-* Operator drills: Team knows how to invoke `panic` and targeted `cancel` via `execution.admin_cli` for immediate kill-switch behavior.
+* Operator drills: Team knows how to invoke `panic`, targeted `cancel`, `reconcile-submit-intents`, and `clear-submit-unknown` via `execution.admin_cli`.
 
 ## 🧭 Development workflow & CI
 

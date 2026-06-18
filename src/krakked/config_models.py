@@ -83,6 +83,13 @@ class UIConfig:
 
 
 @dataclass
+class AlertConfig:
+    enabled: bool = False
+    webhook_url: Optional[str] = None
+    timeout_seconds: float = 5.0
+
+
+@dataclass
 class ProfileConfig:
     name: str
     description: str = ""
@@ -316,3 +323,4 @@ class AppConfig:
     profiles: Dict[str, ProfileConfig] = field(default_factory=dict)
     session: SessionConfig = field(default_factory=SessionConfig)
     ml: MLConfig = field(default_factory=MLConfig)
+    alerts: AlertConfig = field(default_factory=AlertConfig)

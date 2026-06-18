@@ -39,7 +39,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-CURRENT_SCHEMA_VERSION = 10
+CURRENT_SCHEMA_VERSION = 11
 
 MAX_ML_TRAINING_EXAMPLES = 5000
 MIN_ML_BOOTSTRAP_EXAMPLES = 50
@@ -376,6 +376,7 @@ def ensure_portfolio_tables(conn: sqlite3.Connection) -> None:
             cumulative_base_filled REAL,
             avg_fill_price REAL,
             last_error TEXT,
+            client_order_id TEXT,
             raw_request_json TEXT,
             raw_response_json TEXT
         )
@@ -386,6 +387,9 @@ def ensure_portfolio_tables(conn: sqlite3.Connection) -> None:
     )
     cursor.execute(
         "CREATE INDEX IF NOT EXISTS idx_execution_orders_kraken_id ON execution_orders(kraken_order_id)"
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_execution_orders_client_order_id ON execution_orders(client_order_id)"
     )
 
     cursor.execute(
@@ -1409,14 +1413,23 @@ class SQLitePortfolioStore(PortfolioStore):
                 if isinstance(order.updated_at, datetime)
                 else None
             )
+            raw_request = order.raw_request or {}
+            raw_client_order_id = raw_request.get("cl_ord_id")
+            client_order_id = (
+                raw_client_order_id.strip()
+                if isinstance(raw_client_order_id, str)
+                and raw_client_order_id.strip()
+                else None
+            )
 
             cursor.execute(
                 """
                 INSERT OR REPLACE INTO execution_orders (
                     local_id, plan_id, strategy_id, pair, side, order_type, kraken_order_id, userref,
                     requested_base_size, requested_price, status, created_at, updated_at,
-                    cumulative_base_filled, avg_fill_price, last_error, raw_request_json, raw_response_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    cumulative_base_filled, avg_fill_price, last_error, client_order_id,
+                    raw_request_json, raw_response_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     order.local_id,
@@ -1435,10 +1448,9 @@ class SQLitePortfolioStore(PortfolioStore):
                     order.cumulative_base_filled,
                     order.avg_fill_price,
                     order.last_error,
+                    client_order_id,
                     (
-                        json.dumps(order.raw_request, default=str)
-                        if order.raw_request
-                        else None
+                        json.dumps(raw_request, default=str) if raw_request else None
                     ),
                     (
                         json.dumps(order.raw_response, default=str)
@@ -1625,19 +1637,18 @@ class SQLitePortfolioStore(PortfolioStore):
                     requested_base_size, requested_price, status, created_at, updated_at,
                     cumulative_base_filled, avg_fill_price, last_error, raw_request_json, raw_response_json
                 FROM execution_orders
-                WHERE raw_request_json LIKE ?
+                WHERE client_order_id = ?
                 ORDER BY updated_at DESC
+                LIMIT 1
                 """,
-                (f"%{client_order_id}%",),
+                (client_order_id,),
             )
-            rows = cursor.fetchall()
+            row = cursor.fetchone()
 
-        for row in rows:
-            order = self._row_to_local_order(row)
-            if order.raw_request.get("cl_ord_id") == client_order_id:
-                return order
+        if not row:
+            return None
 
-        return None
+        return self._row_to_local_order(row)
 
     def get_decisions(
         self,

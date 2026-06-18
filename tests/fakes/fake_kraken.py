@@ -43,10 +43,15 @@ class FakeKrakenRESTClient:
         add_order_mode: str = ACCEPT,
         add_order_modes: Optional[list[str]] = None,
         reject_error: str = "EOrder:Insufficient funds",
+        echo_client_order_id: bool = True,
     ) -> None:
         self.add_order_mode = add_order_mode
         self._add_order_modes = list(add_order_modes or [])
         self.reject_error = reject_error
+        self.duplicate_client_order_matches = False
+        # When False, the exchange still filters by cl_ord_id but does NOT echo
+        # it back in the returned order payload (the unproven-echo case).
+        self.echo_client_order_id = echo_client_order_id
 
         # Simulated exchange state.
         self._open: dict[str, dict[str, Any]] = {}
@@ -80,6 +85,16 @@ class FakeKrakenRESTClient:
                 "price": params.get("price"),
             },
         }
+
+    def _echoed(self, detail: dict[str, Any]) -> dict[str, Any]:
+        """Return the order detail as the exchange would surface it.
+
+        When ``echo_client_order_id`` is False the exchange filtered correctly
+        but does not surface ``cl_ord_id`` in the order payload.
+        """
+        if self.echo_client_order_id:
+            return dict(detail)
+        return {key: value for key, value in detail.items() if key != "cl_ord_id"}
 
     # -------------------------------------------------- KrakenRESTClient surface
     def add_order(self, params: dict[str, Any]) -> dict[str, Any]:
@@ -121,10 +136,13 @@ class FakeKrakenRESTClient:
             }
         elif client_order_id is not None:
             open_orders = {
-                txid: detail
+                txid: self._echoed(detail)
                 for txid, detail in self._open.items()
                 if detail.get("cl_ord_id") == client_order_id
             }
+            if self.duplicate_client_order_matches and open_orders:
+                first_detail = next(iter(open_orders.values()))
+                open_orders["OFAKE-DUPLICATE"] = dict(first_detail)
         else:
             open_orders = dict(self._open)
         return {"open": open_orders}
@@ -143,7 +161,7 @@ class FakeKrakenRESTClient:
             }
         elif client_order_id is not None:
             closed_orders = {
-                txid: detail
+                txid: self._echoed(detail)
                 for txid, detail in self._closed.items()
                 if detail.get("cl_ord_id") == client_order_id
             }
