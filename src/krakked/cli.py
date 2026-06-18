@@ -832,26 +832,11 @@ def _filter_ohlc_window(
 
 def _refresh_ohlc_command(args: argparse.Namespace) -> int:
     try:
-        since = _parse_since_arg(args.since) if args.since else None
+        result = _refresh_ohlc_tails_for_args(args)
     except ValueError as exc:
-        return _print_error(f"Invalid refresh since value: {exc}")
-
-    market_data: MarketDataAPI | None = None
-    try:
-        config_path = Path(args.config).expanduser().resolve() if args.config else None
-        config = load_config(config_path=config_path)
-        market_data = MarketDataAPI(config)
-        market_data.refresh_universe()
-        result = market_data.refresh_ohlc_tails(
-            pairs=args.pair,
-            timeframes=args.timeframe,
-            since=since,
-        )
+        return _print_error(str(exc))
     except Exception as exc:  # noqa: BLE001
         return _print_error(f"OHLC tail refresh failed: {exc}")
-    finally:
-        if market_data is not None:
-            market_data.shutdown()
 
     payload = result.to_dict()
     if args.json:
@@ -862,6 +847,28 @@ def _refresh_ohlc_command(args: argparse.Namespace) -> int:
     if result.failed_count:
         return 1
     return 0
+
+
+def _refresh_ohlc_tails_for_args(args: argparse.Namespace) -> Any:
+    try:
+        since = _parse_since_arg(args.since) if args.since else None
+    except ValueError as exc:
+        raise ValueError(f"Invalid refresh since value: {exc}") from exc
+
+    market_data: MarketDataAPI | None = None
+    try:
+        config_path = Path(args.config).expanduser().resolve() if args.config else None
+        config = load_config(config_path=config_path)
+        market_data = MarketDataAPI(config)
+        market_data.refresh_universe()
+        return market_data.refresh_ohlc_tails(
+            pairs=args.pair,
+            timeframes=args.timeframe,
+            since=since,
+        )
+    finally:
+        if market_data is not None:
+            market_data.shutdown()
 
 
 def _import_ohlc_command(args: argparse.Namespace) -> int:
@@ -2943,22 +2950,12 @@ def _ml_feature_ablation_summary_command(args: argparse.Namespace) -> int:
 
 def _backtest_preflight_command(args: argparse.Namespace) -> int:
     try:
-        start = _parse_datetime_arg(args.start)
-        end = _parse_datetime_arg(args.end)
+        start, end = _parse_backtest_window(args, "backtest")
     except ValueError as exc:
-        return _print_error(f"Invalid backtest datetime: {exc}")
+        return _print_error(str(exc))
 
     try:
-        config = _load_backtest_config(args)
-        config_provenance = _backtest_config_provenance(args)
-        result = build_backtest_preflight(
-            config,
-            start=start,
-            end=end,
-            timeframes=args.timeframe,
-            warmup_days=args.warmup_days,
-            **config_provenance,
-        )
+        result = _build_backtest_preflight_for_args(args, start=start, end=end)
     except Exception as exc:  # noqa: BLE001
         return _print_error(f"Backtest preflight failed: {exc}")
 
@@ -2976,14 +2973,242 @@ def _backtest_preflight_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _parse_backtest_window(
+    args: argparse.Namespace, command_label: str
+) -> tuple[datetime, datetime]:
+    try:
+        return _parse_datetime_arg(args.start), _parse_datetime_arg(args.end)
+    except ValueError as exc:
+        raise ValueError(f"Invalid {command_label} datetime: {exc}") from exc
+
+
+def _build_backtest_preflight_for_args(
+    args: argparse.Namespace,
+    *,
+    start: datetime,
+    end: datetime,
+    config: AppConfig | None = None,
+) -> BacktestPreflightResult:
+    resolved_config = config or _load_backtest_config(args)
+    config_provenance = _backtest_config_provenance(args)
+    return build_backtest_preflight(
+        resolved_config,
+        start=start,
+        end=end,
+        timeframes=args.timeframe,
+        warmup_days=getattr(args, "warmup_days", None),
+        **config_provenance,
+    )
+
+
+def _build_backtest_report_payload(
+    args: argparse.Namespace,
+    result: BacktestResult,
+    *,
+    generated_by: str,
+) -> dict[str, Any]:
+    payload = result.to_report_dict()
+    if result.summary is not None and isinstance(payload.get("summary"), dict):
+        payload["summary"]["replay_inputs"]["config_path"] = (
+            str(Path(args.config).expanduser().resolve()) if args.config else None
+        )
+    payload["provenance"] = {
+        "app_version": APP_VERSION,
+        "config_path": (
+            str(Path(args.config).expanduser().resolve()) if args.config else None
+        ),
+        "generated_by": generated_by,
+    }
+    db_path = getattr(args, "db_path", None)
+    if db_path:
+        payload["sqlite_output"] = str(Path(db_path).expanduser().resolve())
+    return payload
+
+
+def _replay_readiness_blockers(preflight: Any) -> list[str]:
+    details = backtest_strict_data_details(preflight)
+    blockers = list(details)
+    if getattr(preflight, "status", None) != "ready" and not details:
+        blockers.append(f"preflight status: {getattr(preflight, 'status', 'unknown')}")
+    warmup_status = getattr(preflight, "warmup_status", "disabled")
+    if warmup_status not in {"ready", "disabled"} and not any(
+        detail.startswith("warmup ") for detail in details
+    ):
+        blockers.append(f"warmup status: {warmup_status}")
+    return blockers
+
+
+def _print_replay_refresh_and_preflight(
+    refresh_payload: dict[str, Any], preflight_result: BacktestPreflightResult
+) -> None:
+    _print_ohlc_refresh_summary(refresh_payload)
+    print("")
+    _print_backtest_preflight(preflight_result)
+
+
+def _replay_ready_command(args: argparse.Namespace) -> int:
+    try:
+        start, end = _parse_backtest_window(args, "replay-ready")
+        refresh_result = _refresh_ohlc_tails_for_args(args)
+        preflight_result = _build_backtest_preflight_for_args(
+            args,
+            start=start,
+            end=end,
+        )
+    except ValueError as exc:
+        return _print_error(str(exc))
+    except Exception as exc:  # noqa: BLE001
+        return _print_error(f"Replay-ready failed: {exc}")
+
+    refresh_payload = refresh_result.to_dict()
+    if args.json:
+        print(
+            json.dumps(
+                {
+                    "refresh": refresh_payload,
+                    "preflight": preflight_result.to_dict(),
+                },
+                indent=2,
+            )
+        )
+    else:
+        _print_replay_refresh_and_preflight(refresh_payload, preflight_result)
+
+    return 1 if refresh_result.failed_count else 0
+
+
+def _replay_run_command(args: argparse.Namespace) -> int:
+    try:
+        start, end = _parse_backtest_window(args, "replay-run")
+        refresh_result = _refresh_ohlc_tails_for_args(args)
+        config = _load_backtest_config(args)
+        preflight_result = _build_backtest_preflight_for_args(
+            args,
+            start=start,
+            end=end,
+            config=config,
+        )
+    except ValueError as exc:
+        return _print_error(str(exc))
+    except Exception as exc:  # noqa: BLE001
+        return _print_error(f"Replay-run failed: {exc}")
+
+    refresh_payload = refresh_result.to_dict()
+    if refresh_result.failed_count:
+        if args.json:
+            print(
+                json.dumps(
+                    {
+                        "refresh": refresh_payload,
+                        "preflight": preflight_result.to_dict(),
+                        "backtest": None,
+                        "saved_report_path": None,
+                        "published_report_path": None,
+                    },
+                    indent=2,
+                )
+            )
+        else:
+            _print_replay_refresh_and_preflight(refresh_payload, preflight_result)
+            print("Replay-run aborted: OHLC refresh failed for one or more series.")
+        return 1
+
+    readiness_blockers = _replay_readiness_blockers(preflight_result.preflight)
+    if readiness_blockers:
+        if args.json:
+            print(
+                json.dumps(
+                    {
+                        "refresh": refresh_payload,
+                        "preflight": preflight_result.to_dict(),
+                        "backtest": None,
+                        "saved_report_path": None,
+                        "published_report_path": None,
+                        "readiness_blockers": readiness_blockers,
+                    },
+                    indent=2,
+                )
+            )
+        else:
+            _print_replay_refresh_and_preflight(refresh_payload, preflight_result)
+            print(
+                "Replay-run aborted: replay coverage is still incomplete for the "
+                "requested window."
+            )
+            for blocker in readiness_blockers:
+                print(f"- {blocker}")
+        return 1
+
+    try:
+        result = run_backtest(
+            config,
+            start=start,
+            end=end,
+            timeframes=args.timeframe,
+            starting_cash_usd=float(args.starting_cash_usd),
+            fee_bps=float(args.fee_bps),
+            db_path=args.db_path,
+            strict_data=False,
+            warmup_days=getattr(args, "warmup_days", None),
+            **_backtest_config_provenance(args),
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _print_error(f"Replay-run failed: {exc}")
+
+    payload = _build_backtest_report_payload(
+        args, result, generated_by="krakked replay-run"
+    )
+
+    saved_report_path: str | None = None
+    if args.save_report:
+        try:
+            saved_report_path = _write_backtest_report(payload, args.save_report)
+        except Exception as exc:  # noqa: BLE001
+            return _print_error(f"Replay-run report write failed: {exc}")
+
+    try:
+        published_report_path = str(
+            publish_latest_backtest_report(payload, config_dir=get_config_dir())
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _print_error(f"Replay-run latest-report publish failed: {exc}")
+
+    if args.json:
+        print(
+            json.dumps(
+                {
+                    "refresh": refresh_payload,
+                    "preflight": preflight_result.to_dict(),
+                    "backtest": payload,
+                    "saved_report_path": saved_report_path,
+                    "published_report_path": published_report_path,
+                },
+                indent=2,
+            )
+        )
+    else:
+        _print_replay_refresh_and_preflight(refresh_payload, preflight_result)
+        print("")
+        persist_db_path = (
+            str(Path(args.db_path).expanduser().resolve()) if args.db_path else None
+        )
+        _print_backtest_summary(
+            result,
+            persist_db_path=persist_db_path,
+            report_path=saved_report_path,
+        )
+        print(f"Published latest replay: {published_report_path}")
+
+    return 0
+
+
 def _backtest_command(args: argparse.Namespace) -> int:
     """Replay stored OHLC data through the strategy/risk/execution stack."""
 
     try:
-        start = _parse_datetime_arg(args.start)
-        end = _parse_datetime_arg(args.end)
+        start, end = _parse_backtest_window(args, "backtest")
     except ValueError as exc:
-        return _print_error(f"Invalid backtest datetime: {exc}")
+        return _print_error(str(exc))
 
     try:
         config = _load_backtest_config(args)
@@ -3003,20 +3228,9 @@ def _backtest_command(args: argparse.Namespace) -> int:
     except Exception as exc:  # noqa: BLE001
         return _print_error(f"Backtest failed: {exc}")
 
-    payload = result.to_report_dict()
-    if result.summary is not None:
-        payload["summary"]["replay_inputs"]["config_path"] = (
-            str(Path(args.config).expanduser().resolve()) if args.config else None
-        )
-    payload["provenance"] = {
-        "app_version": APP_VERSION,
-        "config_path": (
-            str(Path(args.config).expanduser().resolve()) if args.config else None
-        ),
-        "generated_by": "krakked backtest",
-    }
-    if args.db_path:
-        payload["sqlite_output"] = str(Path(args.db_path).expanduser().resolve())
+    payload = _build_backtest_report_payload(
+        args, result, generated_by="krakked backtest"
+    )
 
     saved_report_path: str | None = None
     if args.save_report:
@@ -4997,6 +5211,54 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     refresh_ohlc_parser.set_defaults(func=_refresh_ohlc_command)
 
+    replay_ready_parser = subparsers.add_parser(
+        "replay-ready",
+        help=(
+            "Refresh OHLC over the network, then print the offline replay "
+            "readiness preflight"
+        ),
+    )
+    replay_ready_parser.add_argument(
+        "--start",
+        required=True,
+        help="Replay readiness start time in ISO-8601 form",
+    )
+    replay_ready_parser.add_argument(
+        "--end",
+        required=True,
+        help="Replay readiness end time in ISO-8601 form",
+    )
+    replay_ready_parser.add_argument(
+        "--config",
+        help="Optional path to the base config.yaml to use for refresh and preflight",
+    )
+    replay_ready_parser.add_argument(
+        "--pair",
+        action="append",
+        help="Limit refresh/preflight to one pair; repeat to include multiple pairs",
+    )
+    replay_ready_parser.add_argument(
+        "--timeframe",
+        action="append",
+        help=(
+            "Limit refresh/preflight to one timeframe; repeat to include "
+            "multiple timeframes"
+        ),
+    )
+    replay_ready_parser.add_argument(
+        "--since",
+        help=(
+            "Override network refresh start as an ISO-8601 datetime or epoch "
+            "seconds; defaults to each local OHLC tail"
+        ),
+    )
+    replay_ready_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print the replay-ready result as JSON",
+    )
+    replay_ready_parser.set_defaults(func=_replay_ready_command)
+
     import_ohlc_parser = subparsers.add_parser(
         "import-ohlc",
         help="Import local Kraken OHLCVT CSV/ZIP history into the OHLC cache",
@@ -5123,6 +5385,74 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Print the preflight payload as JSON",
     )
     backtest_preflight_parser.set_defaults(func=_backtest_preflight_command)
+
+    replay_run_parser = subparsers.add_parser(
+        "replay-run",
+        help=(
+            "Refresh OHLC over the network, require clean readiness, then run "
+            "and publish the latest replay summary"
+        ),
+    )
+    replay_run_parser.add_argument(
+        "--start",
+        required=True,
+        help="Replay start time in ISO-8601 form",
+    )
+    replay_run_parser.add_argument(
+        "--end",
+        required=True,
+        help="Replay end time in ISO-8601 form",
+    )
+    replay_run_parser.add_argument(
+        "--config",
+        help="Optional path to the base config.yaml to use for refresh and replay",
+    )
+    replay_run_parser.add_argument(
+        "--pair",
+        action="append",
+        help="Limit refresh/replay to one pair; repeat to include multiple pairs",
+    )
+    replay_run_parser.add_argument(
+        "--timeframe",
+        action="append",
+        help=(
+            "Limit refresh/replay to one timeframe; repeat to include multiple "
+            "timeframes"
+        ),
+    )
+    replay_run_parser.add_argument(
+        "--since",
+        help=(
+            "Override network refresh start as an ISO-8601 datetime or epoch "
+            "seconds; defaults to each local OHLC tail"
+        ),
+    )
+    replay_run_parser.add_argument(
+        "--starting-cash-usd",
+        type=float,
+        default=10_000.0,
+        help="Synthetic starting USD wallet balance for the offline replay",
+    )
+    replay_run_parser.add_argument(
+        "--fee-bps",
+        type=float,
+        default=25.0,
+        help="Flat taker fee in basis points applied to simulated fills",
+    )
+    replay_run_parser.add_argument(
+        "--db-path",
+        help="Optional SQLite path to persist decisions, orders, and execution results",
+    )
+    replay_run_parser.add_argument(
+        "--save-report",
+        help="Optional JSON path for a durable replay report artifact",
+    )
+    replay_run_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print the replay-run result as JSON",
+    )
+    replay_run_parser.set_defaults(func=_replay_run_command)
 
     backtest_parser = subparsers.add_parser(
         "backtest",

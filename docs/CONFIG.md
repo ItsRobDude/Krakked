@@ -103,6 +103,8 @@ krakked refresh-ohlc
 
 Use `--pair`, `--timeframe`, `--since`, and `--json` for targeted replay prep or automation. The command uses public Kraken market-data endpoints only; it does not require private credentials and does not change live-trading gates.
 
+For operator shortcuts, `krakked replay-ready --start <iso> --end <iso>` runs the same public OHLC refresh and then prints replay preflight readiness, while `krakked replay-run --start <iso> --end <iso>` refreshes, requires clean readiness, runs the replay, and publishes the latest replay summary. Use `backtest-preflight` and `backtest` directly when you need a strictly cached/offline replay without the network refresh step.
+
 To prove cached OHLC continuity without running a replay, use:
 
 ```bash
