@@ -14,6 +14,7 @@ from typing import Any, Callable, List, Optional, Tuple
 import uvicorn
 
 from krakked import APP_VERSION
+from krakked.alerts import WebhookAlertNotifier
 from krakked.bootstrap import CredentialBootstrapError, bootstrap
 from krakked.config_loader import (
     DEFAULT_OHLC_TAIL_REFRESH_INTERVAL_SECONDS,
@@ -639,6 +640,7 @@ class BotController:
                 store=portfolio.store,
                 rate_limiter=rate_limiter,
                 risk_status_provider=strategy_engine.get_risk_status,
+                alert_notifier=WebhookAlertNotifier(config.alerts),
             )
 
             # Bootstrap: recover and reconcile any persisted open orders before the first strategy cycle.

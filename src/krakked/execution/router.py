@@ -115,8 +115,9 @@ def build_order_payload(
 ) -> dict[str, Any]:
     """
     Construct the Kraken AddOrder payload for a given LocalOrder.
-    Rounding uses pair metadata when provided, and validation/userref flags
-    mirror the execution configuration and order context.
+    Rounding uses pair metadata when provided. Live, non-validate orders use a
+    per-order client id for exchange correlation; validate/paper paths keep
+    userref tagging for attribution.
     """
     order_type = determine_order_type(order, config)
     payload: dict[str, Any] = {
@@ -143,7 +144,10 @@ def build_order_payload(
         if flags:
             payload["oflags"] = ",".join(flags)
 
-    if order.userref is not None:
+    live_submit = config.mode == "live" and not config.validate_only
+    if live_submit:
+        payload["cl_ord_id"] = order.local_id
+    elif order.userref is not None:
         payload["userref"] = order.userref
 
     if config.validate_only or config.mode != "live":

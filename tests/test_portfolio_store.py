@@ -1,5 +1,6 @@
 # tests/test_portfolio_store.py
 
+import json
 import sqlite3
 from datetime import datetime, timezone
 
@@ -7,6 +8,7 @@ import pytest
 
 import krakked.portfolio.store as store_module
 from krakked.execution.models import ExecutionResult, LocalOrder
+from krakked.portfolio import migrations
 from krakked.portfolio.exceptions import PortfolioSchemaError
 from krakked.portfolio.models import AssetValuation, CashFlowRecord, PortfolioSnapshot
 from krakked.portfolio.store import CURRENT_SCHEMA_VERSION, SQLitePortfolioStore
@@ -117,6 +119,103 @@ def test_schema_version_ahead_raises(tmp_path):
 
     with pytest.raises(PortfolioSchemaError):
         SQLitePortfolioStore(str(db_path))
+
+
+def test_fresh_schema_has_indexed_client_order_id(tmp_path):
+    db_path = tmp_path / "client_order_id_fresh.db"
+    SQLitePortfolioStore(str(db_path))
+
+    with sqlite3.connect(db_path) as conn:
+        columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(execution_orders)")
+        }
+        indexes = {
+            row[1] for row in conn.execute("PRAGMA index_list(execution_orders)")
+        }
+
+    assert "client_order_id" in columns
+    assert "idx_execution_orders_client_order_id" in indexes
+
+
+def test_save_order_populates_indexed_client_order_id(tmp_path):
+    db_path = tmp_path / "client_order_id_save.db"
+    store = SQLitePortfolioStore(str(db_path))
+    order = LocalOrder(
+        local_id="local-1",
+        plan_id="plan",
+        strategy_id="strategy",
+        pair="XBTUSD",
+        side="buy",
+        order_type="limit",
+        status="submit_unknown",
+        raw_request={"cl_ord_id": "client-1"},
+    )
+
+    store.save_order(order)
+
+    fetched = store.get_order_by_client_order_id("client-1")
+    assert fetched is not None
+    assert fetched.local_id == "local-1"
+    with sqlite3.connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT client_order_id FROM execution_orders WHERE local_id = 'local-1'"
+        ).fetchone()
+    assert row == ("client-1",)
+
+
+def test_v11_migration_backfills_client_order_id(tmp_path):
+    db_path = tmp_path / "client_order_id_migrate.db"
+    with sqlite3.connect(db_path) as conn:
+        migrations._ensure_meta_table(conn)
+        migrations._set_schema_version(conn, 10)
+        conn.execute(
+            """
+            CREATE TABLE execution_orders (
+                local_id TEXT PRIMARY KEY,
+                plan_id TEXT,
+                strategy_id TEXT,
+                pair TEXT NOT NULL,
+                side TEXT NOT NULL,
+                order_type TEXT,
+                kraken_order_id TEXT,
+                userref INTEGER,
+                requested_base_size REAL,
+                requested_price REAL,
+                status TEXT,
+                created_at REAL,
+                updated_at REAL,
+                cumulative_base_filled REAL,
+                avg_fill_price REAL,
+                last_error TEXT,
+                raw_request_json TEXT,
+                raw_response_json TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO execution_orders (
+                local_id, pair, side, status, raw_request_json
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                "local-1",
+                "XBTUSD",
+                "buy",
+                "submit_unknown",
+                json.dumps({"cl_ord_id": "client-1"}),
+            ),
+        )
+        migrations.run_migrations(conn, 10, CURRENT_SCHEMA_VERSION)
+        row = conn.execute(
+            "SELECT client_order_id FROM execution_orders WHERE local_id = 'local-1'"
+        ).fetchone()
+        indexes = {
+            item[1] for item in conn.execute("PRAGMA index_list(execution_orders)")
+        }
+
+    assert row == ("client-1",)
+    assert "idx_execution_orders_client_order_id" in indexes
 
 
 def test_save_and_get_trades(store):

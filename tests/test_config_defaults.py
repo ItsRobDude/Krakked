@@ -65,6 +65,31 @@ region:
     assert app_config.market_data.ohlc_store["backend"] == "parquet"
 
 
+def test_load_config_parses_alerts(monkeypatch, tmp_path: Path):
+    config_dir = tmp_path / "config"
+    data_dir = tmp_path / "data"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    (config_dir / "config.yaml").write_text(
+        """
+alerts:
+  enabled: true
+  webhook_url: "https://alerts.example/hook"
+  timeout_seconds: 2.5
+""".strip()
+    )
+
+    monkeypatch.setattr(appdirs, "user_config_dir", lambda appname: config_dir)
+    monkeypatch.setattr(appdirs, "user_data_dir", lambda appname: data_dir)
+
+    app_config = load_config()
+
+    assert app_config.alerts.enabled is True
+    assert app_config.alerts.webhook_url == "https://alerts.example/hook"
+    assert app_config.alerts.timeout_seconds == 2.5
+
+
 def test_get_config_dir_prefers_env_override(monkeypatch, tmp_path: Path):
     config_dir = tmp_path / "compose-config"
     monkeypatch.setenv("KRAKKED_CONFIG_DIR", str(config_dir))

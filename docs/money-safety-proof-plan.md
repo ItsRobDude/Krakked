@@ -31,9 +31,14 @@ the repo contains a deterministic proof that the behavior binds under failure.
 
 Current trust level: Level 0, research and paper only.
 
-- Milestone A, fake Kraken and fault harness: not started.
+- Milestone A, fake Kraken and fault harness: started. An initial
+  order-lifecycle fake exists for OMS/adapter/SQLite proofs; account balances,
+  trades, ledgers, partial fills, and stale-read modeling remain missing.
 - Milestones B-E, order lifecycle, reconciliation, risk limits, and emergency
-  operations: building blocks exist, but failure proofs remain incomplete.
+  operations: building blocks exist. Milestone B now has an initial passing
+  proof for AddOrder response-loss duplicate-submit prevention plus manual
+  `submit_unknown` recovery tooling, but broader crash/restart, fill, balance,
+  reconciliation, and emergency-operation proofs remain incomplete.
 - Milestone F, data continuity: continuity tooling exists, but strict replay
   gates do not yet consume continuity gaps directly.
 - Milestone G, paper soak, validate-only drill, and tiny live smoke: not
@@ -41,11 +46,15 @@ Current trust level: Level 0, research and paper only.
 
 Known live blockers:
 
-- no deterministic fake Kraken/fault harness;
-- no crash-safe submit-intent proof for remote-accepted/local-unknown orders;
+- fake Kraken/fault harness is still order-lifecycle-only and does not yet model
+  full account state, fills, trades, ledgers, or stale reads;
+- crash-safe submit-intent behavior is only proven for the initial AddOrder
+  response-loss scenario; broader process-death and reconciliation drills remain
+  incomplete;
 - live balance fetch failure can still fall back to local ledger state in some
   paths;
-- no tested out-of-band alert path for fail-closed events;
+- out-of-band alerting is only proved for `submit_unknown` and blocked opening
+  risk; broader fail-closed alert scenarios remain unproved;
 - no quantified live reconciliation staleness policy or relative drift
   threshold;
 - no enforced live strategy boundary that prevents research strategies from
@@ -59,7 +68,7 @@ Krakked has substantial safety and observability building blocks:
   `execution.allow_live_trading`;
 - OMS persistence for execution plans, local orders, order events, and execution
   results;
-- Kraken order tagging via `userref`;
+- Kraken order tagging via `userref` and live per-order `cl_ord_id`;
 - exchange order refresh/reconciliation hooks for open and closed orders;
 - portfolio sync from trades, ledgers, and balances;
 - drift detection and kill-switch wiring;
@@ -294,13 +303,19 @@ Current building blocks:
 - `KrakenRESTClient` centralizes private endpoint calls;
 - execution, portfolio, and UI tests already use fake clients and services in
   narrow places;
-- OMS and portfolio services can receive injected clients/stores.
+- OMS and portfolio services can receive injected clients/stores;
+- `tests/fakes/fake_kraken.py` now provides an initial deterministic fake for
+  AddOrder, OpenOrders, ClosedOrders, cancellation, and selected submit faults;
+- `tests/test_money_safety_order_lifecycle.py` drives real OMS, real execution
+  adapter, and real SQLite store through that fake.
 
-Proof gap:
+Remaining proof gap:
 
-- there is no single exchange simulator that models order lifecycle, account
-  balances, trades, ledgers, partial fills, rejects, stale reads, and crash
-  points together.
+- the current fake is enough for initial order-lifecycle proofs, but it does not
+  yet model account balances, trades, ledgers, partial fills, stale reads, or
+  portfolio reconciliation behavior together;
+- strict failing tests currently prove the duplicate-submit and restart recovery
+  gaps rather than proving the final safe behavior.
 
 Done when:
 
@@ -323,17 +338,43 @@ double-submit blindly, and it must not forget remote exposure.
 Current building blocks:
 
 - local order IDs are deterministic for plan actions;
+- live, non-validate AddOrder payloads use the deterministic local order ID as
+  Kraken `cl_ord_id`;
+- SQLite stores `cl_ord_id` in an indexed `client_order_id` column for exact
+  local lookup;
+- a shared tri-state attribution helper classifies lookups as `none`, `exact`
+  (one candidate echoing the expected `cl_ord_id`), `unverified` (one candidate
+  missing/mismatched on `cl_ord_id`), or `ambiguous` (>1 candidate); adoption
+  is allowed only on `exact`, and `unverified` is kept distinct from `none`;
+- admin tooling can reconcile submit intents (adopt only on `exact`), clear to
+  `submit_absent` only when both endpoints are `none`, run a validate-only
+  `cl_ord_id` probe, and perform explicit, audited operator force-link /
+  force-clear recovery for `unverified`/`ambiguous` exchange state;
+- `submit_unknown` and blocked-opening events can emit a configured webhook
+  alert;
 - `userref` is deterministic and persisted;
 - execution orders and results are saved to SQLite;
-- bootstrap loads persisted open orders and refreshes/reconciles order state.
+- bootstrap loads persisted open orders and refreshes/reconciles order state;
+- tests now cover remote-accepted/local-response-lost duplicate-submit
+  prevention, restart recovery, generic submit uncertainty, and known
+  no-accept retry boundaries.
 
 Proof gap:
 
 - `userref` helps attribution and recovery, but it is not full idempotency;
-- there is no adversarial proof for "remote accepted, local died before storing
-  txid";
-- there is no explicit persisted submit-intent state that proves exactly what
-  was in flight at crash time.
+- the initial proof covers AddOrder response loss and service-unavailable
+  ambiguity, but not every process-death point, fill timing, cancel timing, or
+  stale exchange-read case;
+- submit-intent state is persisted in the existing execution order table, and
+  manual confirmed-absent clearing exists, but broader lifecycle drills still
+  need to prove it across additional failure points;
+- the validate-only `cl_ord_id` probe proves Kraken *parameter* acceptance only;
+  it does not prove a live order is queryable by `cl_ord_id` or that Kraken
+  echoes it back in the order payload. Auto-recovery requires an exact echoed
+  `cl_ord_id`; missing/mismatched echo is treated as `unverified` and fails
+  closed. Whether Kraken echoes `cl_ord_id` in OpenOrders/ClosedOrders payloads
+  is unproven until a Level-4 tiny-live round trip confirms it; if it does not
+  echo, auto-recovery is effectively manual-only via the audited force path.
 
 Done when:
 
@@ -442,6 +483,8 @@ Current building blocks:
 - background emergency flatten loop;
 - dead-man switch heartbeat support;
 - admin CLI panic path.
+- webhook alert transport for initial submit-unknown and blocked-opening
+  fail-closed events.
 
 Proof gap:
 
@@ -449,8 +492,9 @@ Proof gap:
 - flatten can be unsafe if open orders remain, sync fails, or positions are
   stale;
 - dead-man heartbeat needs realistic live validation;
-- fail-closed events can stop/block without proving that the operator receives
-  an out-of-band notification;
+- only the submit-unknown and blocked-opening alert path is currently proved;
+  kill-switch, drift, stale reconciliation, dead-man, emergency-flatten, and
+  unexpected-stop alerts still need coverage;
 - runbooks and proof outputs should be tied to tests/drills.
 
 Done when:
@@ -552,27 +596,24 @@ Explicit non-goals:
 
 ## Immediate Next Slice
 
-The next engineering slice should be small but foundational:
+The initial AddOrder response-loss and submit-unknown hardening proofs are now
+green. The next engineering slice should widen the same fake-exchange harness
+toward reconciliation evidence without claiming full live readiness.
 
-1. Add a fake Kraken/fault harness for private exchange behavior.
-2. Use it to prove one crash/restart order lifecycle case.
-3. Document exactly which money-safety claims remain unproven.
+Recommended next behavior slice:
 
-Recommended first scenario:
+1. Extend the fake Kraken harness to model balances, trades, ledgers, partial
+   fills, closed-order records, and stale reads for one narrow scenario.
+2. Prove live balance/reconciliation failures block new opening risk while
+   preserving cancel/reduce-only emergency paths.
+3. Replace any live balance-fetch fallback to local ledger state with a
+   fail-closed status before new opening risk can be submitted.
+4. Keep the scenario small: one pair, one order, one mismatch or stale-read
+   condition, one expected block.
 
-- an eligible live-equivalent plan generates one order;
-- local intent is persisted before submit;
-- fake Kraken accepts the order and assigns a txid;
-- the client raises a timeout before the adapter receives the response;
-- the process is "restarted" by constructing fresh services from persisted
-  state;
-- recovery queries open/closed orders and links the remote order back to local
-  state;
-- no duplicate order is submitted;
-- new opening risk remains blocked until the in-flight state is reconciled.
-
-That scenario is intentionally narrower than the full program. It proves the
-harness is useful and attacks the highest-risk lifecycle gap first.
+That slice should advance Milestone C. It should not broaden into dashboard UI,
+strategy promotion, extra alert scenarios, or data-continuity scoreboards until
+the reconciliation gate has a deterministic failing/passing proof.
 
 ## Documentation Rules For Future Work
 

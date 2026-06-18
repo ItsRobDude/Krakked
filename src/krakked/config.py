@@ -11,6 +11,7 @@ from .config_loader import (
 
 # Re-export config models
 from .config_models import (
+    AlertConfig,
     AppConfig,
     ExecutionConfig,
     MarketDataConfig,
@@ -51,6 +52,7 @@ __all__ = [
     "StrategyConfig",
     "StrategiesConfig",
     "MLConfig",
+    "AlertConfig",
     "AppConfig",
     # loader/runtime
     "RUNTIME_OVERRIDES_FILENAME",
