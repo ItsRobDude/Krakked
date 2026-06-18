@@ -354,11 +354,33 @@ def _session_payload(ctx) -> SessionStatePayload:
     )
 
 
+def _alert_status(ctx) -> dict[str, Any]:
+    """Display-only alert-delivery state for the health surface.
+
+    Quiet on success; a False ``alert_last_delivered`` flags that the operator
+    may not have been notified. This never blocks live orders or any path.
+    """
+    service = getattr(ctx, "execution_service", None)
+    notifier = getattr(service, "alert_notifier", None) if service else None
+    config = getattr(notifier, "config", None)
+    last = getattr(notifier, "last_attempt", None) if notifier else None
+    if not isinstance(last, dict):
+        last = {}
+    return {
+        "alerts_enabled": bool(getattr(config, "enabled", False)),
+        "alert_last_event": last.get("event"),
+        "alert_last_attempt_at": last.get("attempted_at"),
+        "alert_last_delivered": last.get("delivered"),
+        "alert_last_error": last.get("error"),
+    }
+
+
 def _build_system_health_payload(ctx) -> SystemHealthPayload:
     provenance = build_runtime_provenance(APP_VERSION)
     if ctx.is_setup_mode:
         return SystemHealthPayload(
             **provenance,
+            **_alert_status(ctx),
             execution_mode="setup",
             lifecycle=_resolve_lifecycle(ctx),
             rest_api_reachable=False,
@@ -466,6 +488,7 @@ def _build_system_health_payload(ctx) -> SystemHealthPayload:
     portfolio_baseline = getattr(ctx.portfolio, "baseline_source", None)
     return SystemHealthPayload(
         **provenance,
+        **_alert_status(ctx),
         execution_mode=getattr(execution_config, "mode", None),
         lifecycle=_resolve_lifecycle(ctx),
         rest_api_reachable=data_status.rest_api_reachable,

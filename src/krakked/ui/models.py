@@ -387,6 +387,23 @@ class SystemHealthPayload(BaseModel):
     )
     drift_detected: bool
     drift_reason: Optional[str] = None
+    alerts_enabled: bool = Field(
+        False, description="Whether out-of-band safety alerts are configured/enabled."
+    )
+    alert_last_event: Optional[str] = Field(
+        None, description="Event name of the most recent alert delivery attempt."
+    )
+    alert_last_attempt_at: Optional[str] = Field(
+        None, description="ISO timestamp of the most recent alert delivery attempt."
+    )
+    alert_last_delivered: Optional[bool] = Field(
+        None,
+        description="Whether the most recent alert delivery attempt succeeded. "
+        "False indicates the operator may not have been notified.",
+    )
+    alert_last_error: Optional[str] = Field(
+        None, description="Redacted error from the last failed alert delivery, if any."
+    )
 
 
 class ErrorRecord(BaseModel):
