@@ -259,6 +259,13 @@ def test_force_link_found_closed_payload_syncs_fills(
     assert linked is not None
     assert linked.cumulative_base_filled == 0.5
     assert linked.status == "closed"
+    # Structured audit is attached without clobbering the synced remote payload.
+    assert linked.raw_response is not None
+    assert (
+        linked.raw_response.get("force_resolve", {}).get("command")
+        == "force-link-submit-unknown"
+    )
+    assert linked.raw_response.get("vol_exec") == "0.5"
 
 
 def test_clear_submit_unknown_refuses_unverified_candidate(

@@ -302,6 +302,29 @@ def clear_submit_unknown(args: argparse.Namespace) -> int:
     return 0
 
 
+def _force_audit_dict(
+    order: Any,
+    *,
+    command: str,
+    reason: str,
+    kraken_order_id: Optional[str],
+    raw_summary: Optional[str],
+    action_at: str,
+) -> dict[str, Any]:
+    """Build the structured force-resolve audit record shared by all force paths."""
+    return {
+        "force_resolve": {
+            "command": command,
+            "reason": reason,
+            "operator_action_at": action_at,
+            "local_id": order.local_id,
+            "expected_cl_ord_id": _client_order_id_for_order(order),
+            "kraken_order_id": kraken_order_id,
+            "raw_candidate": raw_summary,
+        }
+    }
+
+
 def _record_force_audit(
     service: ExecutionService,
     order: Any,
@@ -314,17 +337,14 @@ def _record_force_audit(
 ) -> None:
     """Persist durable, operator-attributed evidence for a force action."""
     action_at = datetime.now(UTC).isoformat()
-    audit = {
-        "force_resolve": {
-            "command": command,
-            "reason": reason,
-            "operator_action_at": action_at,
-            "local_id": order.local_id,
-            "expected_cl_ord_id": _client_order_id_for_order(order),
-            "kraken_order_id": kraken_order_id,
-            "raw_candidate": raw_summary,
-        }
-    }
+    audit = _force_audit_dict(
+        order,
+        command=command,
+        reason=reason,
+        kraken_order_id=kraken_order_id,
+        raw_summary=raw_summary,
+        action_at=action_at,
+    )
     summary = f"FORCE {command} by operator at {action_at}: {reason}"
     if service.store:
         service.store.update_order_status(
@@ -412,9 +432,20 @@ def force_link_submit_unknown(args: argparse.Namespace) -> int:
         is_closed=found_is_closed,
         client_order_id=_client_order_id_for_order(order),
     )
+    action_at = datetime.now(UTC).isoformat()
+    audit = _force_audit_dict(
+        order,
+        command="force-link-submit-unknown",
+        reason=reason,
+        kraken_order_id=args.kraken_id,
+        raw_summary=raw_summary,
+        action_at=action_at,
+    )
+    # Preserve the synced remote payload AND attach structured audit evidence;
+    # fill columns set by _sync_remote_order survive because they are not passed.
+    merged_response = {**found_payload, **audit}
     summary = (
-        f"FORCE force-link-submit-unknown by operator at "
-        f"{datetime.now(UTC).isoformat()}: {reason} "
+        f"FORCE force-link-submit-unknown by operator at {action_at}: {reason} "
         f"(kraken_id={args.kraken_id}; raw={raw_summary})"
     )
     if service.store:
@@ -423,6 +454,7 @@ def force_link_submit_unknown(args: argparse.Namespace) -> int:
             status=link_status,
             kraken_order_id=args.kraken_id,
             last_error=summary,
+            raw_response=merged_response,
             event_message=summary,
         )
     print(
