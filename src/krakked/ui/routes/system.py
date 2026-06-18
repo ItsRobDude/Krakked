@@ -1435,14 +1435,51 @@ def _build_live_readiness_payload(
             )
         )
     else:
+        enabled_strategy_count = len(enabled_strategies)
+        strategy_label = "strategy" if enabled_strategy_count == 1 else "strategies"
         checks.append(
             _live_readiness_check(
                 "enabled_strategies",
                 "Enabled strategies",
                 "passed",
-                f"{len(enabled_strategies)} strategy{'ies' if len(enabled_strategies) != 1 else ''} enabled.",
+                f"{enabled_strategy_count} {strategy_label} enabled.",
             )
         )
+
+    if (
+        execution_config.mode == "live"
+        and not execution_config.validate_only
+        and getattr(execution_config, "allow_live_trading", False)
+    ):
+        live_strategy_allowlist = {
+            str(strategy_id).strip()
+            for strategy_id in getattr(execution_config, "live_strategy_allowlist", [])
+            if str(strategy_id).strip()
+        }
+        unapproved_strategies = [
+            strategy.strategy_id
+            for strategy in enabled_strategies
+            if strategy.strategy_id not in live_strategy_allowlist
+        ]
+        if unapproved_strategies:
+            checks.append(
+                _live_readiness_check(
+                    "live_strategy_boundary",
+                    "Live strategy approval",
+                    "blocked",
+                    "Enabled strategies are not approved for live submission: "
+                    f"{', '.join(sorted(unapproved_strategies))}.",
+                )
+            )
+        elif enabled_strategies:
+            checks.append(
+                _live_readiness_check(
+                    "live_strategy_boundary",
+                    "Live strategy approval",
+                    "passed",
+                    "Enabled strategies are explicitly approved for live submission.",
+                )
+            )
 
     if risk_config is None:
         checks.append(

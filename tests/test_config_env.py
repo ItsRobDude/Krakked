@@ -269,6 +269,36 @@ execution:
     assert app_config.execution.max_slippage_bps == 5000
 
 
+def test_live_strategy_allowlist_parses_nonempty_ids(monkeypatch, tmp_path: Path):
+    config_dir = tmp_path / "config"
+    data_dir = tmp_path / "data"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    config_path = config_dir / "config.yaml"
+    config_path.write_text(
+        """
+execution:
+  mode: "paper"
+  live_strategy_allowlist:
+    - "manual_dca"
+    - ""
+    - " rebalance "
+""".strip()
+    )
+
+    monkeypatch.setattr(appdirs, "user_config_dir", lambda appname: config_dir)
+    monkeypatch.setattr(appdirs, "user_data_dir", lambda appname: data_dir)
+    monkeypatch.setenv("KRAKKED_ENV", "paper")
+
+    app_config = load_config()
+
+    assert app_config.execution.live_strategy_allowlist == [
+        "manual_dca",
+        "rebalance",
+    ]
+
+
 def test_live_mode_requires_per_strategy_limits(monkeypatch, tmp_path: Path):
     config_dir = tmp_path / "config"
     data_dir = tmp_path / "data"

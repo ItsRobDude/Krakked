@@ -176,6 +176,7 @@ The product, CLI, Python package, and config namespace now all use `krakked` / `
       post_only: false                # Maker-only preference
       validate_only: false            # Paper uses the synthetic wallet; live validation is controlled separately
       allow_live_trading: false       # Final gate for live order submission
+      live_strategy_allowlist: []      # Empty blocks all strategy-driven live opening risk
       dead_man_switch_seconds: 600    # Auto-cancel window (0 to disable)
       max_retries: 3                  # Per-order retry budget
       retry_backoff_seconds: 2        # Initial retry delay
@@ -398,6 +399,7 @@ Live routing is guarded by multiple gates that must all be opened:
 * **Set live mode**: `execution.mode: "live"`.
 * **Disable validation-only**: `execution.validate_only: false` so Kraken will accept orders.
 * **Affirm live intent**: `execution.allow_live_trading: true`; this defaults to `false` as a last-ditch safety catch.
+* **Approve live strategy IDs**: add only deliberately promoted strategy IDs to `execution.live_strategy_allowlist`; the default empty list blocks strategy-driven opening risk.
 * **Environment gates**: No additional env flag is required today—config values alone control live behavior.
 
 Only adapters that submit orders honor live mode (`ExecutionAdapter`/`KrakenExecutionAdapter` and any CLI that boots the OMS with a REST client). The `krakked run-once` helper always forces a paper/validated safety path regardless of config so it cannot transmit live orders.
@@ -461,7 +463,7 @@ Invoke via `poetry run python -m krakked.execution.admin_cli <subcommand>`; pass
 * Data review: SQLite `execution_orders` / `execution_results` inspected (or equivalent admin CLI checks) to verify sizing, tagging, and guardrails.
 * Order recovery: `probe-cl-ord-id` run successfully in validate-only mode, with the limitation above understood.
 * Alerts: webhook alerts configured and tested if the session is intended to run semi-unattended.
-* Config gates: `execution.mode="live"`, `execution.validate_only=false`, and `execution.allow_live_trading=true` intentionally set for production; revert any gate to disable.
+* Config gates: `execution.mode="live"`, `execution.validate_only=false`, `execution.allow_live_trading=true`, and `execution.live_strategy_allowlist` intentionally set for production; revert any gate or remove the strategy ID to disable.
 * Risk reviewed: Portfolio and per-strategy risk limits rechecked for live exposure tolerance.
 * Operator drills: Team knows how to invoke `panic`, targeted `cancel`, `reconcile-submit-intents`, and `clear-submit-unknown` via `execution.admin_cli`.
 

@@ -1115,14 +1115,27 @@ def test_live_readiness_reports_ready_when_all_checks_pass(
     system_context.config.execution.validate_only = False
     system_context.config.execution.allow_live_trading = True
     system_context.config.execution.paper_tests_completed = True
-    system_context.config.risk.max_per_strategy_pct = {"dca_overlay": 20.0}
+    system_context.config.execution.live_strategy_allowlist = [
+        "dca_overlay",
+        "manual_dca",
+    ]
+    system_context.config.risk.max_per_strategy_pct = {
+        "dca_overlay": 20.0,
+        "manual_dca": 10.0,
+    }
     system_context.strategy_engine.get_cached_strategy_state.return_value = [
         _strategy_state(
             "dca_overlay",
             enabled=True,
             pairs=["BTC/USD"],
             last_evaluated_at=now,
-        )
+        ),
+        _strategy_state(
+            "manual_dca",
+            enabled=True,
+            pairs=["ETH/USD"],
+            last_evaluated_at=now,
+        ),
     ]
     monkeypatch.setattr(
         system_routes,
@@ -1152,6 +1165,10 @@ def test_live_readiness_reports_ready_when_all_checks_pass(
     assert data["status"] == "ready"
     assert data["blockers"] == []
     assert data["warnings"] == []
+    enabled_strategies = next(
+        check for check in data["passed"] if check["id"] == "enabled_strategies"
+    )
+    assert enabled_strategies["message"] == "2 strategies enabled."
     assert {check["id"] for check in data["passed"]}.issuperset(
         {
             "live_gates",
@@ -1161,6 +1178,7 @@ def test_live_readiness_reports_ready_when_all_checks_pass(
             "drift_monitor",
             "kill_switch",
             "enabled_strategies",
+            "live_strategy_boundary",
             "strategy_risk_caps",
             "strategy_heartbeat",
             "latest_replay",
@@ -1307,6 +1325,41 @@ def test_live_readiness_blocks_missing_enabled_strategy_risk_caps(
     )
     assert cap_blocker["message"] == (
         "Enabled strategies missing explicit risk caps: dca_overlay."
+    )
+
+
+def test_live_readiness_blocks_unapproved_enabled_strategy(client, system_context):
+    system_context.session.active = True
+    system_context.session.mode = "live"
+    system_context.config.execution.mode = "live"
+    system_context.config.execution.validate_only = False
+    system_context.config.execution.allow_live_trading = True
+    system_context.config.execution.paper_tests_completed = True
+    system_context.config.execution.live_strategy_allowlist = ["manual_dca"]
+    system_context.config.risk.max_per_strategy_pct = {"research_alpha": 5.0}
+    system_context.strategy_engine.get_cached_strategy_state.return_value = [
+        _strategy_state(
+            "research_alpha",
+            enabled=True,
+            pairs=["BTC/USD"],
+            last_evaluated_at=datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc),
+        )
+    ]
+
+    response = client.get("/api/system/live-readiness")
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["status"] == "blocked"
+    enabled_strategies = next(
+        check for check in data["passed"] if check["id"] == "enabled_strategies"
+    )
+    assert enabled_strategies["message"] == "1 strategy enabled."
+    boundary_blocker = next(
+        check for check in data["blockers"] if check["id"] == "live_strategy_boundary"
+    )
+    assert boundary_blocker["message"] == (
+        "Enabled strategies are not approved for live submission: research_alpha."
     )
 
 

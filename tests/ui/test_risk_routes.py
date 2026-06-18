@@ -1,5 +1,6 @@
 import json
 from datetime import UTC, datetime, timezone
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock
@@ -21,6 +22,7 @@ from krakked.config import (
     UIRefreshConfig,
     UniverseConfig,
 )
+from krakked.config_loader import RUNTIME_OVERRIDES_FILENAME
 from krakked.execution.models import LocalOrder
 from krakked.execution.oms import ExecutionService
 from krakked.market_data.models import PairMetadata
@@ -246,7 +248,9 @@ def test_get_risk_decisions(client, risk_context):
 
 
 @pytest.mark.parametrize("ui_read_only", [False])
-def test_update_risk_config_mutates_context(client, risk_context):
+def test_update_risk_config_mutates_context(
+    client, risk_context, isolated_ui_config_dir: Path
+):
     body = {"max_open_positions": 42, "max_daily_drawdown_pct": 3.0}
 
     response = client.patch("/api/risk/config", json=body)
@@ -257,6 +261,7 @@ def test_update_risk_config_mutates_context(client, risk_context):
     assert risk_context.config.risk.max_open_positions == 42
     assert risk_context.strategy_engine.risk_engine.config.max_daily_drawdown_pct == 3.0
     assert payload["data"]["max_daily_drawdown_pct"] == 3.0
+    assert (isolated_ui_config_dir / RUNTIME_OVERRIDES_FILENAME).exists()
 
 
 @pytest.mark.parametrize("ui_read_only", [False])

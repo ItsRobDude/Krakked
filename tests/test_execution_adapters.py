@@ -118,6 +118,7 @@ def test_execution_service_uses_kraken_adapter_for_live_mode(inactive_risk_statu
         validate_only=False,
         allow_live_trading=True,
         paper_tests_completed=True,
+        live_strategy_allowlist=["test_strategy"],
     )
     client = MagicMock()
     client.add_order.return_value = {"txid": ["ABC123"], "error": []}

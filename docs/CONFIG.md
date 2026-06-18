@@ -46,6 +46,7 @@ Krakked now boots with a conservative operator-first starter profile unless you 
 
 * Execution defaults to `paper` with a persistent synthetic paper wallet and live submission still gated behind explicit opt-in.
 * Normal paper config uses `execution.validate_only: false` because no Kraken live order is submitted. Operator safety summaries may still treat paper as effectively safe/validated; that is not the same as the raw config flag.
+* Live, non-validate opening risk is also blocked unless the action's strategy ID is explicitly listed in `execution.live_strategy_allowlist`; the default empty list approves no strategies for live order submission.
 * The starter universe is limited to `BTC/USD`, `ETH/USD`, `SOL/USD`, and `ADA/USD`.
 * Historical backfill defaults to `1h`, `4h`, and `1d`.
 * Long-running sessions refresh configured OHLC tails hourly by default (`market_data.ohlc_tail_refresh_interval_seconds: 3600`); set it to `0` to disable.
@@ -70,7 +71,7 @@ Krakked now boots with a conservative operator-first starter profile unless you 
   context.
 * The shipped examples intentionally split defaults by environment:
   * `paper` enables the active starter pack above
-  * `live` keeps the same configured strategies, but enables only `trend_core` and `majors_mean_rev` by default
+  * `live` keeps the same configured strategies, enables only `trend_core` and `majors_mean_rev` by default for evaluation, and leaves `execution.live_strategy_allowlist: []`
 * ML is disabled by default until the operator explicitly opts in.
 * The cockpit may show a display-only BTC/USD `4h` RiskMetrics EWMA volatility
   signal. It is operator context only: it does not affect strategy selection,

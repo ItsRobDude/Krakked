@@ -56,6 +56,7 @@ execution:
   validate_only: true
   allow_live_trading: false
   paper_tests_completed: false
+  live_strategy_allowlist: []
   dead_man_switch_seconds: 600
   max_retries: 3
   retry_backoff_seconds: 2

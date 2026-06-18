@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -27,6 +28,34 @@ from krakked.config import (
 from krakked.metrics import SystemMetrics
 from krakked.ui.api import create_api
 from krakked.ui.context import AppContext, SessionState
+
+
+@pytest.fixture(autouse=True)
+def isolated_ui_config_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+    """Keep UI route persistence tests away from the user's real config dir."""
+
+    config_dir = tmp_path / "_isolated-ui-config"
+    data_dir = tmp_path / "_isolated-ui-data"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    data_dir.mkdir(parents=True, exist_ok=True)
+    (config_dir / "config.yaml").write_text("execution:\n  mode: paper\n")
+
+    monkeypatch.setenv("KRAKKED_CONFIG_DIR", str(config_dir))
+    monkeypatch.setenv("KRAKKED_DATA_DIR", str(data_dir))
+
+    for target in (
+        "krakked.config_loader.get_config_dir",
+        "krakked.config.get_config_dir",
+        "krakked.accounts.get_config_dir",
+        "krakked.main.get_config_dir",
+        "krakked.secrets.get_config_dir",
+        "krakked.ui.routes.config.get_config_dir",
+        "krakked.ui.routes.presets.get_config_dir",
+        "krakked.ui.routes.system.get_config_dir",
+    ):
+        monkeypatch.setattr(target, lambda config_dir=config_dir: config_dir)
+
+    return config_dir
 
 
 def _build_app_config(

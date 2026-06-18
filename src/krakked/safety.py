@@ -19,6 +19,7 @@ class SafetyStatus:
     validate_only: bool
     live_order_submission_blocked: bool
     allow_live_trading: bool
+    has_live_strategy_allowlist: bool
     has_min_order_notional: bool
     has_max_pair_notional: bool
     has_max_total_notional: bool
@@ -30,16 +31,25 @@ def check_safety(config: AppConfig) -> SafetyStatus:
 
     execution = config.execution
     validate_only = execution.validate_only or execution.mode == "paper"
+    has_live_strategy_allowlist = bool(
+        [
+            strategy_id
+            for strategy_id in getattr(execution, "live_strategy_allowlist", [])
+            if str(strategy_id).strip()
+        ]
+    )
     live_order_submission_blocked = (
         execution.mode != "live"
         or execution.validate_only
         or not execution.allow_live_trading
+        or not has_live_strategy_allowlist
     )
     return SafetyStatus(
         live_mode_enabled=execution.mode == "live",
         validate_only=validate_only,
         live_order_submission_blocked=live_order_submission_blocked,
         allow_live_trading=execution.allow_live_trading,
+        has_live_strategy_allowlist=has_live_strategy_allowlist,
         has_min_order_notional=execution.min_order_notional_usd is not None,
         has_max_pair_notional=execution.max_pair_notional_usd is not None,
         has_max_total_notional=execution.max_total_notional_usd is not None,

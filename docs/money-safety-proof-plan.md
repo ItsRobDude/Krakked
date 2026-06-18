@@ -57,8 +57,8 @@ Known live blockers:
   risk; broader fail-closed alert scenarios remain unproved;
 - no quantified live reconciliation staleness policy or relative drift
   threshold;
-- no enforced live strategy boundary that prevents research strategies from
-  submitting live orders.
+- the live strategy boundary is fail-closed by default, but no live utility
+  strategy/profile has been approved for real order submission.
 
 ## Current State
 
@@ -74,6 +74,7 @@ Krakked has substantial safety and observability building blocks:
 - drift detection and kill-switch wiring;
 - emergency cancel-all and flatten-all paths;
 - dead-man switch heartbeat support;
+- fail-closed live strategy approval through `execution.live_strategy_allowlist`;
 - cockpit visibility for health, portfolio, risk, strategies, replay evidence,
   market data, decision trace, and live readiness;
 - pinned-image deployment, backup, restore, rollback, and reboot proof.
@@ -137,7 +138,10 @@ Alpha research remains allowed, but it is a separate research lane. It must not
 become a prerequisite for shipping the safety product, and it must not bypass
 the safety proof gates. Research strategies such as `trend_core`, rotation,
 breakout, mean-reversion, or ML candidates must not drive live orders merely
-because a config toggle enables them.
+because a config toggle enables them. Live, non-validate opening risk is blocked
+unless the action's `strategy_id` is explicitly listed in
+`execution.live_strategy_allowlist`; an empty allowlist means no strategy may
+open live risk.
 
 ## Trust Levels
 

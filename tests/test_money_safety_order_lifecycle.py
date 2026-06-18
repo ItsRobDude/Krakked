@@ -45,6 +45,7 @@ def _live_config() -> ExecutionConfig:
         validate_only=False,
         allow_live_trading=True,
         paper_tests_completed=True,
+        live_strategy_allowlist=["strat"],
         dead_man_switch_seconds=0,
         default_order_type="limit",
         min_order_notional_usd=20.0,

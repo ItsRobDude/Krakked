@@ -314,6 +314,40 @@ def test_execute_plan_allows_fresh_plan_with_ttl(inactive_risk_status):
     assert result.success is True
 
 
+def test_live_execution_blocks_unapproved_strategy_before_submission(
+    inactive_risk_status,
+):
+    adapter = MagicMock()
+    adapter.config = ExecutionConfig(
+        mode="live",
+        validate_only=False,
+        allow_live_trading=True,
+        paper_tests_completed=True,
+        live_strategy_allowlist=["approved_strategy"],
+    )
+    market_data = _market_data(mid_price=100.0)
+    service = ExecutionService(
+        adapter=adapter,
+        market_data=market_data,
+        risk_status_provider=inactive_risk_status,
+    )
+
+    plan = ExecutionPlan(
+        plan_id="plan_unapproved_live_strategy",
+        generated_at=datetime.now(UTC),
+        actions=[_ttl_action(strategy_id="research_strategy")],
+        metadata={"order_type": "limit"},
+    )
+
+    result = service.execute_plan(plan)
+
+    assert result.success is False
+    assert len(result.orders) == 1
+    assert result.orders[0].status == "rejected"
+    assert "live_strategy_allowlist" in (result.orders[0].last_error or "")
+    adapter.submit_order.assert_not_called()
+
+
 def test_refresh_open_orders_updates_tracked_orders(inactive_risk_status):
     client = MagicMock()
     adapter = DryRunExecutionAdapter()

@@ -1,10 +1,12 @@
 from datetime import UTC, datetime
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 from starlette.testclient import TestClient
 
 from krakked.config import StrategyConfig
+from krakked.config_loader import RUNTIME_OVERRIDES_FILENAME
 from krakked.strategy.models import StrategyState
 from krakked.ui.route_runtime import _route_guard
 
@@ -87,7 +89,9 @@ def test_get_strategies_returns_busy_when_refresh_in_progress(client):
 
 
 @pytest.mark.parametrize("ui_read_only", [False])
-def test_set_strategy_enabled_updates_state(client, strategy_context):
+def test_set_strategy_enabled_updates_state(
+    client, strategy_context, isolated_ui_config_dir: Path
+):
     strategy_context.strategy_engine.strategy_states["alpha"] = SimpleNamespace(
         enabled=False
     )
@@ -108,6 +112,7 @@ def test_set_strategy_enabled_updates_state(client, strategy_context):
     assert payload["data"] == {"strategy_id": "alpha", "enabled": True}
     assert strategy_context.strategy_engine.strategy_states["alpha"].enabled is True
     assert "alpha" in strategy_context.config.strategies.enabled
+    assert (isolated_ui_config_dir / RUNTIME_OVERRIDES_FILENAME).exists()
 
 
 @pytest.mark.parametrize("ui_read_only", [True])

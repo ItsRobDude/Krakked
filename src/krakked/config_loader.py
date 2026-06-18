@@ -1386,6 +1386,22 @@ def parse_app_config(
         "config_execution_max_plan_age_seconds",
         config_path,
     )
+    raw_live_strategy_allowlist = execution_data.get("live_strategy_allowlist", [])
+    if not isinstance(raw_live_strategy_allowlist, list):
+        logger.warning(
+            "execution.live_strategy_allowlist must be a list; using empty allowlist",
+            extra={
+                "event": "config_invalid_live_strategy_allowlist",
+                "config_path": str(config_path),
+            },
+        )
+        live_strategy_allowlist: list[str] = []
+    else:
+        live_strategy_allowlist = [
+            str(strategy_id).strip()
+            for strategy_id in raw_live_strategy_allowlist
+            if str(strategy_id).strip()
+        ]
 
     execution_config = ExecutionConfig(
         mode=execution_mode,
@@ -1396,6 +1412,7 @@ def parse_app_config(
         validate_only=execution_data.get("validate_only", False),
         allow_live_trading=execution_data.get("allow_live_trading", False),
         paper_tests_completed=execution_data.get("paper_tests_completed", False),
+        live_strategy_allowlist=live_strategy_allowlist,
         dead_man_switch_seconds=execution_data.get("dead_man_switch_seconds", 600),
         max_retries=execution_data.get("max_retries", 3),
         retry_backoff_seconds=execution_data.get("retry_backoff_seconds", 2),

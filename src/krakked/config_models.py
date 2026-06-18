@@ -45,6 +45,7 @@ class ExecutionConfig:
     validate_only: bool = False
     allow_live_trading: bool = False
     paper_tests_completed: bool = False
+    live_strategy_allowlist: List[str] = field(default_factory=list)
     dead_man_switch_seconds: int = 600
     max_retries: int = 3
     retry_backoff_seconds: int = 2

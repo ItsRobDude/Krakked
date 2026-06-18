@@ -263,6 +263,39 @@ class ExecutionService:
             and get_live_trading_block_reason(config) is None
         )
 
+    def _approved_live_strategy_ids(self) -> set[str]:
+        return {
+            str(strategy_id).strip()
+            for strategy_id in getattr(
+                self._execution_config, "live_strategy_allowlist", []
+            )
+            if str(strategy_id).strip()
+        }
+
+    def _live_strategy_block_reason(self, action: "RiskAdjustedAction") -> str | None:
+        if not self._live_submit_enabled():
+            return None
+
+        if self._is_true_risk_reducing_action(action):
+            return None
+
+        approved_strategy_ids = self._approved_live_strategy_ids()
+        strategy_id = str(getattr(action, "strategy_id", "") or "").strip()
+        if strategy_id in approved_strategy_ids:
+            return None
+
+        if not approved_strategy_ids:
+            return (
+                "Live strategy boundary blocks opening risk: no strategy IDs are "
+                "approved in execution.live_strategy_allowlist"
+            )
+
+        return (
+            "Live strategy boundary blocks opening risk: "
+            f"strategy '{strategy_id or '<missing>'}' is not approved in "
+            "execution.live_strategy_allowlist"
+        )
+
     def _send_safety_alert(
         self,
         *,
@@ -548,6 +581,26 @@ class ExecutionService:
         )
 
         for action in actions_to_process:
+            live_strategy_block_reason = self._live_strategy_block_reason(action)
+            if live_strategy_block_reason:
+                blocked_order = self._create_rejected_order(
+                    plan, action, live_strategy_block_reason
+                )
+                result.errors.append(live_strategy_block_reason)
+                logger.warning(
+                    "Order blocked by live strategy boundary",
+                    extra=structured_log_extra(
+                        event="order_blocked_live_strategy_boundary",
+                        plan_id=plan.plan_id,
+                        strategy_id=action.strategy_id,
+                        pair=action.pair,
+                        local_order_id=blocked_order.local_id,
+                        block_reason=live_strategy_block_reason,
+                    ),
+                )
+                result.orders.append(blocked_order)
+                continue
+
             try:
                 pair_metadata = self.market_data.get_pair_metadata_or_raise(action.pair)
             except ValueError as exc:
