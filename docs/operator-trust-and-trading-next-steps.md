@@ -13,6 +13,12 @@ Known current facts:
 
 - Pinned-image Unraid deploy, upgrade, rollback, backup, and restore proof has
   passed with hard checks enabled.
+- The first pinned-image paper soak completed on 2026-06-19. It proved the
+  runtime/session lifecycle stayed observable overnight, but it did not prove a
+  useful normal trading loop because enabled strategy contexts mostly waited for
+  new closed strategy bars, and fresh evaluations still produced no actions,
+  risk blocks, OMS orders, execution results, trades, or ledger entries. See
+  [`soak-reports/2026-06-19-paper-soak.md`](./soak-reports/2026-06-19-paper-soak.md).
 - Runtime provenance is visible in health payloads, so deployment drift is no
   longer invisible.
 - The EWMA market-risk signal is display-only. It is useful operator context,
@@ -81,16 +87,35 @@ Verification commands used for this local lane:
 
 ## Next Lane: Normal Trading Reliability
 
-Before optimizing strategy knobs, prove the normal loop is boring:
+Before optimizing strategy knobs, prove the normal loop is boring. The first
+paper soak covered the lifecycle part of this lane, but exposed that the active
+strategy loop was mostly alive-without-useful-decisions. The next paper run
+should either produce meaningful strategy/risk/OMS evidence or clearly explain
+why no enabled strategy can evaluate.
 
-- Run a long paper session on the pinned-image Unraid install with the current
-  starter profile.
-- Verify cycle cadence, market-data freshness, strategy decisions, risk blocks,
-  OMS records, portfolio snapshots, and UI snapshot freshness.
-- Exercise pause/resume, emergency flatten, strategy toggle, weight change, and
-  restart persistence.
-- Export a backup after the session and restore it into scratch paths.
-- Save a dated report that says whether anything was unclear to the operator.
+Completed first-run evidence:
+
+- A long paper session on the pinned-image Unraid install stayed active and
+  observable overnight.
+- Pause/resume, implemented as session stop/start, worked.
+- Container restart preserved profile/config/wallet and avoided image drift, but
+  did not auto-resume the active session.
+- Backup/export/restore worked after using the profile-isolated DB path.
+- Emergency flatten's no-position path was safe but did not exercise real
+  close-out behavior.
+
+Remaining proof targets:
+
+- Distinguish active strategy closed-bar deferrals, missing data, true stale
+  data, and no-signal decisions in operator-facing diagnostics.
+- Verify strategy decisions, risk blocks/clamps, OMS records, portfolio
+  snapshots, and UI snapshot freshness during a decision-useful paper run.
+- Exercise strategy toggle and weight-change behavior during the soak.
+- Re-run emergency flatten with seeded synthetic positions and open-order state.
+- Make backup/export profile-aware, or expose the active DB path clearly enough
+  that operators cannot export the wrong database by default.
+- Decide whether the Unraid Docker healthcheck should be hardened or replaced by
+  an app-level operator signal.
 
 This is the bridge between "the code works" and "I would trust this appliance to
 run unattended."
@@ -141,9 +166,9 @@ For strategy evidence:
 
 ## Recommended Order
 
-1. Re-run pinned-image proof after the local UI/API changes land on the image.
-2. Normal paper-session soak on the pinned-image host.
-3. Explicit starter strategy params in profile/config.
+1. Land closed-bar/no-signal strategy diagnostics from the 2026-06-19 soak.
+2. Explicit starter strategy params in profile/config.
+3. Re-run a decision-useful paper soak on the pinned-image host.
 4. One strict evidence scoreboard after Q2 `1h` history exists, or a deliberate
    4h-only hypothesis if the strategy truly operates on 4h.
 5. Only then consider tiny live smoke testing with conservative caps and a

@@ -151,6 +151,13 @@ const baseStrategies = [
     evidence_status: 'research_stage',
     evidence_label: 'Research stage',
     evidence_note: 'Replay evidence has not promoted this strategy beyond research-stage operation.',
+    last_evaluation_summary: {
+      status: 'no_signal',
+      message: 'BTC/USD regime timeframe is not in an uptrend',
+      deferred_no_new_bar_contexts: 0,
+      no_data_contexts: 0,
+      reasons: [{ reason: 'daily_regime_not_uptrend', pair: 'BTC/USD' }],
+    },
   }),
   strategy({
     strategy_id: 'ai_predictor',
@@ -461,6 +468,7 @@ describe('cockpit operator paths', () => {
     await renderActiveCockpit();
 
     expect(screen.getAllByText('Last evaluated').length).toBeGreaterThan(0);
+    expect(screen.getByText('BTC/USD regime timeframe is not in an uptrend')).toBeInTheDocument();
     expect(screen.getAllByText('No action chosen').length).toBeGreaterThanOrEqual(2);
     expect(screen.getAllByText('Not running').length).toBeGreaterThan(0);
     expect(screen.getAllByText('Not yet').length).toBeGreaterThan(0);

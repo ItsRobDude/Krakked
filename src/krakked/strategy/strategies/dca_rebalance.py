@@ -4,13 +4,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from krakked.config import StrategyConfig
 from krakked.market_data.api import MarketDataAPI
 from krakked.market_data.exceptions import DataStaleError
 from krakked.portfolio.manager import PortfolioService
 from krakked.strategy.base import Strategy, StrategyContext
+from krakked.strategy.evaluation import StrategyEvaluationResult
 from krakked.strategy.models import StrategyIntent
 
 
@@ -24,6 +25,8 @@ class DcaRebalanceConfig:
 
 
 class DcaRebalanceStrategy(Strategy):
+    requires_closed_bar_context = False
+
     def __init__(self, base_cfg: StrategyConfig):
         super().__init__(base_cfg)
         self.params = self._parse_config(base_cfg)
@@ -79,16 +82,69 @@ class DcaRebalanceStrategy(Strategy):
         self._last_dca = None
 
     def generate_intents(self, ctx: StrategyContext) -> List[StrategyIntent]:
+        return self.evaluate(ctx).intents
+
+    @staticmethod
+    def _diagnostic(
+        *,
+        reason: str,
+        message: str,
+        pair: Optional[str] = None,
+        timeframe: str,
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {
+            "status": "no_signal",
+            "reason": reason,
+            "message": message,
+            "timeframe": timeframe,
+        }
+        if pair:
+            payload["pair"] = pair
+        if extra:
+            payload.update(extra)
+        return payload
+
+    def evaluate(self, ctx: StrategyContext) -> StrategyEvaluationResult:
+        tf = ctx.timeframe or "1h"
         if self._last_dca:
             elapsed = ctx.now - self._last_dca
             if elapsed < timedelta(minutes=self.params.dca_interval_minutes):
-                return []
+                reason = self._diagnostic(
+                    reason="rebalance_interval_not_elapsed",
+                    message="DCA rebalance interval has not elapsed",
+                    timeframe=tf,
+                    extra={
+                        "elapsed_seconds": elapsed.total_seconds(),
+                        "required_seconds": self.params.dca_interval_minutes * 60,
+                    },
+                )
+                return StrategyEvaluationResult(
+                    no_signal_reasons=[reason],
+                    context_summaries=[reason],
+                    status="no_signal",
+                    message=reason["message"],
+                )
 
         intents: List[StrategyIntent] = []
-        tf = ctx.timeframe or "1h"
+        reasons: List[Dict[str, Any]] = []
+        context_summaries: List[Dict[str, Any]] = []
 
         equity_view = ctx.portfolio.get_equity()
-        equity = equity_view.equity_base
+        equity = float(getattr(equity_view, "equity_base", 0.0) or 0.0)
+        if equity <= 0:
+            reason = self._diagnostic(
+                reason="equity_unavailable_or_zero",
+                message="Portfolio equity is unavailable or zero",
+                timeframe=tf,
+                extra={"equity_usd": equity},
+            )
+            return StrategyEvaluationResult(
+                no_signal_reasons=[reason],
+                context_summaries=[reason],
+                status="no_signal",
+                message=reason["message"],
+            )
 
         positions_by_pair_key = {}
         for position in ctx.portfolio.get_positions() or []:
@@ -102,6 +158,14 @@ class DcaRebalanceStrategy(Strategy):
         for pair in pairs:
             target_weight = target_weights.get(pair)
             if target_weight is None:
+                reason = self._diagnostic(
+                    reason="target_weight_missing",
+                    message=f"{pair} has no target DCA weight",
+                    pair=pair,
+                    timeframe=tf,
+                )
+                reasons.append(reason)
+                context_summaries.append(reason)
                 continue
 
             try:
@@ -110,6 +174,14 @@ class DcaRebalanceStrategy(Strategy):
                 price = None
 
             if price is None:
+                reason = self._diagnostic(
+                    reason="price_unavailable",
+                    message=f"{pair} price is unavailable for DCA evaluation",
+                    pair=pair,
+                    timeframe=tf,
+                )
+                reasons.append(reason)
+                context_summaries.append(reason)
                 continue
 
             position = positions_by_pair_key.get(self._pair_key(ctx, pair))
@@ -125,6 +197,20 @@ class DcaRebalanceStrategy(Strategy):
                 )
 
             if abs(deviation_pct) < self.params.rebalance_threshold_pct:
+                reason = self._diagnostic(
+                    reason="within_rebalance_threshold",
+                    message=f"{pair} is within the DCA rebalance threshold",
+                    pair=pair,
+                    timeframe=tf,
+                    extra={
+                        "current_notional": current_notional,
+                        "target_notional": target_notional,
+                        "deviation_pct": deviation_pct,
+                        "rebalance_threshold_pct": self.params.rebalance_threshold_pct,
+                    },
+                )
+                reasons.append(reason)
+                context_summaries.append(reason)
                 continue
 
             metadata = {
@@ -151,6 +237,18 @@ class DcaRebalanceStrategy(Strategy):
                         metadata=metadata,
                     )
                 )
+                context_summaries.append(
+                    {
+                        "status": "intents_emitted",
+                        "pair": pair,
+                        "timeframe": tf,
+                        "message": f"{pair} is below target DCA allocation",
+                        "reason": "below_target_allocation",
+                        "current_notional": current_notional,
+                        "target_notional": target_notional,
+                        "deviation_pct": deviation_pct,
+                    }
+                )
             else:
                 new_target = max(
                     target_notional, current_notional - self.params.dca_notional_usd
@@ -169,6 +267,18 @@ class DcaRebalanceStrategy(Strategy):
                             metadata=metadata,
                         )
                     )
+                    context_summaries.append(
+                        {
+                            "status": "intents_emitted",
+                            "pair": pair,
+                            "timeframe": tf,
+                            "message": f"{pair} is above target DCA allocation",
+                            "reason": "above_target_allocation_exit",
+                            "current_notional": current_notional,
+                            "target_notional": target_notional,
+                            "deviation_pct": deviation_pct,
+                        }
+                    )
                 else:
                     intents.append(
                         StrategyIntent(
@@ -183,8 +293,34 @@ class DcaRebalanceStrategy(Strategy):
                             metadata=metadata,
                         )
                     )
+                    context_summaries.append(
+                        {
+                            "status": "intents_emitted",
+                            "pair": pair,
+                            "timeframe": tf,
+                            "message": f"{pair} is above target DCA allocation",
+                            "reason": "above_target_allocation_reduce",
+                            "current_notional": current_notional,
+                            "target_notional": target_notional,
+                            "deviation_pct": deviation_pct,
+                        }
+                    )
 
         if intents:
             self._last_dca = ctx.now
 
-        return intents
+        return StrategyEvaluationResult(
+            intents=intents,
+            no_signal_reasons=[] if intents else reasons,
+            context_summaries=context_summaries,
+            status="intents_emitted" if intents else "no_signal",
+            message=(
+                f"Generated {len(intents)} DCA intent(s)"
+                if intents
+                else (
+                    reasons[0]["message"]
+                    if reasons
+                    else "DCA evaluated without a matching pair"
+                )
+            ),
+        )

@@ -94,3 +94,4 @@ class StrategyState:
     configured_weight: int = 100
     effective_weight_pct: Optional[float] = None
     last_evaluated_at: Optional[datetime] = None
+    last_evaluation_summary: Optional[Dict[str, Any]] = None

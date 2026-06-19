@@ -5,6 +5,8 @@ from typing import Any, Dict, Generic, List, Literal, Optional, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from krakked.strategy.evaluation import StrategyEvaluationStatus
+
 T = TypeVar("T")
 
 
@@ -236,6 +238,23 @@ class StrategyPosition(BaseModel):
     comment: Optional[str] = None
 
 
+class StrategyEvaluationSummaryPayload(BaseModel):
+    status: StrategyEvaluationStatus
+    message: str
+    evaluated_at: Optional[str] = None
+    contexts_evaluated: int = 0
+    fresh_contexts_evaluated: int = 0
+    deferred_no_new_bar_contexts: int = 0
+    no_data_contexts: int = 0
+    invalid_bar_timestamp_contexts: int = 0
+    data_stale_contexts: int = 0
+    strategy_error_contexts: int = 0
+    intents_emitted: int = 0
+    timeframes_evaluated: List[str] = Field(default_factory=list)
+    context_summaries: List[Dict[str, Any]] = Field(default_factory=list)
+    reasons: List[Dict[str, Any]] = Field(default_factory=list)
+
+
 class StrategyStatePayload(BaseModel):
     strategy_id: str
     label: str
@@ -246,6 +265,7 @@ class StrategyStatePayload(BaseModel):
     last_intents_at: Optional[datetime]
     last_actions_at: Optional[datetime]
     last_evaluated_at: Optional[datetime] = None
+    last_evaluation_summary: Optional[StrategyEvaluationSummaryPayload] = None
     current_positions: List[StrategyPosition]
     pnl_summary: Dict[str, float]
     last_intents: Optional[list[dict[str, Any]]] = None

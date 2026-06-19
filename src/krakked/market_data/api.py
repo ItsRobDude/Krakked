@@ -14,7 +14,7 @@ from krakked.connection.rest_client import KrakenRESTClient
 from krakked.market_data.exceptions import DataStaleError, PairNotFoundError
 from krakked.market_data.metadata_store import PairMetadataStore
 from krakked.market_data.models import ConnectionStatus, OHLCBar, PairMetadata
-from krakked.market_data.ohlc_fetcher import backfill_ohlc
+from krakked.market_data.ohlc_fetcher import TIMEFRAME_MAP, backfill_ohlc
 from krakked.market_data.ohlc_refresh import OHLCTailRefreshSummary, refresh_ohlc_tails
 from krakked.market_data.ohlc_store import FileOHLCStore, OHLCStore
 from krakked.market_data.universe import build_universe
@@ -154,6 +154,9 @@ class MarketDataAPI:
         self._tail_refresh_thread: Optional[threading.Thread] = None
         self._tail_refresh_lock = threading.Lock()
         self._last_tail_refresh_started_at = time.monotonic()
+        self._last_tail_refresh_boundary_by_timeframe: Dict[str, int] = {}
+        self._invalid_tail_refresh_timeframes_warned: set[str] = set()
+        self._seed_tail_refresh_boundaries(time.time())
         self._initialized_at = time.time()
         self._last_rest_check_at = 0.0
         self._last_rest_reachable = False
@@ -253,19 +256,25 @@ class MarketDataAPI:
             since=since,
         )
 
-    def start_background_ohlc_tail_refresh(self) -> bool:
+    def start_background_ohlc_tail_refresh(
+        self, timeframes: Optional[List[str]] = None
+    ) -> bool:
         """Start one OHLC tail refresh in the background, skipping overlaps."""
         if not self._config.market_data.backfill_timeframes or not self._universe:
             return False
+        refresh_timeframes = timeframes or self._config.market_data.backfill_timeframes
 
         if not self._tail_refresh_lock.acquire(blocking=False):
             logger.info("OHLC tail refresh already running; skipping.")
             return False
 
         def _run() -> None:
-            logger.info("Scheduled OHLC tail refresh started.")
+            logger.info(
+                "Scheduled OHLC tail refresh started for timeframes %s.",
+                refresh_timeframes,
+            )
             try:
-                result = self.refresh_ohlc_tails()
+                result = self.refresh_ohlc_tails(timeframes=refresh_timeframes)
             except Exception as exc:  # pragma: no cover - defensive logging
                 logger.exception("Scheduled OHLC tail refresh failed: %s", exc)
             else:
@@ -288,25 +297,87 @@ class MarketDataAPI:
         self._tail_refresh_thread.start()
         return True
 
+    def _tail_refresh_frame_seconds(self, timeframe: str) -> Optional[int]:
+        timeframe = str(timeframe)
+        interval_minutes = TIMEFRAME_MAP.get(timeframe)
+        if interval_minutes is None:
+            if timeframe not in self._invalid_tail_refresh_timeframes_warned:
+                logger.warning(
+                    "Skipping scheduled OHLC tail refresh for unsupported timeframe %s.",
+                    timeframe,
+                )
+                self._invalid_tail_refresh_timeframes_warned.add(timeframe)
+            return None
+        return int(interval_minutes) * 60
+
+    def _seed_tail_refresh_boundaries(self, now_wall: float) -> None:
+        for timeframe in self._config.market_data.backfill_timeframes:
+            frame_seconds = self._tail_refresh_frame_seconds(str(timeframe))
+            if not frame_seconds:
+                continue
+            boundary = int(now_wall // frame_seconds) * frame_seconds
+            self._last_tail_refresh_boundary_by_timeframe.setdefault(
+                str(timeframe), boundary
+            )
+
+    def _due_boundary_refresh_timeframes(self, now_wall: float) -> List[str]:
+        due: List[str] = []
+        grace_seconds = max(15.0, min(float(self._ws_stale_tolerance), 120.0))
+        for timeframe in self._config.market_data.backfill_timeframes:
+            frame_seconds = self._tail_refresh_frame_seconds(str(timeframe))
+            if not frame_seconds:
+                continue
+            boundary = int(now_wall // frame_seconds) * frame_seconds
+            if now_wall < boundary + grace_seconds:
+                continue
+            last_boundary = self._last_tail_refresh_boundary_by_timeframe.get(
+                str(timeframe)
+            )
+            if last_boundary == boundary:
+                continue
+            due.append(str(timeframe))
+        return due
+
+    def _mark_boundary_refresh_started(
+        self, timeframes: List[str], now_wall: float
+    ) -> None:
+        for timeframe in timeframes:
+            frame_seconds = self._tail_refresh_frame_seconds(str(timeframe))
+            if not frame_seconds:
+                continue
+            boundary = int(now_wall // frame_seconds) * frame_seconds
+            self._last_tail_refresh_boundary_by_timeframe[str(timeframe)] = boundary
+
     def maybe_start_scheduled_ohlc_tail_refresh(
-        self, now_monotonic: Optional[float] = None
+        self,
+        now_monotonic: Optional[float] = None,
+        now_wall: Optional[float] = None,
     ) -> bool:
-        """Start a scheduled tail refresh if the configured interval has elapsed."""
+        """Start a scheduled tail refresh after closed-bar boundaries or interval."""
         interval = self._config.market_data.ohlc_tail_refresh_interval_seconds
         if interval <= 0:
             return False
 
         now = now_monotonic if now_monotonic is not None else time.monotonic()
-        if now - self._last_tail_refresh_started_at < interval:
-            return False
-
         if self._backfill_thread and self._backfill_thread.is_alive():
             return False
 
-        started = self.start_background_ohlc_tail_refresh()
-        if started:
-            self._last_tail_refresh_started_at = now
-        return started
+        wall = now_wall if now_wall is not None else time.time()
+        due_timeframes = self._due_boundary_refresh_timeframes(wall)
+        if due_timeframes:
+            started = self.start_background_ohlc_tail_refresh(timeframes=due_timeframes)
+            if started:
+                self._mark_boundary_refresh_started(due_timeframes, wall)
+                self._last_tail_refresh_started_at = now
+            return started
+
+        if now - self._last_tail_refresh_started_at >= interval:
+            started = self.start_background_ohlc_tail_refresh()
+            if started:
+                self._last_tail_refresh_started_at = now
+            return started
+
+        return False
 
     def get_cached_data_status(self) -> ConnectionStatus:
         return self._last_connection_status

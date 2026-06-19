@@ -32,6 +32,12 @@ const formatLatestSignal = (
   return strategy.enabled ? 'Awaiting first evaluation' : 'Not running';
 };
 
+const formatEvaluationSummary = (strategy: StrategyState) => {
+  const summary = strategy.last_evaluation_summary;
+  if (summary?.message) return summary.message;
+  return formatLatestSignal(strategy, strategy.last_intents?.[0]);
+};
+
 export type StrategiesPanelProps = {
   strategies: StrategyState[];
   performance: Record<string, StrategyPerformance>;
@@ -172,6 +178,7 @@ export function StrategiesPanel({
           const drawdown = drawdownBadge(perf?.max_drawdown_pct);
           const latestIntent = strategy.last_intents?.[0];
           const latestConflict = strategy.conflict_summary?.[0];
+          const evaluationSummary = strategy.last_evaluation_summary;
           const momentum = momentumBadge(strategy, perf?.realized_pnl_quote, perf?.max_drawdown_pct);
           const learningEnabled = learningSelections[strategy.strategy_id] ?? true;
           const effect = getStrategyTradingEffect(strategy, liveMode);
@@ -251,6 +258,12 @@ export function StrategiesPanel({
                 <div>
                   <span>Last evaluated</span>
                   <strong>{lastEvaluated ? formatTimestamp(lastEvaluated) : 'Not yet'}</strong>
+                </div>
+                <div>
+                  <span>Latest evaluation</span>
+                  <strong title={evaluationSummary ? JSON.stringify(evaluationSummary) : undefined}>
+                    {formatEvaluationSummary(strategy)}
+                  </strong>
                 </div>
                 <div>
                   <span>Evidence</span>
