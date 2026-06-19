@@ -896,6 +896,46 @@ def test_intent_summary_clears_top_level_reasons_but_keeps_context_detail():
     )
 
 
+def test_multitimeframe_stale_context_wins_headline_when_no_intents():
+    class PartiallyStaleStrategy(Strategy):
+        def warmup(self, market_data, portfolio):
+            return None
+
+        def generate_intents(self, ctx):
+            if ctx.timeframe == "4h":
+                raise DataStaleError("XBTUSD", 120.0, 60.0)
+            return []
+
+        def explain_no_signal(self, ctx):
+            return [
+                {
+                    "reason": "test_no_signal",
+                    "message": "Fresh context had no signal",
+                    "timeframe": ctx.timeframe,
+                }
+            ]
+
+    strat_config = StrategyConfig(
+        name="partial_stale",
+        type="partial_stale",
+        enabled=True,
+        params={"timeframes": ["1h", "4h"]},
+    )
+    engine = _engine_for_strategy(
+        strat_config=strat_config,
+        strategy=PartiallyStaleStrategy(strat_config),
+    )
+
+    plan = engine.run_cycle(datetime.now(timezone.utc))
+
+    evaluation = plan.metadata["strategy_evaluation"]["partial_stale"]
+    summary = evaluation["last_evaluation_summary"]
+    assert evaluation["fresh_contexts_evaluated"] == 1
+    assert evaluation["data_stale_contexts"] == 1
+    assert summary["status"] == "data_stale"
+    assert summary["message"] == "Market data was stale for this strategy context"
+
+
 def test_disabling_strategy_replaces_stale_generated_intent_summary():
     strat_config = StrategyConfig(
         name="quiet", type="quiet", enabled=True, params={"timeframes": ["1h"]}
@@ -925,6 +965,44 @@ def test_disabling_strategy_replaces_stale_generated_intent_summary():
     )
     assert engine.strategy_states["quiet"].last_evaluation_summary["message"] == (
         "Strategy is paused"
+    )
+
+
+def test_reenabling_strategy_replaces_disabled_summary_with_awaiting_evaluation():
+    strat_config = StrategyConfig(
+        name="quiet", type="quiet", enabled=True, params={"timeframes": ["1h"]}
+    )
+
+    class QuietStrategy(Strategy):
+        def warmup(self, market_data, portfolio):
+            return None
+
+        def generate_intents(self, ctx):
+            return []
+
+    engine = _engine_for_strategy(
+        strat_config=strat_config,
+        strategy=QuietStrategy(strat_config),
+    )
+    engine.set_strategy_enabled("quiet", False)
+    assert engine.strategy_states["quiet"].last_evaluation_summary["status"] == (
+        "disabled"
+    )
+
+    def _activate_strategy(config):
+        engine.strategies[config.name] = QuietStrategy(config)
+        return True
+
+    engine._activate_strategy = MagicMock(side_effect=_activate_strategy)
+
+    engine.set_strategy_enabled("quiet", True)
+
+    assert engine.strategy_states["quiet"].enabled is True
+    assert engine.strategy_states["quiet"].last_evaluation_summary["status"] == (
+        "awaiting_evaluation"
+    )
+    assert engine.strategy_states["quiet"].last_evaluation_summary["message"] == (
+        "Awaiting first strategy evaluation"
     )
 
 

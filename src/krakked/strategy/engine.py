@@ -800,15 +800,15 @@ class StrategyEngine:
             status = "intents_emitted"
             label = "intent" if intents == 1 else "intents"
             message = f"Generated {intents} {label}"
+        elif data_stale_contexts > 0:
+            status = "data_stale"
+            message = "Market data was stale for this strategy context"
         elif fresh_contexts > 0:
             status = "no_signal"
             if reasons:
                 message = reasons[0].get("message") or "No action chosen"
             else:
                 message = "No action chosen after evaluating a fresh closed bar"
-        elif data_stale_contexts > 0:
-            status = "data_stale"
-            message = "Market data was stale for this strategy context"
         elif invalid_contexts > 0:
             status = "invalid_bar_timestamp"
             message = "Closed-bar timestamp was missing or invalid"
@@ -855,6 +855,24 @@ class StrategyEngine:
         return {
             "status": "disabled",
             "message": "Strategy is paused",
+            "evaluated_at": self._isoformat_utc(datetime.now(timezone.utc)),
+            "contexts_evaluated": 0,
+            "fresh_contexts_evaluated": 0,
+            "deferred_no_new_bar_contexts": 0,
+            "no_data_contexts": 0,
+            "invalid_bar_timestamp_contexts": 0,
+            "data_stale_contexts": 0,
+            "strategy_error_contexts": 0,
+            "intents_emitted": 0,
+            "timeframes_evaluated": [],
+            "context_summaries": [],
+            "reasons": [],
+        }
+
+    def _awaiting_strategy_summary(self) -> Dict[str, Any]:
+        return {
+            "status": "awaiting_evaluation",
+            "message": "Awaiting first strategy evaluation",
             "evaluated_at": self._isoformat_utc(datetime.now(timezone.utc)),
             "contexts_evaluated": 0,
             "fresh_contexts_evaluated": 0,
@@ -1557,6 +1575,9 @@ class StrategyEngine:
         if strat_cfg is None:
             raise ValueError(f"Strategy {strategy_id} not found")
 
+        previous_state = self.strategy_states.get(strategy_id)
+        was_enabled = bool(previous_state.enabled) if previous_state else False
+
         strat_cfg.enabled = enabled
         state = self._ensure_strategy_state(strat_cfg, enabled=enabled)
 
@@ -1570,6 +1591,8 @@ class StrategyEngine:
                     strat_cfg.enabled = False
                     if strategy_id in self.config.strategies.enabled:
                         self.config.strategies.enabled.remove(strategy_id)
+            if state.enabled and not was_enabled:
+                state.last_evaluation_summary = self._awaiting_strategy_summary()
         else:
             if strategy_id in self.config.strategies.enabled:
                 self.config.strategies.enabled.remove(strategy_id)
