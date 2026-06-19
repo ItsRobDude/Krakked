@@ -124,8 +124,7 @@ strategies:
       type: "trend_following"
       enabled: true
       params:
-        # Empty => use full discovered universe
-        pairs: []
+        pairs: ["BTC/USD", "ETH/USD", "SOL/USD", "ADA/USD"]
         risk_profile: "balanced"
         timeframes: ["1h", "4h"]
         ma_fast: 10
@@ -155,6 +154,7 @@ strategies:
         timeframe: "1h"
         lookback_bars: 50
         band_width_bps: 150
+        max_positions: 2
       userref: 1003
 
     rs_rotation:

@@ -191,7 +191,7 @@ def _build_setup_config_data(
         "session": {"account_id": "default"},
         "ml": {"enabled": False},
         "risk": get_default_starter_risk_config(),
-        "strategies": get_default_starter_strategies_config(),
+        "strategies": get_default_starter_strategies_config(starter_pairs),
     }
 
 

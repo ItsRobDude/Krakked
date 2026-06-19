@@ -60,6 +60,11 @@ Krakked now boots with a conservative operator-first starter profile unless you 
 * The enabled starter strategy pack is:
   * `trend_core`
   * `majors_mean_rev`
+* Starter strategy inputs are explicit in generated configs:
+  * `trend_core` evaluates `BTC/USD`, `ETH/USD`, `SOL/USD`, and `ADA/USD`
+    on `1h` and `4h`, with `1d` regime context.
+  * `majors_mean_rev` evaluates `BTC/USD` and `ETH/USD` on `1h`, with
+    `lookback_bars: 50`, `band_width_bps: 150`, and `max_positions: 2`.
 * `vol_breakout` remains configured with conservative caps for manual
   research, but is disabled by default because it requires `15m` OHLC and the
   default replay/backfill set intentionally stays on `1h`, `4h`, and `1d`.

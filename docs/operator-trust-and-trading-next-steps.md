@@ -132,7 +132,7 @@ That would recreate the ML loop in another costume.
 
 Useful strategy work now:
 
-- Make every enabled strategy's pairs, timeframes, and sizing params explicit in
+- Keep every enabled strategy's pairs, timeframes, and sizing params explicit in
   the active profile so scoreboards do not depend on constructor defaults.
 - Keep strict preflight as the source of truth. If data is partial, fix data or
   choose a supported window; do not loosen the gate.
@@ -167,7 +167,7 @@ For strategy evidence:
 ## Recommended Order
 
 1. Land closed-bar/no-signal strategy diagnostics from the 2026-06-19 soak.
-2. Explicit starter strategy params in profile/config.
+2. Keep explicit starter strategy params in profile/config.
 3. Re-run a decision-useful paper soak on the pinned-image host.
 4. One strict evidence scoreboard after Q2 `1h` history exists, or a deliberate
    4h-only hypothesis if the strategy truly operates on 4h.

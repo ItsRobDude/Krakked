@@ -1565,6 +1565,18 @@ def test_setup_config_updates_existing_bootstrap_config(
     assert config_data["risk"]["max_per_strategy_pct"]["trend_core"] == 5.0
     assert config_data["market_data"]["backfill_timeframes"] == ["1h", "4h", "1d"]
     assert config_data["market_data"]["ws_timeframes"] == ["1m"]
+    assert config_data["strategies"]["configs"]["trend_core"]["params"]["pairs"] == [
+        "BTC/USD"
+    ]
+    assert config_data["strategies"]["configs"]["majors_mean_rev"]["params"][
+        "pairs"
+    ] == ["BTC/USD"]
+    assert (
+        config_data["strategies"]["configs"]["majors_mean_rev"]["params"][
+            "max_positions"
+        ]
+        == 2
+    )
 
 
 def test_setup_config_uses_starter_universe_when_none_provided(
@@ -1594,6 +1606,18 @@ def test_setup_config_uses_starter_universe_when_none_provided(
         "trend_core",
         "majors_mean_rev",
     ]
+    assert config_data["strategies"]["configs"]["trend_core"]["params"]["pairs"] == [
+        "BTC/USD",
+        "ETH/USD",
+        "SOL/USD",
+        "ADA/USD",
+    ]
+    assert (
+        config_data["strategies"]["configs"]["majors_mean_rev"]["params"][
+            "max_positions"
+        ]
+        == 2
+    )
     assert config_data["strategies"]["configs"]["vol_breakout"]["enabled"] is False
     assert config_data["strategies"]["configs"]["rs_rotation"]["enabled"] is False
 

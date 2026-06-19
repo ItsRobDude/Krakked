@@ -6,6 +6,8 @@ from types import SimpleNamespace
 from krakked.config_loader import (
     DEFAULT_OHLC_TAIL_REFRESH_INTERVAL_SECONDS,
     DEFAULT_STARTER_BACKFILL_TIMEFRAMES,
+    DEFAULT_STARTER_PAIRS,
+    DEFAULT_STARTER_STRATEGY_PARAMS,
     get_initial_ui_config,
 )
 from krakked.main import BotController
@@ -74,6 +76,12 @@ def test_bootstrap_locked_context_seeds_starter_profile(monkeypatch, tmp_path):
     assert (
         ctx.config.market_data.ohlc_tail_refresh_interval_seconds
         == DEFAULT_OHLC_TAIL_REFRESH_INTERVAL_SECONDS
+    )
+    assert ctx.config.strategies.configs["trend_core"].params["pairs"] == (
+        DEFAULT_STARTER_PAIRS
+    )
+    assert ctx.config.strategies.configs["majors_mean_rev"].params == (
+        DEFAULT_STARTER_STRATEGY_PARAMS["majors_mean_rev"]
     )
     assert (tmp_path / "profiles" / "Default.yaml").exists()
 

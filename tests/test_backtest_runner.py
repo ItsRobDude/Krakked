@@ -1004,6 +1004,7 @@ def test_build_trend_core_warmup_warnings_for_short_daily_window(
     config.universe.include_pairs = ["BTC/USD"]
     config.strategies.enabled = ["trend_core"]
     config.strategies.configs["trend_core"].enabled = True
+    config.strategies.configs["trend_core"].params["pairs"] = ["BTC/USD"]
     preflight = runner.BacktestPreflight(
         coverage=[
             runner.BacktestCoverageItem(

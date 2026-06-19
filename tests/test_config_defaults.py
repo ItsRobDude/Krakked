@@ -8,9 +8,11 @@ from krakked.config_loader import (
     DEFAULT_STARTER_BACKFILL_TIMEFRAMES,
     DEFAULT_STARTER_CONFIG_STRATEGY_IDS,
     DEFAULT_STARTER_PAIRS,
+    DEFAULT_STARTER_STRATEGY_PARAMS,
     DEFAULT_STARTER_STRATEGY_IDS,
     DEFAULT_STARTER_WS_TIMEFRAMES,
     cleanup_active_config_chain,
+    get_default_starter_strategies_config,
 )
 
 
@@ -115,6 +117,29 @@ def test_load_config_uses_data_dir_env_override_for_default_ohlc_store(
     assert app_config.market_data.ohlc_store["root_dir"] == str(data_dir / "ohlc")
 
 
+def test_default_starter_strategy_params_are_explicit_and_copied():
+    first = get_default_starter_strategies_config()
+    second = get_default_starter_strategies_config()
+
+    assert (
+        first["configs"]["trend_core"]["params"]
+        == DEFAULT_STARTER_STRATEGY_PARAMS["trend_core"]
+    )
+    assert (
+        first["configs"]["majors_mean_rev"]["params"]
+        == DEFAULT_STARTER_STRATEGY_PARAMS["majors_mean_rev"]
+    )
+    assert first["configs"]["trend_core"]["params"]["pairs"] == DEFAULT_STARTER_PAIRS
+    assert first["configs"]["majors_mean_rev"]["params"]["max_positions"] == 2
+
+    first["configs"]["trend_core"]["params"]["pairs"].append("DOGE/USD")
+    assert second["configs"]["trend_core"]["params"]["pairs"] == DEFAULT_STARTER_PAIRS
+
+    custom = get_default_starter_strategies_config(starter_pairs=["BTC/USD"])
+    assert custom["configs"]["trend_core"]["params"]["pairs"] == ["BTC/USD"]
+    assert custom["configs"]["majors_mean_rev"]["params"]["pairs"] == ["BTC/USD"]
+
+
 def test_load_config_applies_default_starter_strategies_when_missing(
     monkeypatch, tmp_path: Path
 ):
@@ -137,6 +162,14 @@ def test_load_config_applies_default_starter_strategies_when_missing(
     assert app_config.strategies.configs["trend_core"].enabled is True
     assert app_config.strategies.configs["vol_breakout"].enabled is False
     assert app_config.strategies.configs["rs_rotation"].enabled is False
+    assert (
+        app_config.strategies.configs["trend_core"].params
+        == DEFAULT_STARTER_STRATEGY_PARAMS["trend_core"]
+    )
+    assert (
+        app_config.strategies.configs["majors_mean_rev"].params
+        == DEFAULT_STARTER_STRATEGY_PARAMS["majors_mean_rev"]
+    )
     assert app_config.ml.enabled is False
     assert app_config.universe.include_pairs == DEFAULT_STARTER_PAIRS
     assert app_config.universe.min_24h_volume_usd == 100000.0
@@ -155,6 +188,35 @@ def test_load_config_applies_default_starter_strategies_when_missing(
     assert app_config.risk.market_regime_throttle.timeframe == "4h"
     assert app_config.risk.market_regime_throttle.momentum_lookback_bars == 63
     assert app_config.risk.market_regime_throttle.neutral_allocation_multiplier == 0.75
+
+
+def test_load_config_applies_explicit_starter_pairs_from_configured_universe(
+    monkeypatch, tmp_path: Path
+):
+    config_dir = tmp_path / "config"
+    data_dir = tmp_path / "data"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    (config_dir / "config.yaml").write_text(
+        """
+execution:
+  mode: paper
+universe:
+  include_pairs:
+    - BTC/USD
+""".strip()
+    )
+
+    monkeypatch.setattr(appdirs, "user_config_dir", lambda appname: config_dir)
+    monkeypatch.setattr(appdirs, "user_data_dir", lambda appname: data_dir)
+
+    app_config = load_config()
+
+    assert app_config.strategies.configs["trend_core"].params["pairs"] == ["BTC/USD"]
+    assert app_config.strategies.configs["majors_mean_rev"].params["pairs"] == [
+        "BTC/USD"
+    ]
 
 
 def test_load_config_allows_disabling_ohlc_tail_refresh(monkeypatch, tmp_path: Path):

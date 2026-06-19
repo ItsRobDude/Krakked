@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+from copy import deepcopy
 from dataclasses import asdict, fields
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -55,6 +56,40 @@ DEFAULT_STARTER_STRATEGY_LIMITS: Dict[str, float] = {
     "vol_breakout": 5.0,
     "majors_mean_rev": 5.0,
     "rs_rotation": 5.0,
+}
+DEFAULT_STARTER_STRATEGY_PARAMS: Dict[str, Dict[str, Any]] = {
+    "trend_core": {
+        "pairs": list(DEFAULT_STARTER_PAIRS),
+        "risk_profile": "balanced",
+        "timeframes": ["1h", "4h"],
+        "ma_fast": 10,
+        "ma_slow": 20,
+        "regime_timeframe": "1d",
+        "min_trend_strength_bps": 15,
+    },
+    "vol_breakout": {
+        "pairs": list(DEFAULT_STARTER_PAIRS),
+        "timeframes": ["15m", "1h"],
+        "lookback_bars": 20,
+        "min_compression_bps": 10.0,
+        "breakout_multiple": 1.5,
+    },
+    "majors_mean_rev": {
+        "pairs": ["BTC/USD", "ETH/USD"],
+        "timeframe": "1h",
+        "lookback_bars": 50,
+        "band_width_bps": 150,
+        "max_positions": 2,
+    },
+    "rs_rotation": {
+        "pairs": list(DEFAULT_STARTER_PAIRS),
+        "lookback_bars": 42,
+        "timeframe": "4h",
+        "rebalance_interval_hours": 24,
+        "top_n": 2,
+        "total_allocation_pct": 5.0,
+        "confidence_return_bps": 250.0,
+    },
 }
 RESERVED_RISK_STRATEGY_LIMIT_KEYS = {"manual"}
 
@@ -124,16 +159,33 @@ def get_default_ohlc_store_config() -> Dict[str, str]:
     return {"root_dir": str(default_root), "backend": "parquet"}
 
 
-def get_default_starter_strategies_config() -> Dict[str, Any]:
+def get_default_starter_strategies_config(
+    starter_pairs: Optional[List[str]] = None,
+) -> Dict[str, Any]:
     """Return a conservative non-ML starter strategy block for first run."""
 
+    explicit_pairs = list(starter_pairs) if starter_pairs else None
     configs: Dict[str, Any] = {}
     for strategy_id in DEFAULT_STARTER_CONFIG_STRATEGY_IDS:
         definition = CANONICAL_STRATEGIES[strategy_id]
+        params = deepcopy(DEFAULT_STARTER_STRATEGY_PARAMS[strategy_id])
+        if explicit_pairs and strategy_id in {
+            "trend_core",
+            "vol_breakout",
+            "rs_rotation",
+        }:
+            params["pairs"] = list(explicit_pairs)
+        elif explicit_pairs and strategy_id == "majors_mean_rev":
+            majors = [
+                pair for pair in ("BTC/USD", "ETH/USD") if pair in explicit_pairs
+            ]
+            params["pairs"] = majors or list(explicit_pairs)
+
         configs[strategy_id] = {
             "name": strategy_id,
             "type": definition.type,
             "enabled": strategy_id in DEFAULT_STARTER_STRATEGY_IDS,
+            "params": params,
             "strategy_weight": 100,
         }
 
@@ -920,6 +972,15 @@ def parse_app_config(
         )
         capabilities_data = {}
 
+    starter_strategy_pairs: Optional[List[str]] = None
+    universe_for_strategy_defaults = raw_config.get("universe") or {}
+    if isinstance(universe_for_strategy_defaults, dict):
+        include_pairs = universe_for_strategy_defaults.get("include_pairs")
+        if isinstance(include_pairs, list) and include_pairs:
+            starter_strategy_pairs = [
+                str(pair).strip() for pair in include_pairs if str(pair).strip()
+            ]
+
     risk_declared = "risk" in raw_config
     risk_data = raw_config.get("risk") or {}
     if not isinstance(risk_data, dict):
@@ -951,7 +1012,9 @@ def parse_app_config(
         )
         strategies_data = {}
     if not strategies_declared:
-        strategies_data = get_default_starter_strategies_config()
+        strategies_data = get_default_starter_strategies_config(
+            starter_strategy_pairs
+        )
         logger.info(
             "No strategies block found; applying starter strategy defaults",
             extra={
