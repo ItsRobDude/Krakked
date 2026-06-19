@@ -321,6 +321,19 @@ export type StrategyParams = {
   [key: string]: unknown;
 };
 
+export type StrategyEvaluationStatus =
+  | 'awaiting_evaluation'
+  | 'data_stale'
+  | 'deferred_no_new_bar'
+  | 'disabled'
+  | 'intents_emitted'
+  | 'invalid_bar_timestamp'
+  | 'no_data'
+  | 'no_pairs'
+  | 'no_signal'
+  | 'not_evaluated'
+  | 'strategy_error';
+
 export type StrategyState = {
   strategy_id: string;
   label: string;
@@ -331,6 +344,22 @@ export type StrategyState = {
   last_intents_at: string | null;
   last_actions_at: string | null;
   last_evaluated_at: string | null;
+  last_evaluation_summary?: {
+    status?: StrategyEvaluationStatus;
+    message?: string;
+    evaluated_at?: string;
+    contexts_evaluated?: number;
+    fresh_contexts_evaluated?: number;
+    deferred_no_new_bar_contexts?: number;
+    no_data_contexts?: number;
+    invalid_bar_timestamp_contexts?: number;
+    data_stale_contexts?: number;
+    strategy_error_contexts?: number;
+    intents_emitted?: number;
+    timeframes_evaluated?: string[];
+    context_summaries?: Array<Record<string, unknown>>;
+    reasons?: Array<Record<string, unknown>>;
+  } | null;
   pnl_summary: { realized_pnl_usd?: number; exposure_pct?: number };
   last_intents?: StrategyIntentPreview[] | null;
   conflict_summary?: Array<{

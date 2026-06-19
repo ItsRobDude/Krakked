@@ -49,7 +49,7 @@ Krakked now boots with a conservative operator-first starter profile unless you 
 * Live, non-validate opening risk is also blocked unless the action's strategy ID is explicitly listed in `execution.live_strategy_allowlist`; the default empty list approves no strategies for live order submission.
 * The starter universe is limited to `BTC/USD`, `ETH/USD`, `SOL/USD`, and `ADA/USD`.
 * Historical backfill defaults to `1h`, `4h`, and `1d`.
-* Long-running sessions refresh configured OHLC tails hourly by default (`market_data.ohlc_tail_refresh_interval_seconds: 3600`); set it to `0` to disable.
+* Long-running sessions refresh configured OHLC tails shortly after configured timeframe boundaries, with an hourly interval fallback by default (`market_data.ohlc_tail_refresh_interval_seconds: 3600`); set it to `0` to disable scheduled tail refresh.
 * Live websocket OHLC defaults to a single `1m` stream.
 * The runtime market-regime throttle exists as default-disabled risk plumbing:
   `risk.market_regime_throttle.enabled: false`. If deliberately enabled, it

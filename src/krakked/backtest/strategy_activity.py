@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from typing import Any, Mapping, Sequence
 
 from krakked.config import AppConfig
+from krakked.strategy.evaluation import STRATEGY_EVALUATION_INT_FIELDS
 
 from .evidence_windows import (
     EVIDENCE_WINDOW_SET_TUPLES,
@@ -31,6 +32,17 @@ DEFAULT_STRATEGY_ACTIVITY_GROUP_IDS = (
 )
 DEFAULT_STRATEGY_EVIDENCE_GROUP_IDS = ("configured", "starter_all")
 STRATEGY_ACTIVITY_WINDOW_SETS = EVIDENCE_WINDOW_SET_TUPLES
+
+
+def _empty_per_strategy_activity() -> dict[str, Any]:
+    entry: dict[str, Any] = {
+        "timeframes_evaluated": [],
+        "min_score": None,
+        "max_score": None,
+    }
+    for field_name in STRATEGY_EVALUATION_INT_FIELDS:
+        entry[field_name] = 0
+    return entry
 
 
 @dataclass(frozen=True)
@@ -296,23 +308,7 @@ def _activity_error_payload(
         "blocked_reason_counts": {},
         "clamped_reason_counts": {},
         "per_strategy": {
-            strategy_id: {
-                "cycles_evaluated": 0,
-                "contexts_evaluated": 0,
-                "timeframes_evaluated": [],
-                "intents_emitted": 0,
-                "actions_after_scoring": 0,
-                "filtered_by_score": 0,
-                "filtered_no_position_exits": 0,
-                "filtered_position_exits": 0,
-                "filtered_low_score_entries": 0,
-                "blocked_actions": 0,
-                "data_stale_contexts": 0,
-                "skipped_no_pairs": 0,
-                "skipped_stale_timeframe_contexts": 0,
-                "min_score": None,
-                "max_score": None,
-            }
+            strategy_id: _empty_per_strategy_activity()
             for strategy_id in group.strategies
         },
         "error": error_text,

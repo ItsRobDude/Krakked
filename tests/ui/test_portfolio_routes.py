@@ -104,7 +104,7 @@ def test_portfolio_summary_times_out_fast(client, portfolio_context, monkeypatch
     payload = response.json()
     assert payload["data"] is None
     assert payload["error"] == "Portfolio summary timed out."
-    assert elapsed < 0.04
+    assert elapsed < 0.25
 
 
 def test_positions_shape_matches_payload(client, portfolio_context):

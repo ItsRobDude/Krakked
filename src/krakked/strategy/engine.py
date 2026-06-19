@@ -29,6 +29,7 @@ from .allocator import (
     compute_weights,
 )
 from .base import Strategy, StrategyContext
+from .evaluation import StrategyEvaluationResult, new_strategy_evaluation_entry
 from .models import (
     DecisionRecord,
     ExecutionPlan,
@@ -365,6 +366,11 @@ class StrategyEngine:
                 configured_weight=state.configured_weight,
                 effective_weight_pct=state.effective_weight_pct,
                 last_evaluated_at=state.last_evaluated_at,
+                last_evaluation_summary=(
+                    dict(state.last_evaluation_summary)
+                    if state.last_evaluation_summary
+                    else None
+                ),
             )
             for state in self.strategy_states.values()
         ]
@@ -439,23 +445,7 @@ class StrategyEngine:
 
     @staticmethod
     def _new_strategy_evaluation() -> Dict[str, Any]:
-        return {
-            "cycles_evaluated": 0,
-            "contexts_evaluated": 0,
-            "timeframes_evaluated": [],
-            "intents_emitted": 0,
-            "actions_after_scoring": 0,
-            "filtered_by_score": 0,
-            "filtered_no_position_exits": 0,
-            "filtered_position_exits": 0,
-            "filtered_low_score_entries": 0,
-            "min_score": None,
-            "max_score": None,
-            "blocked_actions": 0,
-            "data_stale_contexts": 0,
-            "skipped_no_pairs": 0,
-            "skipped_stale_timeframe_contexts": 0,
-        }
+        return new_strategy_evaluation_entry()
 
     @staticmethod
     def _add_evaluated_timeframe(entry: Dict[str, Any], timeframe: str) -> None:
@@ -574,15 +564,16 @@ class StrategyEngine:
             )
             return None
 
-    def _fresh_timeframe_bar_timestamp(
+    def _timeframe_bar_status(
         self,
         strategy_id: str,
         timeframe: str,
         pairs: Sequence[str],
-    ) -> tuple[bool, Optional[int]]:
-        """Return whether this strategy/timeframe has a new closed bar to evaluate."""
+    ) -> tuple[str, Optional[int], Optional[str]]:
+        """Return closed-bar readiness for this strategy/timeframe context."""
 
         latest_ts: Optional[int] = None
+        saw_invalid_timestamp = False
         for pair in pairs:
             try:
                 bars = self.market_data.get_ohlc(pair, timeframe, lookback=1)
@@ -593,23 +584,28 @@ class StrategyEngine:
             try:
                 raw_timestamp = getattr(bars[-1], "timestamp", None)
             except Exception:
+                saw_invalid_timestamp = True
                 continue
             if raw_timestamp is None:
-                return True, None
+                saw_invalid_timestamp = True
+                continue
             try:
                 bar_ts = int(raw_timestamp)
             except (TypeError, ValueError):
-                return True, None
+                saw_invalid_timestamp = True
+                continue
             latest_ts = bar_ts if latest_ts is None else max(latest_ts, bar_ts)
 
         if latest_ts is None:
-            return True, None
+            if saw_invalid_timestamp:
+                return "invalid_bar_timestamp", None, None
+            return "no_data", None, None
 
         key = (strategy_id, timeframe)
         last_seen = self._last_strategy_timeframe_bar_ts.get(key)
         if last_seen is not None and latest_ts <= last_seen:
-            return False, latest_ts
-        return True, latest_ts
+            return "deferred_no_new_bar", latest_ts, None
+        return "fresh", latest_ts, None
 
     def _mark_timeframe_bar_evaluated(
         self,
@@ -622,6 +618,256 @@ class StrategyEngine:
         self._last_strategy_timeframe_bar_ts[(strategy_id, timeframe)] = int(
             bar_timestamp
         )
+
+    @staticmethod
+    def _isoformat_utc(value: datetime) -> str:
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+    @staticmethod
+    def _limited_no_signal_reasons(
+        reasons: Sequence[Dict[str, Any]],
+        *,
+        limit: int = 8,
+    ) -> List[Dict[str, Any]]:
+        limited: List[Dict[str, Any]] = []
+        for reason in reasons:
+            if not isinstance(reason, dict):
+                continue
+            payload = dict(reason)
+            if "reason" in payload:
+                payload["reason"] = str(payload["reason"])
+            if "message" in payload:
+                payload["message"] = str(payload["message"])
+            if "pair" in payload:
+                payload["pair"] = str(payload["pair"])
+            if "timeframe" in payload:
+                payload["timeframe"] = str(payload["timeframe"])
+            limited.append(payload)
+            if len(limited) >= limit:
+                break
+        return limited
+
+    @staticmethod
+    def _append_context_summary(
+        evaluation: Dict[str, Any],
+        *,
+        timeframe: str,
+        status: str,
+        latest_bar_timestamp: Optional[int] = None,
+        pair: Optional[str] = None,
+        message: Optional[str] = None,
+        intents_emitted: Optional[int] = None,
+        reason: Optional[str] = None,
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        summaries = evaluation.setdefault("context_summaries", [])
+        if not isinstance(summaries, list) or len(summaries) >= 12:
+            return
+        payload: Dict[str, Any] = {
+            "timeframe": str(timeframe),
+            "status": str(status),
+        }
+        if latest_bar_timestamp is not None:
+            payload["latest_bar_timestamp"] = int(latest_bar_timestamp)
+        if pair:
+            payload["pair"] = str(pair)
+        if message:
+            payload["message"] = str(message)
+        if intents_emitted is not None:
+            payload["intents_emitted"] = int(intents_emitted)
+        if reason:
+            payload["reason"] = str(reason)
+        if extra:
+            payload.update(dict(extra))
+        summaries.append(payload)
+
+    @staticmethod
+    def _append_context_payload(
+        evaluation: Dict[str, Any],
+        payload: Dict[str, Any],
+        *,
+        timeframe: str,
+        latest_bar_timestamp: Optional[int] = None,
+        intents_emitted: Optional[int] = None,
+    ) -> None:
+        summaries = evaluation.setdefault("context_summaries", [])
+        if not isinstance(summaries, list) or len(summaries) >= 12:
+            return
+        context_payload = dict(payload)
+        context_payload.setdefault("timeframe", str(timeframe))
+        if latest_bar_timestamp is not None:
+            context_payload.setdefault(
+                "latest_bar_timestamp", int(latest_bar_timestamp)
+            )
+        if intents_emitted is not None:
+            context_payload.setdefault("intents_emitted", int(intents_emitted))
+        if "status" not in context_payload:
+            context_payload["status"] = (
+                "intents_emitted" if (intents_emitted or 0) > 0 else "no_signal"
+            )
+        summaries.append(context_payload)
+
+    def _append_evaluation_result_diagnostics(
+        self,
+        *,
+        evaluation: Dict[str, Any],
+        result: StrategyEvaluationResult,
+        timeframe: str,
+        latest_bar_timestamp: Optional[int],
+    ) -> None:
+        if result.intents:
+            evaluation["no_signal_reasons"] = []
+        else:
+            existing = evaluation.setdefault("no_signal_reasons", [])
+            if not isinstance(existing, list):
+                existing = []
+                evaluation["no_signal_reasons"] = existing
+            for reason in self._limited_no_signal_reasons(result.no_signal_reasons):
+                reason.setdefault("timeframe", timeframe)
+                if len(existing) >= 12:
+                    break
+                existing.append(reason)
+
+        if result.context_summaries:
+            for context_summary in result.context_summaries:
+                if not isinstance(context_summary, dict):
+                    continue
+                self._append_context_payload(
+                    evaluation,
+                    context_summary,
+                    timeframe=timeframe,
+                    latest_bar_timestamp=latest_bar_timestamp,
+                    intents_emitted=len(result.intents),
+                )
+            return
+
+        reason_message = None
+        if not result.intents and result.no_signal_reasons:
+            first_reason = result.no_signal_reasons[0]
+            if isinstance(first_reason, dict):
+                reason_message = first_reason.get("message")
+        self._append_context_summary(
+            evaluation,
+            timeframe=timeframe,
+            status=result.status
+            or ("intents_emitted" if result.intents else "no_signal"),
+            latest_bar_timestamp=latest_bar_timestamp,
+            message=(
+                str(result.message)
+                if result.message
+                else (
+                    str(reason_message)
+                    if reason_message
+                    else (
+                        f"Generated {len(result.intents)} intent(s)"
+                        if result.intents
+                        else "No action chosen"
+                    )
+                )
+            ),
+            intents_emitted=len(result.intents),
+        )
+
+    def _build_strategy_evaluation_summary(
+        self, evaluation: Dict[str, Any], now: datetime
+    ) -> Dict[str, Any]:
+        contexts = int(evaluation.get("contexts_evaluated", 0) or 0)
+        fresh_contexts = int(evaluation.get("fresh_contexts_evaluated", 0) or 0)
+        deferred_contexts = int(evaluation.get("deferred_no_new_bar_contexts", 0) or 0)
+        no_data_contexts = int(evaluation.get("no_data_contexts", 0) or 0)
+        invalid_contexts = int(evaluation.get("invalid_bar_timestamp_contexts", 0) or 0)
+        data_stale_contexts = int(evaluation.get("data_stale_contexts", 0) or 0)
+        intents = int(evaluation.get("intents_emitted", 0) or 0)
+        strategy_error_contexts = int(evaluation.get("strategy_error_contexts", 0) or 0)
+        reasons = (
+            []
+            if intents > 0
+            else self._limited_no_signal_reasons(
+                evaluation.get("no_signal_reasons") or [], limit=5
+            )
+        )
+        skipped_no_pairs = int(evaluation.get("skipped_no_pairs", 0) or 0)
+
+        if strategy_error_contexts > 0:
+            status = "strategy_error"
+            message = "Strategy evaluation failed"
+        elif skipped_no_pairs:
+            status = "no_pairs"
+            message = "No eligible pairs configured for this strategy"
+        elif intents > 0:
+            status = "intents_emitted"
+            label = "intent" if intents == 1 else "intents"
+            message = f"Generated {intents} {label}"
+        elif fresh_contexts > 0:
+            status = "no_signal"
+            if reasons:
+                message = reasons[0].get("message") or "No action chosen"
+            else:
+                message = "No action chosen after evaluating a fresh closed bar"
+        elif data_stale_contexts > 0:
+            status = "data_stale"
+            message = "Market data was stale for this strategy context"
+        elif invalid_contexts > 0:
+            status = "invalid_bar_timestamp"
+            message = "Closed-bar timestamp was missing or invalid"
+        elif no_data_contexts > 0:
+            status = "no_data"
+            message = "No closed bars are available for this strategy timeframe"
+        elif deferred_contexts > 0:
+            status = "deferred_no_new_bar"
+            message = "Waiting for the next closed strategy bar"
+        elif contexts > 0:
+            status = "not_evaluated"
+            message = "Strategy context did not reach evaluation"
+        else:
+            status = "awaiting_evaluation"
+            message = "Awaiting first strategy evaluation"
+
+        return {
+            "status": status,
+            "message": message,
+            "evaluated_at": self._isoformat_utc(now),
+            "contexts_evaluated": contexts,
+            "fresh_contexts_evaluated": fresh_contexts,
+            "deferred_no_new_bar_contexts": deferred_contexts,
+            "no_data_contexts": no_data_contexts,
+            "invalid_bar_timestamp_contexts": invalid_contexts,
+            "data_stale_contexts": data_stale_contexts,
+            "strategy_error_contexts": strategy_error_contexts,
+            "intents_emitted": intents,
+            "timeframes_evaluated": list(evaluation.get("timeframes_evaluated") or []),
+            "context_summaries": list(evaluation.get("context_summaries") or [])[:5],
+            "reasons": reasons,
+        }
+
+    def _update_strategy_evaluation_summary(
+        self, strategy_id: str, evaluation: Dict[str, Any], now: datetime
+    ) -> None:
+        summary = self._build_strategy_evaluation_summary(evaluation, now)
+        evaluation["last_evaluation_summary"] = summary
+        state = self.strategy_states.get(strategy_id)
+        if state is not None:
+            state.last_evaluation_summary = summary
+
+    def _disabled_strategy_summary(self) -> Dict[str, Any]:
+        return {
+            "status": "disabled",
+            "message": "Strategy is paused",
+            "evaluated_at": self._isoformat_utc(datetime.now(timezone.utc)),
+            "contexts_evaluated": 0,
+            "fresh_contexts_evaluated": 0,
+            "deferred_no_new_bar_contexts": 0,
+            "no_data_contexts": 0,
+            "invalid_bar_timestamp_contexts": 0,
+            "data_stale_contexts": 0,
+            "strategy_error_contexts": 0,
+            "intents_emitted": 0,
+            "timeframes_evaluated": [],
+            "context_summaries": [],
+            "reasons": [],
+        }
 
     def _position_base_by_strategy_pair(
         self,
@@ -712,26 +958,73 @@ class StrategyEngine:
                         event="strategy_no_pairs", strategy_id=name
                     ),
                 )
+                self._update_strategy_evaluation_summary(name, evaluation, now)
                 continue
 
             timeframes = self._configured_strategy_timeframes(strategy)
+            requires_closed_bar_context = bool(
+                getattr(strategy, "requires_closed_bar_context", True)
+            )
 
             for timeframe in timeframes:
                 evaluation["contexts_evaluated"] += 1
                 self._add_evaluated_timeframe(evaluation, timeframe)
-                is_fresh_context, fresh_bar_ts = self._fresh_timeframe_bar_timestamp(
-                    name, timeframe, strategy_pairs
-                )
-                if not is_fresh_context:
-                    evaluation["skipped_stale_timeframe_contexts"] += 1
-                    continue
+                fresh_bar_ts: Optional[int] = None
+                if requires_closed_bar_context:
+                    bar_status, fresh_bar_ts, _ = self._timeframe_bar_status(
+                        name, timeframe, strategy_pairs
+                    )
+                    if bar_status == "deferred_no_new_bar":
+                        evaluation["deferred_no_new_bar_contexts"] += 1
+                        # Compatibility alias for existing reports/consumers.
+                        evaluation["skipped_stale_timeframe_contexts"] += 1
+                        self._append_context_summary(
+                            evaluation,
+                            timeframe=timeframe,
+                            status=bar_status,
+                            latest_bar_timestamp=fresh_bar_ts,
+                            message="Waiting for the next closed strategy bar",
+                        )
+                        continue
+                    if bar_status == "no_data":
+                        evaluation["no_data_contexts"] += 1
+                        self._append_context_summary(
+                            evaluation,
+                            timeframe=timeframe,
+                            status=bar_status,
+                            message="No closed bars are available",
+                        )
+                        continue
+                    if bar_status == "invalid_bar_timestamp":
+                        evaluation["invalid_bar_timestamp_contexts"] += 1
+                        self._append_context_summary(
+                            evaluation,
+                            timeframe=timeframe,
+                            status=bar_status,
+                            message="Closed-bar timestamp was missing or invalid",
+                        )
+                        continue
                 context = self._build_context(
                     now, strategy.config, timeframe, regime, strategy_pairs
                 )
                 try:
-                    intents = strategy.generate_intents(context)
+                    result = strategy.evaluate(context)
+                    intents = list(result.intents or [])
                     self._mark_timeframe_bar_evaluated(name, timeframe, fresh_bar_ts)
+                    evaluation["fresh_contexts_evaluated"] += 1
                     evaluation["intents_emitted"] += len(intents)
+                    self._append_evaluation_result_diagnostics(
+                        evaluation=evaluation,
+                        result=StrategyEvaluationResult(
+                            intents=intents,
+                            no_signal_reasons=list(result.no_signal_reasons or []),
+                            context_summaries=list(result.context_summaries or []),
+                            status=result.status,
+                            message=result.message,
+                        ),
+                        timeframe=timeframe,
+                        latest_bar_timestamp=fresh_bar_ts,
+                    )
                     for intent in intents:
                         intent.strategy_id = name
                         intent.metadata = intent.metadata or {}
@@ -766,6 +1059,13 @@ class StrategyEngine:
                     self.strategy_states[name].last_intents_at = now
                 except DataStaleError as exc:
                     evaluation["data_stale_contexts"] += 1
+                    self._append_context_summary(
+                        evaluation,
+                        timeframe=timeframe,
+                        status="data_stale",
+                        pair=exc.pair,
+                        message="Market data was stale for this strategy context",
+                    )
                     logger.warning(
                         (
                             "Stale market data for %s on timeframe %s (pair %s); "
@@ -784,6 +1084,13 @@ class StrategyEngine:
                     )
                     continue
                 except Exception as exc:  # pragma: no cover - defensive
+                    evaluation["strategy_error_contexts"] += 1
+                    self._append_context_summary(
+                        evaluation,
+                        timeframe=timeframe,
+                        status="strategy_error",
+                        message=str(exc),
+                    )
                     logger.error(
                         "Error generating intents for %s on timeframe %s: %s",
                         name,
@@ -796,6 +1103,9 @@ class StrategyEngine:
                             timeframe=timeframe,
                         ),
                     )
+                    self.strategy_states[name].last_evaluated_at = now
+
+            self._update_strategy_evaluation_summary(name, evaluation, now)
 
         return all_intents, intent_summaries, evaluation_summary
 
@@ -1233,6 +1543,11 @@ class StrategyEngine:
                 configured_weight=state.configured_weight,
                 effective_weight_pct=state.effective_weight_pct,
                 last_evaluated_at=state.last_evaluated_at,
+                last_evaluation_summary=(
+                    dict(state.last_evaluation_summary)
+                    if state.last_evaluation_summary
+                    else None
+                ),
             )
             for state in self._cached_strategy_state
         ]
@@ -1260,6 +1575,7 @@ class StrategyEngine:
                 self.config.strategies.enabled.remove(strategy_id)
             self.strategies.pop(strategy_id, None)
             state.enabled = False
+            state.last_evaluation_summary = self._disabled_strategy_summary()
 
         self.refresh_strategy_weight_state()
         self.refresh_runtime_snapshots()

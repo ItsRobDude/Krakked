@@ -152,6 +152,7 @@ ui/*.tsbuildinfo
 
 # Local Codex scratch artifacts
 .tmp-codex/
+.codex-reminders/
 
 # Local runtime reports and walk-forward evidence
 reports/

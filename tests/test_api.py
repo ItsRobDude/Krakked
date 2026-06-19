@@ -301,10 +301,87 @@ def test_scheduled_ohlc_tail_refresh_waits_for_configured_interval(
     api._universe = [MagicMock()]
     api.start_background_ohlc_tail_refresh = MagicMock(return_value=True)
     api._last_tail_refresh_started_at = 100.0
+    api._last_tail_refresh_boundary_by_timeframe["1h"] = 3600
 
-    assert api.maybe_start_scheduled_ohlc_tail_refresh(3699.0) is False
-    assert api.maybe_start_scheduled_ohlc_tail_refresh(3700.0) is True
+    assert (
+        api.maybe_start_scheduled_ohlc_tail_refresh(
+            now_monotonic=3699.0, now_wall=3610.0
+        )
+        is False
+    )
+    assert (
+        api.maybe_start_scheduled_ohlc_tail_refresh(
+            now_monotonic=3700.0, now_wall=3610.0
+        )
+        is True
+    )
     api.start_background_ohlc_tail_refresh.assert_called_once_with()
+
+
+@patch("krakked.market_data.api.FileOHLCStore")
+def test_scheduled_ohlc_tail_refresh_runs_after_timeframe_boundary(
+    mock_store, mock_config
+):
+    mock_config.market_data.backfill_timeframes = ["1h", "4h"]
+    mock_config.market_data.ohlc_tail_refresh_interval_seconds = 3600
+    api = MarketDataAPI(mock_config)
+    api._universe = [MagicMock()]
+    api.start_background_ohlc_tail_refresh = MagicMock(return_value=True)
+    api._last_tail_refresh_started_at = 100.0
+    api._last_tail_refresh_boundary_by_timeframe = {"1h": 0, "4h": 0}
+
+    assert (
+        api.maybe_start_scheduled_ohlc_tail_refresh(
+            now_monotonic=101.0, now_wall=3661.0
+        )
+        is True
+    )
+    api.start_background_ohlc_tail_refresh.assert_called_once_with(timeframes=["1h"])
+
+    assert (
+        api.maybe_start_scheduled_ohlc_tail_refresh(
+            now_monotonic=102.0, now_wall=3670.0
+        )
+        is False
+    )
+    api.start_background_ohlc_tail_refresh.assert_called_once()
+
+
+@patch("krakked.market_data.api.FileOHLCStore")
+def test_scheduled_ohlc_tail_refresh_does_not_burst_on_startup(mock_store, mock_config):
+    mock_config.market_data.backfill_timeframes = ["1h", "4h"]
+    mock_config.market_data.ohlc_tail_refresh_interval_seconds = 3600
+    with patch("krakked.market_data.api.time.time", return_value=3600.0):
+        api = MarketDataAPI(mock_config)
+    api._universe = [MagicMock()]
+    api.start_background_ohlc_tail_refresh = MagicMock(return_value=True)
+    api._last_tail_refresh_started_at = 100.0
+
+    assert (
+        api.maybe_start_scheduled_ohlc_tail_refresh(
+            now_monotonic=101.0, now_wall=3661.0
+        )
+        is False
+    )
+    api.start_background_ohlc_tail_refresh.assert_not_called()
+
+
+@patch("krakked.market_data.api.FileOHLCStore")
+def test_scheduled_ohlc_tail_refresh_skips_invalid_timeframe(mock_store, mock_config):
+    mock_config.market_data.backfill_timeframes = ["nonsense"]
+    mock_config.market_data.ohlc_tail_refresh_interval_seconds = 3600
+    api = MarketDataAPI(mock_config)
+    api._universe = [MagicMock()]
+    api.start_background_ohlc_tail_refresh = MagicMock(return_value=True)
+    api._last_tail_refresh_started_at = 100.0
+
+    assert (
+        api.maybe_start_scheduled_ohlc_tail_refresh(
+            now_monotonic=101.0, now_wall=3661.0
+        )
+        is False
+    )
+    api.start_background_ohlc_tail_refresh.assert_not_called()
 
 
 @patch("krakked.market_data.api.FileOHLCStore")

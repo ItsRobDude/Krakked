@@ -25,6 +25,7 @@ from krakked.market_data.ohlc_store import FileOHLCStore
 from krakked.portfolio.manager import PortfolioService
 from krakked.portfolio.models import AssetBalance
 from krakked.strategy.engine import StrategyEngine, _strategy_registry
+from krakked.strategy.evaluation import STRATEGY_EVALUATION_INT_FIELDS
 from krakked.strategy.models import ExecutionPlan
 from krakked.strategy.strategies.demo_strategy import TrendFollowingStrategy
 
@@ -1864,27 +1865,18 @@ def _compute_max_drawdown_pct(snapshots: List[Any]) -> float:
 
 
 def _new_strategy_summary_entry() -> Dict[str, Any]:
-    return {
+    entry = {
         "realized_pnl_usd": 0.0,
         "trade_count": 0,
         "winning_trades": 0,
         "losing_trades": 0,
-        "cycles_evaluated": 0,
-        "contexts_evaluated": 0,
         "timeframes_evaluated": [],
-        "intents_emitted": 0,
-        "actions_after_scoring": 0,
-        "filtered_by_score": 0,
-        "filtered_no_position_exits": 0,
-        "filtered_position_exits": 0,
-        "filtered_low_score_entries": 0,
         "min_score": None,
         "max_score": None,
-        "blocked_actions": 0,
-        "data_stale_contexts": 0,
-        "skipped_no_pairs": 0,
-        "skipped_stale_timeframe_contexts": 0,
     }
+    for field_name in STRATEGY_EVALUATION_INT_FIELDS:
+        entry[field_name] = 0
+    return entry
 
 
 def _append_unique_timeframes(entry: Dict[str, Any], values: Any) -> None:
@@ -1923,20 +1915,6 @@ def _build_strategy_summary(
         elif pnl_quote < 0:
             entry["losing_trades"] = int(entry["losing_trades"]) + 1
 
-    int_fields = [
-        "cycles_evaluated",
-        "contexts_evaluated",
-        "intents_emitted",
-        "actions_after_scoring",
-        "filtered_by_score",
-        "filtered_no_position_exits",
-        "filtered_position_exits",
-        "filtered_low_score_entries",
-        "blocked_actions",
-        "data_stale_contexts",
-        "skipped_no_pairs",
-        "skipped_stale_timeframe_contexts",
-    ]
     for plan in plans:
         metadata = getattr(plan, "metadata", {}) or {}
         evaluation = metadata.get("strategy_evaluation") or {}
@@ -1946,7 +1924,7 @@ def _build_strategy_summary(
             if not isinstance(payload, dict):
                 continue
             entry = summary.setdefault(str(strategy_id), _new_strategy_summary_entry())
-            for field_name in int_fields:
+            for field_name in STRATEGY_EVALUATION_INT_FIELDS:
                 entry[field_name] = int(entry[field_name]) + int(
                     payload.get(field_name, 0) or 0
                 )

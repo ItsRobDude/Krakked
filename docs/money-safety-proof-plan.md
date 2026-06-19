@@ -41,8 +41,10 @@ Current trust level: Level 0, research and paper only.
   reconciliation, and emergency-operation proofs remain incomplete.
 - Milestone F, data continuity: continuity tooling exists, but strict replay
   gates do not yet consume continuity gaps directly.
-- Milestone G, paper soak, validate-only drill, and tiny live smoke: not
-  started.
+- Milestone G, paper soak, validate-only drill, and tiny live smoke: first
+  pinned-image paper soak completed on 2026-06-19, but only as lifecycle
+  evidence. It did not produce strategy actions, risk blocks, OMS orders,
+  execution results, trades, or ledger entries, so the milestone remains open.
 
 Known live blockers:
 
@@ -562,10 +564,15 @@ Current building blocks:
 - backup/export/import flows exist;
 - cockpit snapshot and live readiness are available;
 - normal paper mode uses a persistent synthetic wallet.
+- a first pinned-image paper soak report exists:
+  [`soak-reports/2026-06-19-paper-soak.md`](./soak-reports/2026-06-19-paper-soak.md).
 
 Proof gap:
 
-- there is not yet a dated long-session report for the current safety posture;
+- the first dated paper-soak report is lifecycle-useful but not
+  decision/execution-useful: strategies mostly deferred until new closed bars,
+  and fresh evaluations still produced no actions, risk blocks, OMS orders,
+  execution results, trades, or ledger entries;
 - live validate-only has not been turned into a repeatable readiness drill;
 - tiny live smoke criteria need to be written before any smoke run.
 

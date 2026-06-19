@@ -17,6 +17,7 @@ from krakked.market_data.models import OHLCBar
 from krakked.portfolio.models import SpotPosition
 from krakked.strategy.base import Strategy
 from krakked.strategy.engine import StrategyRiskEngine
+from krakked.strategy.evaluation import StrategyEvaluationResult
 from krakked.strategy.models import (
     DecisionRecord,
     RiskAdjustedAction,
@@ -24,9 +25,85 @@ from krakked.strategy.models import (
     StrategyIntent,
     StrategyState,
 )
+from krakked.strategy.regime import MarketRegime, RegimeSnapshot
 from krakked.strategy.strategies.dca_rebalance import DcaRebalanceStrategy
 from krakked.strategy.strategies.demo_strategy import TrendFollowingStrategy
+from krakked.strategy.strategies.mean_reversion import MeanReversionStrategy
 from tests.runtime_mocks import make_portfolio_service_mock
+
+
+def _ohlc_from_closes(closes, *, start_ts: int = 1_700_000_000, step: int = 3600):
+    return [
+        OHLCBar(
+            timestamp=start_ts + (index * step),
+            open=float(close),
+            high=float(close) + 1.0,
+            low=max(float(close) - 1.0, 0.0),
+            close=float(close),
+            volume=1.0,
+        )
+        for index, close in enumerate(closes)
+    ]
+
+
+def _engine_for_strategy(
+    *,
+    strat_config: StrategyConfig,
+    strategy: Strategy,
+    market: MagicMock | None = None,
+    portfolio: MagicMock | None = None,
+) -> StrategyRiskEngine:
+    strategies_cfg = StrategiesConfig(
+        enabled=[strat_config.name],
+        configs={strat_config.name: strat_config},
+    )
+
+    app_config = MagicMock(spec=AppConfig)
+    app_config.strategies = strategies_cfg
+    app_config.risk = RiskConfig()
+    app_config.universe = SimpleNamespace(include_pairs=["XBTUSD"], exclude_pairs=[])
+
+    market = market or MagicMock(spec=MarketDataAPI)
+    market.get_data_status.return_value = MagicMock(
+        rest_api_reachable=True,
+        websocket_connected=True,
+        stale_pairs=0,
+    )
+    market.get_universe.return_value = ["XBTUSD"]
+    market.get_display_pair.side_effect = lambda pair: pair
+    market.get_ohlc.return_value = _ohlc_from_closes([100.0])
+
+    portfolio = portfolio or make_portfolio_service_mock()
+    portfolio.get_realized_pnl_by_strategy.return_value = {}
+
+    engine = StrategyRiskEngine(app_config, market, portfolio)
+    engine._data_ready = MagicMock(return_value=True)  # type: ignore[method-assign]
+    engine.risk_engine = MagicMock()
+    engine.risk_engine.process_intents.return_value = []
+    engine.risk_engine.get_status.return_value = RiskStatus(
+        kill_switch_active=False,
+        daily_drawdown_pct=0.0,
+        drift_flag=False,
+        total_exposure_pct=0.0,
+        manual_exposure_pct=0.0,
+        per_asset_exposure_pct={},
+        per_strategy_exposure_pct={},
+    )
+    engine.risk_engine.build_risk_context.return_value = SimpleNamespace(
+        per_strategy_exposure_pct={}
+    )
+    engine.strategies = {strat_config.name: strategy}
+    engine.strategy_states = {
+        strat_config.name: StrategyState(
+            strategy_id=strat_config.name,
+            enabled=True,
+            last_intents_at=None,
+            last_actions_at=None,
+            current_positions=[],
+            pnl_summary={},
+        )
+    }
+    return engine
 
 
 def test_engine_cycle():
@@ -68,6 +145,7 @@ def test_engine_cycle():
     @dataclass
     class MockBar:
         close: float
+        timestamp: int
         high: float = 0
         low: float = 0
 
@@ -77,7 +155,8 @@ def test_engine_cycle():
     # Increasing price pattern.
     prices = [100 + i for i in range(30)]
     market.get_ohlc.return_value = [
-        MockBar(close=p, high=p + 1, low=p - 1) for p in prices
+        MockBar(close=p, timestamp=1_700_000_000 + i * 3600, high=p + 1, low=p - 1)
+        for i, p in enumerate(prices)
     ]
     market.get_latest_price.return_value = 130.0
 
@@ -385,6 +464,12 @@ def test_strategy_timeframe_contexts_wait_for_fresh_bar():
     assert [intent.timeframe for intent in first_intents] == ["1h", "4h"]
     assert (
         first_plan.metadata["strategy_evaluation"]["timestamp"][
+            "deferred_no_new_bar_contexts"
+        ]
+        == 0
+    )
+    assert (
+        first_plan.metadata["strategy_evaluation"]["timestamp"][
             "skipped_stale_timeframe_contexts"
         ]
         == 0
@@ -396,6 +481,12 @@ def test_strategy_timeframe_contexts_wait_for_fresh_bar():
     assert [intent.timeframe for intent in second_intents] == ["1h"]
     assert (
         second_plan.metadata["strategy_evaluation"]["timestamp"][
+            "deferred_no_new_bar_contexts"
+        ]
+        == 1
+    )
+    assert (
+        second_plan.metadata["strategy_evaluation"]["timestamp"][
             "skipped_stale_timeframe_contexts"
         ]
         == 1
@@ -405,6 +496,12 @@ def test_strategy_timeframe_contexts_wait_for_fresh_bar():
     third_plan = engine.run_cycle(engine_now)
     third_intents = engine.risk_engine.process_intents.call_args[0][0]
     assert [intent.timeframe for intent in third_intents] == ["1h", "4h"]
+    assert (
+        third_plan.metadata["strategy_evaluation"]["timestamp"][
+            "deferred_no_new_bar_contexts"
+        ]
+        == 0
+    )
     assert (
         third_plan.metadata["strategy_evaluation"]["timestamp"][
             "skipped_stale_timeframe_contexts"
@@ -480,6 +577,513 @@ def test_strategy_evaluation_heartbeat_updates_when_no_intents_generated():
     assert state.last_evaluated_at == now
     assert state.last_intents_at == now
     assert state.last_intents == []
+    assert state.last_evaluation_summary is not None
+    assert state.last_evaluation_summary["status"] == "no_signal"
+
+
+def test_strategy_evaluation_classifies_no_closed_bars_as_no_data():
+    class QuietStrategy(Strategy):
+        def warmup(self, market_data, portfolio):
+            return None
+
+        def generate_intents(self, ctx):  # pragma: no cover - should not evaluate
+            raise AssertionError("strategy should not evaluate without closed bars")
+
+    strat_config = StrategyConfig(
+        name="quiet", type="quiet", enabled=True, params={"timeframes": ["1h"]}
+    )
+    strategies_cfg = StrategiesConfig(
+        enabled=["quiet"], configs={"quiet": strat_config}
+    )
+
+    app_config = MagicMock(spec=AppConfig)
+    app_config.strategies = strategies_cfg
+    app_config.risk = RiskConfig()
+    app_config.universe = MagicMock()
+    app_config.universe.include_pairs = ["XBTUSD"]
+
+    market = MagicMock(spec=MarketDataAPI)
+    market.get_data_status.return_value = MagicMock(
+        rest_api_reachable=True,
+        websocket_connected=True,
+        stale_pairs=0,
+    )
+    market.get_universe.return_value = ["XBTUSD"]
+    market.get_ohlc.return_value = []
+
+    portfolio = make_portfolio_service_mock()
+    portfolio.get_realized_pnl_by_strategy.return_value = {}
+
+    engine = StrategyRiskEngine(app_config, market, portfolio)
+    engine._data_ready = MagicMock(return_value=True)
+    engine.risk_engine = MagicMock()
+    engine.risk_engine.process_intents.return_value = []
+    engine.risk_engine.get_status.return_value = RiskStatus(
+        kill_switch_active=False,
+        daily_drawdown_pct=0.0,
+        drift_flag=False,
+        total_exposure_pct=0.0,
+        manual_exposure_pct=0.0,
+        per_asset_exposure_pct={},
+        per_strategy_exposure_pct={},
+    )
+    engine.risk_engine.build_risk_context.return_value = SimpleNamespace(
+        per_strategy_exposure_pct={}
+    )
+    engine.strategies = {"quiet": QuietStrategy(strat_config)}
+    engine.strategy_states = {
+        "quiet": StrategyState(
+            strategy_id="quiet",
+            enabled=True,
+            last_intents_at=None,
+            last_actions_at=None,
+            current_positions=[],
+            pnl_summary={},
+        )
+    }
+
+    now = datetime.now(timezone.utc)
+    plan = engine.run_cycle(now)
+
+    evaluation = plan.metadata["strategy_evaluation"]["quiet"]
+    assert evaluation["no_data_contexts"] == 1
+    assert evaluation["fresh_contexts_evaluated"] == 0
+    assert evaluation["deferred_no_new_bar_contexts"] == 0
+    assert evaluation["skipped_stale_timeframe_contexts"] == 0
+    state = engine.strategy_states["quiet"]
+    assert state.last_evaluated_at is None
+    assert state.last_evaluation_summary is not None
+    assert state.last_evaluation_summary["status"] == "no_data"
+
+
+def test_dca_evaluates_with_empty_ohlc_store_when_price_is_fresh():
+    strat_config = StrategyConfig(
+        name="dca_overlay",
+        type="dca_rebalance",
+        enabled=True,
+        params={
+            "pairs": ["XBTUSD"],
+            "target_weights": {"XBTUSD": 0.5, "ETHUSD": 0.5},
+            "rebalance_threshold_pct": 1.0,
+            "dca_interval_minutes": 60,
+            "dca_notional_usd": 100.0,
+        },
+    )
+    strategy = DcaRebalanceStrategy(strat_config)
+
+    market = MagicMock(spec=MarketDataAPI)
+    market.get_data_status.return_value = MagicMock(
+        rest_api_reachable=True,
+        websocket_connected=True,
+        stale_pairs=0,
+    )
+    market.get_universe.return_value = ["XBTUSD"]
+    market.get_ohlc.return_value = []
+    market.get_latest_price.return_value = 100.0
+    market.get_display_pair.side_effect = lambda pair: pair
+
+    portfolio = make_portfolio_service_mock(equity_base=10000.0, cash_base=10000.0)
+    portfolio.get_positions.return_value = []
+    engine = _engine_for_strategy(
+        strat_config=strat_config,
+        strategy=strategy,
+        market=market,
+        portfolio=portfolio,
+    )
+
+    plan = engine.run_cycle(datetime.now(timezone.utc))
+
+    submitted_intents = engine.risk_engine.process_intents.call_args.args[0]
+    assert len(submitted_intents) == 1
+    assert submitted_intents[0].strategy_id == "dca_overlay"
+    evaluation = plan.metadata["strategy_evaluation"]["dca_overlay"]
+    assert evaluation["no_data_contexts"] == 0
+    assert evaluation["fresh_contexts_evaluated"] == 1
+    assert evaluation["last_evaluation_summary"]["status"] == "intents_emitted"
+
+
+def test_dca_interval_not_elapsed_reports_no_signal_reason():
+    strat_config = StrategyConfig(
+        name="dca_overlay",
+        type="dca_rebalance",
+        enabled=True,
+        params={
+            "pairs": ["XBTUSD"],
+            "target_weights": {"XBTUSD": 1.0},
+            "rebalance_threshold_pct": 1.0,
+            "dca_interval_minutes": 60,
+            "dca_notional_usd": 100.0,
+        },
+    )
+    strategy = DcaRebalanceStrategy(strat_config)
+    now = datetime.now(timezone.utc)
+    strategy._last_dca = now
+    ctx = SimpleNamespace(
+        timeframe="1h",
+        universe=["XBTUSD"],
+        market_data=MagicMock(spec=MarketDataAPI),
+        portfolio=make_portfolio_service_mock(),
+        regime=None,
+        now=now,
+    )
+
+    result = strategy.evaluate(ctx)
+
+    assert result.intents == []
+    assert result.no_signal_reasons[0]["reason"] == "rebalance_interval_not_elapsed"
+
+
+def test_dca_within_drift_threshold_reports_no_signal_reason():
+    strat_config = StrategyConfig(
+        name="dca_overlay",
+        type="dca_rebalance",
+        enabled=True,
+        params={
+            "pairs": ["XBTUSD"],
+            "target_weights": {"XBTUSD": 0.5, "ETHUSD": 0.5},
+            "rebalance_threshold_pct": 1.0,
+            "dca_interval_minutes": 60,
+            "dca_notional_usd": 100.0,
+        },
+    )
+    strategy = DcaRebalanceStrategy(strat_config)
+
+    market = MagicMock(spec=MarketDataAPI)
+    market.normalize_pair.side_effect = lambda pair: pair
+    market.get_latest_price.return_value = 100.0
+    portfolio = make_portfolio_service_mock(equity_base=10000.0, cash_base=5000.0)
+    portfolio.get_positions.return_value = [
+        SpotPosition(
+            pair="XBTUSD",
+            base_asset="XBT",
+            quote_asset="USD",
+            base_size=50.0,
+            avg_entry_price=100.0,
+            realized_pnl_base=0.0,
+            fees_paid_base=0.0,
+            strategy_tag="dca_overlay",
+        )
+    ]
+    ctx = SimpleNamespace(
+        timeframe="1h",
+        universe=["XBTUSD"],
+        market_data=market,
+        portfolio=portfolio,
+        regime=None,
+        now=datetime.now(timezone.utc),
+    )
+
+    result = strategy.evaluate(ctx)
+
+    assert result.intents == []
+    assert result.no_signal_reasons[0]["reason"] == "within_rebalance_threshold"
+
+
+def test_strategy_crash_produces_strategy_error_headline():
+    class CrashingStrategy(Strategy):
+        def warmup(self, market_data, portfolio):
+            return None
+
+        def generate_intents(self, ctx):
+            raise RuntimeError("boom")
+
+    strat_config = StrategyConfig(
+        name="crasher", type="crasher", enabled=True, params={"timeframes": ["1h"]}
+    )
+    market = MagicMock(spec=MarketDataAPI)
+    market.get_data_status.return_value = MagicMock(
+        rest_api_reachable=True,
+        websocket_connected=True,
+        stale_pairs=0,
+    )
+    market.get_universe.return_value = ["XBTUSD"]
+    market.get_ohlc.return_value = _ohlc_from_closes([100.0])
+    market.get_display_pair.side_effect = lambda pair: pair
+    engine = _engine_for_strategy(
+        strat_config=strat_config,
+        strategy=CrashingStrategy(strat_config),
+        market=market,
+    )
+
+    plan = engine.run_cycle(datetime.now(timezone.utc))
+
+    evaluation = plan.metadata["strategy_evaluation"]["crasher"]
+    assert evaluation["strategy_error_contexts"] == 1
+    assert evaluation["last_evaluation_summary"]["status"] == "strategy_error"
+    assert (
+        evaluation["last_evaluation_summary"]["message"] == "Strategy evaluation failed"
+    )
+
+
+def test_intent_summary_clears_top_level_reasons_but_keeps_context_detail():
+    class MixedStrategy(Strategy):
+        def warmup(self, market_data, portfolio):
+            return None
+
+        def generate_intents(self, ctx):
+            return []
+
+        def evaluate(self, ctx):
+            if ctx.timeframe == "1h":
+                return StrategyEvaluationResult(
+                    intents=[
+                        StrategyIntent(
+                            strategy_id=self.id,
+                            pair="XBTUSD",
+                            side="long",
+                            intent_type="enter",
+                            desired_exposure_usd=1000.0,
+                            confidence=1.0,
+                            timeframe=ctx.timeframe,
+                            generated_at=ctx.now,
+                        )
+                    ],
+                    context_summaries=[
+                        {
+                            "status": "intents_emitted",
+                            "reason": "entry_signal",
+                            "timeframe": ctx.timeframe,
+                        }
+                    ],
+                )
+            return StrategyEvaluationResult(
+                no_signal_reasons=[
+                    {
+                        "reason": "regime_not_mean_reverting",
+                        "message": "Higher timeframe did not confirm",
+                        "timeframe": ctx.timeframe,
+                    }
+                ],
+                context_summaries=[
+                    {
+                        "status": "no_signal",
+                        "reason": "regime_not_mean_reverting",
+                        "message": "Higher timeframe did not confirm",
+                        "timeframe": ctx.timeframe,
+                    }
+                ],
+            )
+
+    strat_config = StrategyConfig(
+        name="mixed",
+        type="mixed",
+        enabled=True,
+        params={"timeframes": ["4h", "1h"]},
+    )
+    market = MagicMock(spec=MarketDataAPI)
+    market.get_data_status.return_value = MagicMock(
+        rest_api_reachable=True,
+        websocket_connected=True,
+        stale_pairs=0,
+    )
+    market.get_universe.return_value = ["XBTUSD"]
+    market.get_ohlc.return_value = _ohlc_from_closes([100.0])
+    market.get_display_pair.side_effect = lambda pair: pair
+    engine = _engine_for_strategy(
+        strat_config=strat_config,
+        strategy=MixedStrategy(strat_config),
+        market=market,
+    )
+
+    plan = engine.run_cycle(datetime.now(timezone.utc))
+
+    summary = plan.metadata["strategy_evaluation"]["mixed"]["last_evaluation_summary"]
+    assert summary["status"] == "intents_emitted"
+    assert summary["reasons"] == []
+    assert any(
+        context.get("reason") == "regime_not_mean_reverting"
+        for context in summary["context_summaries"]
+    )
+
+
+def test_disabling_strategy_replaces_stale_generated_intent_summary():
+    strat_config = StrategyConfig(
+        name="quiet", type="quiet", enabled=True, params={"timeframes": ["1h"]}
+    )
+
+    class QuietStrategy(Strategy):
+        def warmup(self, market_data, portfolio):
+            return None
+
+        def generate_intents(self, ctx):
+            return []
+
+    engine = _engine_for_strategy(
+        strat_config=strat_config,
+        strategy=QuietStrategy(strat_config),
+    )
+    engine.strategy_states["quiet"].last_evaluation_summary = {
+        "status": "intents_emitted",
+        "message": "Generated 1 intent",
+    }
+
+    engine.set_strategy_enabled("quiet", False)
+
+    assert engine.strategy_states["quiet"].enabled is False
+    assert (
+        engine.strategy_states["quiet"].last_evaluation_summary["status"] == "disabled"
+    )
+    assert engine.strategy_states["quiet"].last_evaluation_summary["message"] == (
+        "Strategy is paused"
+    )
+
+
+def test_strategy_evaluation_summary_records_no_signal_reason():
+    class DiagnosticQuietStrategy(Strategy):
+        def warmup(self, market_data, portfolio):
+            return None
+
+        def generate_intents(self, ctx):
+            return []
+
+        def explain_no_signal(self, ctx):
+            return [
+                {
+                    "pair": "XBTUSD",
+                    "timeframe": ctx.timeframe,
+                    "reason": "test_reason",
+                    "message": "Test reason for no action",
+                }
+            ]
+
+    strat_config = StrategyConfig(
+        name="quiet", type="quiet", enabled=True, params={"timeframes": ["1h"]}
+    )
+    strategies_cfg = StrategiesConfig(
+        enabled=["quiet"], configs={"quiet": strat_config}
+    )
+
+    app_config = MagicMock(spec=AppConfig)
+    app_config.strategies = strategies_cfg
+    app_config.risk = RiskConfig()
+    app_config.universe = MagicMock()
+    app_config.universe.include_pairs = ["XBTUSD"]
+
+    market = MagicMock(spec=MarketDataAPI)
+    market.get_data_status.return_value = MagicMock(
+        rest_api_reachable=True,
+        websocket_connected=True,
+        stale_pairs=0,
+    )
+    market.get_universe.return_value = ["XBTUSD"]
+    market.get_ohlc.return_value = _ohlc_from_closes([100.0])
+
+    portfolio = make_portfolio_service_mock()
+    portfolio.get_realized_pnl_by_strategy.return_value = {}
+
+    engine = StrategyRiskEngine(app_config, market, portfolio)
+    engine._data_ready = MagicMock(return_value=True)
+    engine.risk_engine = MagicMock()
+    engine.risk_engine.process_intents.return_value = []
+    engine.risk_engine.get_status.return_value = RiskStatus(
+        kill_switch_active=False,
+        daily_drawdown_pct=0.0,
+        drift_flag=False,
+        total_exposure_pct=0.0,
+        manual_exposure_pct=0.0,
+        per_asset_exposure_pct={},
+        per_strategy_exposure_pct={},
+    )
+    engine.risk_engine.build_risk_context.return_value = SimpleNamespace(
+        per_strategy_exposure_pct={}
+    )
+    engine.strategies = {"quiet": DiagnosticQuietStrategy(strat_config)}
+    engine.strategy_states = {
+        "quiet": StrategyState(
+            strategy_id="quiet",
+            enabled=True,
+            last_intents_at=None,
+            last_actions_at=None,
+            current_positions=[],
+            pnl_summary={},
+        )
+    }
+
+    plan = engine.run_cycle(datetime.now(timezone.utc))
+
+    evaluation = plan.metadata["strategy_evaluation"]["quiet"]
+    assert evaluation["fresh_contexts_evaluated"] == 1
+    assert evaluation["no_signal_reasons"][0]["reason"] == "test_reason"
+    state = engine.strategy_states["quiet"]
+    assert state.last_evaluation_summary is not None
+    assert state.last_evaluation_summary["status"] == "no_signal"
+    assert state.last_evaluation_summary["message"] == "Test reason for no action"
+
+
+def test_trend_following_no_signal_explains_regime_not_uptrend():
+    strat_config = StrategyConfig(
+        name="trend_core",
+        type="trend_following",
+        enabled=True,
+        params={
+            "pairs": ["XBTUSD"],
+            "timeframes": ["1h"],
+            "ma_fast": 3,
+            "ma_slow": 5,
+            "regime_timeframe": "1d",
+        },
+    )
+    strategy = TrendFollowingStrategy(strat_config)
+
+    market = MagicMock(spec=MarketDataAPI)
+    market.get_pair_metadata.return_value = MagicMock(liquidity_24h_usd=1_000_000.0)
+    market.get_ohlc.side_effect = [
+        _ohlc_from_closes([100, 101, 102, 103, 104, 105], step=3600),
+        _ohlc_from_closes([105, 104, 103, 102, 101, 100], step=86_400),
+    ]
+
+    portfolio = make_portfolio_service_mock()
+    portfolio.app_config = MagicMock()
+    portfolio.app_config.risk = RiskConfig(min_liquidity_24h_usd=100000.0)
+    portfolio.get_positions.return_value = []
+
+    ctx = SimpleNamespace(
+        timeframe="1h",
+        universe=["XBTUSD"],
+        market_data=market,
+        portfolio=portfolio,
+        regime=None,
+        now=datetime.now(timezone.utc),
+    )
+
+    reasons = strategy.explain_no_signal(ctx)
+
+    assert reasons[0]["reason"] == "daily_regime_not_uptrend"
+
+
+def test_mean_reversion_no_signal_explains_regime_gate():
+    strat_config = StrategyConfig(
+        name="majors_mean_rev",
+        type="mean_reversion",
+        enabled=True,
+        params={
+            "pairs": ["ETHUSD"],
+            "timeframe": "1h",
+            "lookback_bars": 5,
+            "band_width_bps": 150,
+        },
+    )
+    strategy = MeanReversionStrategy(strat_config)
+
+    market = MagicMock(spec=MarketDataAPI)
+    market.get_ohlc.return_value = _ohlc_from_closes([100, 100, 100, 100, 90])
+    portfolio = make_portfolio_service_mock()
+    portfolio.get_positions.return_value = []
+    ctx = SimpleNamespace(
+        timeframe="1h",
+        universe=["ETHUSD"],
+        market_data=market,
+        portfolio=portfolio,
+        regime=RegimeSnapshot(
+            per_pair={"ETHUSD": MarketRegime.TRENDING},
+            as_of=datetime.now(timezone.utc).isoformat(),
+        ),
+        now=datetime.now(timezone.utc),
+    )
+
+    reasons = strategy.explain_no_signal(ctx)
+
+    assert reasons[0]["reason"] == "regime_not_mean_reverting"
 
 
 def test_strategy_evaluation_classifies_score_filtered_intents():

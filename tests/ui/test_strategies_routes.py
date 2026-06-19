@@ -26,6 +26,13 @@ def test_get_strategies_enveloped(client, strategy_context):
             last_actions_at=None,
             current_positions=[],
             pnl_summary={"pnl": 1.0},
+            last_evaluation_summary={
+                "status": "no_signal",
+                "message": "ETHUSD is below the band but regime is not mean reverting",
+                "deferred_no_new_bar_contexts": 0,
+                "no_data_contexts": 0,
+                "reasons": [{"reason": "regime_not_mean_reverting"}],
+            },
             conflict_summary=[
                 {
                     "pair": "BTC/USD",
@@ -49,6 +56,11 @@ def test_get_strategies_enveloped(client, strategy_context):
     assert payload["data"][0]["evidence_label"] == "Research stage"
     assert payload["data"][0]["configured_weight"] == 100
     assert payload["data"][0]["conflict_summary"][0]["pair"] == "BTC/USD"
+    assert payload["data"][0]["last_evaluation_summary"]["status"] == "no_signal"
+    assert (
+        payload["data"][0]["last_evaluation_summary"]["reasons"][0]["reason"]
+        == "regime_not_mean_reverting"
+    )
 
 
 def test_get_strategies_without_trailing_slash(client, strategy_context):

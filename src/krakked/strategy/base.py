@@ -10,6 +10,7 @@ from krakked.market_data.api import MarketDataAPI
 from krakked.portfolio.manager import PortfolioService
 from krakked.strategy.regime import RegimeSnapshot
 
+from .evaluation import StrategyEvaluationResult
 from .models import StrategyIntent
 from .pair_keys import pair_key
 
@@ -27,6 +28,8 @@ class StrategyContext:
 
 
 class Strategy(abc.ABC):
+    requires_closed_bar_context = True
+
     def __init__(self, config: StrategyConfig):
         self.config = config
         self.id = config.name
@@ -62,3 +65,15 @@ class Strategy(abc.ABC):
         Called on each decision cycle, returns intents
         """
         pass
+
+    def explain_no_signal(self, ctx: StrategyContext) -> List[Dict[str, Any]]:
+        """Return display-only reasons when a fresh evaluation emits no intents."""
+        return []
+
+    def evaluate(self, ctx: StrategyContext) -> StrategyEvaluationResult:
+        """Evaluate once and return intents plus display-only diagnostics."""
+        intents = self.generate_intents(ctx)
+        return StrategyEvaluationResult(
+            intents=intents,
+            no_signal_reasons=[] if intents else self.explain_no_signal(ctx),
+        )
