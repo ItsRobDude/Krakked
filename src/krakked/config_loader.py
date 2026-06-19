@@ -176,9 +176,7 @@ def get_default_starter_strategies_config(
         }:
             params["pairs"] = list(explicit_pairs)
         elif explicit_pairs and strategy_id == "majors_mean_rev":
-            majors = [
-                pair for pair in ("BTC/USD", "ETH/USD") if pair in explicit_pairs
-            ]
+            majors = [pair for pair in ("BTC/USD", "ETH/USD") if pair in explicit_pairs]
             params["pairs"] = majors or list(explicit_pairs)
 
         configs[strategy_id] = {
@@ -1012,9 +1010,7 @@ def parse_app_config(
         )
         strategies_data = {}
     if not strategies_declared:
-        strategies_data = get_default_starter_strategies_config(
-            starter_strategy_pairs
-        )
+        strategies_data = get_default_starter_strategies_config(starter_strategy_pairs)
         logger.info(
             "No strategies block found; applying starter strategy defaults",
             extra={
