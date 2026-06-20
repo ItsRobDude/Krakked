@@ -4,18 +4,18 @@ Krakked is a modular Kraken trading system for California and broader U.S. use, 
 
 ## 🚀 Current Status
 
-This repository includes working, test-covered implementations across the core trading stack. Phases 1-7 are substantially implemented: the repo has connection/auth, market data, portfolio accounting, strategy/risk, OMS execution, a FastAPI control plane, orchestrator/runtime guardrails, metrics, schema checks, CI, packaging, and a documented Docker-first deployment path. Recent work also added strategy weighting, crash-safe ML checkpoint/resume foundations, release automation, export/import-style operator tooling, runtime provenance, and a passing pinned-image Unraid upgrade/rollback proof.
+This repository includes working, test-covered implementations across the core trading stack. Phases 1-7 are substantially implemented: the repo has connection/auth, market data, portfolio accounting, strategy/risk, OMS execution, a FastAPI control plane, orchestrator/runtime guardrails, metrics, schema checks, CI, packaging, and a documented Docker-first deployment path. Recent work also added strategy weighting, crash-safe ML checkpoint/resume foundations, release automation, export/import-style operator tooling, runtime provenance, a passing pinned-image Unraid upgrade/rollback proof, strategy-silence diagnostics, and an initial fake-Kraken reconciliation proof.
 
 | Module | Status | Notes |
 | :--- | :--- | :--- |
 | **Phase 1: Connection** | ✅ Implemented | REST client with signed private calls, configurable rate limiting, nonce handling, and encrypted credential storage/validation. |
 | **Phase 2: Market Data** | ✅ Implemented | Pair-universe discovery, OHLC backfill to a pluggable store, and WebSocket v2 streaming with staleness checks. |
 | **Phase 3: Portfolio** | ✅ Implemented | Portfolio service with SQLite persistence, weighted-average cost PnL, fee tracking, and cashflow detection. |
-| **Phase 4: Strategy & Risk** | ✅ Implemented with known follow-ups | Strategy loader with multi-timeframe scheduling, per-strategy/portfolio caps, liquidity gating, and staleness handling; order tagging/OMS wiring will land in Phase 5. |
-| **Phase 5: Execution** | ✅ Implemented | OMS with market-data-driven routing, retries/backoff, dead-man switch hooks, panic cancel, and SQLite persistence; paper now uses a persistent synthetic account by default, with explicit `allow_live_trading` gates for live submission. |
+| **Phase 4: Strategy & Risk** | ✅ Implemented with known follow-ups | Strategy loader with multi-timeframe scheduling, per-strategy/portfolio caps, liquidity gating, closed-bar/no-signal diagnostics, and end-to-end strategy attribution into risk and OMS records. |
+| **Phase 5: Execution** | ✅ Implemented with safety follow-ups | OMS with market-data-driven routing, retries/backoff, dead-man switch hooks, panic cancel, SQLite persistence, fail-closed live gates, portfolio-sync opening-risk blocks, and synthetic paper execution. |
 | **Phase 6: UI/Control** | ✅ Implemented | CLI/web interface for monitoring and manual control. See [Phase 6 contract](docs/phases/phase6.md#status--todo) for the completed scope and API details. |
 | **Phase 7: Ops & Runtime** | ✅ Implemented with follow-up validation | Orchestrator, structured logging, metrics, schema guard, CI, packaging, release workflow, backup/export/import, and Docker deployment docs are in place. |
-| **Current Product Track** | 🚧 In progress | Pinned-image Unraid deploy/upgrade/rollback proof has passed; the main remaining work is operator truth-labeling, paper/execution polish, strategy evidence reporting, ML/research reporting, and commercial/distribution polish. |
+| **Current Product Track** | 🚧 In progress | Pinned-image Unraid deploy/upgrade/rollback proof has passed; the main remaining work is stale-sync/material-drift money-safety gates, operator truth-labeling, paper/execution polish, strategy evidence reporting, ML/research reporting, and commercial/distribution polish. |
 
 The repo now has a strong engineering base and has moved past the original phase plan. The current work is less about building missing architecture and more about productization:
 
@@ -23,8 +23,10 @@ The repo now has a strong engineering base and has moved past the original phase
 * The Unraid pinned-image deployment path has passed upgrade/rollback proof with hard backup/restore and paper run-once checks enabled.
 * GitHub Actions covers CI and tag-driven release publishing.
 * Strategy weighting and ML checkpoint/resume foundations are present in code.
+* Live balance unavailability and never-synced live cold start now degrade portfolio sync and block live opening risk through the normal loop and OMS gate.
+* The fake Kraken harness proves one narrow AddOrder/OpenOrders/ClosedOrders/Balance/TradesHistory/Ledgers fill/restart/reconcile lifecycle.
 * Current bundled strategies are research-stage; recent unified evidence has not yet shown a production edge.
-* The next milestone is operational validation, research honesty, and UX polish rather than another major subsystem.
+* The next money-safety milestone is stale-sync age and material-drift gating rather than another major subsystem.
 
 See the consolidated phase contract in [`docs/contract.md`](docs/contract.md) for the full design scope across Phases 1–7. Individual phase files remain available for historical reference.
 
@@ -205,16 +207,16 @@ The helper calls `load_config()` and `secrets.load_api_keys(allow_interactive_se
 
 To run the implemented Phase 4 features, set these keys in `config.yaml`:
 
-*   **Strategy scheduling**: Provide `strategies.enabled` plus per-strategy `timeframes` (or `timeframe`) arrays to run multi-timeframe cycles. 【F:src/krakked/strategy/engine.py†L80-L119】
-*   **Per-strategy caps**: Configure `risk.max_per_strategy_pct` to clamp exposure across strategies and `strategies.configs.<name>.userref` if you need consistent attribution. 【F:src/krakked/config.py†L48-L72】【F:src/krakked/strategy/risk.py†L263-L349】
+*   **Strategy scheduling**: Provide `strategies.enabled` plus per-strategy `timeframes` (or `timeframe`) arrays to run multi-timeframe cycles.
+*   **Per-strategy caps**: Configure `risk.max_per_strategy_pct` to clamp exposure across strategies and `strategies.configs.<name>.userref` if you need consistent attribution.
 *   **Manual exposure**: Manual positions are tracked as a separate risk attribution bucket through `risk.include_manual_positions`; do not add `manual` to `risk.max_per_strategy_pct`.
-*   **Portfolio caps**: Use `risk.max_portfolio_risk_pct`, `risk.max_open_positions`, and `risk.max_per_asset_pct` to enforce total exposure limits. 【F:src/krakked/config.py†L40-L72】【F:src/krakked/strategy/risk.py†L263-L349】
-*   **Liquidity gating**: Set `risk.min_liquidity_24h_usd` to block new exposure when recent volume is too low. 【F:src/krakked/config.py†L60-L72】【F:src/krakked/strategy/risk.py†L203-L249】
-*   **Staleness handling**: Market data staleness and connection checks are enforced before intent generation; strategies surface `DataStaleError` to skip a timeframe when needed. 【F:src/krakked/strategy/engine.py†L33-L120】
+*   **Portfolio caps**: Use `risk.max_portfolio_risk_pct`, `risk.max_open_positions`, and `risk.max_per_asset_pct` to enforce total exposure limits.
+*   **Liquidity gating**: Set `risk.min_liquidity_24h_usd` to block new exposure when recent volume is too low.
+*   **Strategy diagnostics**: Enabled strategies report whether they evaluated, deferred for a new closed bar, lacked data, saw stale data, emitted intents, or chose no trade because their signal rules were not met.
 
 ### Phase 5 execution wiring
 
-Phase 4 produces risk-adjusted actions that now flow through an OMS capable of synthetic paper execution, dry-run/validate routing, and gated live routing. Orders are built from plan deltas, priced off mid/bid/ask via `MarketDataAPI`, and constrained by `ExecutionConfig` guardrails (slippage bands, min notional, max concurrency). Submissions use retries/backoff for transient errors, apply a dead-man switch heartbeat when enabled, and persist to SQLite (`execution_orders` / `execution_results`) alongside in-memory tracking. The admin CLI provides listing, reconciliation, targeted cancels, and a panic cancel-all path that refreshes state after cancelation.
+Phase 4 produces risk-adjusted actions that now flow through an OMS capable of synthetic paper execution, dry-run/validate routing, and gated live routing. Orders are built from plan deltas, priced off mid/bid/ask via `MarketDataAPI`, and constrained by `ExecutionConfig` guardrails (slippage bands, min notional, max concurrency). Live opening-risk submissions are also blocked when live strategy IDs are not allowlisted or when live portfolio sync is degraded, failed, or not yet verified. Submissions use retries/backoff for transient errors, apply a dead-man switch heartbeat when enabled, and persist to SQLite (`execution_orders` / `execution_results`) alongside in-memory tracking. The admin CLI provides listing, reconciliation, targeted cancels, and a panic cancel-all path that refreshes state after cancelation.
 
 #### Strategy ID propagation and tagging
 
@@ -348,7 +350,7 @@ not judged from an ML-only report in isolation.
 * **Non-interactive setup**: add `--allow-interactive-setup false` to block credential prompts in CI/servers while still booting the orchestrator.
 * **Execution knobs**: `execution.mode` selects `paper` vs. `live`, `execution.allow_live_trading` is the final gate for live submissions, and dead-man/kill switches remain available via the configured cancel-all hooks.
 
-Execution defaults stay conservative until you explicitly opt-in: `mode="paper"`, `validate_only=False`, and `allow_live_trading=False`, which now gives you a persistent synthetic paper account out of the box while still keeping live submission gated off until you deliberately enable it.【F:src/krakked/config.py†L29-L36】
+Execution defaults stay conservative until you explicitly opt-in: `mode="paper"`, `validate_only=False`, and `allow_live_trading=False`, which now gives you a persistent synthetic paper account out of the box while still keeping live submission gated off until you deliberately enable it.
 
 To start the full orchestrator (market data WebSocket loop, portfolio sync scheduler, strategy cycles with execution, and the FastAPI UI in the same process):
 
@@ -358,7 +360,7 @@ poetry run krakked run
 
 The runner bootstraps configuration/credentials, initializes market data + portfolio + strategy services, and hosts the UI on `config.ui.host:config.ui.port` when enabled. It listens for `SIGINT`/`SIGTERM` to stop scheduler loops, cancel any open orders, and shut down the WebSocket feed cleanly.
 
-CLI helpers default to the local `portfolio.db` SQLite file; pass `--db-path` to point at an alternate location when needed.【F:src/krakked/cli.py†L20-L33】 After the run, inspect orders/results in the default SQLite store (`portfolio.db` unless overridden) or via the admin helper:
+CLI helpers default to the local `portfolio.db` SQLite file; pass `--db-path` to point at an alternate location when needed. After the run, inspect orders/results in the default SQLite store (`portfolio.db` unless overridden) or via the admin helper:
 
 ```bash
 # Review open/pending orders and execution summaries
@@ -438,8 +440,9 @@ alerts:
 ```
 
 When enabled, the first alert coverage is intentionally narrow:
-`submit_unknown` and blocked opening risk caused by unresolved submit intent.
-Other fail-closed scenarios remain live blockers until separately proved.
+`submit_unknown` and blocked opening risk, including unresolved submit intent and
+degraded live portfolio sync. Other fail-closed scenarios remain live blockers
+until separately proved.
 
 ### ↩️ Disabling Live Trading
 
@@ -476,17 +479,22 @@ Invoke via `poetry run python -m krakked.execution.admin_cli <subcommand>`; pass
 * Order recovery: `probe-cl-ord-id` run successfully in validate-only mode, with the limitation above understood.
 * Alerts: webhook alerts configured and tested if the session is intended to run semi-unattended.
 * Config gates: `execution.mode="live"`, `execution.validate_only=false`, `execution.allow_live_trading=true`, and `execution.live_strategy_allowlist` intentionally set for production; revert any gate or remove the strategy ID to disable.
+* Portfolio sync: Live balance reconciliation has completed successfully and the operator understands that stale-sync age and material-drift policy are still tracked in the money-safety proof plan.
 * Risk reviewed: Portfolio and per-strategy risk limits rechecked for live exposure tolerance.
 * Operator drills: Team knows how to invoke `panic`, targeted `cancel`, `reconcile-submit-intents`, and `clear-submit-unknown` via `execution.admin_cli`.
 
+This checklist is not a live-capital approval. Use
+[`docs/money-safety-proof-plan.md`](docs/money-safety-proof-plan.md) for the
+current proof level and open live blockers.
+
 ## 🧭 Development workflow & CI
 
-The CI workflow is the source of truth for what must pass before packaging/deployment; see [`.github/workflows/ci.yml`](.github/workflows/ci.yml) for the definitive steps.【F:.github/workflows/ci.yml†L1-L102】 Mirror those commands locally:
+The CI workflow is the source of truth for what must pass before packaging/deployment; see [`.github/workflows/ci.yml`](.github/workflows/ci.yml) for the definitive steps. Mirror those commands locally:
 
 * **Install (dev mode)**: `poetry install --with dev --extras tui` to match CI, or `pip install -e .[tui]` if you are not using Poetry.
 * **Tests**: `poetry run pytest` from the repo root; set `KRAKEN_LIVE_TESTS=1` to opt into Kraken-backed integration tests (requires valid credentials).
 * **Lint**: `poetry run flake8 src tests` (same scope as CI).
-* **Static typing**: `poetry run mypy src tests`, `poetry run pyright src ui`, and `npm run typecheck:tests` from `ui/` after `npm ci`.【F:.github/workflows/ci.yml†L60-L95】
+* **Static typing**: `poetry run mypy src tests`, `poetry run pyright src ui`, and `npm run typecheck:tests` from `ui/` after `npm ci`.
 * **UI checks**: from `ui/`, run `npm ci`, `npm run lint`, `npm run test:run`, and `npm run build` to mirror the CI UI job.
 * **Packaging sanity**: `poetry build` if you need to mirror the release artifact validation done in CI.
 

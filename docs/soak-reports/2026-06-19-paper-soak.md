@@ -262,3 +262,28 @@ Priority order from this soak:
    open orders, partial fills, restart, and reconciliation checks.
 7. Turn this manual monitor parsing into a repeatable `krakked` report command
    or scripted runbook.
+
+## Follow-Up Status
+
+Status as of 2026-06-20:
+
+- Strategy diagnostics now distinguish closed-bar deferrals, no data, stale
+  data, strategy errors, no-signal reasons, and emitted intents for the enabled
+  starter strategies.
+- Starter strategy parameters are explicit in the active paper profile/config,
+  so future paper runs do not depend on constructor defaults for proof context.
+- The fake Kraken harness now proves one narrow coherent order lifecycle:
+  AddOrder, OpenOrders, ClosedOrders, Balance, TradesHistory, Ledgers, full
+  fill, partial fill, restart reconciliation, and degraded Balance reads.
+- Live Balance unavailability and never-synced live cold start now keep
+  portfolio sync degraded and block live opening risk.
+
+Still open from this soak:
+
+- Docker healthcheck behavior on Unraid.
+- Pause/resume versus stop/start language.
+- Restart no-auto-resume wording.
+- Profile-aware backup/export.
+- Seeded emergency flatten with positions and open orders.
+- Stale-sync age and relative/material drift gates before any live-capital
+  readiness claim.
