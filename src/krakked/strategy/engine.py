@@ -1370,6 +1370,20 @@ class StrategyEngine:
             )
             return False
 
+        # Fail closed: a degraded sync returns normally but leaves last_sync_ok
+        # False (account truth unavailable). Do not build a cycle on unverified
+        # balances just because sync did not raise.
+        if not self.portfolio.last_sync_ok:
+            logger.error(
+                "Account truth unavailable; skipping strategy cycle: %s",
+                self.portfolio.last_sync_reason,
+                extra=structured_log_extra(
+                    event="portfolio_sync_unverified",
+                    reason=self.portfolio.last_sync_reason,
+                ),
+            )
+            return False
+
         return True
 
     def _build_context(

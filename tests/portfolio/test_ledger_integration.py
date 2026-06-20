@@ -107,10 +107,16 @@ def test_sync_ingestion(service, mock_store, mock_rest_client):
             }
         }
     }
+
     # Mock API response for TradesHistory (empty to skip that part)
-    mock_rest_client.get_private.side_effect = lambda ep, params=None: (
-        {"trades": {}} if ep == "TradesHistory" else {}
-    )
+    def _private_response(ep, params=None):  # noqa: ARG001
+        if ep == "TradesHistory":
+            return {"trades": {}}
+        if ep == "Balance":
+            return {"XXBT": "1.5"}
+        return {}
+
+    mock_rest_client.get_private.side_effect = _private_response
 
     # Run sync
     service.sync()
@@ -133,13 +139,46 @@ def test_sync_ingestion(service, mock_store, mock_rest_client):
 def test_offline_reconcile_fallback(service, mock_rest_client):
     # Setup: Balance API fails
     mock_rest_client.get_private.side_effect = Exception("API Down")
+    service._last_sync_ok = True
+    service._last_sync_reason = None
 
     # Pre-seed balance
     service.portfolio.balances["USD"] = AssetBalance("USD", 500.0, 500.0, 0.0)
 
     # Run reconcile (via sync or directly)
-    # We call _reconcile directly to test the fallback logic
-    service._reconcile()
+    # We call _reconcile directly to test the degraded truth-unavailable state.
+    result = service._reconcile()
 
-    # Should log warning but not crash, and drift check should be skipped
-    pass
+    assert result is False
+    assert service.last_sync_ok is False
+    assert (
+        service.last_sync_reason == "Live balance reconciliation unavailable: API Down"
+    )
+
+
+def test_sync_marks_degraded_when_live_balance_read_fails(service, mock_rest_client):
+    """Real sync() fails closed end-to-end when the live Balance read fails."""
+    mock_rest_client.get_ledgers.return_value = {"ledger": {}}
+
+    def _private_response(ep, params=None):  # noqa: ARG001
+        if ep == "TradesHistory":
+            return {"trades": {}}
+        if ep == "Balance":
+            raise Exception("API Down")
+        return {}
+
+    mock_rest_client.get_private.side_effect = _private_response
+
+    sentinel = object()
+    service._last_sync_at = sentinel
+    service._last_sync_ok = True
+    service._last_sync_reason = None
+
+    service.sync()
+
+    assert service.last_sync_ok is False
+    assert (
+        service.last_sync_reason == "Live balance reconciliation unavailable: API Down"
+    )
+    # last_sync_at must NOT advance on a degraded sync; the last good time is preserved.
+    assert service.last_sync_at is sentinel

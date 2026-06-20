@@ -26,7 +26,7 @@ def _build_service(store, portfolio, api_client):
     service._exchange_reference_checked_at = None
     service._exchange_reference_equity = None
     service._refresh_cached_views = Mock()
-    service._reconcile = Mock()
+    service._reconcile = Mock(return_value=True)
     return service
 
 
@@ -109,6 +109,40 @@ def test_sync_does_not_save_when_ingest_fails():
 
     store.save_trades.assert_not_called()
     assert service.last_sync_ok is False
+
+
+def test_sync_keeps_degraded_when_live_reconcile_unavailable():
+    store = Mock()
+    portfolio = Mock()
+    api_client = Mock()
+
+    store.get_trades.return_value = []
+    store.get_latest_ledger_entry.return_value = None
+    store.get_cash_flows.return_value = []
+    portfolio.balances = {}
+    portfolio._normalize_asset.side_effect = lambda a: a
+    api_client.get_private.return_value = {"trades": {}}
+    api_client.get_ledgers.return_value = {"ledger": {}}
+
+    service = _build_service(store, portfolio, api_client)
+    previous_sync_at = object()
+    service._last_sync_at = previous_sync_at
+
+    def _reconcile_unavailable():
+        service._last_sync_reason = "Live balance reconciliation unavailable: API Down"
+        return False
+
+    service._reconcile.side_effect = _reconcile_unavailable
+
+    result = service.sync()
+
+    assert result == {"new_trades": 0, "new_cash_flows": 0}
+    assert service.last_sync_ok is False
+    assert (
+        service.last_sync_reason == "Live balance reconciliation unavailable: API Down"
+    )
+    assert service.last_sync_at is previous_sync_at
+    service._refresh_cached_views.assert_called_once()
 
 
 def test_sync_does_not_persist_cash_flows_on_failure():

@@ -457,10 +457,60 @@ def test_run_loop_iteration_skips_when_portfolio_sync_failed():
     )
 
     assert updated_strategy_cycle == now - timedelta(seconds=strategy_interval)
-    assert updated_portfolio_sync == now - timedelta(seconds=portfolio_interval)
+    # Degraded sync advances the timestamp on the attempt so it is not re-fired every
+    # loop iteration; the cycle is still skipped because account truth is unavailable.
+    assert updated_portfolio_sync == now
+    portfolio.sync.assert_called_once()
     strategy_engine.run_cycle.assert_not_called()
     execution_service.execute_plan.assert_not_called()
     refresh_metrics.assert_called_once()
+
+
+def test_run_loop_iteration_throttles_degraded_portfolio_sync():
+    """A degraded sync retries on a short interval, not every loop iteration."""
+    now = datetime(2024, 2, 1, tzinfo=timezone.utc)
+    strategy_interval = 60
+    portfolio_interval = 300
+
+    portfolio = StubPortfolioService()
+    portfolio.last_sync_ok = False  # account truth unavailable
+    portfolio.sync = MagicMock()
+
+    strategy_engine = MagicMock()
+    execution_service = MagicMock()
+    market_data = StubMarketData()
+    metrics = FakeMetrics()
+    refresh_metrics = MagicMock()
+
+    common = dict(
+        now=now,
+        strategy_interval=strategy_interval,
+        portfolio_interval=portfolio_interval,
+        last_strategy_cycle=now - timedelta(seconds=strategy_interval),
+        portfolio=portfolio,
+        market_data=market_data,
+        strategy_engine=strategy_engine,
+        execution_service=execution_service,
+        metrics=metrics,
+        refresh_metrics_state=refresh_metrics,
+        session_active=True,
+    )
+
+    # 20s since the last attempt: inside the 60s degraded retry window -> do NOT
+    # re-fire the full sync (which would hammer a failing API every loop tick).
+    updated_sync, _ = _run_loop_iteration(
+        last_portfolio_sync=now - timedelta(seconds=20), **common
+    )
+    portfolio.sync.assert_not_called()
+    assert updated_sync == now - timedelta(seconds=20)
+    strategy_engine.run_cycle.assert_not_called()
+
+    # 70s since the last attempt: past the 60s degraded interval -> retry now.
+    updated_sync2, _ = _run_loop_iteration(
+        last_portfolio_sync=now - timedelta(seconds=70), **common
+    )
+    portfolio.sync.assert_called_once()
+    assert updated_sync2 == now
 
 
 def test_run_loop_iteration_flags_drift_and_enables_kill_switch():

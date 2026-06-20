@@ -257,13 +257,27 @@ async def flatten_all_positions(
             ctx.config.session.emergency_flatten = True
         dump_runtime_overrides(ctx.config, session=ctx.session, sections={"session"})
 
-        msg = "Flatten armed but waiting for open orders to clear; retry shortly"
+        details = []
         if not cancel_ok:
-            msg += " (cancel_all failed)"
+            details.append("cancel_all failed")
+        if open_orders is None:
+            details.append("open order state unavailable")
         if open_orders:
-            msg += f" ({len(open_orders)} open orders remaining)"
+            details.append(f"{len(open_orders)} open orders remaining")
         if not sync_ok:
-            msg += " (portfolio sync failed)"
+            details.append("account truth unavailable")
+
+        if not sync_ok:
+            msg = (
+                "Can't verify your account right now; open-order cancellation has "
+                "been attempted, but Krakked will not place close orders blind. "
+                "If you need out immediately, close directly on Kraken."
+            )
+        else:
+            msg = "Flatten armed but waiting for open orders to clear; retry shortly"
+
+        if details:
+            msg += f" ({'; '.join(details)})"
 
         logger.warning(
             msg,
