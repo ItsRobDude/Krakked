@@ -141,6 +141,8 @@ class DriftMismatchedAsset:
     expected_quantity: float
     actual_quantity: float
     difference_base: float
+    effective_tolerance_base: Optional[float] = None
+    mismatch_reason: Optional[str] = None
 
 
 @dataclass
@@ -150,3 +152,9 @@ class DriftStatus:
     actual_balance_value_base: float
     tolerance_base: float
     mismatched_assets: List[DriftMismatchedAsset] = field(default_factory=list)
+    absolute_tolerance_base: Optional[float] = None
+    relative_tolerance_pct: Optional[float] = None
+    relative_tolerance_base: Optional[float] = None
+    effective_tolerance_base: Optional[float] = None
+    expected_ledger_equity_base: Optional[float] = None
+    aggregate_valued_drift_base: Optional[float] = None

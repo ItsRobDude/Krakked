@@ -31,6 +31,7 @@ from krakked.config_models import (
     UniverseConfig,
 )
 from krakked.logging_config import get_log_environment, structured_log_extra
+from krakked.portfolio.sync_status import DEFAULT_PORTFOLIO_SYNC_INTERVAL_SECONDS
 from krakked.strategy.catalog import CANONICAL_STRATEGIES
 from krakked.utils.io import atomic_write, backup_file
 
@@ -1528,7 +1529,7 @@ def parse_app_config(
         exclude_assets = []
 
     risk_tolerance = portfolio_data.get("reconciliation_tolerance", 1.0)
-    if not isinstance(risk_tolerance, (int, float)):
+    if not isinstance(risk_tolerance, (int, float)) or isinstance(risk_tolerance, bool):
         logger.warning(
             "reconciliation_tolerance should be a number; defaulting to 1.0",
             extra={
@@ -1537,6 +1538,56 @@ def parse_app_config(
             },
         )
         risk_tolerance = 1.0
+    elif risk_tolerance < 0:
+        logger.warning(
+            "reconciliation_tolerance should be non-negative; defaulting to 1.0",
+            extra={
+                "event": "config_invalid_reconciliation_tolerance",
+                "config_path": str(config_path),
+            },
+        )
+        risk_tolerance = 1.0
+
+    sync_interval_seconds = portfolio_data.get(
+        "sync_interval_seconds", DEFAULT_PORTFOLIO_SYNC_INTERVAL_SECONDS
+    )
+    if (
+        not isinstance(sync_interval_seconds, int)
+        or isinstance(sync_interval_seconds, bool)
+        or sync_interval_seconds <= 0
+    ):
+        logger.warning(
+            "sync_interval_seconds should be a positive integer; defaulting to 300",
+            extra={
+                "event": "config_invalid_portfolio_sync_interval",
+                "config_path": str(config_path),
+            },
+        )
+        sync_interval_seconds = DEFAULT_PORTFOLIO_SYNC_INTERVAL_SECONDS
+
+    reconciliation_relative_tolerance_pct = portfolio_data.get(
+        "reconciliation_relative_tolerance_pct", 0.10
+    )
+    if not isinstance(
+        reconciliation_relative_tolerance_pct, (int, float)
+    ) or isinstance(reconciliation_relative_tolerance_pct, bool):
+        logger.warning(
+            "reconciliation_relative_tolerance_pct should be a number; defaulting to 0.10",
+            extra={
+                "event": "config_invalid_reconciliation_relative_tolerance",
+                "config_path": str(config_path),
+            },
+        )
+        reconciliation_relative_tolerance_pct = 0.10
+    elif reconciliation_relative_tolerance_pct < 0:
+        logger.warning(
+            "reconciliation_relative_tolerance_pct should be non-negative; defaulting to 0.10",
+            extra={
+                "event": "config_invalid_reconciliation_relative_tolerance",
+                "config_path": str(config_path),
+            },
+        )
+        reconciliation_relative_tolerance_pct = 0.10
 
     default_auto_migrate = True
     if execution_mode in ("live", "paper"):
@@ -1557,6 +1608,10 @@ def parse_app_config(
         reconciliation_tolerance=risk_tolerance,
         db_path=portfolio_data.get("db_path", "portfolio.db"),
         auto_migrate_schema=auto_migrate_schema,
+        sync_interval_seconds=sync_interval_seconds,
+        reconciliation_relative_tolerance_pct=float(
+            reconciliation_relative_tolerance_pct
+        ),
     )
 
     if execution_config.mode == "live":

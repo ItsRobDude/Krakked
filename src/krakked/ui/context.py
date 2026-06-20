@@ -75,7 +75,11 @@ def build_app_context(allow_interactive_setup: bool = True) -> AppContext:
     market_data.start_background_backfill()
 
     portfolio = PortfolioService(
-        config, market_data, rest_client=client, rate_limiter=rate_limiter
+        config,
+        market_data,
+        rest_client=client,
+        rate_limiter=rate_limiter,
+        alert_notifier=WebhookAlertNotifier(config.alerts),
     )
     portfolio.initialize()
 

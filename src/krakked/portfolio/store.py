@@ -549,6 +549,11 @@ class PortfolioStore(abc.ABC):
         pass
 
     @abc.abstractmethod
+    def get_trade_ids_by_ids(self, trade_ids: set[str]) -> set[str]:
+        """Return stored trade IDs matching the given IDs."""
+        pass
+
+    @abc.abstractmethod
     def save_cash_flows(self, records: List[CashFlowRecord]):
         """Saves cash flow records."""
         pass
@@ -578,6 +583,13 @@ class PortfolioStore(abc.ABC):
         since: Optional[float] = None,
     ) -> List[LedgerEntry]:
         """Retrieves ledger entries, optionally after a given ID or since a timestamp."""
+        pass
+
+    @abc.abstractmethod
+    def get_trade_ledger_ref_times(
+        self, since: Optional[float] = None
+    ) -> Dict[str, float]:
+        """Return trade ledger ref IDs mapped to their oldest ledger timestamp."""
         pass
 
     @abc.abstractmethod
@@ -984,6 +996,26 @@ class SQLitePortfolioStore(PortfolioStore):
 
         return [json.loads(row[0]) for row in rows]
 
+    def get_trade_ids_by_ids(self, trade_ids: set[str]) -> set[str]:
+        if not trade_ids:
+            return set()
+
+        found: set[str] = set()
+        ids = sorted({str(trade_id) for trade_id in trade_ids if str(trade_id)})
+        with self._lock:
+            conn = self._get_conn()
+            cursor = conn.cursor()
+            for offset in range(0, len(ids), 500):
+                chunk = ids[offset : offset + 500]
+                placeholders = ",".join("?" for _ in chunk)
+                cursor.execute(
+                    f"SELECT id FROM trades WHERE id IN ({placeholders})",
+                    chunk,
+                )
+                found.update(str(row[0]) for row in cursor.fetchall())
+
+        return found
+
     def save_cash_flows(self, records: List[CashFlowRecord]):
         if not records:
             return
@@ -1155,6 +1187,29 @@ class SQLitePortfolioStore(PortfolioStore):
             entries = entries[:limit]
 
         return entries
+
+    def get_trade_ledger_ref_times(
+        self, since: Optional[float] = None
+    ) -> Dict[str, float]:
+        with self._lock:
+            conn = self._get_conn()
+            cursor = conn.cursor()
+            query = """
+                SELECT refid, MIN(time)
+                FROM ledger_entries
+                WHERE type = 'trade'
+                  AND refid IS NOT NULL
+                  AND TRIM(refid) != ''
+            """
+            params: List[Any] = []
+            if since is not None:
+                query += " AND time >= ?"
+                params.append(since)
+            query += " GROUP BY refid"
+            cursor.execute(query, params)
+            rows = cursor.fetchall()
+
+        return {str(row[0]): float(row[1]) for row in rows}
 
     def get_all_ledger_entries(self) -> List[LedgerEntry]:
         return self.get_ledger_entries(after_id=None)

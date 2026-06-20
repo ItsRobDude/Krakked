@@ -48,6 +48,7 @@ from krakked.portfolio.store import (
     ensure_portfolio_schema,
     ensure_portfolio_tables,
 )
+from krakked.portfolio.sync_status import effective_portfolio_sync_interval_seconds
 from krakked.strategy.engine import StrategyEngine
 from krakked.ui.api import create_api
 from krakked.ui.context import AppContext, SessionState
@@ -367,13 +368,19 @@ def _run_loop_iteration(
                 drift_status.expected_position_value_base
                 - drift_status.actual_balance_value_base
             )
+            effective_tolerance = (
+                drift_status.effective_tolerance_base
+                if drift_status.effective_tolerance_base is not None
+                else drift_status.tolerance_base
+            )
             drift_message = (
-                "Portfolio drift detected: expected=%.6f balances=%.6f diff=%.6f tolerance=%.6f"
+                "Portfolio drift detected: expected_positions=%.6f "
+                "ledger_balances=%.6f position_diff=%.6f effective_tolerance=%.6f"
                 % (
                     drift_status.expected_position_value_base,
                     drift_status.actual_balance_value_base,
                     diff,
-                    drift_status.tolerance_base,
+                    effective_tolerance,
                 )
             )
             logger.warning(
@@ -382,7 +389,11 @@ def _run_loop_iteration(
                     event="portfolio_drift_detected",
                     expected_position_value_base=drift_status.expected_position_value_base,
                     actual_balance_value_base=drift_status.actual_balance_value_base,
-                    tolerance_base=drift_status.tolerance_base,
+                    tolerance_base=effective_tolerance,
+                    absolute_tolerance_base=drift_status.absolute_tolerance_base,
+                    relative_tolerance_base=drift_status.relative_tolerance_base,
+                    effective_tolerance_base=effective_tolerance,
+                    aggregate_valued_drift_base=drift_status.aggregate_valued_drift_base,
                     mismatched_assets=[
                         asdict(asset) for asset in drift_status.mismatched_assets
                     ],
@@ -522,6 +533,7 @@ class BotController:
 
         # State flags
         self.is_setup_mode = False
+        self._live_portfolio_interval_clamp_logged = False
 
     def bootstrap_locked_context(self) -> AppContext:
         """
@@ -645,6 +657,7 @@ class BotController:
                 db_path=db_path,
                 rest_client=client,
                 rate_limiter=rate_limiter,
+                alert_notifier=WebhookAlertNotifier(config.alerts),
             )
             portfolio.initialize()
 
@@ -1091,11 +1104,30 @@ class BotController:
                 60,
                 "strategy interval",
             )
-            portfolio_interval = _coerce_interval(
+            raw_portfolio_interval = _coerce_interval(
                 getattr(self.context.config.portfolio, "sync_interval_seconds", 300),
                 300,
                 "portfolio sync interval",
             )
+            execution_mode = getattr(self.context.config.execution, "mode", None)
+            portfolio_interval = effective_portfolio_sync_interval_seconds(
+                self.context.config.portfolio,
+                execution_mode=execution_mode,
+            )
+            if (
+                execution_mode == "live"
+                and raw_portfolio_interval != portfolio_interval
+            ):
+                if not self._live_portfolio_interval_clamp_logged:
+                    logger.warning(
+                        "Live portfolio sync interval clamped for account-truth safety",
+                        extra=structured_log_extra(
+                            event="live_portfolio_sync_interval_clamped",
+                            configured_interval_seconds=raw_portfolio_interval,
+                            effective_interval_seconds=portfolio_interval,
+                        ),
+                    )
+                    self._live_portfolio_interval_clamp_logged = True
 
             if (
                 self.context.portfolio

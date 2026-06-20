@@ -122,6 +122,8 @@ class PortfolioConfig:
     reconciliation_tolerance: float = 1.0
     db_path: str = "portfolio.db"
     auto_migrate_schema: bool = True
+    sync_interval_seconds: int = 300
+    reconciliation_relative_tolerance_pct: float = 0.10
 
 
 @dataclass

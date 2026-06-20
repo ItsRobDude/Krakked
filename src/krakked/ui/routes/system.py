@@ -55,6 +55,7 @@ from krakked.password_store import (
 from krakked.portfolio.sync_status import read_portfolio_sync_status
 from krakked.risk_signal import EWMARiskSignalParams, build_ewma_risk_signal
 from krakked.runtime_provenance import build_runtime_provenance
+from krakked.safety_messages import PORTFOLIO_DRIFT_BLOCKED_MESSAGE
 from krakked.secrets import (
     SecretsDecryptionError,
     delete_secrets,
@@ -488,6 +489,13 @@ def _build_system_health_payload(ctx) -> SystemHealthPayload:
         execution_mode=getattr(execution_config, "mode", None),
     )
     portfolio_baseline = getattr(ctx.portfolio, "baseline_source", None)
+    drift_detected = bool(
+        metrics_snapshot.get("drift_detected")
+        or getattr(risk_status, "drift_flag", False)
+    )
+    drift_reason = metrics_snapshot.get("drift_reason")
+    if drift_reason is None and drift_detected:
+        drift_reason = PORTFOLIO_DRIFT_BLOCKED_MESSAGE
     return SystemHealthPayload(
         **provenance,
         **_alert_status(ctx),
@@ -512,8 +520,8 @@ def _build_system_health_payload(ctx) -> SystemHealthPayload:
         portfolio_sync_reason=portfolio_sync.reason,
         portfolio_last_sync_at=portfolio_sync.last_sync_at,
         portfolio_baseline=portfolio_baseline,
-        drift_detected=bool(metrics_snapshot.get("drift_detected")),
-        drift_reason=metrics_snapshot.get("drift_reason"),
+        drift_detected=drift_detected,
+        drift_reason=drift_reason,
     )
 
 

@@ -50,6 +50,8 @@ Krakked now boots with a conservative operator-first starter profile unless you 
 * The starter universe is limited to `BTC/USD`, `ETH/USD`, `SOL/USD`, and `ADA/USD`.
 * Historical backfill defaults to `1h`, `4h`, and `1d`.
 * Long-running sessions refresh configured OHLC tails shortly after configured timeframe boundaries, with an hourly interval fallback by default (`market_data.ohlc_tail_refresh_interval_seconds: 3600`); set it to `0` to disable scheduled tail refresh.
+* Live account-truth checks use `portfolio.sync_interval_seconds: 300` for the private TradesHistory/Ledgers/Balance reconciliation cadence. In live mode Krakked caps the effective interval at 300 seconds even if a larger value is configured, and stale live reconciliation blocks new live opening risk after `min(max(2 * effective_interval, 120), 600)` seconds.
+* Material live drift uses the larger of `portfolio.reconciliation_tolerance` (absolute base-currency floor, default `1.0`) and `portfolio.reconciliation_relative_tolerance_pct` (default `0.10%` of ledger-derived equity), applied to aggregate absolute live-vs-ledger mismatch. Unvalued nonzero balance mismatches still count as drift.
 * Live websocket OHLC defaults to a single `1m` stream.
 * The runtime market-regime throttle exists as default-disabled risk plumbing:
   `risk.market_regime_throttle.enabled: false`. If deliberately enabled, it

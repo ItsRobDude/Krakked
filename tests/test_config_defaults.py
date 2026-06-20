@@ -31,6 +31,71 @@ def test_load_config_sets_default_ohlc_store(monkeypatch, tmp_path: Path):
     assert app_config.market_data.ohlc_store["backend"] == "parquet"
 
 
+def test_load_config_portfolio_account_truth_policy_defaults(
+    monkeypatch, tmp_path: Path
+):
+    config_dir = tmp_path / "config"
+    data_dir = tmp_path / "data"
+
+    monkeypatch.setattr(appdirs, "user_config_dir", lambda appname: config_dir)
+    monkeypatch.setattr(appdirs, "user_data_dir", lambda appname: data_dir)
+
+    app_config = load_config()
+
+    assert app_config.portfolio.sync_interval_seconds == 300
+    assert app_config.portfolio.reconciliation_relative_tolerance_pct == 0.10
+
+
+def test_load_config_invalid_portfolio_account_truth_policy_falls_back(
+    monkeypatch, tmp_path: Path
+):
+    config_dir = tmp_path / "config"
+    data_dir = tmp_path / "data"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    data_dir.mkdir(parents=True, exist_ok=True)
+    (config_dir / "config.yaml").write_text(
+        """
+portfolio:
+  sync_interval_seconds: 0
+  reconciliation_tolerance: -2.0
+  reconciliation_relative_tolerance_pct: "bad"
+""".strip()
+    )
+
+    monkeypatch.setattr(appdirs, "user_config_dir", lambda appname: config_dir)
+    monkeypatch.setattr(appdirs, "user_data_dir", lambda appname: data_dir)
+
+    app_config = load_config()
+
+    assert app_config.portfolio.sync_interval_seconds == 300
+    assert app_config.portfolio.reconciliation_tolerance == 1.0
+    assert app_config.portfolio.reconciliation_relative_tolerance_pct == 0.10
+
+
+def test_load_config_boolean_portfolio_tolerances_fall_back(
+    monkeypatch, tmp_path: Path
+):
+    config_dir = tmp_path / "config"
+    data_dir = tmp_path / "data"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    data_dir.mkdir(parents=True, exist_ok=True)
+    (config_dir / "config.yaml").write_text(
+        """
+portfolio:
+  reconciliation_tolerance: true
+  reconciliation_relative_tolerance_pct: true
+""".strip()
+    )
+
+    monkeypatch.setattr(appdirs, "user_config_dir", lambda appname: config_dir)
+    monkeypatch.setattr(appdirs, "user_data_dir", lambda appname: data_dir)
+
+    app_config = load_config()
+
+    assert app_config.portfolio.reconciliation_tolerance == 1.0
+    assert app_config.portfolio.reconciliation_relative_tolerance_pct == 0.10
+
+
 def test_load_config_region_profile_and_capabilities(monkeypatch, tmp_path: Path):
     """load_config should round-trip an explicit region and preserve defaults elsewhere."""
     config_dir = tmp_path / "config"

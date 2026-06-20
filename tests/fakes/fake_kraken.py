@@ -68,6 +68,12 @@ class FakeKrakenRESTClient:
         self._balance_failures_remaining = 0
         self._stale_balance_reads_remaining = 0
         self._stale_balance_snapshot: Optional[dict[str, str]] = None
+        self._trades_failures_remaining = 0
+        self._stale_trades_reads_remaining = 0
+        self._stale_trades_snapshot: Optional[dict[str, dict[str, Any]]] = None
+        self._ledgers_failures_remaining = 0
+        self._stale_ledger_reads_remaining = 0
+        self._stale_ledger_snapshot: Optional[dict[str, dict[str, Any]]] = None
 
         self._record_seed_ledger("ZUSD", Decimal("10000.0"))
 
@@ -259,8 +265,18 @@ class FakeKrakenRESTClient:
                 return dict(self._stale_balance_snapshot)
             return self._balance_response()
         if endpoint == "TradesHistory":
+            if self._trades_failures_remaining > 0:
+                self._trades_failures_remaining -= 1
+                raise ServiceUnavailableError("fake: trade history unavailable")
+            trades = self._trades
+            if (
+                self._stale_trades_reads_remaining > 0
+                and self._stale_trades_snapshot is not None
+            ):
+                self._stale_trades_reads_remaining -= 1
+                trades = self._stale_trades_snapshot
             return {
-                "trades": self._filter_by_start(self._trades, params),
+                "trades": self._filter_by_start(trades, params),
                 "last": None,
             }
         if endpoint == "OpenOrders":
@@ -346,7 +362,17 @@ class FakeKrakenRESTClient:
         return {"closed": closed_orders}
 
     def get_ledgers(self, params: Optional[dict[str, Any]] = None) -> dict[str, Any]:
-        return {"ledger": self._filter_by_start(self._ledgers, params)}
+        if self._ledgers_failures_remaining > 0:
+            self._ledgers_failures_remaining -= 1
+            raise ServiceUnavailableError("fake: ledgers unavailable")
+        ledgers = self._ledgers
+        if (
+            self._stale_ledger_reads_remaining > 0
+            and self._stale_ledger_snapshot is not None
+        ):
+            self._stale_ledger_reads_remaining -= 1
+            ledgers = self._stale_ledger_snapshot
+        return {"ledger": self._filter_by_start(ledgers, params)}
 
     def cancel_order(self, txid: str) -> dict[str, Any]:
         self.cancel_calls.append(txid)
@@ -387,6 +413,23 @@ class FakeKrakenRESTClient:
     def stale_balance_reads(self, count: int = 1) -> None:
         self._stale_balance_snapshot = self._balance_response()
         self._stale_balance_reads_remaining = max(int(count), 0)
+
+    def fail_trades_history_reads(self, count: int = 1) -> None:
+        self._trades_failures_remaining = max(int(count), 0)
+
+    def stale_trades_history_reads(self, count: int = 1) -> None:
+        self._stale_trades_snapshot = deepcopy(self._trades)
+        self._stale_trades_reads_remaining = max(int(count), 0)
+
+    def fail_ledger_reads(self, count: int = 1) -> None:
+        self._ledgers_failures_remaining = max(int(count), 0)
+
+    def stale_ledger_reads(self, count: int = 1) -> None:
+        self._stale_ledger_snapshot = deepcopy(self._ledgers)
+        self._stale_ledger_reads_remaining = max(int(count), 0)
+
+    def set_clock(self, timestamp: float) -> None:
+        self._clock = Decimal(str(timestamp))
 
     def fill_order(
         self,

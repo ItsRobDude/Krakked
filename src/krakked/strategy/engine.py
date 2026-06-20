@@ -328,6 +328,12 @@ class StrategyEngine:
             "expected_position_value_base": None,
             "actual_balance_value_base": None,
             "tolerance_base": None,
+            "absolute_tolerance_base": None,
+            "relative_tolerance_pct": None,
+            "relative_tolerance_base": None,
+            "effective_tolerance_base": None,
+            "expected_ledger_equity_base": None,
+            "aggregate_valued_drift_base": None,
             "mismatched_assets": [],
         }
         max_equity_24h = (
@@ -348,6 +354,24 @@ class StrategyEngine:
                     drift_status, "actual_balance_value_base", None
                 ),
                 "tolerance_base": getattr(drift_status, "tolerance_base", None),
+                "absolute_tolerance_base": getattr(
+                    drift_status, "absolute_tolerance_base", None
+                ),
+                "relative_tolerance_pct": getattr(
+                    drift_status, "relative_tolerance_pct", None
+                ),
+                "relative_tolerance_base": getattr(
+                    drift_status, "relative_tolerance_base", None
+                ),
+                "effective_tolerance_base": getattr(
+                    drift_status, "effective_tolerance_base", None
+                ),
+                "expected_ledger_equity_base": getattr(
+                    drift_status, "expected_ledger_equity_base", None
+                ),
+                "aggregate_valued_drift_base": getattr(
+                    drift_status, "aggregate_valued_drift_base", None
+                ),
                 "mismatched_assets": [
                     asdict(asset)
                     for asset in (getattr(drift_status, "mismatched_assets", []) or [])
