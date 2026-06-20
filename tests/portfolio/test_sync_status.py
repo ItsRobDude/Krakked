@@ -1,9 +1,14 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 from krakked.portfolio.sync_status import (
+    DEFAULT_PORTFOLIO_SYNC_INTERVAL_SECONDS,
     LIVE_SYNC_COLD_START_REASON,
     LIVE_SYNC_DEGRADED_REASON,
+    MAX_LIVE_PORTFOLIO_SYNC_INTERVAL_SECONDS,
+    effective_portfolio_sync_interval_seconds,
+    live_sync_stale_reason,
+    max_live_sync_age_seconds,
     read_portfolio_sync_status,
 )
 
@@ -107,3 +112,62 @@ def test_whitespace_reason_normalizes_to_none():
 
     assert paper_status.reason is None
     assert live_status.reason == LIVE_SYNC_COLD_START_REASON
+
+
+def test_live_old_sync_is_degraded_with_derived_max_age():
+    now = datetime(2026, 1, 2, 12, 0, tzinfo=timezone.utc)
+    portfolio = SimpleNamespace(
+        config=SimpleNamespace(sync_interval_seconds=300),
+        last_sync_ok=True,
+        last_sync_reason=None,
+        last_sync_at=now - timedelta(seconds=601),
+    )
+
+    status = read_portfolio_sync_status(
+        portfolio,
+        execution_mode="live",
+        now=now,
+    )
+
+    assert status.ok is False
+    assert status.max_age_seconds == 600
+    assert status.reason == live_sync_stale_reason(600)
+
+
+def test_live_configured_interval_above_cap_uses_effective_live_interval():
+    config = SimpleNamespace(sync_interval_seconds=3600)
+
+    assert (
+        effective_portfolio_sync_interval_seconds(config, execution_mode="live")
+        == MAX_LIVE_PORTFOLIO_SYNC_INTERVAL_SECONDS
+    )
+    assert max_live_sync_age_seconds(config) == 600
+
+
+def test_non_live_old_sync_remains_compatible():
+    now = datetime(2026, 1, 2, 12, 0, tzinfo=timezone.utc)
+    portfolio = SimpleNamespace(
+        config=SimpleNamespace(sync_interval_seconds=300),
+        last_sync_ok=True,
+        last_sync_reason=None,
+        last_sync_at=now - timedelta(days=1),
+    )
+
+    status = read_portfolio_sync_status(
+        portfolio,
+        execution_mode="paper",
+        now=now,
+    )
+
+    assert status.ok is True
+    assert status.reason is None
+    assert status.max_age_seconds is None
+
+
+def test_bad_interval_uses_default_sync_interval():
+    config = SimpleNamespace(sync_interval_seconds="not-a-number")
+
+    assert (
+        effective_portfolio_sync_interval_seconds(config, execution_mode="paper")
+        == DEFAULT_PORTFOLIO_SYNC_INTERVAL_SECONDS
+    )

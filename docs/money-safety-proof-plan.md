@@ -34,13 +34,15 @@ Current trust level: Level 0, research and paper only.
 - Milestone A, fake Kraken and fault harness: started. The deterministic fake
   now covers one coherent AddOrder/OpenOrders/ClosedOrders/Balance/
   TradesHistory/Ledgers lifecycle, including full fills, partial fills, and
-  deterministic balance read failures/stale reads for a single narrow account
-  scenario.
+  deterministic Balance/TradesHistory/Ledgers failures plus narrow stale-read
+  and trade-ledger/trade-history matching proofs for a single account scenario.
 - Milestones B-E, order lifecycle, reconciliation, risk limits, and emergency
   operations: building blocks exist. Milestone B now has an initial passing
   proof for AddOrder response-loss duplicate-submit prevention, manual
   `submit_unknown` recovery tooling, and one restart/closed-order/portfolio-sync
-  reconciliation drill. Broader process-death, cancel timing, stale-read, and
+  reconciliation drill. Milestone C now has a deterministic account-truth gate
+  proof for missing, failed, stale, and materially drifting live reconciliation.
+  Broader process-death, cancel timing, stale-read, multi-asset, and
   emergency-operation proofs remain incomplete.
 - Milestone F, data continuity: continuity tooling exists, but strict replay
   gates do not yet consume continuity gaps directly.
@@ -52,18 +54,16 @@ Current trust level: Level 0, research and paper only.
 Known live blockers:
 
 - fake Kraken/fault harness now models one coherent account/fill/trade/ledger
-  path, but it is intentionally narrow and does not yet cover broad exchange
-  behavior, multiple pairs/assets, or stale reads across the full lifecycle;
+  path plus narrow failing/stale private reads, but it is intentionally narrow
+  and does not yet cover broad exchange behavior or multiple pairs/assets;
 - crash-safe submit-intent behavior is only proven for the initial AddOrder
   response-loss scenario; broader process-death and reconciliation drills remain
   incomplete;
-- live Balance unavailability and never-synced live cold start now keep
-  portfolio sync degraded and block normal-loop/live-opening-risk paths, but
-  stale-sync age and relative drift policy still need explicit live gates;
+- live Balance/TradesHistory/Ledgers unavailability, never-synced live cold
+  start, stale reconciliation age, missing trade-history evidence, and material
+  drift now block normal-loop/live-opening-risk paths;
 - out-of-band alerting is only proved for `submit_unknown` and blocked opening
   risk; broader fail-closed alert scenarios remain unproved;
-- no quantified live reconciliation staleness policy or relative drift
-  threshold;
 - the live strategy boundary is fail-closed by default, but no live utility
   strategy/profile has been approved for real order submission.
 
@@ -413,30 +413,48 @@ Current building blocks:
 
 - portfolio sync imports trades and ledgers, then compares local balances to
   Kraken balances;
-- drift detection exists;
+- material drift detection uses the larger of an absolute tolerance and
+  relative tolerance based on ledger-derived equity, applied to the aggregate
+  absolute value of live-vs-ledger mismatches;
 - risk can activate a kill switch on drift;
 - live readiness can report portfolio sync and drift state.
 
-Proof gap:
+Proved account-truth gate:
 
 - failed live Balance fetch and never-synced live cold start now leave portfolio
   sync degraded rather than reporting local ledger state as live truth;
-- live readiness and the normal strategy loop block on degraded portfolio sync,
-  and the OMS now blocks direct live opening-risk submissions before adapter
-  submission through the production cached risk-status provider when the risk
-  status reports unavailable account truth;
-- stale sync age and last successful reconciliation need explicit live policy;
-- relative drift tolerance needs explicit live policy alongside the existing
-  absolute `portfolio.reconciliation_tolerance` setting;
-- broader stale-read, stale-sync-age, and material-drift blocking behavior still
-  needs end-to-end tests.
+- failed TradesHistory or Ledgers reads leave portfolio sync degraded with the
+  last successful sync timestamp unchanged;
+- trade ledger entries whose trade `refid`s are not present in stored or fetched
+  TradesHistory leave portfolio sync degraded until a later sync catches up;
+- unmatched trade ledger refs older than the live sync-age horizon remain
+  fail-closed and escalate through operator sync reason plus webhook alert;
+- stale successful reconciliation age degrades live portfolio sync;
+- live readiness and the normal strategy loop block on degraded portfolio sync;
+- the OMS blocks direct live opening-risk submissions before adapter submission
+  through the production cached risk-status provider when account truth is
+  unavailable or drift is material;
+- cancel-all and true reduce/close OMS actions remain available under degraded
+  account truth.
 
-Initial live reconciliation policy to implement and prove:
+Remaining proof gap:
+
+- broader stale-read inference across self-consistent private API snapshots is
+  intentionally not claimed;
+- the narrow trade-history lag invariant assumes Kraken ledger entry
+  `type="trade"` `refid` equals the matching TradesHistory trade ID; the fake
+  Kraken proof covers that model, not every possible Kraken historical edge
+  case;
+- stale sync age has no separate operator override yet;
+- material-drift policy is proved for one deterministic account/pair flow, not
+  every exchange shape or multi-asset portfolio.
+
+Initial live reconciliation policy now implemented and proved narrowly:
 
 - absolute tolerance is `portfolio.reconciliation_tolerance`, currently
   defaulting to `$1.00`;
-- relative tolerance is `0.10%` of total equity;
-- valued drift blocks new live risk when the mismatch exceeds
+- relative tolerance is `0.10%` of ledger-derived equity;
+- valued drift blocks new live risk when aggregate absolute mismatch exceeds
   `max(absolute_tolerance, relative_tolerance)`;
 - the last successful live reconciliation must be no older than
   `min(max(2 * effective_portfolio_sync_interval_seconds, 120), 600)` seconds;
@@ -446,14 +464,17 @@ Initial live reconciliation policy to implement and prove:
   or unpriced material mismatch blocks new opening risk while preserving cancel
   and reduce-only emergency paths.
 
-Done when:
+Current deterministic tests prove:
 
-- live start is blocked if portfolio sync is missing, stale, failed, or drifting;
 - new live risk is blocked if reconciliation is unknown, stale, failed, or
   drifting;
 - reduce-only/cancel paths remain available during reconciliation failure;
 - cockpit and live readiness name the exact reconciliation blocker;
-- tests prove drift and stale sync block new risk before order submission.
+- stale Balance/Ledgers reads produce drift and block new live opening risk;
+- failing TradesHistory/Ledgers reads degrade sync;
+- ledger trade references without matching TradesHistory persistently degrade
+  sync until a later successful sync resolves the evidence gap, with alert
+  escalation after the live sync-age horizon.
 
 ### Milestone D: Risk Limits Bind Under Attack
 
@@ -621,27 +642,28 @@ Explicit non-goals:
 
 ## Immediate Next Slice
 
-The initial AddOrder response-loss, submit-unknown, and one coherent
-fill/restart/portfolio-sync reconciliation proof are now green. The next
-engineering slice should keep using the fake-exchange harness, but move from
-"can we reconcile one filled order?" to "do live gates bind when account truth
-is stale or mismatched?"
+The initial AddOrder response-loss, submit-unknown, one coherent
+fill/restart/portfolio-sync reconciliation proof, and narrow account-truth gates
+are now green. The next slice should be a short decision-useful paper validation
+pass that checks whether the newly legible strategy diagnostics and account
+truth gates render sanely in a real operator session.
 
 Recommended next behavior slice:
 
-1. Add an explicit live sync-age policy and block new live opening risk when the
-   last successful reconciliation is too old.
-2. Add a relative drift threshold beside the existing absolute reconciliation
-   tolerance and prove material drift blocks new opening risk.
-3. Prove stale Balance/TradesHistory/Ledgers reads degrade or block according to
-   the written policy, rather than silently reporting healthy state.
-4. Keep cancel-all available under degraded truth and keep position-closing
-   emergency flatten blocked unless fresh account truth is available.
+1. Run a short paper validation pass, not a 24-hour soak, using the explicit
+   starter profile/config.
+2. Confirm the Strategies panel shows useful evaluated/deferred/no-signal
+   reasons.
+3. Confirm system health/live readiness distinguish market-data freshness,
+   closed-bar readiness, portfolio sync age, and drift blockers.
+4. Capture whether any strategy actions, OMS records, portfolio snapshots, or
+   risk blocks appear.
+5. Decide from that evidence whether to continue paper validation, adjust
+   diagnostics/operator copy, or move to a deterministic emergency-flatten drill.
 
-That slice should advance Milestone C. It should not broaden into strategy
-promotion, extra alert scenarios, multi-pair simulation, or data-continuity
-scoreboards until reconciliation age and drift gates have deterministic
-failing/passing proofs.
+That slice should not broaden into strategy promotion, ML authority, multi-pair
+simulation, or data-continuity scoreboards until the operator session produces
+decision-useful evidence.
 
 ## Documentation Rules For Future Work
 

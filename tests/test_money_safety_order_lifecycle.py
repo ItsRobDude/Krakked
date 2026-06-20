@@ -30,11 +30,23 @@ from krakked.config import (
 )
 from krakked.connection.rest_client import KrakenRESTClient
 from krakked.execution.adapter import KrakenExecutionAdapter
-from krakked.execution.oms import PORTFOLIO_SYNC_ORDER_BLOCKED_MESSAGE, ExecutionService
+from krakked.execution.oms import (
+    PORTFOLIO_DRIFT_ORDER_BLOCKED_MESSAGE,
+    PORTFOLIO_SYNC_ORDER_BLOCKED_MESSAGE,
+    ExecutionService,
+)
 from krakked.market_data.models import PairMetadata
 from krakked.portfolio.manager import PortfolioService
 from krakked.portfolio.store import SQLitePortfolioStore
-from krakked.portfolio.sync_status import LIVE_SYNC_DEGRADED_REASON
+from krakked.portfolio.sync_status import (
+    LIVE_SYNC_DEGRADED_REASON,
+    LIVE_SYNC_LEDGERS_UNAVAILABLE_REASON,
+    LIVE_SYNC_TRADE_HISTORY_LAG_ALERT_TITLE,
+    LIVE_SYNC_TRADE_HISTORY_LAGGING_REASON,
+    LIVE_SYNC_TRADES_UNAVAILABLE_REASON,
+    live_sync_stale_reason,
+    live_sync_trade_history_lag_escalated_reason,
+)
 from krakked.strategy.engine import StrategyEngine
 from krakked.strategy.models import ExecutionPlan, RiskAdjustedAction
 from tests.fakes.fake_kraken import (
@@ -61,6 +73,16 @@ def _degraded_risk():
         kill_switch_active=False,
         portfolio_sync_ok=False,
         portfolio_sync_reason="Live balance reconciliation unavailable: API Down",
+    )
+
+
+def _drift_risk():
+    return SimpleNamespace(
+        kill_switch_active=False,
+        portfolio_sync_ok=True,
+        portfolio_sync_reason=None,
+        drift_flag=True,
+        drift_info={"mismatched_assets": [{"asset": "USD"}]},
     )
 
 
@@ -221,12 +243,15 @@ def _service_with_risk(
 def _portfolio_service(
     client: FakeKrakenRESTClient,
     db_path,
+    *,
+    alert_notifier: Any | None = None,
 ) -> PortfolioService:
     service = PortfolioService(
         config=_app_config(str(db_path)),
         market_data=_market_data(),
         db_path=str(db_path),
         rest_client=cast(KrakenRESTClient, client),
+        alert_notifier=alert_notifier,
     )
     return service
 
@@ -551,6 +576,30 @@ def test_fake_balance_failure_degrades_portfolio_sync(tmp_path):
     assert portfolio.last_sync_reason == LIVE_SYNC_DEGRADED_REASON
 
 
+def test_fake_trades_history_failure_degrades_portfolio_sync(tmp_path):
+    client = FakeKrakenRESTClient(add_order_mode=ACCEPT)
+    portfolio = _portfolio_service(client, tmp_path / "portfolio.db")
+    client.fail_trades_history_reads()
+
+    result = portfolio.sync()
+
+    assert result == {"new_trades": 0, "new_cash_flows": 0}
+    assert portfolio.last_sync_ok is False
+    assert portfolio.last_sync_reason == LIVE_SYNC_TRADES_UNAVAILABLE_REASON
+
+
+def test_fake_ledgers_failure_degrades_portfolio_sync(tmp_path):
+    client = FakeKrakenRESTClient(add_order_mode=ACCEPT)
+    portfolio = _portfolio_service(client, tmp_path / "portfolio.db")
+    client.fail_ledger_reads()
+
+    result = portfolio.sync()
+
+    assert result == {"new_trades": 0, "new_cash_flows": 0}
+    assert portfolio.last_sync_ok is False
+    assert portfolio.last_sync_reason == LIVE_SYNC_LEDGERS_UNAVAILABLE_REASON
+
+
 def test_fake_balance_stale_read_returns_prior_snapshot():
     client = FakeKrakenRESTClient(add_order_mode=ACCEPT)
     before = client.get_private("Balance")
@@ -576,6 +625,175 @@ def test_fake_balance_stale_read_returns_prior_snapshot():
     assert current != before
     assert current["XXBT"] == "1.00000000"
     assert current["ZUSD"] == "9900.00000000"
+
+
+def test_stale_balance_after_fill_drifts_and_blocks_live_opening_risk(tmp_path):
+    client = FakeKrakenRESTClient(add_order_mode=ACCEPT)
+    db_path = tmp_path / "portfolio.db"
+    store = SQLitePortfolioStore(str(db_path))
+    service = _service(client, store)
+    result = service.execute_plan(_plan(plan_id="plan-before-stale-balance"))
+    order = result.orders[0]
+    assert order.kraken_order_id is not None
+
+    client.stale_balance_reads()
+    client.close_order(order.kraken_order_id, price=100.0)
+
+    portfolio = _portfolio_service(client, db_path)
+    sync_result = portfolio.sync()
+
+    assert sync_result["new_trades"] == 1
+    assert portfolio.last_sync_ok is True
+    assert portfolio.get_drift_status().drift_flag is True
+
+    strategy_engine = StrategyEngine(
+        _app_config(str(db_path)), _market_data(), portfolio
+    )
+    strategy_engine.refresh_runtime_snapshots()
+    service_after_drift = _service_with_risk(
+        client,
+        portfolio.store,
+        strategy_engine.get_risk_status,
+    )
+
+    blocked = service_after_drift.execute_plan(_plan(plan_id="plan-blocked-drift"))
+
+    assert blocked.errors == [PORTFOLIO_DRIFT_ORDER_BLOCKED_MESSAGE]
+    assert len(client.add_order_calls) == 1
+
+
+def test_stale_ledgers_after_fill_drifts_and_blocks_live_opening_risk(tmp_path):
+    client = FakeKrakenRESTClient(add_order_mode=ACCEPT)
+    db_path = tmp_path / "portfolio.db"
+    store = SQLitePortfolioStore(str(db_path))
+    service = _service(client, store)
+    result = service.execute_plan(_plan(plan_id="plan-before-stale-ledgers"))
+    order = result.orders[0]
+    assert order.kraken_order_id is not None
+
+    client.stale_ledger_reads()
+    client.close_order(order.kraken_order_id, price=100.0)
+
+    portfolio = _portfolio_service(client, db_path)
+    portfolio.sync()
+
+    assert portfolio.last_sync_ok is True
+    assert portfolio.get_drift_status().drift_flag is True
+
+    strategy_engine = StrategyEngine(
+        _app_config(str(db_path)), _market_data(), portfolio
+    )
+    strategy_engine.refresh_runtime_snapshots()
+    service_after_drift = _service_with_risk(
+        client,
+        portfolio.store,
+        strategy_engine.get_risk_status,
+    )
+
+    blocked = service_after_drift.execute_plan(
+        _plan(plan_id="plan-blocked-ledger-drift")
+    )
+
+    assert blocked.errors == [PORTFOLIO_DRIFT_ORDER_BLOCKED_MESSAGE]
+    assert len(client.add_order_calls) == 1
+
+
+def test_trade_ledger_refs_without_matching_trades_stay_degraded_until_recovery(
+    tmp_path,
+):
+    client = FakeKrakenRESTClient(add_order_mode=ACCEPT)
+    client.set_clock(datetime.now(UTC).timestamp())
+    db_path = tmp_path / "portfolio.db"
+    store = SQLitePortfolioStore(str(db_path))
+    service = _service(client, store)
+    result = service.execute_plan(_plan(plan_id="plan-before-lagging-trades"))
+    order = result.orders[0]
+    assert order.kraken_order_id is not None
+
+    client.stale_trades_history_reads(count=2)
+    client.close_order(order.kraken_order_id, price=100.0)
+
+    portfolio = _portfolio_service(client, db_path)
+    sync_result = portfolio.sync()
+
+    assert sync_result["new_trades"] == 0
+    assert portfolio.last_sync_ok is False
+    assert portfolio.last_sync_reason == LIVE_SYNC_TRADE_HISTORY_LAGGING_REASON
+
+    second_result = portfolio.sync()
+
+    assert second_result["new_trades"] == 0
+    assert portfolio.last_sync_ok is False
+    assert portfolio.last_sync_reason == LIVE_SYNC_TRADE_HISTORY_LAGGING_REASON
+
+    recovered_result = portfolio.sync()
+
+    assert recovered_result["new_trades"] == 1
+    assert portfolio.last_sync_ok is True
+    assert portfolio.last_sync_reason is None
+    stored_trade_ids = {trade["id"] for trade in portfolio.store.get_trades()}
+    ledger_refs = {
+        entry.refid
+        for entry in portfolio.store.get_ledger_entries()
+        if entry.type == "trade"
+    }
+    assert ledger_refs <= stored_trade_ids
+
+
+def test_old_trade_ledger_ref_lag_escalates_and_alerts_once(tmp_path):
+    client = FakeKrakenRESTClient(add_order_mode=ACCEPT)
+    db_path = tmp_path / "portfolio.db"
+    store = SQLitePortfolioStore(str(db_path))
+    service = _service(client, store)
+    result = service.execute_plan(_plan(plan_id="plan-before-escalated-lag"))
+    order = result.orders[0]
+    assert order.kraken_order_id is not None
+
+    client.stale_trades_history_reads(count=2)
+    client.close_order(order.kraken_order_id, price=100.0)
+    alerts = _RecordingAlerts()
+    portfolio = _portfolio_service(client, db_path, alert_notifier=alerts)
+
+    portfolio.sync()
+    portfolio.sync()
+
+    expected_reason = live_sync_trade_history_lag_escalated_reason(600)
+    assert portfolio.last_sync_ok is False
+    assert portfolio.last_sync_reason == expected_reason
+    assert len(alerts.events) == 1
+    assert alerts.events[0]["event"] == "portfolio_trade_history_lag_escalated"
+    assert alerts.events[0]["title"] == LIVE_SYNC_TRADE_HISTORY_LAG_ALERT_TITLE
+    assert alerts.events[0]["message"] == expected_reason
+
+
+def test_fake_kraken_trade_ledgers_refid_matches_trades_history_id(tmp_path):
+    client = FakeKrakenRESTClient(add_order_mode=ACCEPT)
+    store = SQLitePortfolioStore(str(tmp_path / "portfolio.db"))
+    service = _service(client, store)
+    result = service.execute_plan(_plan(plan_id="plan-refid-proof"))
+    order = result.orders[0]
+    assert order.kraken_order_id is not None
+
+    client.partial_fill_order(order.kraken_order_id, price=100.0, volume=0.25)
+    client.close_order(order.kraken_order_id, price=110.0)
+
+    trades = client.get_private("TradesHistory")["trades"]
+    ledgers = client.get_ledgers()["ledger"]
+    trade_ids = set(trades)
+    trade_refids = {
+        str(entry["refid"])
+        for entry in ledgers.values()
+        if entry.get("type") == "trade"
+    }
+
+    assert len(trade_ids) == 2
+    assert trade_refids == trade_ids
+
+    portfolio = _portfolio_service(client, tmp_path / "portfolio.db")
+    portfolio.sync()
+
+    assert portfolio.last_sync_ok is True
+    assert {trade["id"] for trade in portfolio.store.get_trades()} == trade_ids
 
 
 def test_live_opening_risk_blocked_when_portfolio_sync_degraded(tmp_path):
@@ -628,6 +846,91 @@ def test_live_opening_risk_blocked_by_strategy_engine_cached_portfolio_sync(
     assert result.orders[0].last_error == PORTFOLIO_SYNC_ORDER_BLOCKED_MESSAGE
     assert result.errors == [PORTFOLIO_SYNC_ORDER_BLOCKED_MESSAGE]
     assert "API Down" not in (result.orders[0].last_error or "")
+
+
+def test_live_opening_risk_blocked_by_strategy_engine_stale_portfolio_sync(
+    tmp_path,
+):
+    client = FakeKrakenRESTClient(add_order_mode=ACCEPT)
+    db_path = tmp_path / "portfolio.db"
+    portfolio = _portfolio_service(client, db_path)
+    portfolio._last_sync_ok = True
+    portfolio._last_sync_reason = None
+    portfolio._last_sync_at = datetime(2026, 1, 2, 3, 4, tzinfo=UTC)
+    strategy_engine = StrategyEngine(
+        _app_config(str(db_path)),
+        _market_data(),
+        portfolio,
+    )
+    strategy_engine.refresh_runtime_snapshots()
+    service = _service_with_risk(
+        client,
+        portfolio.store,
+        strategy_engine.get_risk_status,
+    )
+
+    result = service.execute_plan(_plan(plan_id="plan-real-provider-stale-sync-block"))
+
+    status = strategy_engine.get_risk_status()
+    assert status.portfolio_sync_ok is False
+    assert status.portfolio_sync_reason == live_sync_stale_reason(600)
+    assert result.errors == [PORTFOLIO_SYNC_ORDER_BLOCKED_MESSAGE]
+    assert len(client.add_order_calls) == 0
+
+
+def test_live_opening_risk_blocked_when_portfolio_drift_detected(tmp_path):
+    client = FakeKrakenRESTClient(add_order_mode=ACCEPT)
+    store = SQLitePortfolioStore(str(tmp_path / "portfolio.db"))
+    service = _service_with_risk(client, store, _drift_risk)
+
+    result = service.execute_plan(_plan(plan_id="plan-drift-block"))
+
+    assert result.errors == [PORTFOLIO_DRIFT_ORDER_BLOCKED_MESSAGE]
+    assert len(client.add_order_calls) == 0
+    assert result.orders[0].status == "rejected"
+
+
+def test_live_risk_reducing_actions_not_blocked_by_portfolio_drift(tmp_path):
+    client = FakeKrakenRESTClient(add_order_mode=ACCEPT)
+    store = SQLitePortfolioStore(str(tmp_path / "portfolio.db"))
+    service = _service_with_risk(client, store, _drift_risk)
+
+    plan = ExecutionPlan(
+        plan_id="plan-reduce-drift",
+        generated_at=datetime.now(UTC),
+        actions=[
+            _action(
+                action_type="close",
+                current_base_size=1.0,
+                target_base_size=0.0,
+                target_notional_usd=0.0,
+            ),
+            _action(
+                action_type="reduce",
+                current_base_size=1.0,
+                target_base_size=0.5,
+                target_notional_usd=50.0,
+            ),
+        ],
+        metadata={"order_type": "limit"},
+        emergency_reduce_only=True,
+    )
+
+    result = service.execute_plan(plan)
+
+    assert not result.errors
+    assert len(client.add_order_calls) == 2
+    assert [order.status for order in result.orders] == ["open", "open"]
+
+
+def test_cancel_all_reaches_fake_kraken_when_portfolio_drift_detected(tmp_path):
+    client = FakeKrakenRESTClient(add_order_mode=ACCEPT)
+    store = SQLitePortfolioStore(str(tmp_path / "portfolio.db"))
+    service = _service_with_risk(client, store, _drift_risk)
+
+    service.cancel_all()
+
+    assert client.cancel_all_calls == 1
 
 
 def test_live_risk_reducing_action_not_blocked_by_degraded_portfolio_sync(tmp_path):

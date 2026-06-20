@@ -1,17 +1,26 @@
 # src/krakked/portfolio/manager.py
 
 import logging
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Union
 
 from krakked.config import AppConfig, get_config_dir
 from krakked.connection.rate_limiter import RateLimiter
 from krakked.connection.rest_client import KrakenRESTClient
 from krakked.logging_config import structured_log_extra
 from krakked.market_data.api import MarketDataAPI
-from krakked.portfolio.sync_status import LIVE_SYNC_DEGRADED_REASON
+from krakked.portfolio.sync_status import (
+    LIVE_SYNC_DEGRADED_REASON,
+    LIVE_SYNC_LEDGERS_UNAVAILABLE_REASON,
+    LIVE_SYNC_TRADE_HISTORY_LAG_ALERT_TITLE,
+    LIVE_SYNC_TRADE_HISTORY_LAGGING_REASON,
+    LIVE_SYNC_TRADES_UNAVAILABLE_REASON,
+    live_sync_trade_history_lag_escalated_reason,
+    max_live_sync_age_seconds,
+)
 from krakked.strategy.performance import compute_strategy_performance
 
 from .balance_engine import BalanceEngine, classify_cashflow, rebuild_balances
@@ -38,6 +47,35 @@ logger = logging.getLogger(__name__)
 DEFAULT_PAPER_STARTING_CASH_USD = 10_000.0
 DEFAULT_PORTFOLIO_DB_NAME = "portfolio.db"
 DEFAULT_PROFILE_PAPER_DB_NAME = "portfolio.paper.db"
+
+
+@dataclass(frozen=True)
+class _TradeSyncResult:
+    count: int
+    trade_ids: Set[str]
+    failed: bool = False
+
+
+@dataclass(frozen=True)
+class _LedgerSyncResult:
+    cash_flow_count: int
+    trade_refids: Set[str]
+    failed: bool = False
+
+
+@dataclass(frozen=True)
+class _TradeHistoryLagStatus:
+    ref_times: Dict[str, float]
+    escalated_refids: Set[str]
+    max_age_seconds: int
+
+    @property
+    def missing_refids(self) -> Set[str]:
+        return set(self.ref_times)
+
+    @property
+    def escalated(self) -> bool:
+        return bool(self.escalated_refids)
 
 
 def resolve_portfolio_db_path(config: AppConfig, db_path: Optional[str] = None) -> str:
@@ -72,6 +110,7 @@ class PortfolioService:
         db_path: str = "portfolio.db",
         rest_client: Optional[KrakenRESTClient] = None,
         rate_limiter: Optional[RateLimiter] = None,
+        alert_notifier: Optional[Any] = None,
     ):
         self.config = config.portfolio
         self.app_config = config  # Keep full config if needed
@@ -84,6 +123,7 @@ class PortfolioService:
         self.rest_client = rest_client or KrakenRESTClient(
             rate_limiter=rate_limiter
         )  # Used for balance checks and ledger/trades fetching if not passed in
+        self.alert_notifier = alert_notifier
 
         strategy_tags = {
             cfg.name: cfg.name for cfg in config.strategies.configs.values()
@@ -120,6 +160,7 @@ class PortfolioService:
         self._exchange_reference_balances: Dict[str, AssetBalance] = {}
         self._exchange_reference_checked_at: Optional[datetime] = None
         self._exchange_reference_equity: Optional[EquityView] = None
+        self._trade_history_lag_alerted_refs: Set[str] = set()
 
     @property
     def last_sync_ok(self) -> bool:
@@ -258,22 +299,47 @@ class PortfolioService:
             latest_trades = self.store.get_trades(limit=1)  # ordered by time desc
             since_ts = latest_trades[0]["time"] if latest_trades else None
 
-            new_trade_count = self._sync_trades_history(since_ts)
-            if new_trade_count < 0:
-                # Sync failed (logged internally), return partial results (0, 0)
-                self._last_sync_reason = "Trade ingestion failed during portfolio sync."
+            trade_result = self._sync_trades_history(since_ts)
+            if trade_result.failed:
                 return {"new_trades": 0, "new_cash_flows": 0}
 
             # 2. Fetch Ledgers
-            new_cash_flows = self._sync_ledgers()
+            ledger_result = self._sync_ledgers()
+            if ledger_result.failed:
+                return {"new_trades": trade_result.count, "new_cash_flows": 0}
+
+            trade_history_lag = self._missing_trade_history_refs(
+                trade_result.trade_ids,
+            )
+            if trade_history_lag.missing_refids:
+                self._last_sync_reason = self._trade_history_lag_reason(
+                    trade_history_lag
+                )
+                self._refresh_cached_views()
+                logger.warning(
+                    "Ledger trade references arrived before matching TradesHistory records.",
+                    extra=structured_log_extra(
+                        event="portfolio_trade_history_lagging",
+                        missing_trade_refs=sorted(trade_history_lag.missing_refids),
+                        escalated_refids=sorted(trade_history_lag.escalated_refids),
+                        max_age_seconds=trade_history_lag.max_age_seconds,
+                    ),
+                )
+                self._send_trade_history_lag_alert(trade_history_lag)
+                return {
+                    "new_trades": trade_result.count,
+                    "new_cash_flows": ledger_result.cash_flow_count,
+                }
+            if hasattr(self, "_trade_history_lag_alerted_refs"):
+                self._trade_history_lag_alerted_refs.clear()
 
             # 3. Reconcile
             reconcile_ok = self._reconcile()
             self._refresh_cached_views()
             if not reconcile_ok:
                 return {
-                    "new_trades": new_trade_count,
-                    "new_cash_flows": new_cash_flows,
+                    "new_trades": trade_result.count,
+                    "new_cash_flows": ledger_result.cash_flow_count,
                 }
 
             self._last_sync_ok = True
@@ -281,8 +347,8 @@ class PortfolioService:
             self._last_sync_at = datetime.now(timezone.utc)
 
             return {
-                "new_trades": new_trade_count,
-                "new_cash_flows": new_cash_flows,
+                "new_trades": trade_result.count,
+                "new_cash_flows": ledger_result.cash_flow_count,
             }
         except Exception as exc:
             self._last_sync_reason = str(exc)
@@ -521,7 +587,7 @@ class PortfolioService:
             "userref": order.userref,
         }
 
-    def _sync_trades_history(self, since_ts: Optional[float]) -> int:
+    def _sync_trades_history(self, since_ts: Optional[float]) -> _TradeSyncResult:
         """Fetch, deduplicate, enrich, and persist new trades."""
         params = {}
         known_txids_at_boundary = set()
@@ -547,81 +613,93 @@ class PortfolioService:
         safety_counter = 0
         last_cursor = since_ts
 
-        while True:
-            resp = self.rest_client.get_private("TradesHistory", params=params)
-            trades_dict = resp.get("trades", {})
-            if not trades_dict:
-                break
+        try:
+            while True:
+                resp = self.rest_client.get_private("TradesHistory", params=params)
+                trades_dict = resp.get("trades", {})
+                if not trades_dict:
+                    break
 
-            batch: List[Dict[str, Any]] = []
-            for txid, trade_data in trades_dict.items():
-                # Deduplicate against boundary
-                if txid in known_txids_at_boundary:
-                    continue
+                batch: List[Dict[str, Any]] = []
+                for txid, trade_data in trades_dict.items():
+                    # Deduplicate against boundary
+                    if txid in known_txids_at_boundary:
+                        continue
 
-                trade_record: Dict[str, Any] = dict(trade_data)
-                trade_record["id"] = txid
+                    trade_record: Dict[str, Any] = dict(trade_data)
+                    trade_record["id"] = txid
 
-                # --- Strategy attribution ---
-                # TradesHistory does not reliably include order-level metadata like `userref`.
-                # If this trade belongs to an order we submitted/tracked locally, enrich the
-                # stored trade record with a strategy tag (and userref when available) so that
-                # PnL attribution works even when Kraken does not return `userref` on trades.
-                try:
-                    ordertxid = trade_record.get("ordertxid")
-                    local_order = (
-                        self.store.get_order_by_reference(kraken_order_id=ordertxid)
-                        if ordertxid
-                        else None
-                    )
-                except Exception:
-                    local_order = None
+                    # --- Strategy attribution ---
+                    # TradesHistory does not reliably include order-level metadata like `userref`.
+                    # If this trade belongs to an order we submitted/tracked locally, enrich the
+                    # stored trade record with a strategy tag (and userref when available) so that
+                    # PnL attribution works even when Kraken does not return `userref` on trades.
+                    try:
+                        ordertxid = trade_record.get("ordertxid")
+                        local_order = (
+                            self.store.get_order_by_reference(kraken_order_id=ordertxid)
+                            if ordertxid
+                            else None
+                        )
+                    except Exception:
+                        local_order = None
 
-                if local_order is not None:
-                    trade_record.setdefault("strategy_tag", local_order.strategy_id)
-                    if getattr(local_order, "userref", None) is not None:
-                        trade_record.setdefault("userref", local_order.userref)
+                    if local_order is not None:
+                        trade_record.setdefault("strategy_tag", local_order.strategy_id)
+                        if getattr(local_order, "userref", None) is not None:
+                            trade_record.setdefault("userref", local_order.userref)
 
-                batch.append(trade_record)
+                    batch.append(trade_record)
 
-            batch.sort(key=lambda x: x["time"])
+                batch.sort(key=lambda x: x["time"])
 
-            if batch:
-                new_trades.extend(batch)
-
-            resp_last = resp.get("last")
-            try:
-                resp_last = float(resp_last) if resp_last is not None else None
-            except (TypeError, ValueError):
-                resp_last = None
-
-            if resp_last is not None and resp_last == last_cursor:
-                break
-
-            if resp_last is not None:
-                params["start"] = resp_last
-                last_cursor = resp_last
-            else:
                 if batch:
-                    last_ts = batch[-1]["time"]
-                    last_cursor = last_ts + 1e-6
-                    params["start"] = last_cursor
-                else:
-                    if resp_last:
-                        params["start"] = resp_last
-                        last_cursor = resp_last
-                    else:
-                        break
+                    new_trades.extend(batch)
 
-            safety_counter += 1
-            if safety_counter > 200:
-                logger.warning(
-                    "TradesHistory pagination aborted after 200 pages.",
-                    extra=structured_log_extra(
-                        event="portfolio_sync_pagination_aborted", pages=safety_counter
-                    ),
-                )
-                break
+                resp_last = resp.get("last")
+                try:
+                    resp_last = float(resp_last) if resp_last is not None else None
+                except (TypeError, ValueError):
+                    resp_last = None
+
+                if resp_last is not None and resp_last == last_cursor:
+                    break
+
+                if resp_last is not None:
+                    params["start"] = resp_last
+                    last_cursor = resp_last
+                else:
+                    if batch:
+                        last_ts = batch[-1]["time"]
+                        last_cursor = last_ts + 1e-6
+                        params["start"] = last_cursor
+                    else:
+                        if resp_last:
+                            params["start"] = resp_last
+                            last_cursor = resp_last
+                        else:
+                            break
+
+                safety_counter += 1
+                if safety_counter > 200:
+                    logger.warning(
+                        "TradesHistory pagination aborted after 200 pages.",
+                        extra=structured_log_extra(
+                            event="portfolio_sync_pagination_aborted",
+                            pages=safety_counter,
+                        ),
+                    )
+                    break
+        except Exception as exc:  # noqa: BLE001
+            self._last_sync_reason = LIVE_SYNC_TRADES_UNAVAILABLE_REASON
+            logger.warning(
+                "TradesHistory sync unavailable; account truth is degraded until Kraken trade history can be verified.",
+                extra=structured_log_extra(
+                    event="portfolio_trades_history_unavailable",
+                    error=str(exc),
+                ),
+            )
+            return _TradeSyncResult(count=0, trade_ids=set(), failed=True)
 
         if new_trades:
             try:
@@ -631,16 +709,20 @@ class PortfolioService:
                     "portfolio.sync.ingest_trades_failed",
                     extra={"since": since_ts, "count": len(new_trades)},
                 )
-                return -1
+                self._last_sync_reason = LIVE_SYNC_TRADES_UNAVAILABLE_REASON
+                return _TradeSyncResult(count=0, trade_ids=set(), failed=True)
 
             normalized_trades = [
                 self.portfolio._normalize_trade_payload(t) for t in new_trades
             ]
             self.store.save_trades(normalized_trades)
 
-        return len(new_trades)
+        return _TradeSyncResult(
+            count=len(new_trades),
+            trade_ids={str(trade["id"]) for trade in new_trades if trade.get("id")},
+        )
 
-    def _sync_ledgers(self) -> int:
+    def _sync_ledgers(self) -> _LedgerSyncResult:
         """Fetch, process, and persist new ledger entries."""
         last_entry = self.store.get_latest_ledger_entry()
         last_ledger_time = last_entry.time if last_entry else 0
@@ -654,11 +736,23 @@ class PortfolioService:
             boundary_entries = self.store.get_ledger_entries(since=last_ledger_time)
             known_ids_at_boundary = {e.id for e in boundary_entries}
 
-        ledger_resp = self.rest_client.get_ledgers(params=ledger_params)
-        ledger_dict = ledger_resp.get("ledger", {})
+        try:
+            ledger_resp = self.rest_client.get_ledgers(params=ledger_params)
+            ledger_dict = ledger_resp.get("ledger", {})
+        except Exception as exc:  # noqa: BLE001
+            self._last_sync_reason = LIVE_SYNC_LEDGERS_UNAVAILABLE_REASON
+            logger.warning(
+                "Ledgers sync unavailable; account truth is degraded until Kraken ledgers can be verified.",
+                extra=structured_log_extra(
+                    event="portfolio_ledgers_unavailable",
+                    error=str(exc),
+                ),
+            )
+            return _LedgerSyncResult(cash_flow_count=0, trade_refids=set(), failed=True)
 
         new_ledger_entries = []
         cash_flow_records = []
+        trade_refids: Set[str] = set()
 
         if ledger_dict:
             for lid, info in ledger_dict.items():
@@ -678,6 +772,8 @@ class PortfolioService:
             for entry in new_ledger_entries:
                 self.store.save_ledger_entry(entry)
                 engine.apply_entry(entry)
+                if entry.type == "trade" and entry.refid:
+                    trade_refids.add(str(entry.refid))
 
                 cf = classify_cashflow(entry)
                 if cf:
@@ -686,7 +782,90 @@ class PortfolioService:
         if cash_flow_records:
             self.store.save_cash_flows(cash_flow_records)
 
-        return len(cash_flow_records)
+        return _LedgerSyncResult(
+            cash_flow_count=len(cash_flow_records),
+            trade_refids=trade_refids,
+        )
+
+    def _missing_trade_history_refs(
+        self, fetched_trade_ids: Set[str]
+    ) -> _TradeHistoryLagStatus:
+        since_ts = (
+            self._last_sync_at.timestamp()
+            if isinstance(self._last_sync_at, datetime)
+            else None
+        )
+        ref_times = self.store.get_trade_ledger_ref_times(since=since_ts)
+        if not ref_times:
+            return _TradeHistoryLagStatus(
+                ref_times={},
+                escalated_refids=set(),
+                max_age_seconds=max_live_sync_age_seconds(self.config),
+            )
+
+        candidate_refs = set(ref_times)
+        known_trade_ids = set(fetched_trade_ids)
+        known_trade_ids.update(self.store.get_trade_ids_by_ids(candidate_refs))
+        missing = {
+            refid: ref_times[refid]
+            for refid in candidate_refs
+            if refid not in known_trade_ids
+        }
+        max_age_seconds = max_live_sync_age_seconds(self.config)
+        now_ts = datetime.now(timezone.utc).timestamp()
+        escalated_refids = {
+            refid
+            for refid, ledger_time in missing.items()
+            if now_ts - ledger_time > max_age_seconds
+        }
+        return _TradeHistoryLagStatus(
+            ref_times=missing,
+            escalated_refids=escalated_refids,
+            max_age_seconds=max_age_seconds,
+        )
+
+    def _trade_history_lag_reason(self, status: _TradeHistoryLagStatus) -> str:
+        if status.escalated:
+            return live_sync_trade_history_lag_escalated_reason(status.max_age_seconds)
+        return LIVE_SYNC_TRADE_HISTORY_LAGGING_REASON
+
+    def _send_trade_history_lag_alert(self, status: _TradeHistoryLagStatus) -> None:
+        if not hasattr(self, "_trade_history_lag_alerted_refs"):
+            self._trade_history_lag_alerted_refs = set()
+        new_escalated_refids = status.escalated_refids - getattr(
+            self, "_trade_history_lag_alerted_refs", set()
+        )
+        if not new_escalated_refids:
+            return
+
+        notifier = getattr(self, "alert_notifier", None)
+        if notifier is None or not hasattr(notifier, "send"):
+            self._trade_history_lag_alerted_refs.update(new_escalated_refids)
+            return
+
+        try:
+            notifier.send(
+                event="portfolio_trade_history_lag_escalated",
+                title=LIVE_SYNC_TRADE_HISTORY_LAG_ALERT_TITLE,
+                message=self._trade_history_lag_reason(status),
+                severity="error",
+                context={
+                    "missing_trade_refs": sorted(status.missing_refids),
+                    "escalated_refids": sorted(status.escalated_refids),
+                    "max_age_seconds": status.max_age_seconds,
+                    "oldest_unmatched_ledger_time": min(status.ref_times.values()),
+                },
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.error(
+                "Failed to send trade-history lag alert",
+                extra=structured_log_extra(
+                    event="portfolio_trade_history_lag_alert_failed",
+                    error=str(exc),
+                ),
+            )
+        finally:
+            self._trade_history_lag_alerted_refs.update(new_escalated_refids)
 
     def _reconcile(self) -> bool:
         """Fetch live balances and flag drift."""

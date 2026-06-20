@@ -1267,6 +1267,24 @@ class RiskEngine:
             "expected_position_value_base": ctx.drift_status.expected_position_value_base,
             "actual_balance_value_base": ctx.drift_status.actual_balance_value_base,
             "tolerance_base": ctx.drift_status.tolerance_base,
+            "absolute_tolerance_base": getattr(
+                ctx.drift_status, "absolute_tolerance_base", None
+            ),
+            "relative_tolerance_pct": getattr(
+                ctx.drift_status, "relative_tolerance_pct", None
+            ),
+            "relative_tolerance_base": getattr(
+                ctx.drift_status, "relative_tolerance_base", None
+            ),
+            "effective_tolerance_base": getattr(
+                ctx.drift_status, "effective_tolerance_base", None
+            ),
+            "expected_ledger_equity_base": getattr(
+                ctx.drift_status, "expected_ledger_equity_base", None
+            ),
+            "aggregate_valued_drift_base": getattr(
+                ctx.drift_status, "aggregate_valued_drift_base", None
+            ),
         }
         if ctx.drift_status.mismatched_assets:
             drift_info["mismatched_assets"] = [

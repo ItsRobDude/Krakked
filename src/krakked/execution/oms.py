@@ -12,6 +12,7 @@ from krakked.connection.rate_limiter import RateLimiter
 from krakked.connection.rest_client import KrakenRESTClient
 from krakked.logging_config import structured_log_extra
 from krakked.market_data.api import MarketDataAPI
+from krakked.safety_messages import PORTFOLIO_DRIFT_ORDER_BLOCKED_MESSAGE
 from krakked.strategy.models import ExecutionPlan
 
 from .adapter import (
@@ -42,7 +43,7 @@ PORTFOLIO_SYNC_RUNTIME_CHECKS_UNAVAILABLE_MESSAGE = (
 @dataclass(frozen=True)
 class _PortfolioSyncBlock:
     message: str
-    detail: str | None = None
+    detail: Any | None = None
 
 
 ACTIVE_ORDER_STATUSES = {
@@ -355,6 +356,43 @@ class ExecutionService:
         return _PortfolioSyncBlock(
             PORTFOLIO_SYNC_ORDER_BLOCKED_MESSAGE,
             detail=reason if isinstance(reason, str) and reason.strip() else None,
+        )
+
+    def _portfolio_drift_block_reason(
+        self, action: "RiskAdjustedAction"
+    ) -> _PortfolioSyncBlock | None:
+        if not self._live_submit_enabled():
+            return None
+
+        if self._is_true_risk_reducing_action(action):
+            return None
+
+        if not self._risk_status_provider:
+            return None
+
+        try:
+            status = self._risk_status_provider()
+        except Exception as exc:  # noqa: BLE001
+            logger.exception(
+                "Risk status provider failed while checking portfolio drift",
+                extra=structured_log_extra(
+                    event="portfolio_drift_provider_error",
+                    strategy_id=getattr(action, "strategy_id", None),
+                    pair=getattr(action, "pair", None),
+                    error=str(exc),
+                ),
+            )
+            return _PortfolioSyncBlock(
+                PORTFOLIO_SYNC_RUNTIME_CHECKS_UNAVAILABLE_MESSAGE,
+                detail="risk status provider failed",
+            )
+
+        if not bool(getattr(status, "drift_flag", False)):
+            return None
+
+        return _PortfolioSyncBlock(
+            PORTFOLIO_DRIFT_ORDER_BLOCKED_MESSAGE,
+            detail=getattr(status, "drift_info", None),
         )
 
     def _send_safety_alert(
@@ -678,6 +716,27 @@ class ExecutionService:
                         local_order_id=blocked_order.local_id,
                         block_reason=portfolio_sync_block.message,
                         portfolio_sync_reason=portfolio_sync_block.detail,
+                    ),
+                )
+                result.orders.append(blocked_order)
+                continue
+
+            portfolio_drift_block = self._portfolio_drift_block_reason(action)
+            if portfolio_drift_block:
+                blocked_order = self._create_rejected_order(
+                    plan, action, portfolio_drift_block.message
+                )
+                result.errors.append(portfolio_drift_block.message)
+                logger.warning(
+                    "Order blocked by portfolio drift",
+                    extra=structured_log_extra(
+                        event="order_blocked_portfolio_drift",
+                        plan_id=plan.plan_id,
+                        strategy_id=action.strategy_id,
+                        pair=action.pair,
+                        local_order_id=blocked_order.local_id,
+                        block_reason=portfolio_drift_block.message,
+                        drift_info=portfolio_drift_block.detail,
                     ),
                 )
                 result.orders.append(blocked_order)

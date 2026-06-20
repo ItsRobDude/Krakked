@@ -20,7 +20,10 @@ from krakked.credentials import CredentialResult, CredentialStatus
 from krakked.execution.models import ExecutionResult, LocalOrder
 from krakked.market_data.api import MarketDataStatus
 from krakked.metrics import SystemMetrics
-from krakked.portfolio.sync_status import LIVE_SYNC_COLD_START_REASON
+from krakked.portfolio.sync_status import (
+    LIVE_SYNC_COLD_START_REASON,
+    live_sync_stale_reason,
+)
 from krakked.strategy.models import DecisionRecord, ExecutionPlan, RiskAdjustedAction
 from krakked.ui.api import create_api
 from tests.ui.conftest import build_test_context
@@ -266,6 +269,65 @@ def test_system_health_treats_live_missing_sync_time_as_degraded(
     assert payload["portfolio_sync_ok"] is False
     assert payload["portfolio_sync_reason"] == LIVE_SYNC_COLD_START_REASON
     assert payload["portfolio_last_sync_at"] is None
+
+
+def test_system_health_treats_live_stale_sync_time_as_degraded(client, system_context):
+    system_context.config.execution.mode = "live"
+    system_context.portfolio.last_sync_ok = True
+    system_context.portfolio.last_sync_reason = None
+    system_context.portfolio.last_sync_at = datetime(
+        2026, 1, 2, 3, 4, tzinfo=timezone.utc
+    )
+
+    response = client.get("/api/system/health")
+
+    assert response.status_code == 200
+    payload = response.json()["data"]
+    assert payload["portfolio_sync_ok"] is False
+    assert payload["portfolio_sync_reason"] == live_sync_stale_reason(600)
+
+
+def test_system_health_reports_risk_drift_as_blocker(client, system_context):
+    system_context.strategy_engine.get_risk_status.return_value = SimpleNamespace(
+        kill_switch_active=False,
+        drift_flag=True,
+    )
+
+    response = client.get("/api/system/health")
+
+    assert response.status_code == 200
+    payload = response.json()["data"]
+    assert payload["drift_detected"] is True
+    assert "portfolio mismatch" in payload["drift_reason"]
+
+
+def test_live_readiness_reports_stale_sync_and_drift_blockers(client, system_context):
+    system_context.config.execution.mode = "live"
+    system_context.config.execution.validate_only = False
+    system_context.config.execution.allow_live_trading = True
+    system_context.config.execution.paper_tests_completed = True
+    system_context.portfolio.last_sync_ok = True
+    system_context.portfolio.last_sync_reason = None
+    system_context.portfolio.last_sync_at = datetime(
+        2026, 1, 2, 3, 4, tzinfo=timezone.utc
+    )
+    system_context.strategy_engine.get_risk_status.return_value = SimpleNamespace(
+        kill_switch_active=False,
+        drift_flag=True,
+    )
+
+    response = client.get("/api/system/live-readiness")
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    checks = {
+        check["id"]: check
+        for check in data["blockers"] + data["warnings"] + data["passed"]
+    }
+    assert checks["portfolio_sync"]["status"] == "blocked"
+    assert checks["portfolio_sync"]["message"] == live_sync_stale_reason(600)
+    assert checks["drift_monitor"]["status"] == "blocked"
+    assert "portfolio mismatch" in checks["drift_monitor"]["message"]
 
 
 def test_system_health_reports_config_and_risk_flags(client, system_context):
@@ -1144,7 +1206,7 @@ def test_live_readiness_reports_ready_when_all_checks_pass(
     }
     system_context.portfolio.last_sync_ok = True
     system_context.portfolio.last_sync_reason = None
-    system_context.portfolio.last_sync_at = now
+    system_context.portfolio.last_sync_at = datetime.now(timezone.utc)
     system_context.strategy_engine.get_cached_strategy_state.return_value = [
         _strategy_state(
             "dca_overlay",

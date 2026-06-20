@@ -17,6 +17,14 @@ class InMemoryStore(PortfolioStore):
     ):
         return getattr(self, "trades", [])
 
+    def get_trade_ids_by_ids(self, trade_ids):
+        stored_ids = {
+            str(trade.get("id"))
+            for trade in getattr(self, "trades", [])
+            if isinstance(trade, dict) and trade.get("id")
+        }
+        return {str(trade_id) for trade_id in trade_ids if str(trade_id) in stored_ids}
+
     def save_cash_flows(self, records):
         pass
 
@@ -97,6 +105,17 @@ class InMemoryStore(PortfolioStore):
         if limit:
             entries = entries[:limit]
         return entries
+
+    def get_trade_ledger_ref_times(self, since=None):
+        refs = {}
+        for entry in getattr(self, "ledger_entries", []):
+            if entry.type != "trade" or not entry.refid:
+                continue
+            if since is not None and entry.time < since:
+                continue
+            refid = str(entry.refid)
+            refs[refid] = min(refs.get(refid, entry.time), entry.time)
+        return refs
 
     def get_all_ledger_entries(self):
         return getattr(self, "ledger_entries", [])

@@ -83,6 +83,9 @@ class Portfolio:
             actual_balance_value_base=0.0,
             tolerance_base=self.config.reconciliation_tolerance,
             mismatched_assets=[],
+            absolute_tolerance_base=self.config.reconciliation_tolerance,
+            effective_tolerance_base=self.config.reconciliation_tolerance,
+            aggregate_valued_drift_base=0.0,
         )
         self._last_snapshot_ts: int = 0
 
@@ -315,13 +318,39 @@ class Portfolio:
         live_assets = set()
         drift_detected = False
         mismatched_assets: List[DriftMismatchedAsset] = []
+        valued_live_mismatches: List[DriftMismatchedAsset] = []
+        aggregate_valued_drift_base = 0.0
 
-        # We use a tolerance for comparison
-        tolerance_base = self.config.reconciliation_tolerance
+        absolute_tolerance_base = max(
+            float(getattr(self.config, "reconciliation_tolerance", 1.0) or 0.0),
+            0.0,
+        )
+        relative_tolerance_pct = max(
+            float(
+                getattr(
+                    self.config,
+                    "reconciliation_relative_tolerance_pct",
+                    0.10,
+                )
+                or 0.0
+            ),
+            0.0,
+        )
 
         # Helper to convert drift to base currency
         def to_base(amt, asset):
             return self._convert_to_base_currency(amt, asset)
+
+        expected_ledger_equity_base = 0.0
+        for asset, balance in self.balances.items():
+            conversion = to_base(balance.total, asset)
+            if conversion.status != "unvalued":
+                expected_ledger_equity_base += conversion.value_base
+
+        relative_tolerance_base = (
+            expected_ledger_equity_base * relative_tolerance_pct / 100.0
+        )
+        effective_tolerance_base = max(absolute_tolerance_base, relative_tolerance_base)
 
         for asset_raw, amount_str in live_balances.items():
             asset = self._normalize_asset(asset_raw)
@@ -338,15 +367,18 @@ class Portfolio:
             conversion = to_base(diff_qty, asset)
             diff_val = conversion.value_base
 
-            # Drift if value > tolerance OR unvalued but non-zero quantity mismatch
-            if diff_val > tolerance_base:
-                drift_detected = True
-                mismatched_assets.append(
+            # Aggregate valued exchange mismatches so offsetting assets cannot
+            # hide drift. Unvalued quantity mismatches remain immediate drift.
+            if conversion.status != "unvalued" and diff_val > 1e-9:
+                aggregate_valued_drift_base += diff_val
+                valued_live_mismatches.append(
                     DriftMismatchedAsset(
                         asset=asset,
                         expected_quantity=local_bal,
                         actual_quantity=live_qty,
                         difference_base=diff_val,
+                        effective_tolerance_base=effective_tolerance_base,
+                        mismatch_reason="live_balance_mismatch",
                     )
                 )
             elif conversion.status == "unvalued" and diff_qty > 1e-9:
@@ -358,6 +390,8 @@ class Portfolio:
                         expected_quantity=local_bal,
                         actual_quantity=live_qty,
                         difference_base=0.0,  # Cannot value it
+                        effective_tolerance_base=effective_tolerance_base,
+                        mismatch_reason="unvalued_quantity_mismatch",
                     )
                 )
 
@@ -368,14 +402,16 @@ class Portfolio:
                 conversion = to_base(bal.total, asset)
                 val = conversion.value_base
 
-                if val > tolerance_base:
-                    drift_detected = True
-                    mismatched_assets.append(
+                if conversion.status != "unvalued" and val > 1e-9:
+                    aggregate_valued_drift_base += val
+                    valued_live_mismatches.append(
                         DriftMismatchedAsset(
                             asset=asset,
                             expected_quantity=bal.total,
                             actual_quantity=0.0,
                             difference_base=val,
+                            effective_tolerance_base=effective_tolerance_base,
+                            mismatch_reason="missing_live_balance",
                         )
                     )
                 elif conversion.status == "unvalued" and bal.total > 1e-9:
@@ -386,8 +422,14 @@ class Portfolio:
                             expected_quantity=bal.total,
                             actual_quantity=0.0,
                             difference_base=0.0,
+                            effective_tolerance_base=effective_tolerance_base,
+                            mismatch_reason="unvalued_quantity_mismatch",
                         )
                     )
+
+        if aggregate_valued_drift_base > effective_tolerance_base:
+            drift_detected = True
+            mismatched_assets.extend(valued_live_mismatches)
 
         # 2. Compare Positions (Trades) vs Ledger Balances (self.balances)
         # This is the "internal consistency" check.
@@ -413,7 +455,7 @@ class Portfolio:
             expected_position_value_base += pos_val
             actual_balance_value_base += bal_val
 
-            if diff_value > tolerance_base:
+            if diff_value > absolute_tolerance_base:
                 drift_detected = True
                 mismatched_assets.append(
                     DriftMismatchedAsset(
@@ -421,6 +463,8 @@ class Portfolio:
                         expected_quantity=pos_total,
                         actual_quantity=balance_total,
                         difference_base=diff_value,
+                        effective_tolerance_base=absolute_tolerance_base,
+                        mismatch_reason="internal_position_balance_mismatch",
                     )
                 )
             elif conversion.status == "unvalued" and diff_qty > 1e-9:
@@ -431,6 +475,8 @@ class Portfolio:
                         expected_quantity=pos_total,
                         actual_quantity=balance_total,
                         difference_base=0.0,  # Unvalued
+                        effective_tolerance_base=absolute_tolerance_base,
+                        mismatch_reason="unvalued_quantity_mismatch",
                     )
                 )
 
@@ -439,8 +485,14 @@ class Portfolio:
             drift_flag=drift_detected,
             expected_position_value_base=expected_position_value_base,
             actual_balance_value_base=actual_balance_value_base,
-            tolerance_base=tolerance_base,
+            tolerance_base=effective_tolerance_base,
             mismatched_assets=mismatched_assets,
+            absolute_tolerance_base=absolute_tolerance_base,
+            relative_tolerance_pct=relative_tolerance_pct,
+            relative_tolerance_base=relative_tolerance_base,
+            effective_tolerance_base=effective_tolerance_base,
+            expected_ledger_equity_base=expected_ledger_equity_base,
+            aggregate_valued_drift_base=aggregate_valued_drift_base,
         )
         return drift_detected
 

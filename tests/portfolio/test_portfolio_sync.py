@@ -9,6 +9,8 @@ from krakked.portfolio.sync_status import LIVE_SYNC_DEGRADED_REASON
 
 
 def _build_service(store, portfolio, api_client):
+    store.get_trade_ledger_ref_times.return_value = {}
+    store.get_trade_ids_by_ids.side_effect = lambda trade_ids: set()
     service = PortfolioService.__new__(PortfolioService)
     service.config = PortfolioConfig()
     service.store = store
@@ -26,6 +28,8 @@ def _build_service(store, portfolio, api_client):
     service._exchange_reference_balances = {}
     service._exchange_reference_checked_at = None
     service._exchange_reference_equity = None
+    service._trade_history_lag_alerted_refs = set()
+    service.alert_notifier = None
     service._refresh_cached_views = Mock()
     service._reconcile = Mock(return_value=True)
     return service

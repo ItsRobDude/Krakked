@@ -23,10 +23,10 @@ The repo now has a strong engineering base and has moved past the original phase
 * The Unraid pinned-image deployment path has passed upgrade/rollback proof with hard backup/restore and paper run-once checks enabled.
 * GitHub Actions covers CI and tag-driven release publishing.
 * Strategy weighting and ML checkpoint/resume foundations are present in code.
-* Live balance unavailability and never-synced live cold start now degrade portfolio sync and block live opening risk through the normal loop and OMS gate.
-* The fake Kraken harness proves one narrow AddOrder/OpenOrders/ClosedOrders/Balance/TradesHistory/Ledgers fill/restart/reconcile lifecycle.
+* Live balance unavailability, never-synced cold start, stale reconciliation age, and material portfolio drift now degrade account-truth checks and block live opening risk through the normal loop and OMS gate.
+* The fake Kraken harness proves one narrow AddOrder/OpenOrders/ClosedOrders/Balance/TradesHistory/Ledgers fill/restart/reconcile lifecycle, including the trade-ledger `refid` to TradesHistory ID assumption used by the account-truth gate.
 * Current bundled strategies are research-stage; recent unified evidence has not yet shown a production edge.
-* The next money-safety milestone is stale-sync age and material-drift gating rather than another major subsystem.
+* The next money-safety milestone is a short decision-useful paper validation pass rather than another major subsystem.
 
 See the consolidated phase contract in [`docs/contract.md`](docs/contract.md) for the full design scope across Phases 1–7. Individual phase files remain available for historical reference.
 
@@ -216,7 +216,7 @@ To run the implemented Phase 4 features, set these keys in `config.yaml`:
 
 ### Phase 5 execution wiring
 
-Phase 4 produces risk-adjusted actions that now flow through an OMS capable of synthetic paper execution, dry-run/validate routing, and gated live routing. Orders are built from plan deltas, priced off mid/bid/ask via `MarketDataAPI`, and constrained by `ExecutionConfig` guardrails (slippage bands, min notional, max concurrency). Live opening-risk submissions are also blocked when live strategy IDs are not allowlisted or when live portfolio sync is degraded, failed, or not yet verified. Submissions use retries/backoff for transient errors, apply a dead-man switch heartbeat when enabled, and persist to SQLite (`execution_orders` / `execution_results`) alongside in-memory tracking. The admin CLI provides listing, reconciliation, targeted cancels, and a panic cancel-all path that refreshes state after cancelation.
+Phase 4 produces risk-adjusted actions that now flow through an OMS capable of synthetic paper execution, dry-run/validate routing, and gated live routing. Orders are built from plan deltas, priced off mid/bid/ask via `MarketDataAPI`, and constrained by `ExecutionConfig` guardrails (slippage bands, min notional, max concurrency). Live opening-risk submissions are also blocked when live strategy IDs are not allowlisted, live portfolio sync is degraded/stale/not yet verified, or material portfolio drift is detected. Submissions use retries/backoff for transient errors, apply a dead-man switch heartbeat when enabled, and persist to SQLite (`execution_orders` / `execution_results`) alongside in-memory tracking. The admin CLI provides listing, reconciliation, targeted cancels, and a panic cancel-all path that refreshes state after cancelation.
 
 #### Strategy ID propagation and tagging
 
@@ -479,7 +479,7 @@ Invoke via `poetry run python -m krakked.execution.admin_cli <subcommand>`; pass
 * Order recovery: `probe-cl-ord-id` run successfully in validate-only mode, with the limitation above understood.
 * Alerts: webhook alerts configured and tested if the session is intended to run semi-unattended.
 * Config gates: `execution.mode="live"`, `execution.validate_only=false`, `execution.allow_live_trading=true`, and `execution.live_strategy_allowlist` intentionally set for production; revert any gate or remove the strategy ID to disable.
-* Portfolio sync: Live balance reconciliation has completed successfully and the operator understands that stale-sync age and material-drift policy are still tracked in the money-safety proof plan.
+* Portfolio sync: Live balance reconciliation has completed recently enough for the live sync-age policy, and material-drift blockers are clear.
 * Risk reviewed: Portfolio and per-strategy risk limits rechecked for live exposure tolerance.
 * Operator drills: Team knows how to invoke `panic`, targeted `cancel`, `reconcile-submit-intents`, and `clear-submit-unknown` via `execution.admin_cli`.
 

@@ -10,6 +10,7 @@ from krakked.portfolio.models import SpotPosition
 from krakked.portfolio.sync_status import (
     LIVE_SYNC_COLD_START_REASON,
     LIVE_SYNC_DEGRADED_REASON,
+    live_sync_stale_reason,
 )
 from krakked.strategy.models import StrategyIntent
 from krakked.strategy.risk import RiskContext, RiskEngine
@@ -143,6 +144,24 @@ def test_risk_status_treats_live_cold_start_as_degraded():
     assert status.portfolio_sync_ok is False
     assert status.portfolio_sync_reason == LIVE_SYNC_COLD_START_REASON
     assert status.portfolio_last_sync_at is None
+
+
+def test_risk_status_treats_live_stale_sync_as_degraded():
+    synced_at = datetime(2026, 1, 2, 3, 4, tzinfo=timezone.utc)
+    market_data = MagicMock()
+    portfolio = _build_portfolio_mock()
+    portfolio.last_sync_ok = True
+    portfolio.last_sync_reason = None
+    portfolio.last_sync_at = synced_at
+    portfolio.app_config = SimpleNamespace(execution=SimpleNamespace(mode="live"))
+
+    engine = RiskEngine(RiskConfig(), market_data, portfolio)
+
+    status = engine.get_status()
+
+    assert status.portfolio_sync_ok is False
+    assert status.portfolio_sync_reason == live_sync_stale_reason(600)
+    assert status.portfolio_last_sync_at == synced_at
 
 
 def test_blocked_action_matches_display_pair_to_canonical_position():

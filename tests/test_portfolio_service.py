@@ -189,6 +189,132 @@ def test_reconciliation_drift(service):
     assert service.drift_flag
 
 
+def test_reconciliation_uses_relative_material_drift_threshold(service):
+    service.config.reconciliation_tolerance = 1.0
+    service.config.reconciliation_relative_tolerance_pct = 0.10
+    service.balances["USD"] = AssetBalance("USD", 10000.0, 0.0, 10000.0)
+
+    service.rest_client.get_private.return_value = {"ZUSD": "9995.0"}
+    service._reconcile()
+    assert service.drift_flag is False
+    status = service.get_drift_status()
+    assert status.expected_ledger_equity_base == pytest.approx(10000.0)
+    assert status.relative_tolerance_base == pytest.approx(10.0)
+    assert status.effective_tolerance_base == pytest.approx(10.0)
+
+    service.rest_client.get_private.return_value = {"ZUSD": "9989.0"}
+    service._reconcile()
+    assert service.drift_flag is True
+    assert service.get_drift_status().mismatched_assets[
+        0
+    ].difference_base == pytest.approx(11.0)
+
+
+def test_reconciliation_aggregates_subthreshold_valued_mismatches(service):
+    service.config.reconciliation_tolerance = 1.0
+    service.config.reconciliation_relative_tolerance_pct = 0.10
+    service.balances["USD"] = AssetBalance("USD", 50000.0, 0.0, 50000.0)
+    service.balances["XBT"] = AssetBalance("XBT", 1.0, 0.0, 1.0)
+
+    service.rest_client.get_private.return_value = {
+        "ZUSD": "49960.0",
+        "XXBT": "0.9992",
+    }
+    service._reconcile()
+    assert service.drift_flag is False
+    assert service.get_drift_status().aggregate_valued_drift_base == pytest.approx(80.0)
+
+    service.rest_client.get_private.return_value = {
+        "ZUSD": "49940.0",
+        "XXBT": "0.9988",
+    }
+    service._reconcile()
+    assert service.drift_flag is True
+    status = service.get_drift_status()
+    assert status.aggregate_valued_drift_base == pytest.approx(120.0)
+    assert status.effective_tolerance_base == pytest.approx(100.0)
+    assert {m.asset for m in status.mismatched_assets} == {"USD", "XBT"}
+
+
+def test_reconciliation_uses_absolute_magnitudes_for_offsetting_mismatches(service):
+    service.config.reconciliation_tolerance = 1.0
+    service.config.reconciliation_relative_tolerance_pct = 0.10
+    service.balances["USD"] = AssetBalance("USD", 50000.0, 0.0, 50000.0)
+    service.balances["XBT"] = AssetBalance("XBT", 1.0, 0.0, 1.0)
+
+    service.rest_client.get_private.return_value = {
+        "ZUSD": "50060.0",
+        "XXBT": "0.9988",
+    }
+    service._reconcile()
+
+    status = service.get_drift_status()
+    assert service.drift_flag is True
+    assert status.aggregate_valued_drift_base == pytest.approx(120.0)
+    assert status.effective_tolerance_base == pytest.approx(100.0)
+
+
+def test_reconciliation_absolute_tolerance_remains_floor_for_small_equity(service):
+    service.config.reconciliation_tolerance = 1.0
+    service.config.reconciliation_relative_tolerance_pct = 0.10
+    service.balances["USD"] = AssetBalance("USD", 100.0, 0.0, 100.0)
+
+    service.rest_client.get_private.return_value = {"ZUSD": "99.5"}
+    service._reconcile()
+    assert service.drift_flag is False
+    assert service.get_drift_status().effective_tolerance_base == pytest.approx(1.0)
+
+    service.rest_client.get_private.return_value = {"ZUSD": "98.9"}
+    service._reconcile()
+    assert service.drift_flag is True
+
+
+def test_reconciliation_unvalued_nonzero_mismatch_always_flags(service):
+    service.config.reconciliation_tolerance = 1_000_000.0
+    service.config.reconciliation_relative_tolerance_pct = 100.0
+    service.balances["FOO"] = AssetBalance("FOO", 2.0, 0.0, 2.0)
+
+    service.rest_client.get_private.return_value = {}
+    service._reconcile()
+
+    assert service.drift_flag is True
+    mismatch = service.get_drift_status().mismatched_assets[0]
+    assert mismatch.asset == "FOO"
+    assert mismatch.mismatch_reason == "unvalued_quantity_mismatch"
+
+
+def test_internal_position_balance_mismatch_uses_absolute_tolerance(service):
+    service.config.reconciliation_tolerance = 1.0
+    service.config.reconciliation_relative_tolerance_pct = 0.10
+    service.balances["USD"] = AssetBalance("USD", 500000.0, 0.0, 500000.0)
+    service.balances["XBT"] = AssetBalance("XBT", 0.99, 0.0, 0.99)
+    service.positions["XBTUSD"] = SpotPosition(
+        "XBTUSD",
+        "XBT",
+        "USD",
+        1.0,
+        50000.0,
+        0.0,
+        0.0,
+    )
+    service.rest_client.get_private.return_value = {
+        "ZUSD": "500000.0",
+        "XXBT": "0.99",
+    }
+
+    service._reconcile()
+
+    status = service.get_drift_status()
+    assert service.drift_flag is True
+    mismatch = next(
+        m
+        for m in status.mismatched_assets
+        if m.mismatch_reason == "internal_position_balance_mismatch"
+    )
+    assert mismatch.difference_base == pytest.approx(500.0)
+    assert mismatch.effective_tolerance_base == pytest.approx(1.0)
+
+
 def test_get_equity(service):
     # Setup balances
     from krakked.portfolio.models import AssetBalance

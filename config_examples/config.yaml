@@ -45,6 +45,8 @@ portfolio:
   track_manual_trades: true
   snapshot_retention_days: 30
   reconciliation_tolerance: 1.0
+  reconciliation_relative_tolerance_pct: 0.10
+  sync_interval_seconds: 300
   auto_migrate_schema: false
 
 execution:
