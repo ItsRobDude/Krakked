@@ -17,12 +17,25 @@ from types import SimpleNamespace
 from typing import Any, Dict, cast
 from unittest.mock import MagicMock
 
-from krakked.config import ExecutionConfig
+from krakked.config import (
+    AppConfig,
+    ExecutionConfig,
+    MarketDataConfig,
+    PortfolioConfig,
+    RegionCapabilities,
+    RegionProfile,
+    StrategiesConfig,
+    StrategyConfig,
+    UniverseConfig,
+)
 from krakked.connection.rest_client import KrakenRESTClient
 from krakked.execution.adapter import KrakenExecutionAdapter
-from krakked.execution.oms import ExecutionService
+from krakked.execution.oms import PORTFOLIO_SYNC_ORDER_BLOCKED_MESSAGE, ExecutionService
 from krakked.market_data.models import PairMetadata
+from krakked.portfolio.manager import PortfolioService
 from krakked.portfolio.store import SQLitePortfolioStore
+from krakked.portfolio.sync_status import LIVE_SYNC_DEGRADED_REASON
+from krakked.strategy.engine import StrategyEngine
 from krakked.strategy.models import ExecutionPlan, RiskAdjustedAction
 from tests.fakes.fake_kraken import (
     ACCEPT,
@@ -36,7 +49,19 @@ USERREF = 99
 
 
 def _inactive_risk():
-    return SimpleNamespace(kill_switch_active=False)
+    return SimpleNamespace(
+        kill_switch_active=False,
+        portfolio_sync_ok=True,
+        portfolio_sync_reason=None,
+    )
+
+
+def _degraded_risk():
+    return SimpleNamespace(
+        kill_switch_active=False,
+        portfolio_sync_ok=False,
+        portfolio_sync_reason="Live balance reconciliation unavailable: API Down",
+    )
 
 
 def _live_config() -> ExecutionConfig:
@@ -59,10 +84,11 @@ def _market_data(mid_price: float = 100.0) -> MagicMock:
     md = MagicMock()
 
     def _build_metadata(pair: str) -> PairMetadata:
-        base, quote = pair[:3], pair[3:]
+        compact = str(pair).replace("/", "")
+        base, quote = compact[:3], compact[3:]
         rest_symbol = f"{base}/{quote}"
         return PairMetadata(
-            canonical=pair,
+            canonical=compact,
             base=base,
             quote=quote,
             rest_symbol=rest_symbol,
@@ -76,8 +102,58 @@ def _market_data(mid_price: float = 100.0) -> MagicMock:
         )
 
     md.get_pair_metadata_or_raise.side_effect = _build_metadata
+    md.get_pair_metadata.side_effect = _build_metadata
     md.get_best_bid_ask.return_value = {"bid": mid_price - 0.5, "ask": mid_price + 0.5}
+    md.get_latest_price.return_value = mid_price
+    md.get_valuation_pair.side_effect = lambda asset: (
+        "XBTUSD" if str(asset) in {"XBT", "XXBT"} else None
+    )
+    md.normalize_asset.side_effect = lambda asset: {
+        "XXBT": "XBT",
+        "XBT": "XBT",
+        "ZUSD": "USD",
+        "USD": "USD",
+    }.get(str(asset), str(asset))
     return md
+
+
+def _app_config(db_path: str) -> AppConfig:
+    return AppConfig(
+        region=RegionProfile(
+            code="TEST",
+            capabilities=RegionCapabilities(
+                supports_margin=False,
+                supports_futures=False,
+                supports_staking=False,
+            ),
+        ),
+        universe=UniverseConfig(
+            include_pairs=["XBTUSD"], exclude_pairs=[], min_24h_volume_usd=0.0
+        ),
+        market_data=MarketDataConfig(
+            ws={},
+            ohlc_store={},
+            backfill_timeframes=[],
+            ws_timeframes=[],
+        ),
+        portfolio=PortfolioConfig(
+            db_path=db_path,
+            reconciliation_tolerance=0.0001,
+            valuation_pairs={"XBT": "XBTUSD"},
+        ),
+        execution=_live_config(),
+        strategies=StrategiesConfig(
+            enabled=["strat"],
+            configs={
+                "strat": StrategyConfig(
+                    name="strat",
+                    type="manual",
+                    enabled=True,
+                    userref=USERREF,
+                )
+            },
+        ),
+    )
 
 
 def _action(**overrides: Any) -> RiskAdjustedAction:
@@ -122,6 +198,37 @@ def _service(
         market_data=_market_data(),
         risk_status_provider=_inactive_risk,
     )
+
+
+def _service_with_risk(
+    client: FakeKrakenRESTClient,
+    store: SQLitePortfolioStore,
+    risk_status_provider,
+) -> ExecutionService:
+    config = _live_config()
+    adapter = KrakenExecutionAdapter(
+        client=cast(KrakenRESTClient, client), config=config
+    )
+    return ExecutionService(
+        adapter=adapter,
+        store=store,
+        config=config,
+        market_data=_market_data(),
+        risk_status_provider=risk_status_provider,
+    )
+
+
+def _portfolio_service(
+    client: FakeKrakenRESTClient,
+    db_path,
+) -> PortfolioService:
+    service = PortfolioService(
+        config=_app_config(str(db_path)),
+        market_data=_market_data(),
+        db_path=str(db_path),
+        rest_client=cast(KrakenRESTClient, client),
+    )
+    return service
 
 
 class _RecordingAlerts:
@@ -368,3 +475,194 @@ def test_lost_response_without_cl_ord_id_echo_is_not_adopted(tmp_path):
     order = result.orders[0]
     assert order.status == "submit_unknown"
     assert order.kraken_order_id is None
+
+
+def test_fill_restart_reconcile_and_portfolio_sync_proves_money_path(tmp_path):
+    """A closed exchange order reconciles after restart and syncs into portfolio state."""
+
+    client = FakeKrakenRESTClient(add_order_mode=ACCEPT)
+    db_path = tmp_path / "portfolio.db"
+    store = SQLitePortfolioStore(str(db_path))
+    service = _service(client, store)
+
+    result = service.execute_plan(_plan(plan_id="plan-fill"))
+    assert len(client.add_order_calls) == 1
+    assert result.orders
+    order = result.orders[0]
+    assert order.kraken_order_id is not None
+
+    client.close_order(order.kraken_order_id, price=100.0)
+
+    restarted = _service(client, store)
+    restarted.load_open_orders_from_store()
+    restarted.refresh_open_orders()
+    restarted.reconcile_orders()
+
+    persisted = store.get_order_by_reference(kraken_order_id=order.kraken_order_id)
+    assert persisted is not None
+    assert persisted.status == "closed"
+    assert persisted.cumulative_base_filled == 1.0
+    assert persisted.avg_fill_price == 100.0
+    assert len(client.add_order_calls) == 1
+
+    portfolio = _portfolio_service(client, db_path)
+    sync_result = portfolio.sync()
+
+    assert sync_result["new_trades"] == 1
+    assert portfolio.last_sync_ok is True
+    assert portfolio.get_drift_status().drift_flag is False
+
+    trades = portfolio.store.get_trades()
+    ledgers = portfolio.store.get_ledger_entries()
+    assert any(trade.get("ordertxid") == order.kraken_order_id for trade in trades)
+    assert any(entry.refid == trades[0].get("id") for entry in ledgers)
+
+
+def test_partial_fill_reconciles_without_terminal_order_state(tmp_path):
+    client = FakeKrakenRESTClient(add_order_mode=ACCEPT)
+    store = SQLitePortfolioStore(str(tmp_path / "portfolio.db"))
+    service = _service(client, store)
+
+    result = service.execute_plan(_plan(plan_id="plan-partial"))
+    order = result.orders[0]
+    assert order.kraken_order_id is not None
+
+    client.partial_fill_order(order.kraken_order_id, price=100.0, volume=0.25)
+    client.partial_fill_order(order.kraken_order_id, price=120.0, volume=0.25)
+    service.refresh_open_orders()
+
+    persisted = store.get_order_by_reference(kraken_order_id=order.kraken_order_id)
+    assert persisted is not None
+    assert persisted.status == "partially_filled"
+    assert persisted.cumulative_base_filled == 0.5
+    assert persisted.avg_fill_price == 110.0
+    assert client.open_count == 1
+
+
+def test_fake_balance_failure_degrades_portfolio_sync(tmp_path):
+    client = FakeKrakenRESTClient(add_order_mode=ACCEPT)
+    portfolio = _portfolio_service(client, tmp_path / "portfolio.db")
+    client.fail_balance_reads()
+
+    result = portfolio.sync()
+
+    assert result == {"new_trades": 0, "new_cash_flows": 1}
+    assert portfolio.last_sync_ok is False
+    assert portfolio.last_sync_reason == LIVE_SYNC_DEGRADED_REASON
+
+
+def test_fake_balance_stale_read_returns_prior_snapshot():
+    client = FakeKrakenRESTClient(add_order_mode=ACCEPT)
+    before = client.get_private("Balance")
+    client.stale_balance_reads()
+
+    response = client.add_order(
+        {
+            "pair": "XBTUSD",
+            "type": "buy",
+            "ordertype": "limit",
+            "volume": "1.0",
+            "price": "100.0",
+            "cl_ord_id": "stale-balance-proof",
+        }
+    )
+    txid = response["txid"][0]
+    client.close_order(txid, price=100.0)
+
+    stale = client.get_private("Balance")
+    current = client.get_private("Balance")
+
+    assert stale == before
+    assert current != before
+    assert current["XXBT"] == "1.00000000"
+    assert current["ZUSD"] == "9900.00000000"
+
+
+def test_live_opening_risk_blocked_when_portfolio_sync_degraded(tmp_path):
+    client = FakeKrakenRESTClient(add_order_mode=ACCEPT)
+    store = SQLitePortfolioStore(str(tmp_path / "portfolio.db"))
+    service = _service_with_risk(client, store, _degraded_risk)
+
+    result = service.execute_plan(_plan(plan_id="plan-sync-block"))
+
+    assert result.errors
+    assert len(client.add_order_calls) == 0
+    assert result.orders
+    assert result.orders[0].status == "rejected"
+    assert result.orders[0].last_error == PORTFOLIO_SYNC_ORDER_BLOCKED_MESSAGE
+    assert result.errors == [PORTFOLIO_SYNC_ORDER_BLOCKED_MESSAGE]
+    assert "API Down" not in (result.orders[0].last_error or "")
+    assert "boundary" not in (result.orders[0].last_error or "")
+    assert "opening risk" not in (result.orders[0].last_error or "")
+    assert "account truth" not in (result.orders[0].last_error or "")
+
+
+def test_live_opening_risk_blocked_by_strategy_engine_cached_portfolio_sync(
+    tmp_path,
+):
+    client = FakeKrakenRESTClient(add_order_mode=ACCEPT)
+    db_path = tmp_path / "portfolio.db"
+    portfolio = _portfolio_service(client, db_path)
+    portfolio._last_sync_ok = False
+    portfolio._last_sync_reason = "Live balance reconciliation unavailable: API Down"
+    portfolio._last_sync_at = datetime(2026, 1, 2, 3, 4, tzinfo=UTC)
+    strategy_engine = StrategyEngine(
+        _app_config(str(db_path)),
+        _market_data(),
+        portfolio,
+    )
+    strategy_engine.refresh_runtime_snapshots()
+    service = _service_with_risk(
+        client,
+        portfolio.store,
+        strategy_engine.get_risk_status,
+    )
+
+    result = service.execute_plan(_plan(plan_id="plan-real-provider-sync-block"))
+
+    assert strategy_engine.get_risk_status().portfolio_sync_ok is False
+    assert result.errors
+    assert len(client.add_order_calls) == 0
+    assert result.orders
+    assert result.orders[0].status == "rejected"
+    assert result.orders[0].last_error == PORTFOLIO_SYNC_ORDER_BLOCKED_MESSAGE
+    assert result.errors == [PORTFOLIO_SYNC_ORDER_BLOCKED_MESSAGE]
+    assert "API Down" not in (result.orders[0].last_error or "")
+
+
+def test_live_risk_reducing_action_not_blocked_by_degraded_portfolio_sync(tmp_path):
+    client = FakeKrakenRESTClient(add_order_mode=ACCEPT)
+    store = SQLitePortfolioStore(str(tmp_path / "portfolio.db"))
+    service = _service_with_risk(client, store, _degraded_risk)
+
+    plan = ExecutionPlan(
+        plan_id="plan-reduce-sync-degraded",
+        generated_at=datetime.now(UTC),
+        actions=[
+            _action(
+                action_type="close",
+                current_base_size=1.0,
+                target_base_size=0.0,
+                target_notional_usd=0.0,
+            )
+        ],
+        metadata={"order_type": "limit"},
+        emergency_reduce_only=True,
+    )
+
+    result = service.execute_plan(plan)
+
+    assert not result.errors
+    assert len(client.add_order_calls) == 1
+    assert result.orders
+    assert result.orders[0].status == "open"
+
+
+def test_cancel_all_reaches_fake_kraken_when_portfolio_sync_degraded(tmp_path):
+    client = FakeKrakenRESTClient(add_order_mode=ACCEPT)
+    store = SQLitePortfolioStore(str(tmp_path / "portfolio.db"))
+    service = _service_with_risk(client, store, _degraded_risk)
+
+    service.cancel_all()
+
+    assert client.cancel_all_calls == 1

@@ -20,6 +20,7 @@ from krakked.market_data.exceptions import DataStaleError
 from krakked.market_regime import MarketRegimeSnapshot
 from krakked.portfolio.manager import PortfolioService
 from krakked.portfolio.models import DriftStatus, SpotPosition
+from krakked.portfolio.sync_status import read_portfolio_sync_status
 
 from .allocator import StrategyWeights
 from .models import RiskAdjustedAction, RiskStatus, StrategyIntent
@@ -1272,6 +1273,14 @@ class RiskEngine:
                 asdict(m) for m in ctx.drift_status.mismatched_assets
             ]
 
+        execution_config = getattr(
+            getattr(self.portfolio, "app_config", None), "execution", None
+        )
+        portfolio_sync = read_portfolio_sync_status(
+            self.portfolio,
+            execution_mode=getattr(execution_config, "mode", None),
+        )
+
         return RiskStatus(
             kill_switch_active=self._kill_switch_active
             or self._manual_kill_switch_active,
@@ -1283,4 +1292,7 @@ class RiskEngine:
             per_asset_exposure_pct=per_asset,
             per_strategy_exposure_pct=ctx.per_strategy_exposure_pct,
             market_regime_throttle=self.get_last_market_regime_throttle(),
+            portfolio_sync_ok=portfolio_sync.ok,
+            portfolio_sync_reason=portfolio_sync.reason,
+            portfolio_last_sync_at=portfolio_sync.last_sync_at,
         )

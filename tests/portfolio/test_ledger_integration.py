@@ -7,6 +7,7 @@ import pytest
 from krakked.config import AppConfig
 from krakked.portfolio.manager import PortfolioService
 from krakked.portfolio.models import AssetBalance, LedgerEntry
+from krakked.portfolio.sync_status import LIVE_SYNC_DEGRADED_REASON
 
 
 @pytest.fixture
@@ -151,9 +152,7 @@ def test_offline_reconcile_fallback(service, mock_rest_client):
 
     assert result is False
     assert service.last_sync_ok is False
-    assert (
-        service.last_sync_reason == "Live balance reconciliation unavailable: API Down"
-    )
+    assert service.last_sync_reason == LIVE_SYNC_DEGRADED_REASON
 
 
 def test_sync_marks_degraded_when_live_balance_read_fails(service, mock_rest_client):
@@ -177,8 +176,6 @@ def test_sync_marks_degraded_when_live_balance_read_fails(service, mock_rest_cli
     service.sync()
 
     assert service.last_sync_ok is False
-    assert (
-        service.last_sync_reason == "Live balance reconciliation unavailable: API Down"
-    )
+    assert service.last_sync_reason == LIVE_SYNC_DEGRADED_REASON
     # last_sync_at must NOT advance on a degraded sync; the last good time is preserved.
     assert service.last_sync_at is sentinel

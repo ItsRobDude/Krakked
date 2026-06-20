@@ -52,6 +52,7 @@ from krakked.password_store import (
     get_saved_master_password,
     save_master_password,
 )
+from krakked.portfolio.sync_status import read_portfolio_sync_status
 from krakked.risk_signal import EWMARiskSignalParams, build_ewma_risk_signal
 from krakked.runtime_provenance import build_runtime_provenance
 from krakked.secrets import (
@@ -482,9 +483,10 @@ def _build_system_health_payload(ctx) -> SystemHealthPayload:
         or get_live_trading_block_reason(execution_config) is None
     )
     risk_status = ctx.strategy_engine.get_risk_status()
-    portfolio_sync_ok = bool(getattr(ctx.portfolio, "last_sync_ok", True))
-    portfolio_sync_reason = getattr(ctx.portfolio, "last_sync_reason", None)
-    portfolio_last_sync_at = getattr(ctx.portfolio, "last_sync_at", None)
+    portfolio_sync = read_portfolio_sync_status(
+        ctx.portfolio,
+        execution_mode=getattr(execution_config, "mode", None),
+    )
     portfolio_baseline = getattr(ctx.portfolio, "baseline_source", None)
     return SystemHealthPayload(
         **provenance,
@@ -506,9 +508,9 @@ def _build_system_health_payload(ctx) -> SystemHealthPayload:
         current_mode=execution_config.mode,
         ui_read_only=ctx.config.ui.read_only,
         kill_switch_active=getattr(risk_status, "kill_switch_active", None),
-        portfolio_sync_ok=portfolio_sync_ok,
-        portfolio_sync_reason=portfolio_sync_reason,
-        portfolio_last_sync_at=portfolio_last_sync_at,
+        portfolio_sync_ok=portfolio_sync.ok,
+        portfolio_sync_reason=portfolio_sync.reason,
+        portfolio_last_sync_at=portfolio_sync.last_sync_at,
         portfolio_baseline=portfolio_baseline,
         drift_detected=bool(metrics_snapshot.get("drift_detected")),
         drift_reason=metrics_snapshot.get("drift_reason"),

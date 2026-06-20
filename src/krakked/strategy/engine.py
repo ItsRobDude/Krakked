@@ -20,6 +20,10 @@ from krakked.market_regime import (
 )
 from krakked.portfolio.manager import PortfolioService
 from krakked.portfolio.models import SpotPosition
+from krakked.portfolio.sync_status import (
+    PortfolioSyncStatus,
+    read_portfolio_sync_status,
+)
 from krakked.strategy.regime import RegimeSnapshot, infer_regime
 
 from .allocator import (
@@ -91,6 +95,7 @@ class StrategyEngine:
 
         self.strategies: Dict[str, Strategy] = {}
         self.strategy_states: Dict[str, StrategyState] = {}
+        portfolio_sync = self._portfolio_sync_status()
         self._cached_risk_status = RiskStatus(
             kill_switch_active=False,
             daily_drawdown_pct=0.0,
@@ -99,10 +104,24 @@ class StrategyEngine:
             manual_exposure_pct=0.0,
             per_asset_exposure_pct={},
             per_strategy_exposure_pct={},
+            portfolio_sync_ok=portfolio_sync.ok,
+            portfolio_sync_reason=portfolio_sync.reason,
+            portfolio_last_sync_at=portfolio_sync.last_sync_at,
         )
         self._cached_strategy_state: List[StrategyState] = []
         self.last_cycle_intents: List[StrategyIntent] = []
         self._last_strategy_timeframe_bar_ts: Dict[tuple[str, str], int] = {}
+
+    def _execution_mode(self) -> str | None:
+        execution_config = getattr(self.config, "execution", None)
+        mode = getattr(execution_config, "mode", None)
+        return mode if isinstance(mode, str) else None
+
+    def _portfolio_sync_status(self) -> PortfolioSyncStatus:
+        return read_portfolio_sync_status(
+            self.portfolio,
+            execution_mode=self._execution_mode(),
+        )
 
     def initialize(self) -> None:
         logger.info(
@@ -335,6 +354,7 @@ class StrategyEngine:
                 ],
             }
 
+        portfolio_sync = self._portfolio_sync_status()
         self._cached_risk_status = RiskStatus(
             kill_switch_active=self.risk_engine._kill_switch_active
             or self.risk_engine._manual_kill_switch_active,
@@ -349,6 +369,9 @@ class StrategyEngine:
             per_strategy_exposure_pct=per_strategy_exposure_pct,
             drift_info=drift_info,
             market_regime_throttle=self._last_market_regime_throttle_payload(),
+            portfolio_sync_ok=portfolio_sync.ok,
+            portfolio_sync_reason=portfolio_sync.reason,
+            portfolio_last_sync_at=portfolio_sync.last_sync_at,
         )
         self._cached_strategy_state = [
             StrategyState(

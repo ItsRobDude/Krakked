@@ -15,6 +15,10 @@ from krakked.market_data.api import MarketDataAPI
 from krakked.market_data.exceptions import DataStaleError
 from krakked.market_data.models import OHLCBar
 from krakked.portfolio.models import SpotPosition
+from krakked.portfolio.sync_status import (
+    LIVE_SYNC_COLD_START_REASON,
+    LIVE_SYNC_DEGRADED_REASON,
+)
 from krakked.strategy.base import Strategy
 from krakked.strategy.engine import StrategyRiskEngine
 from krakked.strategy.evaluation import StrategyEvaluationResult
@@ -1809,11 +1813,13 @@ def test_build_emergency_flatten_plan():
     assert any(a.strategy_id == "manual" for a in plan.actions)
 
 
-def _data_ready_engine(portfolio):
+def _data_ready_engine(portfolio, *, execution_mode: str | None = None):
     app_config = MagicMock(spec=AppConfig)
     app_config.strategies = StrategiesConfig(enabled=[], configs={})
     app_config.risk = RiskConfig()
     app_config.universe = SimpleNamespace(include_pairs=["XBTUSD"], exclude_pairs=[])
+    if execution_mode is not None:
+        app_config.execution = SimpleNamespace(mode=execution_mode)
 
     market = MagicMock(spec=MarketDataAPI)
     market.get_data_status.return_value = MagicMock(
@@ -1828,7 +1834,7 @@ def test_data_ready_fails_closed_when_account_truth_unavailable():
     """_data_ready returns False when sync leaves last_sync_ok False without raising."""
     portfolio = make_portfolio_service_mock()
     portfolio.last_sync_ok = False
-    portfolio.last_sync_reason = "Live balance reconciliation unavailable: API Down"
+    portfolio.last_sync_reason = LIVE_SYNC_DEGRADED_REASON
 
     engine = _data_ready_engine(portfolio)
 
@@ -1844,3 +1850,54 @@ def test_data_ready_true_when_sync_verified():
 
     assert engine._data_ready() is True
     portfolio.sync.assert_called_once()
+
+
+def test_cached_risk_status_includes_live_degraded_portfolio_sync():
+    portfolio = make_portfolio_service_mock()
+    portfolio.last_sync_ok = False
+    portfolio.last_sync_reason = LIVE_SYNC_DEGRADED_REASON
+    portfolio.last_sync_at = datetime(2026, 1, 2, 3, 4, tzinfo=timezone.utc)
+
+    engine = _data_ready_engine(portfolio)
+    engine.config.execution = SimpleNamespace(mode="live")
+    engine.refresh_runtime_snapshots()
+
+    status = engine.get_risk_status()
+
+    assert status.portfolio_sync_ok is False
+    assert status.portfolio_sync_reason == LIVE_SYNC_DEGRADED_REASON
+    assert status.portfolio_last_sync_at == datetime(
+        2026, 1, 2, 3, 4, tzinfo=timezone.utc
+    )
+
+
+def test_cached_risk_status_treats_live_cold_start_as_degraded():
+    portfolio = make_portfolio_service_mock()
+    portfolio.last_sync_ok = True
+    portfolio.last_sync_reason = None
+    portfolio.last_sync_at = None
+
+    engine = _data_ready_engine(portfolio)
+    engine.config.execution = SimpleNamespace(mode="live")
+    engine.refresh_runtime_snapshots()
+
+    status = engine.get_risk_status()
+
+    assert status.portfolio_sync_ok is False
+    assert status.portfolio_sync_reason == LIVE_SYNC_COLD_START_REASON
+    assert status.portfolio_last_sync_at is None
+
+
+def test_initial_cached_risk_status_treats_live_cold_start_as_degraded():
+    portfolio = make_portfolio_service_mock()
+    portfolio.last_sync_ok = True
+    portfolio.last_sync_reason = None
+    portfolio.last_sync_at = None
+
+    engine = _data_ready_engine(portfolio, execution_mode="live")
+
+    status = engine.get_risk_status()
+
+    assert status.portfolio_sync_ok is False
+    assert status.portfolio_sync_reason == LIVE_SYNC_COLD_START_REASON
+    assert status.portfolio_last_sync_at is None

@@ -5,6 +5,7 @@ from krakked.config import PortfolioConfig
 from krakked.market_data.exceptions import PairNotFoundError
 from krakked.portfolio.manager import PortfolioService
 from krakked.portfolio.portfolio import Portfolio
+from krakked.portfolio.sync_status import LIVE_SYNC_DEGRADED_REASON
 
 
 def _build_service(store, portfolio, api_client):
@@ -129,7 +130,7 @@ def test_sync_keeps_degraded_when_live_reconcile_unavailable():
     service._last_sync_at = previous_sync_at
 
     def _reconcile_unavailable():
-        service._last_sync_reason = "Live balance reconciliation unavailable: API Down"
+        service._last_sync_reason = LIVE_SYNC_DEGRADED_REASON
         return False
 
     service._reconcile.side_effect = _reconcile_unavailable
@@ -138,9 +139,7 @@ def test_sync_keeps_degraded_when_live_reconcile_unavailable():
 
     assert result == {"new_trades": 0, "new_cash_flows": 0}
     assert service.last_sync_ok is False
-    assert (
-        service.last_sync_reason == "Live balance reconciliation unavailable: API Down"
-    )
+    assert service.last_sync_reason == LIVE_SYNC_DEGRADED_REASON
     assert service.last_sync_at is previous_sync_at
     service._refresh_cached_views.assert_called_once()
 

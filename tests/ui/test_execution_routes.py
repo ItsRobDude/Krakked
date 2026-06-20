@@ -267,7 +267,7 @@ def test_flatten_all_blocks_when_account_truth_unavailable(client, exec_context)
         assert "Can't verify your account right now" in data["error"]
         assert "will not place close orders blind" in data["error"]
         assert "close directly on Kraken" in data["error"]
-        assert "account truth unavailable" in data["error"]
+        assert "account sync unavailable" in data["error"]
         exec_context.execution_service.cancel_all.assert_called_once()
         exec_context.strategy_engine.build_emergency_flatten_plan.assert_not_called()
         exec_context.execution_service.execute_plan.assert_not_called()

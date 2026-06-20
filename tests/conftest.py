@@ -27,4 +27,8 @@ if missing:
 def inactive_risk_status():
     """Returns a callable that reports an inactive kill switch."""
 
-    return lambda: SimpleNamespace(kill_switch_active=False)
+    return lambda: SimpleNamespace(
+        kill_switch_active=False,
+        portfolio_sync_ok=True,
+        portfolio_sync_reason=None,
+    )

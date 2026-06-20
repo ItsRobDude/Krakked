@@ -31,14 +31,17 @@ the repo contains a deterministic proof that the behavior binds under failure.
 
 Current trust level: Level 0, research and paper only.
 
-- Milestone A, fake Kraken and fault harness: started. An initial
-  order-lifecycle fake exists for OMS/adapter/SQLite proofs; account balances,
-  trades, ledgers, partial fills, and stale-read modeling remain missing.
+- Milestone A, fake Kraken and fault harness: started. The deterministic fake
+  now covers one coherent AddOrder/OpenOrders/ClosedOrders/Balance/
+  TradesHistory/Ledgers lifecycle, including full fills, partial fills, and
+  deterministic balance read failures/stale reads for a single narrow account
+  scenario.
 - Milestones B-E, order lifecycle, reconciliation, risk limits, and emergency
   operations: building blocks exist. Milestone B now has an initial passing
-  proof for AddOrder response-loss duplicate-submit prevention plus manual
-  `submit_unknown` recovery tooling, but broader crash/restart, fill, balance,
-  reconciliation, and emergency-operation proofs remain incomplete.
+  proof for AddOrder response-loss duplicate-submit prevention, manual
+  `submit_unknown` recovery tooling, and one restart/closed-order/portfolio-sync
+  reconciliation drill. Broader process-death, cancel timing, stale-read, and
+  emergency-operation proofs remain incomplete.
 - Milestone F, data continuity: continuity tooling exists, but strict replay
   gates do not yet consume continuity gaps directly.
 - Milestone G, paper soak, validate-only drill, and tiny live smoke: first
@@ -48,13 +51,15 @@ Current trust level: Level 0, research and paper only.
 
 Known live blockers:
 
-- fake Kraken/fault harness is still order-lifecycle-only and does not yet model
-  full account state, fills, trades, ledgers, or stale reads;
+- fake Kraken/fault harness now models one coherent account/fill/trade/ledger
+  path, but it is intentionally narrow and does not yet cover broad exchange
+  behavior, multiple pairs/assets, or stale reads across the full lifecycle;
 - crash-safe submit-intent behavior is only proven for the initial AddOrder
   response-loss scenario; broader process-death and reconciliation drills remain
   incomplete;
-- live balance fetch failure can still fall back to local ledger state in some
-  paths;
+- live Balance unavailability and never-synced live cold start now keep
+  portfolio sync degraded and block normal-loop/live-opening-risk paths, but
+  stale-sync age and relative drift policy still need explicit live gates;
 - out-of-band alerting is only proved for `submit_unknown` and blocked opening
   risk; broader fail-closed alert scenarios remain unproved;
 - no quantified live reconciliation staleness policy or relative drift
@@ -311,17 +316,20 @@ Current building blocks:
   narrow places;
 - OMS and portfolio services can receive injected clients/stores;
 - `tests/fakes/fake_kraken.py` now provides an initial deterministic fake for
-  AddOrder, OpenOrders, ClosedOrders, cancellation, and selected submit faults;
+  AddOrder, OpenOrders, ClosedOrders, Balance, TradesHistory, Ledgers,
+  cancellation, selected submit faults, coherent fills, partial fills, and
+  deterministic Balance failure/stale-read knobs;
 - `tests/test_money_safety_order_lifecycle.py` drives real OMS, real execution
   adapter, and real SQLite store through that fake.
 
 Remaining proof gap:
 
-- the current fake is enough for initial order-lifecycle proofs, but it does not
-  yet model account balances, trades, ledgers, partial fills, stale reads, or
-  portfolio reconciliation behavior together;
-- strict failing tests currently prove the duplicate-submit and restart recovery
-  gaps rather than proving the final safe behavior.
+- the current fake proves one coherent account lifecycle only; it is not a
+  broad exchange simulator and does not cover multiple assets, cross-pair fills,
+  cancel/fill races, paginated stale reads, or every process-death timing;
+- strict tests now prove duplicate-submit prevention, one restart reconcile,
+  partial-fill state, Balance failure degradation, and the OMS portfolio-sync
+  opening-risk gate.
 
 Done when:
 
@@ -362,15 +370,17 @@ Current building blocks:
 - execution orders and results are saved to SQLite;
 - bootstrap loads persisted open orders and refreshes/reconciles order state;
 - tests now cover remote-accepted/local-response-lost duplicate-submit
-  prevention, restart recovery, generic submit uncertainty, and known
-  no-accept retry boundaries.
+  prevention, restart recovery, generic submit uncertainty, known no-accept
+  retry boundaries, and one closed-order/fill restart reconciliation path
+  through OMS, SQLite, portfolio trade/ledger ingestion, and live Balance
+  reconciliation.
 
 Proof gap:
 
 - `userref` helps attribution and recovery, but it is not full idempotency;
-- the initial proof covers AddOrder response loss and service-unavailable
-  ambiguity, but not every process-death point, fill timing, cancel timing, or
-  stale exchange-read case;
+- the initial proof covers AddOrder response loss, service-unavailable
+  ambiguity, and one post-restart closed-order reconciliation, but not every
+  process-death point, fill timing, cancel timing, or stale exchange-read case;
 - submit-intent state is persisted in the existing execution order table, and
   manual confirmed-absent clearing exists, but broader lifecycle drills still
   need to prove it across additional failure points;
@@ -409,13 +419,17 @@ Current building blocks:
 
 Proof gap:
 
-- failed balance fetch currently falls back to local ledger state in some paths;
-  this is a known live-dangerous defect, not just a missing proof;
-- live readiness is mostly operator-facing and not always an execution gate;
+- failed live Balance fetch and never-synced live cold start now leave portfolio
+  sync degraded rather than reporting local ledger state as live truth;
+- live readiness and the normal strategy loop block on degraded portfolio sync,
+  and the OMS now blocks direct live opening-risk submissions before adapter
+  submission through the production cached risk-status provider when the risk
+  status reports unavailable account truth;
 - stale sync age and last successful reconciliation need explicit live policy;
 - relative drift tolerance needs explicit live policy alongside the existing
   absolute `portfolio.reconciliation_tolerance` setting;
-- the exact blocking behavior needs end-to-end tests.
+- broader stale-read, stale-sync-age, and material-drift blocking behavior still
+  needs end-to-end tests.
 
 Initial live reconciliation policy to implement and prove:
 
@@ -607,24 +621,27 @@ Explicit non-goals:
 
 ## Immediate Next Slice
 
-The initial AddOrder response-loss and submit-unknown hardening proofs are now
-green. The next engineering slice should widen the same fake-exchange harness
-toward reconciliation evidence without claiming full live readiness.
+The initial AddOrder response-loss, submit-unknown, and one coherent
+fill/restart/portfolio-sync reconciliation proof are now green. The next
+engineering slice should keep using the fake-exchange harness, but move from
+"can we reconcile one filled order?" to "do live gates bind when account truth
+is stale or mismatched?"
 
 Recommended next behavior slice:
 
-1. Extend the fake Kraken harness to model balances, trades, ledgers, partial
-   fills, closed-order records, and stale reads for one narrow scenario.
-2. Prove live balance/reconciliation failures block new opening risk while
-   preserving cancel/reduce-only emergency paths.
-3. Replace any live balance-fetch fallback to local ledger state with a
-   fail-closed status before new opening risk can be submitted.
-4. Keep the scenario small: one pair, one order, one mismatch or stale-read
-   condition, one expected block.
+1. Add an explicit live sync-age policy and block new live opening risk when the
+   last successful reconciliation is too old.
+2. Add a relative drift threshold beside the existing absolute reconciliation
+   tolerance and prove material drift blocks new opening risk.
+3. Prove stale Balance/TradesHistory/Ledgers reads degrade or block according to
+   the written policy, rather than silently reporting healthy state.
+4. Keep cancel-all available under degraded truth and keep position-closing
+   emergency flatten blocked unless fresh account truth is available.
 
-That slice should advance Milestone C. It should not broaden into dashboard UI,
-strategy promotion, extra alert scenarios, or data-continuity scoreboards until
-the reconciliation gate has a deterministic failing/passing proof.
+That slice should advance Milestone C. It should not broaden into strategy
+promotion, extra alert scenarios, multi-pair simulation, or data-continuity
+scoreboards until reconciliation age and drift gates have deterministic
+failing/passing proofs.
 
 ## Documentation Rules For Future Work
 
@@ -648,7 +665,7 @@ When adding or modifying money-safety behavior:
 Do not prioritize another strategy scoreboard as the next money-safety task.
 Do not prioritize live UI polish as the next money-safety task.
 
-Prioritize the fake Kraken/fault harness and the first crash/restart order
-lifecycle proof. Once that is in place, the remaining safety proof milestones can
-be implemented as meaningful tests instead of scattered mocks and optimistic
-operator notes.
+Prioritize stale-sync and material-drift gates on top of the fake Kraken/fault
+harness. The first crash/restart order lifecycle proof is in place; the next
+risk is stale or mismatched account truth being treated as permission to open
+new live exposure.

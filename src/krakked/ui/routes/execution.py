@@ -265,7 +265,7 @@ async def flatten_all_positions(
         if open_orders:
             details.append(f"{len(open_orders)} open orders remaining")
         if not sync_ok:
-            details.append("account truth unavailable")
+            details.append("account sync unavailable")
 
         if not sync_ok:
             msg = (

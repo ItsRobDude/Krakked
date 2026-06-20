@@ -74,6 +74,9 @@ class RiskStatusPayload(BaseModel):
     per_strategy_exposure_pct: Dict[str, float]
     drift_info: Optional[Dict[str, Any]] = None
     market_regime_throttle: Optional[Dict[str, Any]] = None
+    portfolio_sync_ok: bool = True
+    portfolio_sync_reason: Optional[str] = None
+    portfolio_last_sync_at: Optional[datetime] = None
 
 
 class RiskDecisionPayload(BaseModel):
