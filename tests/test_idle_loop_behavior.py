@@ -118,6 +118,61 @@ def test_emergency_flatten_runs_while_inactive():
     assert updated_cycle == now
 
 
+def test_emergency_flatten_defers_when_account_truth_unavailable():
+    """Emergency flatten must not place close orders without verified account truth."""
+    now = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    portfolio_interval = 1
+    strategy_interval = 1
+    last_portfolio_sync = now - timedelta(seconds=2)
+    last_strategy_cycle = now - timedelta(seconds=2)
+
+    portfolio = MagicMock()
+    portfolio.last_sync_ok = True
+    portfolio.last_sync_reason = None
+    portfolio.get_positions.return_value = ["dummy_pos"]
+
+    def _sync_unavailable():
+        portfolio.last_sync_ok = False
+        portfolio.last_sync_reason = "Live balance reconciliation unavailable: API Down"
+
+    portfolio.sync.side_effect = _sync_unavailable
+
+    execution_service = MagicMock()
+    execution_service.get_open_orders.return_value = []
+
+    strategy_engine = MagicMock()
+    metrics = MagicMock()
+    refresh_metrics_state = MagicMock()
+    market_data = MagicMock()
+    session = SimpleNamespace(emergency_flatten=True)
+
+    updated_sync, updated_cycle = _run_loop_iteration(
+        now=now,
+        strategy_interval=strategy_interval,
+        portfolio_interval=portfolio_interval,
+        last_strategy_cycle=last_strategy_cycle,
+        last_portfolio_sync=last_portfolio_sync,
+        portfolio=portfolio,
+        market_data=market_data,
+        strategy_engine=strategy_engine,
+        execution_service=execution_service,
+        metrics=metrics,
+        refresh_metrics_state=refresh_metrics_state,
+        session_active=False,
+        session=session,
+    )
+
+    execution_service.cancel_all.assert_called()
+    execution_service.refresh_open_orders.assert_called()
+    execution_service.reconcile_orders.assert_called()
+    strategy_engine.build_emergency_flatten_plan.assert_not_called()
+    execution_service.execute_plan.assert_not_called()
+    assert session.emergency_flatten is True
+    assert updated_sync == last_portfolio_sync
+    assert updated_cycle == last_strategy_cycle
+    refresh_metrics_state.assert_called()
+
+
 def test_emergency_flatten_clears_on_dust_only():
     """Test C: Emergency flatten clears when plan actions are empty (dust only)."""
     now = datetime(2024, 1, 1, tzinfo=timezone.utc)

@@ -246,6 +246,35 @@ def test_flatten_all_fails_if_open_orders_remain(client, exec_context):
         mock_dump.assert_called_once()
 
 
+def test_flatten_all_blocks_when_account_truth_unavailable(client, exec_context):
+    """Do not place close orders when live account truth cannot be verified."""
+    exec_context.execution_service.cancel_all.return_value = None
+    exec_context.execution_service.get_open_orders.return_value = []
+    exec_context.portfolio.last_sync_ok = False
+    exec_context.portfolio.last_sync_reason = (
+        "Live balance reconciliation unavailable: API Down"
+    )
+
+    with patch("krakked.ui.routes.execution.dump_runtime_overrides") as mock_dump:
+        response = client.post(
+            "/api/execution/flatten_all", json={"confirmation": "FLATTEN ALL"}
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+
+        assert data["error"] is not None
+        assert "Can't verify your account right now" in data["error"]
+        assert "will not place close orders blind" in data["error"]
+        assert "close directly on Kraken" in data["error"]
+        assert "account truth unavailable" in data["error"]
+        exec_context.execution_service.cancel_all.assert_called_once()
+        exec_context.strategy_engine.build_emergency_flatten_plan.assert_not_called()
+        exec_context.execution_service.execute_plan.assert_not_called()
+        assert exec_context.session.emergency_flatten is True
+        mock_dump.assert_called_once()
+
+
 @pytest.mark.parametrize("ui_read_only", [False])
 def test_flatten_all_handles_dust_only(client, exec_context):
     """Verify flatten_all returns success and warnings without arming emergency mode if only dust remains."""

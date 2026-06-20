@@ -116,6 +116,12 @@ def _get_portfolio_drift(portfolio: PortfolioService) -> Optional[DriftStatus]:
     return None
 
 
+# When live account truth is unavailable, retry the portfolio sync this often instead
+# of waiting the full portfolio interval, so the session recovers quickly without
+# hammering a failing/rate-limited Kraken API every loop iteration.
+DEGRADED_PORTFOLIO_SYNC_RETRY_SECONDS = 60
+
+
 def _run_loop_iteration(
     *,
     now: datetime,
@@ -240,6 +246,7 @@ def _run_loop_iteration(
                     cancel_ok=cancel_ok,
                     open_orders=open_orders_count,
                     last_sync_ok=portfolio.last_sync_ok,
+                    last_sync_reason=getattr(portfolio, "last_sync_reason", None),
                 ),
             )
             refresh_metrics_state()
@@ -268,7 +275,19 @@ def _run_loop_iteration(
     if not session_active:
         return updated_portfolio_sync, updated_strategy_cycle
 
-    if (now - last_portfolio_sync).total_seconds() >= portfolio_interval:
+    # When account truth is unavailable we retry sooner than the full interval so the
+    # session recovers quickly once Kraken is reachable again, but not every loop tick
+    # (which would hammer an already-failing or rate-limited API).
+    sync_due_interval = portfolio_interval
+    if not portfolio.last_sync_ok:
+        sync_due_interval = min(
+            DEGRADED_PORTFOLIO_SYNC_RETRY_SECONDS, portfolio_interval
+        )
+
+    if (now - last_portfolio_sync).total_seconds() >= sync_due_interval:
+        # Advance the sync timestamp on the attempt itself, not only on a verified
+        # success, so a persistent failure does not re-fire the full sync every loop.
+        updated_portfolio_sync = now
         try:
             portfolio.sync()
             if portfolio.last_sync_ok:
@@ -288,7 +307,6 @@ def _run_loop_iteration(
                     )
                     metrics.record_error(f"Order reconciliation failed: {exc}")
 
-                updated_portfolio_sync = now
                 refresh_metrics_state()
         except Exception as exc:  # pragma: no cover - defensive logging
             logger.error("Portfolio sync failed: %s", exc)

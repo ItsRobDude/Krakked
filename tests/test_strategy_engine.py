@@ -1807,3 +1807,40 @@ def test_build_emergency_flatten_plan():
     assert {a.pair for a in plan.actions} == {"XBTUSD", "ETHUSD"}
     assert any(a.strategy_id == "trend" for a in plan.actions)
     assert any(a.strategy_id == "manual" for a in plan.actions)
+
+
+def _data_ready_engine(portfolio):
+    app_config = MagicMock(spec=AppConfig)
+    app_config.strategies = StrategiesConfig(enabled=[], configs={})
+    app_config.risk = RiskConfig()
+    app_config.universe = SimpleNamespace(include_pairs=["XBTUSD"], exclude_pairs=[])
+
+    market = MagicMock(spec=MarketDataAPI)
+    market.get_data_status.return_value = MagicMock(
+        rest_api_reachable=True,
+        websocket_connected=True,
+        stale_pairs=0,
+    )
+    return StrategyRiskEngine(app_config, market, portfolio)
+
+
+def test_data_ready_fails_closed_when_account_truth_unavailable():
+    """_data_ready returns False when sync leaves last_sync_ok False without raising."""
+    portfolio = make_portfolio_service_mock()
+    portfolio.last_sync_ok = False
+    portfolio.last_sync_reason = "Live balance reconciliation unavailable: API Down"
+
+    engine = _data_ready_engine(portfolio)
+
+    assert engine._data_ready() is False
+    portfolio.sync.assert_called_once()
+
+
+def test_data_ready_true_when_sync_verified():
+    portfolio = make_portfolio_service_mock()
+    portfolio.last_sync_ok = True
+
+    engine = _data_ready_engine(portfolio)
+
+    assert engine._data_ready() is True
+    portfolio.sync.assert_called_once()

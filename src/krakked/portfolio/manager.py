@@ -265,8 +265,14 @@ class PortfolioService:
             new_cash_flows = self._sync_ledgers()
 
             # 3. Reconcile
-            self._reconcile()
+            reconcile_ok = self._reconcile()
             self._refresh_cached_views()
+            if not reconcile_ok:
+                return {
+                    "new_trades": new_trade_count,
+                    "new_cash_flows": new_cash_flows,
+                }
+
             self._last_sync_ok = True
             self._last_sync_reason = None
             self._last_sync_at = datetime.now(timezone.utc)
@@ -679,19 +685,22 @@ class PortfolioService:
 
         return len(cash_flow_records)
 
-    def _reconcile(self):
+    def _reconcile(self) -> bool:
         """Fetch live balances and flag drift."""
         try:
             balance_resp = self.rest_client.get_private("Balance")
-        except Exception:  # noqa: BLE001
-            # Offline mode: use local balances
+        except Exception as exc:  # noqa: BLE001
+            reason = f"Live balance reconciliation unavailable: {exc}"
+            self._last_sync_ok = False
+            self._last_sync_reason = reason
             logger.warning(
-                "Failed to fetch live balance. Using local ledger balances.",
-                extra=structured_log_extra(event="portfolio_offline_mode"),
+                "Live balance reconciliation unavailable; local ledger balances are display-only until Kraken balances can be verified.",
+                extra=structured_log_extra(
+                    event="portfolio_truth_unavailable",
+                    error=str(exc),
+                ),
             )
-            # Drift is not checked since we have no source of truth
-            # But we can still report status
-            return
+            return False
 
         drift_detected = self.portfolio.reconcile(balance_resp)
 
@@ -705,6 +714,7 @@ class PortfolioService:
                 "Portfolio Drift Detected during reconciliation.",
                 extra=structured_log_extra(event="portfolio_drift_detected"),
             )
+        return True
 
     def record_decision(self, record: "DecisionRecord"):
         """
