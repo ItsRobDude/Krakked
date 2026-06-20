@@ -1,6 +1,6 @@
 # Operator Trust And Normal Trading Next Steps
 
-Date: 2026-06-16
+Date: 2026-06-20
 
 ## Current Truth
 
@@ -32,8 +32,17 @@ Known current facts:
   continuous from `2025-12-01` through the current tail. `1h` still has an
   April/May 2026 gap, so default 1h strategy scoreboards remain legitimately
   data-blocked until deeper history is imported.
+- Closed-bar/no-signal strategy diagnostics and explicit starter strategy
+  parameters have landed, so the next useful paper run should be a validation
+  pass rather than a discovery run for why strategies were silent.
+- Live balance reconciliation now fails closed when Kraken balances are
+  unavailable, and never-synced live startup blocks live opening risk until
+  portfolio sync verifies the account.
+- The fake Kraken harness now proves one narrow
+  AddOrder/OpenOrders/ClosedOrders/Balance/TradesHistory/Ledgers lifecycle with
+  full fill, partial fill, restart reconciliation, and degraded-balance cases.
 
-Implemented in the local working tree after this note was first drafted:
+Recently landed operator UX work:
 
 - The stopped-session startup screen now shows live readiness when Live is
   selected and keeps Start disabled only when backend readiness reports real
@@ -85,13 +94,13 @@ Verification commands used for this local lane:
 - `poetry run pytest tests/ui/test_system_routes.py -k "cockpit_snapshot"`
 - `npm run test:run -- App.operator-paths.test.tsx`
 
-## Next Lane: Normal Trading Reliability
+## Next Lane: Account-Truth Reliability
 
-Before optimizing strategy knobs, prove the normal loop is boring. The first
-paper soak covered the lifecycle part of this lane, but exposed that the active
-strategy loop was mostly alive-without-useful-decisions. The next paper run
-should either produce meaningful strategy/risk/OMS evidence or clearly explain
-why no enabled strategy can evaluate.
+Before optimizing strategy knobs or planning live smoke, prove that Krakked does
+not treat stale or mismatched account state as permission to open new live risk.
+The first paper soak covered runtime lifecycle; the later diagnostics and fake
+Kraken work made strategy silence and one order lifecycle more legible. The
+next technical lane is now account-truth freshness and drift policy.
 
 Completed first-run evidence:
 
@@ -106,19 +115,25 @@ Completed first-run evidence:
 
 Remaining proof targets:
 
-- Distinguish active strategy closed-bar deferrals, missing data, true stale
-  data, and no-signal decisions in operator-facing diagnostics.
-- Verify strategy decisions, risk blocks/clamps, OMS records, portfolio
-  snapshots, and UI snapshot freshness during a decision-useful paper run.
-- Exercise strategy toggle and weight-change behavior during the soak.
+- Add an explicit live sync-age policy and block new live opening risk when the
+  last successful reconciliation is too old.
+- Add a relative/material drift threshold beside the existing absolute
+  reconciliation tolerance and prove material drift blocks live opening risk.
+- Prove stale `Balance`, `TradesHistory`, and `Ledgers` reads degrade or block
+  according to the written policy.
+- Verify strategy diagnostics, risk blocks/clamps, OMS records, portfolio
+  snapshots, and UI snapshot freshness during a short follow-up paper run.
+- Exercise strategy toggle and weight-change behavior during that validation
+  run.
 - Re-run emergency flatten with seeded synthetic positions and open-order state.
 - Make backup/export profile-aware, or expose the active DB path clearly enough
   that operators cannot export the wrong database by default.
 - Decide whether the Unraid Docker healthcheck should be hardened or replaced by
   an app-level operator signal.
 
-This is the bridge between "the code works" and "I would trust this appliance to
-run unattended."
+This is the bridge between "one deterministic lifecycle proof exists" and "I
+would trust this appliance to refuse new live risk when account truth is old,
+missing, or mismatched."
 
 For the stricter money-safety proof contract, use
 [`money-safety-proof-plan.md`](./money-safety-proof-plan.md). That document is
@@ -166,10 +181,16 @@ For strategy evidence:
 
 ## Recommended Order
 
-1. Land closed-bar/no-signal strategy diagnostics from the 2026-06-19 soak.
-2. Keep explicit starter strategy params in profile/config.
-3. Re-run a decision-useful paper soak on the pinned-image host.
-4. One strict evidence scoreboard after Q2 `1h` history exists, or a deliberate
-   4h-only hypothesis if the strategy truly operates on 4h.
-5. Only then consider tiny live smoke testing with conservative caps and a
-   written stop condition.
+1. Implement stale-sync age and relative/material drift gates on top of the
+   fake Kraken reconciliation harness.
+2. Prove stale `Balance`, `TradesHistory`, and `Ledgers` reads follow the
+   written account-truth policy instead of silently reporting healthy state.
+3. Run a short pinned-image paper validation pass to confirm the new diagnostics
+   and explicit starter profile render sanely. This is not a 24-hour soak unless
+   it uncovers lifecycle questions again.
+4. Clean up the remaining operator affordances from the soak: Docker health
+   signal, pause/resume wording, restart no-auto-resume wording, and
+   profile-aware backup/export.
+5. Only after account-truth gates and operator drills are boring should tiny
+   live smoke testing be considered, with conservative caps and a written stop
+   condition.

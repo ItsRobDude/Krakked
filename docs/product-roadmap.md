@@ -82,6 +82,16 @@ Implemented or substantially in place:
 - Backup, export, import, and upgrade-oriented operator tooling
 - Operator cockpit shell that now prefers one cockpit snapshot, partial rendering, and local section degradation over global loading deadlocks
 - Paper mode now uses a profile-scoped persistent synthetic wallet, with live exchange balances kept only as optional reference context
+- Strategy-silence diagnostics now distinguish closed-bar deferrals, missing
+  data, stale data, strategy errors, no-signal decisions, and emitted intents
+  for enabled starter strategies
+- Live Balance reconciliation failure and never-synced live startup now degrade
+  portfolio sync and block live opening risk through the normal loop and OMS
+  gate
+- The fake Kraken harness now proves one narrow coherent
+  AddOrder/OpenOrders/ClosedOrders/Balance/TradesHistory/Ledgers lifecycle,
+  including full fill, partial fill, restart reconciliation, and balance-read
+  degradation
 - Strategy-source evidence currently does not support runtime promotion for the tested bundled/source candidates
 - Strict cached `4h` and `1d` OHLC now covers `BTC/USD`, `ETH/USD`,
   `SOL/USD`, and `ADA/USD` from `2025-12-01` through the current tail; `1h`
@@ -101,6 +111,7 @@ Still needing real-world validation or product work:
 - Unified strategy evidence reporting with explicit cost semantics and
   cash/buy-hold comparisons
 - Live-trading readiness drills and operator runbooks after paper/execution reliability is proven
+- Stale-sync age and relative/material drift gates before any live-capital claim
 - Live automation UX polish so a prepared operator can start live automation
   from the UI with one obvious start action after readiness is visible.
 - Commercial packaging, licensing, and legal/business review
@@ -111,6 +122,10 @@ Krakked is now closer to an operator-facing control room than a hobby bot shell,
 
 - Paper mode is a local persistent synthetic wallet that can exercise the strategy, risk, OMS, and portfolio loops without transmitting live orders.
 - Exchange balances are now optional reference context in paper mode, not the paper account baseline.
+- In live mode, missing or failed balance reconciliation is treated as degraded
+  account truth and blocks new opening risk. That is not the same as full live
+  readiness: stale sync age and material drift thresholds still need explicit
+  gates.
 - Current strategy-source evidence does not yet support runtime promotion of `rs_rotation`, `rs_rotation_v2`, `trend_core` signal-quality claims, global top-N momentum proxies, or pair-local source variants.
 - ML remains in scope as infrastructure, but the current volatility-forecasting
   lane is closed for runtime influence: the 2026-06-16 strict rerun was ready
@@ -199,9 +214,14 @@ The next milestones are product-facing rather than architecture-facing:
 3. Reliability and Live-Readiness Plumbing
    - Formalize operational runbooks and pre-live checklists.
    - Tighten live-mode guidance, safety prompts, and emergency control flows.
-   - Add a normal-trading soak path: active paper session, restart persistence,
-     strategy/control changes, pause/resume, and fresh backup before any small
-     live smoke.
+   - Add stale-sync age and relative/material drift gates so old or mismatched
+     account truth cannot permit new live opening risk.
+   - Keep extending the fake Kraken/fault harness only around production seams
+     needed to prove reconciliation, stale reads, failed reads, and restart
+     recovery.
+   - Use short paper validation passes to confirm diagnostics, strategy/control
+     changes, pause/resume, and fresh backup behavior before any small live
+     smoke.
    - Practice rollback, restore, and upgrade drills on realistic deployments.
    - Make the startup/unlock/session lifecycle trustworthy enough that operators can confidently distinguish slow warmup from a real fault.
 
