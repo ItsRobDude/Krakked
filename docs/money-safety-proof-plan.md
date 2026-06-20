@@ -685,9 +685,17 @@ When adding or modifying money-safety behavior:
 ## Current Recommendation
 
 Do not prioritize another strategy scoreboard as the next money-safety task.
-Do not prioritize live UI polish as the next money-safety task.
+Do not prioritize broad live UI polish as the next money-safety task.
 
-Prioritize stale-sync and material-drift gates on top of the fake Kraken/fault
-harness. The first crash/restart order lifecycle proof is in place; the next
-risk is stale or mismatched account truth being treated as permission to open
-new live exposure.
+The stale-sync/material-drift account-truth gates now have a narrow
+deterministic proof. Prioritize a short decision-useful paper validation pass on
+the pinned-image install. That pass should prove whether the newly legible
+strategy diagnostics, live-readiness blockers, portfolio sync age, drift state,
+OMS records, and portfolio snapshots make sense to an operator in a real paper
+session.
+
+If that validation is boring, move next to the deterministic emergency-flatten
+drill with seeded synthetic positions, open orders, partial fills, restart, and
+reconciliation checks. If the validation is confusing, fix the operator copy,
+runtime state, or profile/export affordance that made it confusing before
+adding another safety subsystem.

@@ -35,12 +35,14 @@ Known current facts:
 - Closed-bar/no-signal strategy diagnostics and explicit starter strategy
   parameters have landed, so the next useful paper run should be a validation
   pass rather than a discovery run for why strategies were silent.
-- Live balance reconciliation now fails closed when Kraken balances are
-  unavailable, and never-synced live startup blocks live opening risk until
-  portfolio sync verifies the account.
+- Live Balance, TradesHistory, Ledgers, never-synced startup, stale sync age,
+  missing trade-history evidence, and material drift now degrade account truth
+  and block live opening risk through the normal loop and OMS gate.
 - The fake Kraken harness now proves one narrow
   AddOrder/OpenOrders/ClosedOrders/Balance/TradesHistory/Ledgers lifecycle with
-  full fill, partial fill, restart reconciliation, and degraded-balance cases.
+  full fill, partial fill, restart reconciliation, degraded private reads, and
+  the trade-ledger `refid` to TradesHistory ID assumption used by the
+  account-truth gate.
 
 Recently landed operator UX work:
 
@@ -94,13 +96,14 @@ Verification commands used for this local lane:
 - `poetry run pytest tests/ui/test_system_routes.py -k "cockpit_snapshot"`
 - `npm run test:run -- App.operator-paths.test.tsx`
 
-## Next Lane: Account-Truth Reliability
+## Next Lane: Decision-Useful Paper Validation
 
-Before optimizing strategy knobs or planning live smoke, prove that Krakked does
-not treat stale or mismatched account state as permission to open new live risk.
-The first paper soak covered runtime lifecycle; the later diagnostics and fake
-Kraken work made strategy silence and one order lifecycle more legible. The
-next technical lane is now account-truth freshness and drift policy.
+Before optimizing strategy knobs or planning live smoke, prove that the current
+operator surfaces are decision-useful in a real paper session. The first paper
+soak covered runtime lifecycle. Later diagnostics and fake Kraken work made
+strategy silence, one order lifecycle, private-read failures, stale sync age,
+and material drift legible and fail-closed. The next lane is to validate that
+these surfaces render sanely during a short pinned-image paper run.
 
 Completed first-run evidence:
 
@@ -115,14 +118,10 @@ Completed first-run evidence:
 
 Remaining proof targets:
 
-- Add an explicit live sync-age policy and block new live opening risk when the
-  last successful reconciliation is too old.
-- Add a relative/material drift threshold beside the existing absolute
-  reconciliation tolerance and prove material drift blocks live opening risk.
-- Prove stale `Balance`, `TradesHistory`, and `Ledgers` reads degrade or block
-  according to the written policy.
 - Verify strategy diagnostics, risk blocks/clamps, OMS records, portfolio
   snapshots, and UI snapshot freshness during a short follow-up paper run.
+- Confirm live-readiness and system-health copy clearly separate market-data
+  freshness, closed-bar readiness, portfolio sync age, and drift blockers.
 - Exercise strategy toggle and weight-change behavior during that validation
   run.
 - Re-run emergency flatten with seeded synthetic positions and open-order state.
@@ -131,9 +130,9 @@ Remaining proof targets:
 - Decide whether the Unraid Docker healthcheck should be hardened or replaced by
   an app-level operator signal.
 
-This is the bridge between "one deterministic lifecycle proof exists" and "I
-would trust this appliance to refuse new live risk when account truth is old,
-missing, or mismatched."
+This is the bridge between "the deterministic gates exist" and "an operator can
+tell what the appliance is doing, why it is safe, and why it is or is not
+trading."
 
 For the stricter money-safety proof contract, use
 [`money-safety-proof-plan.md`](./money-safety-proof-plan.md). That document is
@@ -181,13 +180,13 @@ For strategy evidence:
 
 ## Recommended Order
 
-1. Implement stale-sync age and relative/material drift gates on top of the
-   fake Kraken reconciliation harness.
-2. Prove stale `Balance`, `TradesHistory`, and `Ledgers` reads follow the
-   written account-truth policy instead of silently reporting healthy state.
-3. Run a short pinned-image paper validation pass to confirm the new diagnostics
+1. Run a short pinned-image paper validation pass to confirm the new diagnostics
    and explicit starter profile render sanely. This is not a 24-hour soak unless
    it uncovers lifecycle questions again.
+2. Document the result in a dated paper-validation report: strategy evaluation
+   reasons, live-readiness blockers, portfolio snapshots, OMS evidence, and any
+   operator confusion.
+3. Re-run emergency flatten with seeded synthetic positions and open-order state.
 4. Clean up the remaining operator affordances from the soak: Docker health
    signal, pause/resume wording, restart no-auto-resume wording, and
    profile-aware backup/export.
