@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -6,6 +7,10 @@ import pytest
 from krakked.config import RiskConfig
 from krakked.market_data.exceptions import DataStaleError
 from krakked.portfolio.models import SpotPosition
+from krakked.portfolio.sync_status import (
+    LIVE_SYNC_COLD_START_REASON,
+    LIVE_SYNC_DEGRADED_REASON,
+)
 from krakked.strategy.models import StrategyIntent
 from krakked.strategy.risk import RiskContext, RiskEngine
 from tests.runtime_mocks import make_portfolio_service_mock
@@ -103,6 +108,41 @@ def test_kill_switch_handles_unexpected_price_errors():
     assert len(actions) == 1
     assert actions[0].target_notional_usd == 0.0
     assert actions[0].blocked is True
+
+
+def test_risk_status_includes_portfolio_sync_state():
+    market_data = MagicMock()
+    portfolio = _build_portfolio_mock()
+    portfolio.last_sync_ok = False
+    portfolio.last_sync_reason = LIVE_SYNC_DEGRADED_REASON
+    portfolio.last_sync_at = datetime(2026, 1, 2, 3, 4, tzinfo=timezone.utc)
+
+    engine = RiskEngine(RiskConfig(), market_data, portfolio)
+
+    status = engine.get_status()
+
+    assert status.portfolio_sync_ok is False
+    assert status.portfolio_sync_reason == LIVE_SYNC_DEGRADED_REASON
+    assert status.portfolio_last_sync_at == datetime(
+        2026, 1, 2, 3, 4, tzinfo=timezone.utc
+    )
+
+
+def test_risk_status_treats_live_cold_start_as_degraded():
+    market_data = MagicMock()
+    portfolio = _build_portfolio_mock()
+    portfolio.last_sync_ok = True
+    portfolio.last_sync_reason = None
+    portfolio.last_sync_at = None
+    portfolio.app_config = SimpleNamespace(execution=SimpleNamespace(mode="live"))
+
+    engine = RiskEngine(RiskConfig(), market_data, portfolio)
+
+    status = engine.get_status()
+
+    assert status.portfolio_sync_ok is False
+    assert status.portfolio_sync_reason == LIVE_SYNC_COLD_START_REASON
+    assert status.portfolio_last_sync_at is None
 
 
 def test_blocked_action_matches_display_pair_to_canonical_position():

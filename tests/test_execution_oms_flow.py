@@ -8,7 +8,7 @@ import pytest
 from krakked.config import ExecutionConfig
 from krakked.execution.adapter import DryRunExecutionAdapter
 from krakked.execution.models import LocalOrder
-from krakked.execution.oms import ExecutionService
+from krakked.execution.oms import PORTFOLIO_SYNC_ORDER_BLOCKED_MESSAGE, ExecutionService
 from krakked.market_data.models import PairMetadata
 from krakked.strategy.models import ExecutionPlan, RiskAdjustedAction
 
@@ -346,6 +346,81 @@ def test_live_execution_blocks_unapproved_strategy_before_submission(
     assert result.orders[0].status == "rejected"
     assert "live_strategy_allowlist" in (result.orders[0].last_error or "")
     adapter.submit_order.assert_not_called()
+
+
+def test_live_execution_blocks_missing_portfolio_sync_fields():
+    adapter = MagicMock()
+    adapter.config = ExecutionConfig(
+        mode="live",
+        validate_only=False,
+        allow_live_trading=True,
+        paper_tests_completed=True,
+        live_strategy_allowlist=["strat"],
+    )
+    adapter.submit_order.side_effect = (
+        lambda order, pair_metadata, latest_price=None: order
+    )
+    market_data = _market_data(mid_price=100.0)
+    service = ExecutionService(
+        adapter=adapter,
+        market_data=market_data,
+        risk_status_provider=lambda: SimpleNamespace(kill_switch_active=False),
+    )
+
+    plan = ExecutionPlan(
+        plan_id="plan_missing_portfolio_sync_fields",
+        generated_at=datetime.now(UTC),
+        actions=[_ttl_action(strategy_id="strat")],
+        metadata={"order_type": "limit"},
+    )
+
+    result = service.execute_plan(plan)
+
+    assert result.success is False
+    assert result.errors == [PORTFOLIO_SYNC_ORDER_BLOCKED_MESSAGE]
+    assert result.orders
+    assert result.orders[0].status == "rejected"
+    assert result.orders[0].last_error == PORTFOLIO_SYNC_ORDER_BLOCKED_MESSAGE
+    assert "boundary" not in result.orders[0].last_error
+    assert "opening risk" not in result.orders[0].last_error
+    assert "account truth" not in result.orders[0].last_error
+    adapter.submit_order.assert_not_called()
+
+
+def test_live_execution_allows_explicit_healthy_portfolio_sync_fields():
+    adapter = MagicMock()
+    adapter.config = ExecutionConfig(
+        mode="live",
+        validate_only=False,
+        allow_live_trading=True,
+        paper_tests_completed=True,
+        live_strategy_allowlist=["strat"],
+    )
+    adapter.submit_order.side_effect = (
+        lambda order, pair_metadata, latest_price=None: order
+    )
+    market_data = _market_data(mid_price=100.0)
+    service = ExecutionService(
+        adapter=adapter,
+        market_data=market_data,
+        risk_status_provider=lambda: SimpleNamespace(
+            kill_switch_active=False,
+            portfolio_sync_ok=True,
+        ),
+    )
+
+    plan = ExecutionPlan(
+        plan_id="plan_explicit_healthy_portfolio_sync",
+        generated_at=datetime.now(UTC),
+        actions=[_ttl_action(strategy_id="strat")],
+        metadata={"order_type": "limit"},
+    )
+
+    result = service.execute_plan(plan)
+
+    assert result.success is True
+    assert result.errors == []
+    adapter.submit_order.assert_called_once()
 
 
 def test_refresh_open_orders_updates_tracked_orders(inactive_risk_status):

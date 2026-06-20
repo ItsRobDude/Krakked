@@ -78,6 +78,9 @@ class RiskStatus:
     # Optional extra detail about drift for logging / future UI
     drift_info: Optional[Dict[str, Any]] = None
     market_regime_throttle: Optional[Dict[str, Any]] = None
+    portfolio_sync_ok: bool = True
+    portfolio_sync_reason: Optional[str] = None
+    portfolio_last_sync_at: Optional[datetime] = None
 
 
 @dataclass

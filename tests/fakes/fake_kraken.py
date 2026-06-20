@@ -18,6 +18,8 @@ success and ``{"error": [msg]}`` on rejection; open/closed queries return
 
 from __future__ import annotations
 
+from copy import deepcopy
+from decimal import Decimal
 from typing import Any, Optional
 
 from krakked.connection.exceptions import RateLimitError, ServiceUnavailableError
@@ -53,7 +55,21 @@ class FakeKrakenRESTClient:
         # Simulated exchange state.
         self._open: dict[str, dict[str, Any]] = {}
         self._closed: dict[str, dict[str, Any]] = {}
+        self._balances: dict[str, Decimal] = {
+            "ZUSD": Decimal("10000.0"),
+            "XXBT": Decimal("0.0"),
+        }
+        self._trades: dict[str, dict[str, Any]] = {}
+        self._ledgers: dict[str, dict[str, Any]] = {}
         self._txid_counter = 0
+        self._trade_counter = 0
+        self._ledger_counter = 0
+        self._clock = Decimal("1.0")
+        self._balance_failures_remaining = 0
+        self._stale_balance_reads_remaining = 0
+        self._stale_balance_snapshot: Optional[dict[str, str]] = None
+
+        self._record_seed_ledger("ZUSD", Decimal("10000.0"))
 
         # Observability for assertions.
         self.add_order_calls: list[dict[str, Any]] = []
@@ -67,6 +83,31 @@ class FakeKrakenRESTClient:
     def _next_txid(self) -> str:
         self._txid_counter += 1
         return f"OFAKE-{self._txid_counter:06d}"
+
+    def _next_trade_id(self) -> str:
+        self._trade_counter += 1
+        return f"TFAKE-{self._trade_counter:06d}"
+
+    def _next_ledger_id(self) -> str:
+        self._ledger_counter += 1
+        return f"LFAKE-{self._ledger_counter:06d}"
+
+    def _next_time(self) -> float:
+        self._clock += Decimal("1.0")
+        return float(self._clock)
+
+    @staticmethod
+    def _format_decimal(value: Decimal) -> str:
+        return format(value.quantize(Decimal("0.00000001")), "f")
+
+    @staticmethod
+    def _asset_codes(pair: str) -> tuple[str, str]:
+        pair = pair.replace("/", "")
+        base = pair[:3]
+        quote = pair[3:]
+        base_code = "XXBT" if base == "XBT" else base
+        quote_code = "ZUSD" if quote == "USD" else quote
+        return base_code, quote_code
 
     def _record_open(self, params: dict[str, Any], txid: str) -> None:
         self._open[txid] = {
@@ -83,6 +124,28 @@ class FakeKrakenRESTClient:
             },
         }
 
+    def _balance_response(self) -> dict[str, str]:
+        return {
+            asset: self._format_decimal(amount)
+            for asset, amount in self._balances.items()
+        }
+
+    def _record_seed_ledger(self, asset: str, amount: Decimal) -> None:
+        if amount == 0:
+            return
+        ledger_id = self._next_ledger_id()
+        self._ledgers[ledger_id] = {
+            "refid": "seed",
+            "time": self._next_time(),
+            "type": "deposit",
+            "subtype": "",
+            "aclass": "currency",
+            "asset": asset,
+            "amount": self._format_decimal(amount),
+            "fee": "0.00000000",
+            "balance": self._format_decimal(self._balances[asset]),
+        }
+
     def _echoed(self, detail: dict[str, Any]) -> dict[str, Any]:
         """Return the order detail as the exchange would surface it.
 
@@ -93,7 +156,119 @@ class FakeKrakenRESTClient:
             return dict(detail)
         return {key: value for key, value in detail.items() if key != "cl_ord_id"}
 
+    def _record_trade_and_ledgers(
+        self,
+        *,
+        txid: str,
+        detail: dict[str, Any],
+        volume: Decimal,
+        price: Decimal,
+        fee: Decimal,
+    ) -> None:
+        pair = str(detail.get("descr", {}).get("pair") or "")
+        side = str(detail.get("descr", {}).get("type") or "buy")
+        base_asset, quote_asset = self._asset_codes(pair)
+        cost = (volume * price).quantize(Decimal("0.00000001"))
+        event_time = self._next_time()
+        trade_id = self._next_trade_id()
+
+        if side == "buy":
+            base_delta = volume
+            quote_delta = -cost
+        else:
+            base_delta = -volume
+            quote_delta = cost
+
+        self._balances[base_asset] = (
+            self._balances.get(base_asset, Decimal("0")) + base_delta
+        )
+        self._balances[quote_asset] = (
+            self._balances.get(quote_asset, Decimal("0")) + quote_delta - fee
+        )
+
+        self._trades[trade_id] = {
+            "ordertxid": txid,
+            "pair": pair,
+            "time": event_time,
+            "type": side,
+            "ordertype": detail.get("descr", {}).get("ordertype") or "limit",
+            "price": self._format_decimal(price),
+            "cost": self._format_decimal(cost),
+            "fee": self._format_decimal(fee),
+            "vol": self._format_decimal(volume),
+            "margin": "0.0",
+            "misc": "",
+            "posstatus": None,
+        }
+
+        base_ledger_id = self._next_ledger_id()
+        self._ledgers[base_ledger_id] = {
+            "refid": trade_id,
+            "time": event_time,
+            "type": "trade",
+            "subtype": "",
+            "aclass": "currency",
+            "asset": base_asset,
+            "amount": self._format_decimal(base_delta),
+            "fee": "0.00000000",
+            "balance": self._format_decimal(self._balances[base_asset]),
+        }
+
+        quote_ledger_id = self._next_ledger_id()
+        self._ledgers[quote_ledger_id] = {
+            "refid": trade_id,
+            "time": event_time,
+            "type": "trade",
+            "subtype": "",
+            "aclass": "currency",
+            "asset": quote_asset,
+            "amount": self._format_decimal(quote_delta),
+            "fee": self._format_decimal(fee),
+            "balance": self._format_decimal(self._balances[quote_asset]),
+        }
+
+    def _filter_by_start(
+        self, records: dict[str, dict[str, Any]], params: Optional[dict[str, Any]]
+    ) -> dict[str, dict[str, Any]]:
+        start = (params or {}).get("start")
+        if start is None:
+            return deepcopy(records)
+        try:
+            start_value = float(start)
+        except (TypeError, ValueError):
+            return deepcopy(records)
+        return {
+            record_id: deepcopy(record)
+            for record_id, record in records.items()
+            if float(record.get("time", 0.0) or 0.0) >= start_value
+        }
+
     # -------------------------------------------------- KrakenRESTClient surface
+    def get_private(
+        self, endpoint: str, params: Optional[dict[str, Any]] = None
+    ) -> dict[str, Any]:
+        if endpoint == "Balance":
+            if self._balance_failures_remaining > 0:
+                self._balance_failures_remaining -= 1
+                raise ServiceUnavailableError("fake: balance unavailable")
+            if (
+                self._stale_balance_reads_remaining > 0
+                and self._stale_balance_snapshot is not None
+            ):
+                self._stale_balance_reads_remaining -= 1
+                return dict(self._stale_balance_snapshot)
+            return self._balance_response()
+        if endpoint == "TradesHistory":
+            return {
+                "trades": self._filter_by_start(self._trades, params),
+                "last": None,
+            }
+        if endpoint == "OpenOrders":
+            return self.get_open_orders(params=params)
+        if endpoint == "ClosedOrders":
+            return self.get_closed_orders(params=params)
+        raise ServiceUnavailableError(f"fake: unsupported private endpoint {endpoint}")
+
     def add_order(self, params: dict[str, Any]) -> dict[str, Any]:
         self.add_order_calls.append(dict(params))
         mode = (
@@ -170,6 +345,9 @@ class FakeKrakenRESTClient:
             closed_orders = dict(self._closed)
         return {"closed": closed_orders}
 
+    def get_ledgers(self, params: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+        return {"ledger": self._filter_by_start(self._ledgers, params)}
+
     def cancel_order(self, txid: str) -> dict[str, Any]:
         self.cancel_calls.append(txid)
         detail = self._open.pop(txid, None)
@@ -202,3 +380,81 @@ class FakeKrakenRESTClient:
             for txid, detail in self._open.items()
             if detail.get("userref") == userref
         ]
+
+    def fail_balance_reads(self, count: int = 1) -> None:
+        self._balance_failures_remaining = max(int(count), 0)
+
+    def stale_balance_reads(self, count: int = 1) -> None:
+        self._stale_balance_snapshot = self._balance_response()
+        self._stale_balance_reads_remaining = max(int(count), 0)
+
+    def fill_order(
+        self,
+        txid: str,
+        *,
+        price: Optional[float] = None,
+        volume: Optional[float] = None,
+        fee: float = 0.0,
+    ) -> dict[str, Any]:
+        detail = self._open.get(txid)
+        if detail is None:
+            raise ValueError(f"No open fake order {txid}")
+
+        total_volume = Decimal(str(detail.get("vol") or "0"))
+        already_filled = Decimal(str(detail.get("vol_exec") or "0"))
+        remaining = max(total_volume - already_filled, Decimal("0"))
+        fill_volume = remaining if volume is None else Decimal(str(volume))
+        if fill_volume <= 0 or fill_volume > remaining:
+            raise ValueError("Invalid fake fill volume")
+
+        fill_price = Decimal(
+            str(
+                price
+                if price is not None
+                else detail.get("descr", {}).get("price") or "0"
+            )
+        )
+        fill_fee = Decimal(str(fee))
+        self._record_trade_and_ledgers(
+            txid=txid,
+            detail=detail,
+            volume=fill_volume,
+            price=fill_price,
+            fee=fill_fee,
+        )
+
+        new_filled = already_filled + fill_volume
+        prior_avg_price = Decimal(str(detail.get("price_avg") or "0"))
+        prior_notional = already_filled * prior_avg_price
+        average_price = (
+            (prior_notional + (fill_volume * fill_price)) / new_filled
+            if new_filled > 0
+            else fill_price
+        )
+        detail["vol_exec"] = self._format_decimal(new_filled)
+        detail["price"] = self._format_decimal(fill_price)
+        detail["price_avg"] = self._format_decimal(average_price)
+
+        if new_filled >= total_volume:
+            detail["status"] = "closed"
+            self._closed[txid] = detail
+            self._open.pop(txid, None)
+        else:
+            detail["status"] = "partially_filled"
+
+        return dict(detail)
+
+    def partial_fill_order(
+        self,
+        txid: str,
+        *,
+        volume: float,
+        price: Optional[float] = None,
+        fee: float = 0.0,
+    ) -> dict[str, Any]:
+        return self.fill_order(txid, price=price, volume=volume, fee=fee)
+
+    def close_order(
+        self, txid: str, *, price: Optional[float] = None
+    ) -> dict[str, Any]:
+        return self.fill_order(txid, price=price)

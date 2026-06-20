@@ -48,6 +48,9 @@ export type RiskStatus = {
   manual_exposure_pct: number;
   per_asset_exposure_pct: Record<string, number>;
   per_strategy_exposure_pct: Record<string, number>;
+  portfolio_sync_ok?: boolean;
+  portfolio_sync_reason?: string | null;
+  portfolio_last_sync_at?: string | null;
 };
 
 export type RiskDecision = {

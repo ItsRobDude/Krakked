@@ -20,6 +20,7 @@ from krakked.credentials import CredentialResult, CredentialStatus
 from krakked.execution.models import ExecutionResult, LocalOrder
 from krakked.market_data.api import MarketDataStatus
 from krakked.metrics import SystemMetrics
+from krakked.portfolio.sync_status import LIVE_SYNC_COLD_START_REASON
 from krakked.strategy.models import DecisionRecord, ExecutionPlan, RiskAdjustedAction
 from krakked.ui.api import create_api
 from tests.ui.conftest import build_test_context
@@ -247,6 +248,24 @@ def test_system_health_enveloped(client, system_context):
     assert payload["data"]["portfolio_sync_reason"] is None
     assert payload["data"]["portfolio_last_sync_at"] is None
     assert payload["data"]["portfolio_baseline"] == "ledger_history"
+
+
+def test_system_health_treats_live_missing_sync_time_as_degraded(
+    client, system_context
+):
+    system_context.config.execution.mode = "live"
+    system_context.portfolio.last_sync_ok = True
+    system_context.portfolio.last_sync_reason = None
+    system_context.portfolio.last_sync_at = None
+
+    response = client.get("/api/system/health")
+
+    assert response.status_code == 200
+    payload = response.json()["data"]
+    assert payload["execution_mode"] == "live"
+    assert payload["portfolio_sync_ok"] is False
+    assert payload["portfolio_sync_reason"] == LIVE_SYNC_COLD_START_REASON
+    assert payload["portfolio_last_sync_at"] is None
 
 
 def test_system_health_reports_config_and_risk_flags(client, system_context):
@@ -1123,6 +1142,9 @@ def test_live_readiness_reports_ready_when_all_checks_pass(
         "dca_overlay": 20.0,
         "manual_dca": 10.0,
     }
+    system_context.portfolio.last_sync_ok = True
+    system_context.portfolio.last_sync_reason = None
+    system_context.portfolio.last_sync_at = now
     system_context.strategy_engine.get_cached_strategy_state.return_value = [
         _strategy_state(
             "dca_overlay",

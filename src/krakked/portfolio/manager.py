@@ -11,6 +11,7 @@ from krakked.connection.rate_limiter import RateLimiter
 from krakked.connection.rest_client import KrakenRESTClient
 from krakked.logging_config import structured_log_extra
 from krakked.market_data.api import MarketDataAPI
+from krakked.portfolio.sync_status import LIVE_SYNC_DEGRADED_REASON
 from krakked.strategy.performance import compute_strategy_performance
 
 from .balance_engine import BalanceEngine, classify_cashflow, rebuild_balances
@@ -101,7 +102,9 @@ class PortfolioService:
             userref_to_strategy=userref_to_strategy,
         )
         self._bootstrapped = False
-        self._last_sync_ok: bool = True  # pessimistic until first failure
+        # Compatibility default; live safety surfaces treat missing sync time
+        # as degraded.
+        self._last_sync_ok: bool = True
         self._last_sync_at: Optional[datetime] = None
         self._last_sync_reason: Optional[str] = None
         self._baseline_source: str = (
@@ -690,9 +693,8 @@ class PortfolioService:
         try:
             balance_resp = self.rest_client.get_private("Balance")
         except Exception as exc:  # noqa: BLE001
-            reason = f"Live balance reconciliation unavailable: {exc}"
             self._last_sync_ok = False
-            self._last_sync_reason = reason
+            self._last_sync_reason = LIVE_SYNC_DEGRADED_REASON
             logger.warning(
                 "Live balance reconciliation unavailable; local ledger balances are display-only until Kraken balances can be verified.",
                 extra=structured_log_extra(

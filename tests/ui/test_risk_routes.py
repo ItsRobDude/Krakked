@@ -27,9 +27,12 @@ from krakked.execution.models import LocalOrder
 from krakked.execution.oms import ExecutionService
 from krakked.market_data.models import PairMetadata
 from krakked.metrics import SystemMetrics
+from krakked.portfolio.sync_status import LIVE_SYNC_DEGRADED_REASON
+from krakked.strategy.engine import StrategyEngine
 from krakked.strategy.models import DecisionRecord, ExecutionPlan, RiskAdjustedAction
 from krakked.ui.api import create_api
 from krakked.ui.context import AppContext
+from tests.runtime_mocks import make_portfolio_service_mock
 
 
 @pytest.fixture
@@ -204,6 +207,59 @@ def test_get_risk_status_enveloped(client, risk_context):
     payload = response.json()
     assert payload["error"] is None
     assert payload["data"]["per_strategy_exposure_pct"] == {"alpha": 2.0}
+    assert payload["data"]["portfolio_sync_ok"] is True
+    assert payload["data"]["portfolio_sync_reason"] is None
+    assert payload["data"]["portfolio_last_sync_at"] is None
+
+
+def test_get_risk_status_serializes_portfolio_sync_state(client, risk_context):
+    risk_context.strategy_engine.get_risk_status.return_value = SimpleNamespace(
+        kill_switch_active=False,
+        daily_drawdown_pct=1.0,
+        drift_flag=False,
+        total_exposure_pct=2.0,
+        manual_exposure_pct=0.0,
+        per_asset_exposure_pct={"BTC": 1.0},
+        per_strategy_exposure_pct={"alpha": 2.0},
+        portfolio_sync_ok=False,
+        portfolio_sync_reason=LIVE_SYNC_DEGRADED_REASON,
+        portfolio_last_sync_at=datetime(2026, 1, 2, 3, 4, tzinfo=timezone.utc),
+    )
+
+    response = client.get("/api/risk/status")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["error"] is None
+    assert payload["data"]["portfolio_sync_ok"] is False
+    assert payload["data"]["portfolio_sync_reason"] == LIVE_SYNC_DEGRADED_REASON
+    assert payload["data"]["portfolio_last_sync_at"] in {
+        "2026-01-02T03:04:00Z",
+        "2026-01-02T03:04:00+00:00",
+    }
+
+
+def test_get_risk_status_uses_real_cached_portfolio_sync_status(client, risk_context):
+    risk_context.config.execution.mode = "live"
+    portfolio = make_portfolio_service_mock()
+    portfolio.last_sync_ok = False
+    portfolio.last_sync_reason = LIVE_SYNC_DEGRADED_REASON
+    portfolio.last_sync_at = datetime(2026, 1, 2, 3, 4, tzinfo=UTC)
+    engine = StrategyEngine(risk_context.config, risk_context.market_data, portfolio)
+    engine.refresh_runtime_snapshots()
+    risk_context.strategy_engine = engine
+
+    response = client.get("/api/risk/status")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["error"] is None
+    assert payload["data"]["portfolio_sync_ok"] is False
+    assert payload["data"]["portfolio_sync_reason"] == LIVE_SYNC_DEGRADED_REASON
+    assert payload["data"]["portfolio_last_sync_at"] in {
+        "2026-01-02T03:04:00Z",
+        "2026-01-02T03:04:00+00:00",
+    }
 
 
 def test_get_risk_config_enveloped(client, risk_context):

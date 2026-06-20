@@ -1,6 +1,7 @@
 # src/krakked/execution/oms.py
 
 import logging
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
@@ -25,6 +26,24 @@ from .router import build_order_from_plan_action, build_order_payload
 from .userref import resolve_userref
 
 logger = logging.getLogger(__name__)
+
+PORTFOLIO_SYNC_ORDER_BLOCKED_MESSAGE = (
+    "Krakked cannot verify your live account right now, so this order was "
+    "blocked before it reached Kraken. Orders will resume automatically once "
+    "account sync recovers."
+)
+PORTFOLIO_SYNC_RUNTIME_CHECKS_UNAVAILABLE_MESSAGE = (
+    "Krakked cannot verify runtime safety checks right now, so this order was "
+    "blocked before it reached Kraken. Orders will resume automatically once "
+    "safety checks recover."
+)
+
+
+@dataclass(frozen=True)
+class _PortfolioSyncBlock:
+    message: str
+    detail: str | None = None
+
 
 ACTIVE_ORDER_STATUSES = {
     "pending",
@@ -294,6 +313,48 @@ class ExecutionService:
             "Live strategy boundary blocks opening risk: "
             f"strategy '{strategy_id or '<missing>'}' is not approved in "
             "execution.live_strategy_allowlist"
+        )
+
+    def _portfolio_sync_block_reason(
+        self, action: "RiskAdjustedAction"
+    ) -> _PortfolioSyncBlock | None:
+        if not self._live_submit_enabled():
+            return None
+
+        if self._is_true_risk_reducing_action(action):
+            return None
+
+        if not self._risk_status_provider:
+            return _PortfolioSyncBlock(
+                PORTFOLIO_SYNC_RUNTIME_CHECKS_UNAVAILABLE_MESSAGE,
+                detail="risk status provider is unavailable",
+            )
+
+        try:
+            status = self._risk_status_provider()
+        except Exception as exc:  # noqa: BLE001
+            logger.exception(
+                "Risk status provider failed while checking portfolio sync",
+                extra=structured_log_extra(
+                    event="portfolio_sync_provider_error",
+                    strategy_id=getattr(action, "strategy_id", None),
+                    pair=getattr(action, "pair", None),
+                    error=str(exc),
+                ),
+            )
+            return _PortfolioSyncBlock(
+                PORTFOLIO_SYNC_RUNTIME_CHECKS_UNAVAILABLE_MESSAGE,
+                detail="risk status provider failed",
+            )
+
+        portfolio_sync_ok = getattr(status, "portfolio_sync_ok", None)
+        if portfolio_sync_ok is not None and bool(portfolio_sync_ok):
+            return None
+
+        reason = getattr(status, "portfolio_sync_reason", None)
+        return _PortfolioSyncBlock(
+            PORTFOLIO_SYNC_ORDER_BLOCKED_MESSAGE,
+            detail=reason if isinstance(reason, str) and reason.strip() else None,
         )
 
     def _send_safety_alert(
@@ -596,6 +657,27 @@ class ExecutionService:
                         pair=action.pair,
                         local_order_id=blocked_order.local_id,
                         block_reason=live_strategy_block_reason,
+                    ),
+                )
+                result.orders.append(blocked_order)
+                continue
+
+            portfolio_sync_block = self._portfolio_sync_block_reason(action)
+            if portfolio_sync_block:
+                blocked_order = self._create_rejected_order(
+                    plan, action, portfolio_sync_block.message
+                )
+                result.errors.append(portfolio_sync_block.message)
+                logger.warning(
+                    "Order blocked by portfolio sync boundary",
+                    extra=structured_log_extra(
+                        event="order_blocked_portfolio_sync",
+                        plan_id=plan.plan_id,
+                        strategy_id=action.strategy_id,
+                        pair=action.pair,
+                        local_order_id=blocked_order.local_id,
+                        block_reason=portfolio_sync_block.message,
+                        portfolio_sync_reason=portfolio_sync_block.detail,
                     ),
                 )
                 result.orders.append(blocked_order)
@@ -1050,7 +1132,7 @@ class ExecutionService:
         except (TypeError, ValueError):
             pass
 
-        price = payload.get("price") or payload.get("price_avg")
+        price = payload.get("price_avg") or payload.get("price")
         try:
             order.avg_fill_price = (
                 float(price) if price is not None else order.avg_fill_price
