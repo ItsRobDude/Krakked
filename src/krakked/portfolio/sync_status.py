@@ -158,23 +158,17 @@ def read_portfolio_sync_status(
             in_progress=raw_in_progress,
         )
 
-    if raw_in_progress:
-        max_age = max_live_sync_age_seconds(portfolio)
-        return PortfolioSyncStatus(
-            ok=False,
-            reason=LIVE_SYNC_IN_PROGRESS_REASON,
-            last_sync_at=last_sync_at,
-            in_progress=True,
-            max_age_seconds=max_age,
-        )
-
     if last_sync_at is None:
         max_age = max_live_sync_age_seconds(portfolio)
         return PortfolioSyncStatus(
             ok=False,
-            reason=reason or LIVE_SYNC_COLD_START_REASON,
+            reason=(
+                reason
+                or (LIVE_SYNC_IN_PROGRESS_REASON if raw_in_progress else None)
+                or LIVE_SYNC_COLD_START_REASON
+            ),
             last_sync_at=None,
-            in_progress=False,
+            in_progress=raw_in_progress,
             max_age_seconds=max_age,
         )
 
@@ -184,7 +178,7 @@ def read_portfolio_sync_status(
             ok=False,
             reason=reason or LIVE_SYNC_DEGRADED_REASON,
             last_sync_at=last_sync_at,
-            in_progress=False,
+            in_progress=raw_in_progress,
             max_age_seconds=max_age,
         )
 
@@ -196,7 +190,7 @@ def read_portfolio_sync_status(
             ok=False,
             reason=live_sync_stale_reason(max_age),
             last_sync_at=last_sync_at,
-            in_progress=False,
+            in_progress=raw_in_progress,
             max_age_seconds=max_age,
             age_seconds=age_seconds,
         )
@@ -205,7 +199,7 @@ def read_portfolio_sync_status(
         ok=True,
         reason=None,
         last_sync_at=last_sync_at,
-        in_progress=False,
+        in_progress=raw_in_progress,
         max_age_seconds=max_age,
         age_seconds=age_seconds,
     )

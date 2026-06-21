@@ -1,5 +1,6 @@
 import logging
 from datetime import datetime, timedelta, timezone
+from threading import Event, Lock, Thread
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -92,6 +93,75 @@ def test_sync_in_progress_preserves_last_completed_state_during_attempt():
     assert service.last_sync_ok is True
     assert service.last_sync_reason is None
     assert service.last_sync_at is not previous_sync_at
+
+
+def test_account_truth_snapshot_uses_injected_clock():
+    store = Mock()
+    portfolio = Mock()
+    api_client = Mock()
+    service = _build_service(store, portfolio, api_client)
+    now = datetime(2026, 1, 2, 3, 4, tzinfo=timezone.utc)
+    service._clock = lambda: now
+    service._last_sync_ok = True
+    service._last_sync_reason = None
+    service._last_sync_at = now - timedelta(seconds=30)
+    service.get_drift_status = Mock(return_value=SimpleNamespace(drift_flag=False))
+
+    snapshot = service.get_account_truth_snapshot()
+
+    assert snapshot.generated_at == now
+    assert snapshot.age_seconds == 30
+
+
+def test_sync_singleflight_serializes_concurrent_attempts():
+    store = Mock()
+    portfolio = Mock()
+    api_client = Mock()
+    service = _build_service(store, portfolio, api_client)
+    service._sync_run_lock = Lock()
+    store.get_trades.return_value = []
+    service._sync_ledgers = Mock(
+        return_value=SimpleNamespace(
+            cash_flow_count=0, trade_refids=set(), failed=False
+        )
+    )
+    first_started = Event()
+    release_first = Event()
+    second_started = Event()
+    calls = []
+
+    def _sync_trades(_since_ts):
+        calls.append(len(calls) + 1)
+        if len(calls) == 1:
+            first_started.set()
+            assert release_first.wait(2)
+        else:
+            second_started.set()
+        return SimpleNamespace(count=0, trade_ids=set(), failed=False)
+
+    service._sync_trades_history = Mock(side_effect=_sync_trades)
+    results = []
+
+    def _run_sync():
+        results.append(service.sync())
+
+    first_thread = Thread(target=_run_sync)
+    second_thread = Thread(target=_run_sync)
+    first_thread.start()
+    assert first_started.wait(2)
+    second_thread.start()
+    assert not second_started.wait(0.1)
+    release_first.set()
+    first_thread.join(2)
+    second_thread.join(2)
+
+    assert not first_thread.is_alive()
+    assert not second_thread.is_alive()
+    assert calls == [1, 2]
+    assert results == [
+        {"new_trades": 0, "new_cash_flows": 0},
+        {"new_trades": 0, "new_cash_flows": 0},
+    ]
 
 
 def test_sync_unmatched_trade_refs_ignore_last_sync_at_cutoff():

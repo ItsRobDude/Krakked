@@ -39,7 +39,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-CURRENT_SCHEMA_VERSION = 11
+CURRENT_SCHEMA_VERSION = 13
 
 MAX_ML_TRAINING_EXAMPLES = 5000
 MIN_ML_BOOTSTRAP_EXAMPLES = 50
@@ -56,8 +56,96 @@ class SchemaStatus:
         return self.migrated or self.initialized
 
 
+@dataclass(frozen=True)
+class TradeLedgerRefReview:
+    refid: str
+    reviewed_at: str
+    reviewed_by: str
+    reason: str
+    ledger_entry_ids: List[str]
+    context: Dict[str, Any]
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "refid": self.refid,
+            "reviewed_at": self.reviewed_at,
+            "reviewed_by": self.reviewed_by,
+            "reason": self.reason,
+            "ledger_entry_ids": list(self.ledger_entry_ids),
+            "context": dict(self.context),
+        }
+
+
+@dataclass(frozen=True)
+class TradeLedgerRefReviewEvent:
+    refid: str
+    event_type: str
+    event_at: str
+    actor: str
+    reason: str
+    ledger_entry_ids: List[str]
+    context: Dict[str, Any]
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "refid": self.refid,
+            "event_type": self.event_type,
+            "event_at": self.event_at,
+            "actor": self.actor,
+            "reason": self.reason,
+            "ledger_entry_ids": list(self.ledger_entry_ids),
+            "context": dict(self.context),
+        }
+
+
+@dataclass(frozen=True)
+class UnmatchedTradeLedgerRef:
+    refid: str
+    oldest_time: float
+    latest_time: float
+    ledger_count: int
+    ledger_entries: List[Dict[str, Any]]
+    reviewed: bool = False
+    reviewed_at: Optional[str] = None
+    reviewed_by: Optional[str] = None
+    reason: Optional[str] = None
+    context: Dict[str, Any] | None = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "refid": self.refid,
+            "oldest_time": self.oldest_time,
+            "latest_time": self.latest_time,
+            "ledger_count": self.ledger_count,
+            "ledger_entries": list(self.ledger_entries),
+            "reviewed": self.reviewed,
+            "reviewed_at": self.reviewed_at,
+            "reviewed_by": self.reviewed_by,
+            "reason": self.reason,
+            "context": dict(self.context or {}),
+        }
+
+
 def _utc_now_iso() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def _json_dict_or_empty(value: Any) -> Dict[str, Any]:
+    try:
+        parsed = json.loads(value) if value else {}
+    except (TypeError, json.JSONDecodeError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _json_str_list_or_empty(value: Any) -> List[str]:
+    try:
+        parsed = json.loads(value) if value else []
+    except (TypeError, json.JSONDecodeError):
+        return []
+    if not isinstance(parsed, list):
+        return []
+    return [str(item) for item in parsed]
 
 
 def _parse_optional_datetime(value: Optional[str]) -> Optional[datetime]:
@@ -517,6 +605,60 @@ def ensure_portfolio_tables(conn: sqlite3.Connection) -> None:
             ON ledger_entries(type, refid, time)
         """
     )
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS reviewed_trade_ledger_refs (
+            refid TEXT PRIMARY KEY,
+            reviewed_at TEXT NOT NULL,
+            reviewed_by TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            ledger_entry_ids_json TEXT NOT NULL,
+            context_json TEXT NOT NULL
+        )
+        """
+    )
+    cursor.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_reviewed_trade_ledger_refs_reviewed_at
+            ON reviewed_trade_ledger_refs(reviewed_at)
+        """
+    )
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS reviewed_trade_ledger_ref_entries (
+            refid TEXT NOT NULL,
+            ledger_entry_id TEXT NOT NULL,
+            reviewed_at TEXT NOT NULL,
+            PRIMARY KEY (refid, ledger_entry_id)
+        )
+        """
+    )
+    cursor.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_reviewed_trade_ledger_ref_entries_ledger_id
+            ON reviewed_trade_ledger_ref_entries(ledger_entry_id)
+        """
+    )
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS trade_ledger_ref_review_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            refid TEXT NOT NULL,
+            event_type TEXT NOT NULL,
+            event_at TEXT NOT NULL,
+            actor TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            ledger_entry_ids_json TEXT NOT NULL,
+            context_json TEXT NOT NULL
+        )
+        """
+    )
+    cursor.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_trade_ledger_ref_review_events_refid_time
+            ON trade_ledger_ref_review_events(refid, event_at)
+        """
+    )
 
     # Balance Snapshots Table
     cursor.execute(
@@ -596,6 +738,40 @@ class PortfolioStore(abc.ABC):
         self, include_refids: Optional[set[str]] = None
     ) -> Dict[str, float]:
         """Return unmatched trade ledger ref IDs mapped to their oldest timestamp."""
+        pass
+
+    @abc.abstractmethod
+    def get_unmatched_trade_ledger_refs(
+        self, *, include_reviewed: bool = False
+    ) -> List[UnmatchedTradeLedgerRef]:
+        """Return unmatched trade ledger refs with ledger and review details."""
+        pass
+
+    @abc.abstractmethod
+    def mark_trade_ledger_ref_reviewed(
+        self,
+        *,
+        refid: str,
+        reviewed_by: str,
+        reason: str,
+        ledger_entry_ids: List[str],
+        context: Dict[str, Any],
+        reviewed_at: Optional[str] = None,
+    ) -> TradeLedgerRefReview:
+        """Persist an audited operator review for an unmatched trade ledger ref."""
+        pass
+
+    @abc.abstractmethod
+    def revoke_trade_ledger_ref_review(
+        self,
+        *,
+        refid: str,
+        revoked_by: str,
+        reason: str,
+        context: Dict[str, Any],
+        revoked_at: Optional[str] = None,
+    ) -> TradeLedgerRefReviewEvent:
+        """Revoke an active operator review for an unmatched trade ledger ref."""
         pass
 
     @abc.abstractmethod
@@ -1197,25 +1373,396 @@ class SQLitePortfolioStore(PortfolioStore):
     def get_unmatched_trade_ledger_ref_times(
         self, include_refids: Optional[set[str]] = None
     ) -> Dict[str, float]:
-        _ = include_refids
+        included_refids = {
+            str(refid).strip()
+            for refid in (include_refids or set())
+            if str(refid).strip()
+        }
+        with self._lock:
+            conn = self._get_conn()
+            cursor = conn.cursor()
+            rows = cursor.execute(
+                """
+                SELECT le.refid, MIN(le.time)
+                FROM ledger_entries AS le
+                LEFT JOIN trades AS t ON t.id = le.refid
+                LEFT JOIN reviewed_trade_ledger_ref_entries AS re
+                  ON re.refid = le.refid
+                 AND re.ledger_entry_id = le.id
+                WHERE le.type = 'trade'
+                  AND le.refid IS NOT NULL
+                  AND TRIM(le.refid) != ''
+                  AND t.id IS NULL
+                  AND re.ledger_entry_id IS NULL
+                GROUP BY le.refid
+                """
+            ).fetchall()
+
+            if included_refids:
+                placeholders = ",".join("?" for _ in included_refids)
+                rows.extend(
+                    cursor.execute(
+                        f"""
+                        SELECT le.refid, MIN(le.time)
+                        FROM ledger_entries AS le
+                        LEFT JOIN trades AS t ON t.id = le.refid
+                        LEFT JOIN reviewed_trade_ledger_ref_entries AS re
+                          ON re.refid = le.refid
+                         AND re.ledger_entry_id = le.id
+                        WHERE le.type = 'trade'
+                          AND le.refid IN ({placeholders})
+                          AND t.id IS NULL
+                          AND re.ledger_entry_id IS NULL
+                        GROUP BY le.refid
+                        """,
+                        tuple(sorted(included_refids)),
+                    ).fetchall()
+                )
+
+        ref_times: Dict[str, float] = {}
+        for row in rows:
+            refid = str(row[0])
+            ledger_time = float(row[1])
+            if refid in ref_times:
+                ref_times[refid] = min(ref_times[refid], ledger_time)
+            else:
+                ref_times[refid] = ledger_time
+        return ref_times
+
+    def get_unmatched_trade_ledger_refs(
+        self, *, include_reviewed: bool = False
+    ) -> List[UnmatchedTradeLedgerRef]:
         with self._lock:
             conn = self._get_conn()
             cursor = conn.cursor()
             cursor.execute(
                 """
-                SELECT le.refid, MIN(le.time)
+                SELECT
+                    le.refid,
+                    le.id,
+                    le.time,
+                    le.type,
+                    le.subtype,
+                    le.aclass,
+                    le.asset,
+                    le.amount,
+                    le.fee,
+                    le.balance,
+                    le.misc,
+                    le.raw_json,
+                    r.reviewed_at,
+                    r.reviewed_by,
+                    r.reason,
+                    r.context_json,
+                    re.ledger_entry_id AS reviewed_ledger_entry_id
                 FROM ledger_entries AS le
                 LEFT JOIN trades AS t ON t.id = le.refid
+                LEFT JOIN reviewed_trade_ledger_refs AS r ON r.refid = le.refid
+                LEFT JOIN reviewed_trade_ledger_ref_entries AS re
+                  ON re.refid = le.refid
+                 AND re.ledger_entry_id = le.id
                 WHERE le.type = 'trade'
                   AND le.refid IS NOT NULL
                   AND TRIM(le.refid) != ''
                   AND t.id IS NULL
-                GROUP BY le.refid
-            """
+                  AND (? OR re.ledger_entry_id IS NULL)
+                ORDER BY le.refid ASC, le.time ASC, le.id ASC
+                """,
+                (1 if include_reviewed else 0,),
             )
             rows = cursor.fetchall()
 
-        return {str(row[0]): float(row[1]) for row in rows}
+        grouped: Dict[str, Dict[str, Any]] = {}
+        for row in rows:
+            refid = str(row[0])
+            ledger_time = float(row[2])
+            raw_json = _json_dict_or_empty(row[11])
+            context = _json_dict_or_empty(row[15])
+            ledger_reviewed = row[16] is not None
+
+            group = grouped.setdefault(
+                refid,
+                {
+                    "oldest_time": ledger_time,
+                    "latest_time": ledger_time,
+                    "ledger_entries": [],
+                    "reviewed_at": row[12],
+                    "reviewed_by": row[13],
+                    "reason": row[14],
+                    "context": context,
+                },
+            )
+            group["oldest_time"] = min(float(group["oldest_time"]), ledger_time)
+            group["latest_time"] = max(float(group["latest_time"]), ledger_time)
+            group["ledger_entries"].append(
+                {
+                    "id": row[1],
+                    "time": ledger_time,
+                    "type": row[3],
+                    "subtype": row[4],
+                    "aclass": row[5],
+                    "asset": row[6],
+                    "amount": row[7],
+                    "fee": row[8],
+                    "balance": row[9],
+                    "refid": refid,
+                    "misc": row[10],
+                    "raw": raw_json,
+                    "reviewed": ledger_reviewed,
+                }
+            )
+
+        return [
+            UnmatchedTradeLedgerRef(
+                refid=refid,
+                oldest_time=float(group["oldest_time"]),
+                latest_time=float(group["latest_time"]),
+                ledger_count=len(group["ledger_entries"]),
+                ledger_entries=list(group["ledger_entries"]),
+                reviewed=bool(group.get("reviewed_at")),
+                reviewed_at=group.get("reviewed_at"),
+                reviewed_by=group.get("reviewed_by"),
+                reason=group.get("reason"),
+                context=group.get("context"),
+            )
+            for refid, group in grouped.items()
+        ]
+
+    def mark_trade_ledger_ref_reviewed(
+        self,
+        *,
+        refid: str,
+        reviewed_by: str,
+        reason: str,
+        ledger_entry_ids: List[str],
+        context: Dict[str, Any],
+        reviewed_at: Optional[str] = None,
+    ) -> TradeLedgerRefReview:
+        cleaned_refid = refid.strip()
+        actor = reviewed_by.strip()
+        cleaned_reason = reason.strip()
+        if not cleaned_refid:
+            raise ValueError("refid is required")
+        if not actor:
+            raise ValueError("reviewed_by is required")
+        if not cleaned_reason:
+            raise ValueError("reason is required")
+        reviewed_at_value = reviewed_at or _utc_now_iso()
+        _ = ledger_entry_ids
+        with self._lock:
+            conn = self._get_conn()
+            cursor = conn.cursor()
+            try:
+                cursor.execute("BEGIN IMMEDIATE")
+                active_review = cursor.execute(
+                    """
+                    SELECT 1
+                    FROM reviewed_trade_ledger_refs
+                    WHERE refid = ?
+                    LIMIT 1
+                    """,
+                    (cleaned_refid,),
+                ).fetchone()
+                if active_review is not None:
+                    raise ValueError(
+                        f"Trade ledger ref already reviewed: {cleaned_refid}"
+                    )
+
+                rows = cursor.execute(
+                    """
+                    SELECT le.id
+                    FROM ledger_entries AS le
+                    LEFT JOIN trades AS t ON t.id = le.refid
+                    WHERE le.type = 'trade'
+                      AND le.refid = ?
+                      AND t.id IS NULL
+                    ORDER BY le.time ASC, le.id ASC
+                    """,
+                    (cleaned_refid,),
+                ).fetchall()
+                if not rows:
+                    raise ValueError(
+                        f"Unmatched trade ledger ref not found: {cleaned_refid}"
+                    )
+
+                ledger_ids = [str(row[0]) for row in rows]
+                review = TradeLedgerRefReview(
+                    refid=cleaned_refid,
+                    reviewed_at=reviewed_at_value,
+                    reviewed_by=actor,
+                    reason=cleaned_reason,
+                    ledger_entry_ids=ledger_ids,
+                    context=dict(context),
+                )
+                cursor.execute(
+                    """
+                    INSERT INTO reviewed_trade_ledger_refs (
+                        refid,
+                        reviewed_at,
+                        reviewed_by,
+                        reason,
+                        ledger_entry_ids_json,
+                        context_json
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        review.refid,
+                        review.reviewed_at,
+                        review.reviewed_by,
+                        review.reason,
+                        json.dumps(review.ledger_entry_ids, sort_keys=True),
+                        json.dumps(review.context, sort_keys=True),
+                    ),
+                )
+                cursor.executemany(
+                    """
+                    INSERT INTO reviewed_trade_ledger_ref_entries (
+                        refid, ledger_entry_id, reviewed_at
+                    ) VALUES (?, ?, ?)
+                    """,
+                    [
+                        (review.refid, ledger_id, review.reviewed_at)
+                        for ledger_id in review.ledger_entry_ids
+                    ],
+                )
+                cursor.execute(
+                    """
+                    INSERT INTO trade_ledger_ref_review_events (
+                        refid,
+                        event_type,
+                        event_at,
+                        actor,
+                        reason,
+                        ledger_entry_ids_json,
+                        context_json
+                    ) VALUES (?, 'review', ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        review.refid,
+                        review.reviewed_at,
+                        review.reviewed_by,
+                        review.reason,
+                        json.dumps(review.ledger_entry_ids, sort_keys=True),
+                        json.dumps(review.context, sort_keys=True),
+                    ),
+                )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+        return review
+
+    def revoke_trade_ledger_ref_review(
+        self,
+        *,
+        refid: str,
+        revoked_by: str,
+        reason: str,
+        context: Dict[str, Any],
+        revoked_at: Optional[str] = None,
+    ) -> TradeLedgerRefReviewEvent:
+        cleaned_refid = refid.strip()
+        actor = revoked_by.strip()
+        cleaned_reason = reason.strip()
+        if not cleaned_refid:
+            raise ValueError("refid is required")
+        if not actor:
+            raise ValueError("revoked_by is required")
+        if not cleaned_reason:
+            raise ValueError("reason is required")
+        revoked_at_value = revoked_at or _utc_now_iso()
+        with self._lock:
+            conn = self._get_conn()
+            cursor = conn.cursor()
+            try:
+                cursor.execute("BEGIN IMMEDIATE")
+                row = cursor.execute(
+                    """
+                    SELECT
+                        reviewed_at,
+                        reviewed_by,
+                        reason,
+                        ledger_entry_ids_json,
+                        context_json
+                    FROM reviewed_trade_ledger_refs
+                    WHERE refid = ?
+                    """,
+                    (cleaned_refid,),
+                ).fetchone()
+                if row is None:
+                    raise ValueError(
+                        f"Trade ledger ref review is not active: {cleaned_refid}"
+                    )
+
+                ledger_ids = _json_str_list_or_empty(row[3])
+                if not ledger_ids:
+                    ledger_ids = [
+                        str(item[0])
+                        for item in cursor.execute(
+                            """
+                            SELECT ledger_entry_id
+                            FROM reviewed_trade_ledger_ref_entries
+                            WHERE refid = ?
+                            ORDER BY ledger_entry_id ASC
+                            """,
+                            (cleaned_refid,),
+                        ).fetchall()
+                    ]
+                event_context = dict(context)
+                event_context.setdefault(
+                    "active_review",
+                    {
+                        "refid": cleaned_refid,
+                        "reviewed_at": row[0],
+                        "reviewed_by": row[1],
+                        "reason": row[2],
+                        "ledger_entry_ids": ledger_ids,
+                        "context": _json_dict_or_empty(row[4]),
+                    },
+                )
+                event = TradeLedgerRefReviewEvent(
+                    refid=cleaned_refid,
+                    event_type="revoke",
+                    event_at=revoked_at_value,
+                    actor=actor,
+                    reason=cleaned_reason,
+                    ledger_entry_ids=ledger_ids,
+                    context=event_context,
+                )
+                cursor.execute(
+                    "DELETE FROM reviewed_trade_ledger_ref_entries WHERE refid = ?",
+                    (cleaned_refid,),
+                )
+                cursor.execute(
+                    "DELETE FROM reviewed_trade_ledger_refs WHERE refid = ?",
+                    (cleaned_refid,),
+                )
+                cursor.execute(
+                    """
+                    INSERT INTO trade_ledger_ref_review_events (
+                        refid,
+                        event_type,
+                        event_at,
+                        actor,
+                        reason,
+                        ledger_entry_ids_json,
+                        context_json
+                    ) VALUES (?, 'revoke', ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        event.refid,
+                        event.event_at,
+                        event.actor,
+                        event.reason,
+                        json.dumps(event.ledger_entry_ids, sort_keys=True),
+                        json.dumps(event.context, sort_keys=True),
+                    ),
+                )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+        return event
 
     def get_all_ledger_entries(self) -> List[LedgerEntry]:
         return self.get_ledger_entries(after_id=None)

@@ -5,7 +5,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
-from threading import RLock
+from threading import Lock, RLock
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Set, Union, cast
 
@@ -153,6 +153,7 @@ class PortfolioService:
         # Compatibility default; live safety surfaces treat missing sync time
         # as degraded.
         self._account_truth_lock = RLock()
+        self._sync_run_lock = Lock()
         self._sync_in_progress: bool = False
         self._last_sync_ok: bool = True
         self._last_sync_at: Optional[datetime] = None
@@ -265,8 +266,14 @@ class PortfolioService:
         *,
         execution_mode: Optional[str] = None,
         now: Optional[datetime] = None,
+        force_fresh_drift: bool = False,
     ) -> AccountTruthSnapshot:
         """Return a small atomic view of sync and drift truth for safety checks."""
+
+        if force_fresh_drift:
+            reconcile_ok = self._reconcile()
+            if reconcile_ok:
+                self._refresh_cached_views()
 
         lock = getattr(self, "_account_truth_lock", None)
         if lock is None:
@@ -287,7 +294,7 @@ class PortfolioService:
                     sync_in_progress=self._sync_in_progress,
                 )
 
-        now_value = now if isinstance(now, datetime) else datetime.now(timezone.utc)
+        now_value = now if isinstance(now, datetime) else self._now()
         sync_status = read_portfolio_sync_status(
             state,
             execution_mode=execution_mode or self._execution_mode(),
@@ -403,6 +410,15 @@ class PortfolioService:
         self._bootstrapped = True
 
     def sync(self) -> Dict[str, int]:
+        """Synchronize portfolio state with single-flight protection."""
+
+        sync_lock = getattr(self, "_sync_run_lock", None)
+        if sync_lock is None:
+            return self._sync_unlocked()
+        with sync_lock:
+            return self._sync_unlocked()
+
+    def _sync_unlocked(self) -> Dict[str, int]:
         """
         Synchronizes local state with the Kraken API via a multi-stage update.
 

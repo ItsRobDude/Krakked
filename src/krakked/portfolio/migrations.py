@@ -304,6 +304,8 @@ def run_migrations(
         8: migrate_8_to_9,
         9: migrate_9_to_10,
         10: migrate_10_to_11,
+        11: migrate_11_to_12,
+        12: migrate_12_to_13,
     }
 
     for version in range(from_version, to_version):
@@ -574,3 +576,134 @@ def migrate_10_to_11(conn: sqlite3.Connection) -> None:
             ON execution_orders(client_order_id)
         """
     )
+
+
+def migrate_11_to_12(conn: sqlite3.Connection) -> None:
+    """Add audited operator reviews for unmatched trade ledger refs."""
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS reviewed_trade_ledger_refs (
+            refid TEXT PRIMARY KEY,
+            reviewed_at TEXT NOT NULL,
+            reviewed_by TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            ledger_entry_ids_json TEXT NOT NULL,
+            context_json TEXT NOT NULL
+        )
+        """
+    )
+    cursor.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_reviewed_trade_ledger_refs_reviewed_at
+            ON reviewed_trade_ledger_refs(reviewed_at)
+        """
+    )
+
+
+def migrate_12_to_13(conn: sqlite3.Connection) -> None:
+    """Scope reviewed trade refs to ledger entry IDs and add review audit events."""
+    cursor = conn.cursor()
+    migrate_11_to_12(conn)
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS reviewed_trade_ledger_ref_entries (
+            refid TEXT NOT NULL,
+            ledger_entry_id TEXT NOT NULL,
+            reviewed_at TEXT NOT NULL,
+            PRIMARY KEY (refid, ledger_entry_id)
+        )
+        """
+    )
+    cursor.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_reviewed_trade_ledger_ref_entries_ledger_id
+            ON reviewed_trade_ledger_ref_entries(ledger_entry_id)
+        """
+    )
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS trade_ledger_ref_review_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            refid TEXT NOT NULL,
+            event_type TEXT NOT NULL,
+            event_at TEXT NOT NULL,
+            actor TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            ledger_entry_ids_json TEXT NOT NULL,
+            context_json TEXT NOT NULL
+        )
+        """
+    )
+    cursor.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_trade_ledger_ref_review_events_refid_time
+            ON trade_ledger_ref_review_events(refid, event_at)
+        """
+    )
+
+    rows = cursor.execute(
+        """
+        SELECT refid, reviewed_at, reviewed_by, reason, ledger_entry_ids_json, context_json
+        FROM reviewed_trade_ledger_refs
+        """
+    ).fetchall()
+    for (
+        refid,
+        reviewed_at,
+        reviewed_by,
+        reason,
+        ledger_entry_ids_json,
+        context_json,
+    ) in rows:
+        try:
+            parsed_ids = (
+                json.loads(ledger_entry_ids_json) if ledger_entry_ids_json else []
+            )
+        except (TypeError, json.JSONDecodeError):
+            parsed_ids = []
+        ledger_ids = (
+            [str(item) for item in parsed_ids] if isinstance(parsed_ids, list) else []
+        )
+        for ledger_id in ledger_ids:
+            cursor.execute(
+                """
+                INSERT OR IGNORE INTO reviewed_trade_ledger_ref_entries (
+                    refid, ledger_entry_id, reviewed_at
+                ) VALUES (?, ?, ?)
+                """,
+                (refid, ledger_id, reviewed_at),
+            )
+        existing_event = cursor.execute(
+            """
+            SELECT 1
+            FROM trade_ledger_ref_review_events
+            WHERE refid = ?
+              AND event_type = 'review'
+              AND event_at = ?
+            LIMIT 1
+            """,
+            (refid, reviewed_at),
+        ).fetchone()
+        if existing_event is None:
+            cursor.execute(
+                """
+                INSERT INTO trade_ledger_ref_review_events (
+                    refid,
+                    event_type,
+                    event_at,
+                    actor,
+                    reason,
+                    ledger_entry_ids_json,
+                    context_json
+                ) VALUES (?, 'review', ?, ?, ?, ?, ?)
+                """,
+                (
+                    refid,
+                    reviewed_at,
+                    reviewed_by,
+                    reason,
+                    json.dumps(ledger_ids, sort_keys=True),
+                    context_json or "{}",
+                ),
+            )

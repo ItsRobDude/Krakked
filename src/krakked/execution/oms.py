@@ -4,7 +4,7 @@ import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, cast
 from uuid import uuid4
 
 from krakked.config import ExecutionConfig
@@ -398,7 +398,11 @@ class ExecutionService:
 
         if self._account_truth_provider:
             try:
-                account_truth = self._account_truth_provider()
+                account_truth_provider = cast(Any, self._account_truth_provider)
+                try:
+                    account_truth = account_truth_provider(force_fresh_drift=True)
+                except TypeError:
+                    account_truth = account_truth_provider()
             except Exception as exc:  # noqa: BLE001
                 logger.exception(
                     "Account truth provider failed while checking portfolio drift",
@@ -412,6 +416,16 @@ class ExecutionService:
                 return _PortfolioSyncBlock(
                     PORTFOLIO_SYNC_RUNTIME_CHECKS_UNAVAILABLE_MESSAGE,
                     detail="account truth provider failed",
+                )
+
+            portfolio_sync_ok = getattr(account_truth, "portfolio_sync_ok", None)
+            if portfolio_sync_ok is not None and not bool(portfolio_sync_ok):
+                reason = getattr(account_truth, "portfolio_sync_reason", None)
+                return _PortfolioSyncBlock(
+                    PORTFOLIO_SYNC_RUNTIME_CHECKS_UNAVAILABLE_MESSAGE,
+                    detail=(
+                        reason if isinstance(reason, str) and reason.strip() else None
+                    ),
                 )
 
             if not bool(getattr(account_truth, "drift_flag", False)):

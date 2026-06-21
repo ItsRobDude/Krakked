@@ -9,7 +9,7 @@ def test_sqlite_portfolio_store_not_abstract():
 
 
 def test_current_schema_version_is_latest():
-    assert CURRENT_SCHEMA_VERSION == 11
+    assert CURRENT_SCHEMA_VERSION == 13
 
 
 def test_run_migrations_reaches_latest_and_creates_ml_tables(tmp_path):
@@ -41,6 +41,21 @@ def test_run_migrations_reaches_latest_and_creates_ml_tables(tmp_path):
 
         cursor.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='ml_model_checkpoints'"
+        )
+        assert cursor.fetchone() is not None
+
+        cursor.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='reviewed_trade_ledger_refs'"
+        )
+        assert cursor.fetchone() is not None
+
+        cursor.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='reviewed_trade_ledger_ref_entries'"
+        )
+        assert cursor.fetchone() is not None
+
+        cursor.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='trade_ledger_ref_review_events'"
         )
         assert cursor.fetchone() is not None
     finally:

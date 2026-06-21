@@ -5,7 +5,13 @@ import pytest
 
 from krakked.config import PortfolioConfig
 from krakked.portfolio.portfolio import Portfolio
-from krakked.portfolio.store import MAX_ML_TRAINING_EXAMPLES, PortfolioStore
+from krakked.portfolio.store import (
+    MAX_ML_TRAINING_EXAMPLES,
+    PortfolioStore,
+    TradeLedgerRefReview,
+    TradeLedgerRefReviewEvent,
+    UnmatchedTradeLedgerRef,
+)
 
 
 class InMemoryStore(PortfolioStore):
@@ -113,14 +119,91 @@ class InMemoryStore(PortfolioStore):
             for trade in getattr(self, "trades", [])
             if isinstance(trade, dict) and trade.get("id")
         }
+        reviewed_entry_ids = set(getattr(self, "reviewed_trade_ledger_entry_ids", {}))
         for entry in getattr(self, "ledger_entries", []):
             if entry.type != "trade" or not entry.refid:
                 continue
             refid = str(entry.refid)
-            if refid in stored_trade_ids:
+            if refid in stored_trade_ids or str(entry.id) in reviewed_entry_ids:
                 continue
             refs[refid] = min(refs.get(refid, entry.time), entry.time)
         return refs
+
+    def get_unmatched_trade_ledger_refs(self, *, include_reviewed=False):
+        ref_times = self.get_unmatched_trade_ledger_ref_times()
+        reviewed_refs = getattr(self, "reviewed_trade_ledger_refs", {})
+        if include_reviewed:
+            ref_times.update(
+                {refid: 0.0 for refid in reviewed_refs if refid not in ref_times}
+            )
+        return [
+            UnmatchedTradeLedgerRef(
+                refid=refid,
+                oldest_time=time,
+                latest_time=time,
+                ledger_count=1,
+                ledger_entries=[],
+                reviewed=refid in reviewed_refs,
+            )
+            for refid, time in ref_times.items()
+        ]
+
+    def mark_trade_ledger_ref_reviewed(
+        self,
+        *,
+        refid,
+        reviewed_by,
+        reason,
+        ledger_entry_ids,
+        context,
+        reviewed_at=None,
+    ):
+        reviews = getattr(self, "reviewed_trade_ledger_refs", {})
+        if refid in reviews:
+            raise ValueError(f"{refid} already reviewed")
+        matching_ledgers = [
+            entry
+            for entry in getattr(self, "ledger_entries", [])
+            if entry.type == "trade" and str(entry.refid) == str(refid)
+        ]
+        if not matching_ledgers:
+            raise ValueError(f"{refid} is not unmatched")
+        ledger_ids = [str(entry.id) for entry in matching_ledgers]
+        review = TradeLedgerRefReview(
+            refid=refid,
+            reviewed_at=reviewed_at or "2026-01-01T00:00:00+00:00",
+            reviewed_by=reviewed_by,
+            reason=reason,
+            ledger_entry_ids=ledger_ids,
+            context=dict(context),
+        )
+        reviews[refid] = review
+        self.reviewed_trade_ledger_refs = reviews
+        reviewed_ids = set(getattr(self, "reviewed_trade_ledger_entry_ids", set()))
+        reviewed_ids.update(ledger_ids)
+        self.reviewed_trade_ledger_entry_ids = reviewed_ids
+        return review
+
+    def revoke_trade_ledger_ref_review(
+        self, *, refid, revoked_by, reason, context, revoked_at=None
+    ):
+        reviews = getattr(self, "reviewed_trade_ledger_refs", {})
+        review = reviews.pop(refid, None)
+        if review is None:
+            raise ValueError(f"{refid} is not reviewed")
+        self.reviewed_trade_ledger_refs = reviews
+        reviewed_ids = set(getattr(self, "reviewed_trade_ledger_entry_ids", set()))
+        reviewed_ids.difference_update(review.ledger_entry_ids)
+        self.reviewed_trade_ledger_entry_ids = reviewed_ids
+        return TradeLedgerRefReviewEvent(
+            refid=refid,
+            event_type="revoke",
+            event_at=revoked_at or "2026-01-01T00:00:00+00:00",
+            actor=revoked_by,
+            reason=reason,
+            ledger_entry_ids=list(review.ledger_entry_ids),
+            context=dict(context),
+        )
 
     def get_all_ledger_entries(self):
         return getattr(self, "ledger_entries", [])

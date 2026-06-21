@@ -428,12 +428,17 @@ Proved account-truth gate:
 - trade ledger entries whose trade `refid`s are not present in stored or fetched
   TradesHistory leave portfolio sync degraded until a later sync catches up;
 - unmatched trade ledger refs older than the live sync-age horizon remain
-  fail-closed and escalate through operator sync reason plus webhook alert;
+  fail-closed and escalate through operator sync reason plus webhook alert
+  unless the exact unmatched ledger rows have been explicitly accepted through
+  the reviewed-ref repair audit path;
 - stale successful reconciliation age degrades live portfolio sync;
 - live readiness and the normal strategy loop block on degraded portfolio sync;
 - the OMS blocks direct live opening-risk submissions before adapter submission
   through the production cached risk-status provider when account truth is
   unavailable or drift is material;
+- direct live opening-risk submissions also request a fresh Balance reconcile
+  from the account-truth provider before drift approval; true reduce and close
+  actions remain exempt from that fresh-drift gate;
 - cancel-all and true reduce/close OMS actions remain available under degraded
   account truth.
 
@@ -449,6 +454,44 @@ Remaining proof gap:
 - material-drift policy is proved for one deterministic account/pair flow, not
   every exchange shape or multi-asset portfolio.
 
+Operator repair path for unmatched trade ledger refs:
+
+1. Stop live automation or leave live opening-risk gates closed before repair.
+2. Back up/export the active profile database if a normal backup is not already
+   fresh.
+3. Inspect the blocker:
+   `poetry run krakked db-unmatched-trade-refs --db-path <db> --json`.
+   This command opens SQLite read-only and does not run migrations. If review
+   metadata is not available, run `poetry run krakked migrate --db-path <db>`
+   deliberately, then re-run the list command.
+4. Compare each listed `refid` and ledger row against Kraken trade and ledger
+   history outside Krakked. Confirm this is a provider/history mismatch or
+   accepted historical edge, not an unaccounted live order.
+5. If the operator accepts the accounting risk, mark exactly one ref reviewed:
+   `poetry run krakked db-mark-trade-ref-reviewed <REFID> --db-path <db> --reviewed-by <name> --reason "<why>" --confirm "MARK <REFID> REVIEWED"`.
+6. Re-run `db-unmatched-trade-refs`; use `--include-reviewed` when auditing
+   prior break-glass decisions. A reviewed ref disappears from the default list
+   only for the ledger entry IDs captured by that review.
+7. To undo an active review, run:
+   `poetry run krakked db-revoke-trade-ref-review <REFID> --db-path <db> --revoked-by <name> --reason "<why>" --confirm "REVOKE <REFID> REVIEW"`.
+8. Restart or re-run portfolio sync and verify live readiness clears only if
+   the remaining account-truth checks are healthy.
+
+Warnings:
+
+- Mark-reviewed writes an audit row only. It does not create TradesHistory
+  records, edit ledgers, alter balances, or repair PnL attribution.
+- A reviewed ref suppresses only the unmatched-ref blocker for the exact ledger
+  row IDs captured at review time. New unmatched ledger rows for the same
+  `refid` re-block live opening risk.
+- Revoke is audited and restores the unmatched-ref live blocker for the
+  reviewed ledger rows.
+- Other unmatched refs, stale sync age, private-read failures, and material
+  drift remain live blockers.
+- If Kraken later returns the missing trade, the stored trade can still be
+  ingested normally; the audit record remains historical evidence of the
+  operator decision.
+
 Initial live reconciliation policy now implemented and proved narrowly:
 
 - absolute tolerance is `portfolio.reconciliation_tolerance`, currently
@@ -460,6 +503,9 @@ Initial live reconciliation policy now implemented and proved narrowly:
   `min(max(2 * effective_portfolio_sync_interval_seconds, 120), 600)` seconds;
 - with the current effective 300-second portfolio-loop fallback, that staleness
   limit is 600 seconds;
+- one routine sync may be in progress without blocking opening risk when the
+  previous completed live sync is still successful and fresh; cold, stale, or
+  previously degraded account truth still blocks while a sync is in progress;
 - balance fetch failure, unknown reconciliation status, stale reconciliation,
   or unpriced material mismatch blocks new opening risk while preserving cancel
   and reduce-only emergency paths.
@@ -471,6 +517,9 @@ Current deterministic tests prove:
 - reduce-only/cancel paths remain available during reconciliation failure;
 - cockpit and live readiness name the exact reconciliation blocker;
 - stale Balance/Ledgers reads produce drift and block new live opening risk;
+- direct OMS opening-risk submissions using the real
+  `PortfolioService.get_account_truth_snapshot` provider block on degraded
+  sync, unmatched trade refs, fresh Balance drift, and Balance-read failure;
 - failing TradesHistory/Ledgers reads degrade sync;
 - ledger trade references without matching TradesHistory persistently degrade
   sync until a later successful sync resolves the evidence gap, with alert
