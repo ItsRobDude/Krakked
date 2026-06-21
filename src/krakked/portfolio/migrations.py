@@ -766,51 +766,48 @@ def _cleanup_ambiguous_trade_ref_reviews(
     validation_tables_present = all(
         _table_exists(conn, table) for table in {"ledger_entries", "trades"}
     )
-    if validation_tables_present:
-        rows = cursor.execute(
-            """
-            SELECT
-                re.refid,
-                re.ledger_entry_id,
-                re.reviewed_at,
-                re.reviewed_by,
-                re.reason,
-                re.context_json,
-                re.review_event_id,
-                CASE
-                    WHEN le.id IS NULL THEN 'ledger_entry_missing_or_mismatched'
-                    WHEN t.id IS NOT NULL THEN 'trade_history_now_matched'
-                    ELSE 'unknown'
-                END AS cleanup_reason
-            FROM reviewed_trade_ledger_ref_entries AS re
-            LEFT JOIN ledger_entries AS le
-              ON le.id = re.ledger_entry_id
-             AND le.refid = re.refid
-             AND le.type = 'trade'
-             AND le.refid IS NOT NULL
-             AND TRIM(le.refid) != ''
-            LEFT JOIN trades AS t ON t.id = re.refid
-            WHERE le.id IS NULL
-               OR t.id IS NOT NULL
-            ORDER BY re.refid ASC, re.ledger_entry_id ASC
-            """
-        ).fetchall()
-    else:
-        rows = cursor.execute(
-            """
-            SELECT
-                refid,
-                ledger_entry_id,
-                reviewed_at,
-                reviewed_by,
-                reason,
-                context_json,
-                review_event_id,
-                'validation_tables_missing' AS cleanup_reason
-            FROM reviewed_trade_ledger_ref_entries
-            ORDER BY refid ASC, ledger_entry_id ASC
-            """
-        ).fetchall()
+    if not validation_tables_present:
+        active_review_count = int(
+            cursor.execute(
+                "SELECT COUNT(*) FROM reviewed_trade_ledger_ref_entries"
+            ).fetchone()[0]
+            or 0
+        )
+        if active_review_count:
+            raise sqlite3.OperationalError(
+                "Cannot validate active trade-ledger review suppressions during "
+                f"{migration_name}: ledger_entries and trades tables are required"
+            )
+        return
+
+    rows = cursor.execute(
+        """
+        SELECT
+            re.refid,
+            re.ledger_entry_id,
+            re.reviewed_at,
+            re.reviewed_by,
+            re.reason,
+            re.context_json,
+            re.review_event_id,
+            CASE
+                WHEN le.id IS NULL THEN 'ledger_entry_missing_or_mismatched'
+                WHEN t.id IS NOT NULL THEN 'trade_history_now_matched'
+                ELSE 'unknown'
+            END AS cleanup_reason
+        FROM reviewed_trade_ledger_ref_entries AS re
+        LEFT JOIN ledger_entries AS le
+          ON le.id = re.ledger_entry_id
+         AND le.refid = re.refid
+         AND le.type = 'trade'
+         AND le.refid IS NOT NULL
+         AND TRIM(le.refid) != ''
+        LEFT JOIN trades AS t ON t.id = re.refid
+        WHERE le.id IS NULL
+           OR t.id IS NOT NULL
+        ORDER BY re.refid ASC, re.ledger_entry_id ASC
+        """
+    ).fetchall()
 
     if not rows:
         return
@@ -935,8 +932,9 @@ def migrate_13_to_14(conn: sqlite3.Connection) -> None:
             }
 
     existing_entries: list[dict[str, Any]] = []
-    if _table_exists(conn, "reviewed_trade_ledger_ref_entries"):
-        columns = _table_columns(conn, "reviewed_trade_ledger_ref_entries")
+
+    def collect_existing_entries(table_name: str) -> None:
+        columns = _table_columns(conn, table_name)
         reviewed_by_expr = (
             "reviewed_by" if "reviewed_by" in columns else "NULL AS reviewed_by"
         )
@@ -959,7 +957,7 @@ def migrate_13_to_14(conn: sqlite3.Connection) -> None:
                 {reason_expr},
                 {context_expr},
                 {event_expr}
-            FROM reviewed_trade_ledger_ref_entries
+            FROM {table_name}
             """
         ).fetchall():
             existing_entries.append(
@@ -973,13 +971,26 @@ def migrate_13_to_14(conn: sqlite3.Connection) -> None:
                     "review_event_id": row[6],
                 }
             )
+
+    target_table = "reviewed_trade_ledger_ref_entries"
+    staging_table = "reviewed_trade_ledger_ref_entries_v13"
+    target_exists = _table_exists(conn, target_table)
+    staging_exists = _table_exists(conn, staging_table)
+    if staging_exists:
+        collect_existing_entries(staging_table)
+    if target_exists:
+        collect_existing_entries(target_table)
+
+    if target_exists and staging_exists:
+        cursor.execute(f"DROP TABLE {target_table}")
+    elif target_exists:
         cursor.execute(
             "ALTER TABLE reviewed_trade_ledger_ref_entries RENAME TO reviewed_trade_ledger_ref_entries_v13"
         )
 
     cursor.execute(
         """
-        CREATE TABLE reviewed_trade_ledger_ref_entries (
+        CREATE TABLE IF NOT EXISTS reviewed_trade_ledger_ref_entries (
             refid TEXT NOT NULL,
             ledger_entry_id TEXT NOT NULL,
             reviewed_at TEXT NOT NULL,

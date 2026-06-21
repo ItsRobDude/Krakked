@@ -43,6 +43,7 @@ from krakked.portfolio.manager import PortfolioService
 from krakked.portfolio.models import LedgerEntry
 from krakked.portfolio.store import SQLitePortfolioStore
 from krakked.portfolio.sync_status import (
+    LIVE_ACCOUNT_TRUTH_REFRESH_TIMEOUT_REASON,
     LIVE_SYNC_DEGRADED_REASON,
     LIVE_SYNC_LEDGERS_UNAVAILABLE_REASON,
     LIVE_SYNC_TRADE_HISTORY_LAG_ALERT_TITLE,
@@ -1038,6 +1039,47 @@ def test_real_account_truth_provider_gates_live_opening_risk(tmp_path):
 
     assert reducing_result.success is True
     assert len(unmatched_client.add_order_calls) == 3
+
+
+def test_real_account_truth_timeout_recovery_requires_successful_balance_reconcile(
+    tmp_path,
+):
+    client = FakeKrakenRESTClient(add_order_mode=ACCEPT)
+    db_path = tmp_path / "timeout-recovery.db"
+    portfolio = _portfolio_service(client, db_path)
+    portfolio.sync()
+    portfolio._last_balance_reconcile_at = datetime.now(UTC) - timedelta(seconds=10)
+    portfolio._set_last_sync_state(
+        ok=False,
+        reason=LIVE_ACCOUNT_TRUTH_REFRESH_TIMEOUT_REASON,
+    )
+    client.fail_balance_reads(count=1)
+    service = _service_with_account_truth(
+        client,
+        cast(SQLitePortfolioStore, portfolio.store),
+        portfolio,
+    )
+
+    failed_refresh = service.execute_plan(_plan("plan-timeout-recovery-fails-closed"))
+
+    assert failed_refresh.success is False
+    assert failed_refresh.errors == [PORTFOLIO_SYNC_ORDER_BLOCKED_MESSAGE]
+    assert len(client.add_order_calls) == 0
+    assert portfolio.last_sync_ok is False
+    assert portfolio.last_sync_reason == LIVE_SYNC_DEGRADED_REASON
+
+    portfolio._last_balance_reconcile_at = datetime.now(UTC) - timedelta(seconds=10)
+    portfolio._set_last_sync_state(
+        ok=False,
+        reason=LIVE_ACCOUNT_TRUTH_REFRESH_TIMEOUT_REASON,
+    )
+
+    recovered = service.execute_plan(_plan("plan-timeout-recovery-succeeds"))
+
+    assert recovered.success is True
+    assert len(client.add_order_calls) == 1
+    assert portfolio.last_sync_ok is True
+    assert portfolio.last_sync_reason is None
 
 
 def test_ambiguous_migrated_review_blocks_until_re_reviewed(tmp_path):

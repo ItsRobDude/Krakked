@@ -452,6 +452,293 @@ def test_v14_cleanup_removes_ambiguous_active_reviews(tmp_path):
     assert review.ledger_entry_ids == ["L-future"]
 
 
+def test_v13_to_v14_retry_uses_renamed_review_entry_staging_table(tmp_path):
+    db_path = tmp_path / "review_retry_staging.db"
+    store = SQLitePortfolioStore(str(db_path))
+    store.save_ledger_entry(
+        LedgerEntry(
+            id="L-valid",
+            time=10.0,
+            type="trade",
+            subtype="",
+            aclass="currency",
+            asset="USD",
+            amount=Decimal("1"),
+            fee=Decimal("0"),
+            balance=None,
+            refid="T-VALID",
+            misc=None,
+            raw={},
+        )
+    )
+    store.close()
+
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("DROP TABLE reviewed_trade_ledger_ref_entries")
+        conn.execute(
+            """
+            CREATE TABLE reviewed_trade_ledger_ref_entries_v13 (
+                refid TEXT NOT NULL,
+                ledger_entry_id TEXT NOT NULL,
+                reviewed_at TEXT NOT NULL,
+                PRIMARY KEY (refid, ledger_entry_id)
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO reviewed_trade_ledger_ref_entries_v13 (
+                refid, ledger_entry_id, reviewed_at
+            ) VALUES ('T-VALID', 'L-valid', '2026-01-02T03:04:05+00:00')
+            """
+        )
+        migrations._set_schema_version(conn, 13)
+
+    migrated = SQLitePortfolioStore(str(db_path))
+
+    with sqlite3.connect(db_path) as conn:
+        active_rows = conn.execute(
+            """
+            SELECT refid, ledger_entry_id, reviewed_by, reason
+            FROM reviewed_trade_ledger_ref_entries
+            """
+        ).fetchall()
+        staging_exists = conn.execute(
+            """
+            SELECT 1
+            FROM sqlite_master
+            WHERE type = 'table'
+              AND name = 'reviewed_trade_ledger_ref_entries_v13'
+            """
+        ).fetchone()
+
+    assert active_rows == [
+        (
+            "T-VALID",
+            "L-valid",
+            "migration",
+            "Migrated active review metadata unavailable",
+        )
+    ]
+    assert staging_exists is None
+    assert migrated.get_unmatched_trade_ledger_ref_times() == {}
+
+
+def test_v13_to_v14_retry_rebuilds_partial_target_when_staging_exists(tmp_path):
+    db_path = tmp_path / "review_retry_partial_target.db"
+    store = SQLitePortfolioStore(str(db_path))
+    for entry_id, refid in [("L-staging", "T-STAGING"), ("L-target", "T-TARGET")]:
+        store.save_ledger_entry(
+            LedgerEntry(
+                id=entry_id,
+                time=10.0,
+                type="trade",
+                subtype="",
+                aclass="currency",
+                asset="USD",
+                amount=Decimal("1"),
+                fee=Decimal("0"),
+                balance=None,
+                refid=refid,
+                misc=None,
+                raw={},
+            )
+        )
+    store.close()
+
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE reviewed_trade_ledger_ref_entries_v13 (
+                refid TEXT NOT NULL,
+                ledger_entry_id TEXT NOT NULL,
+                reviewed_at TEXT NOT NULL,
+                PRIMARY KEY (refid, ledger_entry_id)
+            )
+            """
+        )
+        conn.execute("DELETE FROM reviewed_trade_ledger_ref_entries")
+        conn.execute(
+            """
+            INSERT INTO reviewed_trade_ledger_ref_entries_v13 (
+                refid, ledger_entry_id, reviewed_at
+            ) VALUES ('T-STAGING', 'L-staging', '2026-01-02T03:04:05+00:00')
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO reviewed_trade_ledger_ref_entries (
+                refid,
+                ledger_entry_id,
+                reviewed_at,
+                reviewed_by,
+                reason,
+                context_json,
+                review_event_id
+            ) VALUES (
+                'T-TARGET',
+                'L-target',
+                '2026-01-02T03:04:06+00:00',
+                'ops',
+                'partial target row',
+                '{}',
+                NULL
+            )
+            """
+        )
+        migrations._set_schema_version(conn, 13)
+
+    SQLitePortfolioStore(str(db_path)).close()
+
+    with sqlite3.connect(db_path) as conn:
+        active_rows = conn.execute(
+            """
+            SELECT refid, ledger_entry_id, reviewed_by, reason
+            FROM reviewed_trade_ledger_ref_entries
+            ORDER BY refid
+            """
+        ).fetchall()
+        staging_exists = conn.execute(
+            """
+            SELECT 1
+            FROM sqlite_master
+            WHERE type = 'table'
+              AND name = 'reviewed_trade_ledger_ref_entries_v13'
+            """
+        ).fetchone()
+
+    assert active_rows == [
+        (
+            "T-STAGING",
+            "L-staging",
+            "migration",
+            "Migrated active review metadata unavailable",
+        ),
+        ("T-TARGET", "L-target", "ops", "partial target row"),
+    ]
+    assert staging_exists is None
+
+
+def test_v15_cleanup_missing_validation_tables_with_active_reviews_fails_loudly(
+    tmp_path,
+):
+    db_path = tmp_path / "review_missing_validation_active.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)")
+        conn.execute("INSERT INTO meta (key, value) VALUES ('schema_version', '14')")
+        conn.execute(
+            """
+            CREATE TABLE reviewed_trade_ledger_ref_entries (
+                refid TEXT NOT NULL,
+                ledger_entry_id TEXT NOT NULL,
+                reviewed_at TEXT NOT NULL,
+                reviewed_by TEXT NOT NULL,
+                reason TEXT NOT NULL,
+                context_json TEXT NOT NULL,
+                review_event_id INTEGER,
+                PRIMARY KEY (refid, ledger_entry_id)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE trade_ledger_ref_review_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                refid TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                event_at TEXT NOT NULL,
+                actor TEXT NOT NULL,
+                reason TEXT NOT NULL,
+                ledger_entry_ids_json TEXT NOT NULL,
+                context_json TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO reviewed_trade_ledger_ref_entries (
+                refid, ledger_entry_id, reviewed_at, reviewed_by, reason, context_json
+            ) VALUES (
+                'T-ACTIVE',
+                'L-active',
+                '2026-01-02T03:04:05+00:00',
+                'ops',
+                'active review',
+                '{}'
+            )
+            """
+        )
+
+    with pytest.raises(PortfolioSchemaError):
+        SQLitePortfolioStore(str(db_path))
+
+    with sqlite3.connect(db_path) as conn:
+        active_rows = conn.execute(
+            "SELECT refid, ledger_entry_id FROM reviewed_trade_ledger_ref_entries"
+        ).fetchall()
+        version = conn.execute(
+            "SELECT value FROM meta WHERE key = 'schema_version'"
+        ).fetchone()[0]
+
+    assert active_rows == [("T-ACTIVE", "L-active")]
+    assert version == "14"
+
+
+def test_v15_cleanup_missing_validation_tables_with_no_active_reviews_succeeds(
+    tmp_path,
+):
+    db_path = tmp_path / "review_missing_validation_empty.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)")
+        conn.execute("INSERT INTO meta (key, value) VALUES ('schema_version', '14')")
+        conn.execute(
+            """
+            CREATE TABLE reviewed_trade_ledger_ref_entries (
+                refid TEXT NOT NULL,
+                ledger_entry_id TEXT NOT NULL,
+                reviewed_at TEXT NOT NULL,
+                reviewed_by TEXT NOT NULL,
+                reason TEXT NOT NULL,
+                context_json TEXT NOT NULL,
+                review_event_id INTEGER,
+                PRIMARY KEY (refid, ledger_entry_id)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE trade_ledger_ref_review_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                refid TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                event_at TEXT NOT NULL,
+                actor TEXT NOT NULL,
+                reason TEXT NOT NULL,
+                ledger_entry_ids_json TEXT NOT NULL,
+                context_json TEXT NOT NULL
+            )
+            """
+        )
+
+    migrated = SQLitePortfolioStore(str(db_path))
+    migrated.close()
+
+    with sqlite3.connect(db_path) as conn:
+        version = conn.execute(
+            "SELECT value FROM meta WHERE key = 'schema_version'"
+        ).fetchone()[0]
+        ledger_entries_exists = conn.execute(
+            """
+            SELECT 1 FROM sqlite_master
+            WHERE type = 'table'
+              AND name = 'ledger_entries'
+            """
+        ).fetchone()
+
+    assert version == str(CURRENT_SCHEMA_VERSION)
+    assert ledger_entries_exists is not None
+
+
 def test_unmatched_trade_ledger_ref_times_excludes_stored_trades(tmp_path):
     db_path = tmp_path / "unmatched_trade_refs.db"
     store = SQLitePortfolioStore(str(db_path))
