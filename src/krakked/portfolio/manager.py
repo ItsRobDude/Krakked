@@ -60,6 +60,7 @@ _SYNC_TIME_UNSET = object()
 _NOOP_SYNC_RESULT = {"new_trades": 0, "new_cash_flows": 0}
 _SYNC_RUN_KIND_FULL = "full_sync"
 _SYNC_RUN_KIND_FRESH_ACCOUNT_TRUTH = "fresh_account_truth"
+LIVE_FULL_SYNC_DEADLINE_SECONDS = 3600.0
 
 
 @dataclass(frozen=True)
@@ -468,7 +469,14 @@ class PortfolioService:
         drift_flag = bool(getattr(drift_status, "drift_flag", False))
         drift_info: Optional[Dict[str, Any]]
         if drift_status is None:
-            drift_info = None
+            if use_cached_drift:
+                drift_info = {
+                    "status": "unknown",
+                    "source": "cached",
+                    "reason": "cached_drift_status_unavailable",
+                }
+            else:
+                drift_info = None
         else:
             try:
                 drift_info = asdict(drift_status)
@@ -508,7 +516,9 @@ class PortfolioService:
 
         acquired = sync_lock.acquire(timeout=LIVE_ACCOUNT_TRUTH_LOCK_TIMEOUT_SECONDS)
         if not acquired:
-            if not self._mark_stuck_sync_if_stale():
+            if not self._mark_full_sync_deadline_exceeded(
+                checkpoint="account_truth_lock_wait"
+            ):
                 self._mark_account_truth_refresh_timeout()
             return self._build_account_truth_snapshot(
                 now_value=now_value,
@@ -663,25 +673,30 @@ class PortfolioService:
         self._refresh_cached_views()
         self._bootstrapped = True
 
-    def _mark_stuck_sync_if_stale(self, *, checkpoint: str = "lock_wait") -> bool:
+    def _mark_full_sync_deadline_exceeded(self, *, checkpoint: str) -> bool:
         now_value = self._now()
         lock = getattr(self, "_account_truth_lock", None)
         if lock is None:
             sync_started_at = getattr(self, "_sync_started_at", None)
+            sync_run_kind = getattr(self, "_sync_run_kind", None)
         else:
             with lock:
                 sync_started_at = self._sync_started_at
+                sync_run_kind = self._sync_run_kind
+        if sync_run_kind != _SYNC_RUN_KIND_FULL:
+            return False
         if not isinstance(sync_started_at, datetime):
             return False
         sync_age_seconds = (now_value - sync_started_at).total_seconds()
-        if sync_age_seconds <= max_live_sync_age_seconds(self.config):
+        if sync_age_seconds <= LIVE_FULL_SYNC_DEADLINE_SECONDS:
             return False
         self._set_last_sync_state(ok=False, reason=LIVE_SYNC_STUCK_REASON)
         logger.warning(
-            "Portfolio sync lock timed out and the in-progress sync appears stale.",
+            "Portfolio full sync exceeded the live safety deadline.",
             extra=structured_log_extra(
                 event="portfolio_sync_stuck",
                 sync_age_seconds=sync_age_seconds,
+                deadline_seconds=LIVE_FULL_SYNC_DEADLINE_SECONDS,
                 checkpoint=checkpoint,
             ),
         )
@@ -719,7 +734,14 @@ class PortfolioService:
 
         sync_lock = getattr(self, "_sync_run_lock", None)
         if sync_lock is None:
-            return self._remember_sync_result(self._sync_unlocked())
+            generation = self._begin_full_sync_run()
+            try:
+                return self._remember_sync_result(
+                    self._sync_unlocked(),
+                    generation=generation,
+                )
+            finally:
+                self._set_sync_run_kind(None)
 
         acquired = sync_lock.acquire(blocking=False)
         if acquired:
@@ -743,7 +765,7 @@ class PortfolioService:
             timeout=LIVE_ACCOUNT_TRUTH_LOCK_TIMEOUT_SECONDS
         )
         if not acquired_after_wait:
-            self._mark_stuck_sync_if_stale(checkpoint="sync_lock_wait")
+            self._mark_full_sync_deadline_exceeded(checkpoint="sync_lock_wait")
             return {"new_trades": 0, "new_cash_flows": 0}
         try:
             if blocked_by_kind == _SYNC_RUN_KIND_FULL:
@@ -781,34 +803,32 @@ class PortfolioService:
 
         self._set_sync_in_progress(True)
         try:
-            if self._mark_stuck_sync_if_stale(checkpoint="before_bootstrap"):
+            if self._mark_full_sync_deadline_exceeded(checkpoint="before_bootstrap"):
                 return dict(_NOOP_SYNC_RESULT)
             self._bootstrap_from_store()
-            if self._mark_stuck_sync_if_stale(checkpoint="after_bootstrap"):
+            if self._mark_full_sync_deadline_exceeded(checkpoint="after_bootstrap"):
                 return dict(_NOOP_SYNC_RESULT)
 
             if self._is_paper_mode():
                 return self._sync_paper_wallet()
 
             # 1. Fetch and Save Trades
-            if self._mark_stuck_sync_if_stale(checkpoint="before_trades_history"):
-                return dict(_NOOP_SYNC_RESULT)
             latest_trades = self.store.get_trades(limit=1)  # ordered by time desc
             since_ts = latest_trades[0]["time"] if latest_trades else None
 
             trade_result = self._sync_trades_history(since_ts)
             if trade_result.failed:
                 return {"new_trades": 0, "new_cash_flows": 0}
-            if self._mark_stuck_sync_if_stale(checkpoint="after_trades_history"):
+            if self._mark_full_sync_deadline_exceeded(
+                checkpoint="after_trades_history"
+            ):
                 return {"new_trades": trade_result.count, "new_cash_flows": 0}
 
             # 2. Fetch Ledgers
-            if self._mark_stuck_sync_if_stale(checkpoint="before_ledgers"):
-                return {"new_trades": trade_result.count, "new_cash_flows": 0}
             ledger_result = self._sync_ledgers()
             if ledger_result.failed:
                 return {"new_trades": trade_result.count, "new_cash_flows": 0}
-            if self._mark_stuck_sync_if_stale(checkpoint="after_ledgers"):
+            if self._mark_full_sync_deadline_exceeded(checkpoint="after_ledgers"):
                 return {
                     "new_trades": trade_result.count,
                     "new_cash_flows": ledger_result.cash_flow_count,
@@ -842,11 +862,6 @@ class PortfolioService:
                 self._trade_history_lag_alerted_refs.clear()
 
             # 3. Reconcile
-            if self._mark_stuck_sync_if_stale(checkpoint="before_reconcile"):
-                return {
-                    "new_trades": trade_result.count,
-                    "new_cash_flows": ledger_result.cash_flow_count,
-                }
             reconcile_ok = self._reconcile()
             self._refresh_cached_views()
             if not reconcile_ok:
@@ -854,7 +869,7 @@ class PortfolioService:
                     "new_trades": trade_result.count,
                     "new_cash_flows": ledger_result.cash_flow_count,
                 }
-            if self._mark_stuck_sync_if_stale(checkpoint="after_reconcile"):
+            if self._mark_full_sync_deadline_exceeded(checkpoint="after_reconcile"):
                 return {
                     "new_trades": trade_result.count,
                     "new_cash_flows": ledger_result.cash_flow_count,
@@ -1142,15 +1157,7 @@ class PortfolioService:
 
         try:
             while True:
-                if self._mark_stuck_sync_if_stale(
-                    checkpoint="trades_history_before_page"
-                ):
-                    return _TradeSyncResult(count=0, trade_ids=set(), failed=True)
                 resp = self.rest_client.get_private("TradesHistory", params=params)
-                if self._mark_stuck_sync_if_stale(
-                    checkpoint="trades_history_after_page"
-                ):
-                    return _TradeSyncResult(count=0, trade_ids=set(), failed=True)
                 trades_dict = resp.get("trades", {})
                 if not trades_dict:
                     break
@@ -1278,15 +1285,7 @@ class PortfolioService:
             known_ids_at_boundary = {e.id for e in boundary_entries}
 
         try:
-            if self._mark_stuck_sync_if_stale(checkpoint="ledgers_before_fetch"):
-                return _LedgerSyncResult(
-                    cash_flow_count=0, trade_refids=set(), failed=True
-                )
             ledger_resp = self.rest_client.get_ledgers(params=ledger_params)
-            if self._mark_stuck_sync_if_stale(checkpoint="ledgers_after_fetch"):
-                return _LedgerSyncResult(
-                    cash_flow_count=0, trade_refids=set(), failed=True
-                )
             ledger_dict = ledger_resp.get("ledger", {})
         except Exception as exc:  # noqa: BLE001
             self._set_last_sync_state(

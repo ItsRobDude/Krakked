@@ -619,6 +619,58 @@ def test_v13_to_v14_retry_rebuilds_partial_target_when_staging_exists(tmp_path):
     assert staging_exists is None
 
 
+def test_v13_to_v14_missing_validation_tables_names_preserved_staging(
+    tmp_path,
+):
+    db_path = tmp_path / "review_missing_validation_v13.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)")
+        conn.execute("INSERT INTO meta (key, value) VALUES ('schema_version', '13')")
+        conn.execute(
+            """
+            CREATE TABLE reviewed_trade_ledger_ref_entries (
+                refid TEXT NOT NULL,
+                ledger_entry_id TEXT NOT NULL,
+                reviewed_at TEXT NOT NULL,
+                PRIMARY KEY (refid, ledger_entry_id)
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO reviewed_trade_ledger_ref_entries (
+                refid, ledger_entry_id, reviewed_at
+            ) VALUES ('T-ACTIVE', 'L-active', '2026-01-02T03:04:05+00:00')
+            """
+        )
+
+    with pytest.raises(PortfolioSchemaError) as exc_info:
+        SQLitePortfolioStore(str(db_path))
+
+    assert exc_info.value.__cause__ is not None
+    assert "reviewed_trade_ledger_ref_entries_v13" in str(exc_info.value.__cause__)
+    with sqlite3.connect(db_path) as conn:
+        staging_rows = conn.execute(
+            """
+            SELECT refid, ledger_entry_id
+            FROM reviewed_trade_ledger_ref_entries_v13
+            """
+        ).fetchall()
+        target_rows = conn.execute(
+            """
+            SELECT refid, ledger_entry_id
+            FROM reviewed_trade_ledger_ref_entries
+            """
+        ).fetchall()
+        version = conn.execute(
+            "SELECT value FROM meta WHERE key = 'schema_version'"
+        ).fetchone()[0]
+
+    assert staging_rows == [("T-ACTIVE", "L-active")]
+    assert target_rows == []
+    assert version == "13"
+
+
 def test_v15_cleanup_missing_validation_tables_with_active_reviews_fails_loudly(
     tmp_path,
 ):

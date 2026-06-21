@@ -774,9 +774,16 @@ def _cleanup_ambiguous_trade_ref_reviews(
             or 0
         )
         if active_review_count:
+            preserved_detail = (
+                "; active review rows remain preserved in "
+                "reviewed_trade_ledger_ref_entries_v13"
+                if migration_name == "v13_to_v14"
+                else ""
+            )
             raise sqlite3.OperationalError(
                 "Cannot validate active trade-ledger review suppressions during "
                 f"{migration_name}: ledger_entries and trades tables are required"
+                f"{preserved_detail}"
             )
         return
 
