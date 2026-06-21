@@ -474,9 +474,9 @@ Invoke via `poetry run python -m krakked.execution.admin_cli <subcommand>`; pass
 The main `krakked` CLI also exposes database repair helpers for persistent
 account-truth blockers:
 
-* `db-unmatched-trade-refs --db-path <db> [--json] [--include-reviewed]`: Read-only list of trade ledger refs whose `refid` still has no matching stored TradesHistory row, including ledger details and review state. It does not auto-migrate the database; if review metadata is missing, run `poetry run krakked migrate --db-path <db>` explicitly.
-* `db-mark-trade-ref-reviewed REFID --db-path <db> --reviewed-by <name> --reason <text> --confirm "MARK <REFID> REVIEWED"`: High-friction break-glass path for a manually verified unmatched trade ledger ref. It creates a timestamped DB backup first and writes only review audit state for the currently unmatched ledger row IDs. It does **not** synthesize missing TradesHistory rows, so PnL attribution may remain incomplete. New unmatched ledger rows for the same `refid` re-block live opening risk.
-* `db-revoke-trade-ref-review REFID --db-path <db> --revoked-by <name> --reason <text> --confirm "REVOKE <REFID> REVIEW"`: Audited revoke for an active trade-ref review. It creates a timestamped backup, removes the active review state, keeps the audit event, and restores the unmatched-ref live blocker until TradesHistory catches up or a new explicit review is recorded.
+* `db-unmatched-trade-refs --db-path <db> [--json] [--include-reviewed]`: Read-only list of trade ledger refs whose `refid` still has no matching stored TradesHistory row, including per-ledger review state plus reviewed/unreviewed counts. It does not auto-migrate the database; if review metadata is missing, run `poetry run krakked migrate --db-path <db>` explicitly.
+* `db-mark-trade-ref-reviewed REFID --db-path <db> --reviewed-by <name> --reason <text> --confirm "MARK <REFID> REVIEWED"`: High-friction break-glass path for manually verified unmatched trade ledger rows. It creates a timestamped DB backup first and writes only audit state for the currently unreviewed unmatched ledger row IDs. It does **not** synthesize missing TradesHistory rows, so PnL attribution may remain incomplete. New unmatched ledger rows for the same `refid` re-block live opening risk and require a new explicit review.
+* `db-revoke-trade-ref-review REFID --db-path <db> --revoked-by <name> --reason <text> --confirm "REVOKE <REFID> REVIEW"`: Audited revoke for active trade-ref reviews. It creates a timestamped backup, removes active per-ledger review state, keeps append-only audit events, and restores the unmatched-ref live blocker until TradesHistory catches up or a new explicit review is recorded.
 
 ### ✅ Live Readiness Checklist
 
@@ -486,7 +486,7 @@ account-truth blockers:
 * Order recovery: `probe-cl-ord-id` run successfully in validate-only mode, with the limitation above understood.
 * Alerts: webhook alerts configured and tested if the session is intended to run semi-unattended.
 * Config gates: `execution.mode="live"`, `execution.validate_only=false`, `execution.allow_live_trading=true`, and `execution.live_strategy_allowlist` intentionally set for production; revert any gate or remove the strategy ID to disable.
-* Portfolio sync: Live balance reconciliation has completed recently enough for the live sync-age policy, material-drift blockers are clear, and any unmatched trade ledger refs have either recovered through TradesHistory or been explicitly reviewed with the scoped repair helper above.
+* Portfolio sync: Live balance reconciliation has completed recently enough for the live sync-age policy, material-drift blockers are clear, and any unmatched trade ledger rows have either recovered through TradesHistory or been explicitly reviewed with the scoped repair helper above.
 * Risk reviewed: Portfolio and per-strategy risk limits rechecked for live exposure tolerance.
 * Operator drills: Team knows how to invoke `panic`, targeted `cancel`, `reconcile-submit-intents`, and `clear-submit-unknown` via `execution.admin_cli`.
 

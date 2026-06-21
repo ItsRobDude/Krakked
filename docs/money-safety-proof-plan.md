@@ -461,14 +461,18 @@ Operator repair path for unmatched trade ledger refs:
    fresh.
 3. Inspect the blocker:
    `poetry run krakked db-unmatched-trade-refs --db-path <db> --json`.
-   This command opens SQLite read-only and does not run migrations. If review
-   metadata is not available, run `poetry run krakked migrate --db-path <db>`
-   deliberately, then re-run the list command.
+   This command opens SQLite read-only and does not run migrations. It requires
+   schema v14 review metadata; if metadata is not available, run
+   `poetry run krakked migrate --db-path <db>` deliberately, then re-run the
+   list command.
 4. Compare each listed `refid` and ledger row against Kraken trade and ledger
    history outside Krakked. Confirm this is a provider/history mismatch or
    accepted historical edge, not an unaccounted live order.
 5. If the operator accepts the accounting risk, mark exactly one ref reviewed:
    `poetry run krakked db-mark-trade-ref-reviewed <REFID> --db-path <db> --reviewed-by <name> --reason "<why>" --confirm "MARK <REFID> REVIEWED"`.
+   The command captures the currently unreviewed unmatched ledger row IDs for
+   that ref and the store transaction rejects the write if the ledger set changes
+   between list and mark.
 6. Re-run `db-unmatched-trade-refs`; use `--include-reviewed` when auditing
    prior break-glass decisions. A reviewed ref disappears from the default list
    only for the ledger entry IDs captured by that review.
@@ -486,6 +490,8 @@ Warnings:
   `refid` re-block live opening risk.
 - Revoke is audited and restores the unmatched-ref live blocker for the
   reviewed ledger rows.
+- Legacy empty or invalid reviewed-ref metadata migrates fail-closed: it does
+  not suppress blockers, and the ref remains reviewable through the CLI.
 - Other unmatched refs, stale sync age, private-read failures, and material
   drift remain live blockers.
 - If Kraken later returns the missing trade, the stored trade can still be

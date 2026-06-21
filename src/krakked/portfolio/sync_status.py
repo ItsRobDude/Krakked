@@ -10,6 +10,8 @@ DEFAULT_PORTFOLIO_SYNC_INTERVAL_SECONDS = 300
 MAX_LIVE_PORTFOLIO_SYNC_INTERVAL_SECONDS = 300
 MIN_LIVE_SYNC_MAX_AGE_SECONDS = 120
 MAX_LIVE_SYNC_MAX_AGE_SECONDS = 600
+LIVE_DRIFT_FRESHNESS_BUDGET_SECONDS = 5.0
+LIVE_ACCOUNT_TRUTH_LOCK_TIMEOUT_SECONDS = 5.0
 
 LIVE_SYNC_COLD_START_REASON = (
     "Starting up - verifying your live account before allowing orders."
@@ -37,6 +39,15 @@ LIVE_SYNC_LEDGERS_UNAVAILABLE_REASON = (
 LIVE_SYNC_TRADE_HISTORY_LAGGING_REASON = (
     "Kraken trade history has not caught up to new ledger entries yet. Orders "
     "will resume automatically once account sync recovers."
+)
+LIVE_ACCOUNT_TRUTH_REFRESH_TIMEOUT_REASON = (
+    "Krakked could not refresh live account truth because another portfolio sync "
+    "is still running. Orders will resume automatically once account sync "
+    "recovers."
+)
+LIVE_SYNC_STUCK_REASON = (
+    "Krakked portfolio sync appears stuck. Orders will resume automatically once "
+    "account sync recovers."
 )
 LIVE_SYNC_TRADE_HISTORY_LAG_ALERT_TITLE = "Kraken trade history needs review"
 _RAW_BALANCE_UNAVAILABLE_PREFIX = "Live balance reconciliation unavailable:"

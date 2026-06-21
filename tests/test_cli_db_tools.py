@@ -256,6 +256,8 @@ def test_db_unmatched_trade_refs_reports_human_and_json(
         "T-MISSING"
     ]
     assert payload["unmatched_trade_ledger_refs"][0]["ledger_count"] == 2
+    assert payload["unmatched_trade_ledger_refs"][0]["reviewed_ledger_count"] == 0
+    assert payload["unmatched_trade_ledger_refs"][0]["unreviewed_ledger_count"] == 2
 
 
 def test_db_unmatched_trade_refs_reports_missing_file(
@@ -417,7 +419,24 @@ def test_db_mark_trade_ref_reviewed_creates_backup_and_unblocks_ref(
     finally:
         store.close()
 
-    duplicate_exit = cli.main(
+    mixed_exit = cli.main(
+        [
+            "db-unmatched-trade-refs",
+            "--db-path",
+            str(db_path),
+            "--include-reviewed",
+            "--json",
+        ]
+    )
+    mixed_payload = json.loads(capsys.readouterr().out)
+    assert mixed_exit == 0
+    assert mixed_payload["unmatched_trade_ledger_refs"][0]["reviewed"] is False
+    assert mixed_payload["unmatched_trade_ledger_refs"][0]["reviewed_ledger_count"] == 2
+    assert (
+        mixed_payload["unmatched_trade_ledger_refs"][0]["unreviewed_ledger_count"] == 1
+    )
+
+    append_exit = cli.main(
         [
             "db-mark-trade-ref-reviewed",
             "T-MISSING",
@@ -432,9 +451,9 @@ def test_db_mark_trade_ref_reviewed_creates_backup_and_unblocks_ref(
         ]
     )
 
-    duplicate_output = capsys.readouterr().out
-    assert duplicate_exit != 0
-    assert "already reviewed" in duplicate_output
+    append_output = capsys.readouterr().out
+    assert append_exit == 0
+    assert "Reviewed unmatched trade ledger ref T-MISSING" in append_output
 
     include_reviewed_exit = cli.main(
         [
@@ -449,14 +468,15 @@ def test_db_mark_trade_ref_reviewed_creates_backup_and_unblocks_ref(
     payload = json.loads(capsys.readouterr().out)
     assert include_reviewed_exit == 0
     assert payload["unmatched_trade_ledger_refs"][0]["reviewed"] is True
+    assert payload["unmatched_trade_ledger_refs"][0]["reviewed_ledger_count"] == 3
+    assert payload["unmatched_trade_ledger_refs"][0]["unreviewed_ledger_count"] == 0
     reviewed_ledgers = payload["unmatched_trade_ledger_refs"][0]["ledger_entries"]
     assert {entry["id"] for entry in reviewed_ledgers if entry["reviewed"]} == {
         "L-missing-1",
         "L-missing-2",
+        "L-missing-new",
     }
-    assert {entry["id"] for entry in reviewed_ledgers if not entry["reviewed"]} == {
-        "L-missing-new"
-    }
+    assert {entry["id"] for entry in reviewed_ledgers if not entry["reviewed"]} == set()
 
 
 def test_db_revoke_trade_ref_review_creates_backup_and_restores_blocker(
@@ -600,7 +620,9 @@ def test_db_mark_trade_ref_reviewed_creates_backup_before_audit_insert(
     assert "audit insert failed" in output
 
     with sqlite3.connect(db_path) as conn:
-        rows = conn.execute("SELECT refid FROM reviewed_trade_ledger_refs").fetchall()
+        rows = conn.execute(
+            "SELECT refid FROM reviewed_trade_ledger_ref_entries"
+        ).fetchall()
 
     assert rows == []
 

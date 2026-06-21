@@ -5023,7 +5023,7 @@ def _read_schema_version_from_conn(conn: sqlite3.Connection) -> int | None:
 
 def _review_metadata_migration_message(db_path: Path) -> str:
     return (
-        "Review metadata requires portfolio schema v13. Run: "
+        "Review metadata requires portfolio schema v14. Run: "
         f"poetry run krakked migrate --db-path {db_path}"
     )
 
@@ -5037,12 +5037,12 @@ def _read_unmatched_trade_ledger_refs_read_only(
         required_tables = {
             "ledger_entries",
             "trades",
-            "reviewed_trade_ledger_refs",
             "reviewed_trade_ledger_ref_entries",
+            "trade_ledger_ref_review_events",
         }
         if (
             schema_version is None
-            or schema_version < 13
+            or schema_version < 14
             or not all(_sqlite_table_exists(conn, table) for table in required_tables)
         ):
             raise ValueError(_review_metadata_migration_message(db_path))
@@ -5062,14 +5062,13 @@ def _read_unmatched_trade_ledger_refs_read_only(
                 le.balance,
                 le.misc,
                 le.raw_json,
-                r.reviewed_at,
-                r.reviewed_by,
-                r.reason,
-                r.context_json,
-                re.ledger_entry_id AS reviewed_ledger_entry_id
+                re.reviewed_at,
+                re.reviewed_by,
+                re.reason,
+                re.context_json,
+                re.review_event_id
             FROM ledger_entries AS le
             LEFT JOIN trades AS t ON t.id = le.refid
-            LEFT JOIN reviewed_trade_ledger_refs AS r ON r.refid = le.refid
             LEFT JOIN reviewed_trade_ledger_ref_entries AS re
               ON re.refid = le.refid
              AND re.ledger_entry_id = le.id
@@ -5099,20 +5098,33 @@ def _read_unmatched_trade_ledger_refs_read_only(
             context = parsed_context if isinstance(parsed_context, dict) else {}
         except (TypeError, json.JSONDecodeError):
             context = {}
+        ledger_reviewed = row[12] is not None
         group = grouped.setdefault(
             refid,
             {
                 "oldest_time": ledger_time,
                 "latest_time": ledger_time,
                 "ledger_entries": [],
-                "reviewed_at": row[12],
-                "reviewed_by": row[13],
-                "reason": row[14],
-                "context": context,
+                "reviewed_ledger_count": 0,
+                "unreviewed_ledger_count": 0,
+                "reviewed_at": None,
+                "reviewed_by": None,
+                "reason": None,
+                "context": {},
             },
         )
         group["oldest_time"] = min(float(group["oldest_time"]), ledger_time)
         group["latest_time"] = max(float(group["latest_time"]), ledger_time)
+        if ledger_reviewed:
+            group["reviewed_ledger_count"] = int(group["reviewed_ledger_count"]) + 1
+            reviewed_at = str(row[12])
+            if group["reviewed_at"] is None or reviewed_at > str(group["reviewed_at"]):
+                group["reviewed_at"] = reviewed_at
+                group["reviewed_by"] = row[13]
+                group["reason"] = row[14]
+                group["context"] = context
+        else:
+            group["unreviewed_ledger_count"] = int(group["unreviewed_ledger_count"]) + 1
         group["ledger_entries"].append(
             {
                 "id": row[1],
@@ -5127,25 +5139,38 @@ def _read_unmatched_trade_ledger_refs_read_only(
                 "refid": refid,
                 "misc": row[10],
                 "raw": raw_json,
-                "reviewed": row[16] is not None,
+                "reviewed": ledger_reviewed,
+                "reviewed_at": row[12],
+                "reviewed_by": row[13],
+                "reason": row[14],
+                "context": context if ledger_reviewed else {},
+                "review_event_id": row[16],
             }
         )
 
-    return [
-        UnmatchedTradeLedgerRef(
-            refid=refid,
-            oldest_time=float(group["oldest_time"]),
-            latest_time=float(group["latest_time"]),
-            ledger_count=len(group["ledger_entries"]),
-            ledger_entries=list(group["ledger_entries"]),
-            reviewed=bool(group.get("reviewed_at")),
-            reviewed_at=group.get("reviewed_at"),
-            reviewed_by=group.get("reviewed_by"),
-            reason=group.get("reason"),
-            context=group.get("context"),
+    refs: list[UnmatchedTradeLedgerRef] = []
+    for refid, group in grouped.items():
+        ledger_count = len(group["ledger_entries"])
+        reviewed_count = int(group["reviewed_ledger_count"])
+        unreviewed_count = int(group["unreviewed_ledger_count"])
+        fully_reviewed = ledger_count > 0 and unreviewed_count == 0
+        refs.append(
+            UnmatchedTradeLedgerRef(
+                refid=refid,
+                oldest_time=float(group["oldest_time"]),
+                latest_time=float(group["latest_time"]),
+                ledger_count=ledger_count,
+                ledger_entries=list(group["ledger_entries"]),
+                reviewed=fully_reviewed,
+                reviewed_ledger_count=reviewed_count,
+                unreviewed_ledger_count=unreviewed_count,
+                reviewed_at=group.get("reviewed_at") if fully_reviewed else None,
+                reviewed_by=group.get("reviewed_by") if fully_reviewed else None,
+                reason=group.get("reason") if fully_reviewed else None,
+                context=group.get("context") if fully_reviewed else {},
+            )
         )
-        for refid, group in grouped.items()
-    ]
+    return refs
 
 
 def _read_trade_ref_review_candidate(db_path: Path, refid: str) -> tuple[bool, bool]:
@@ -5153,38 +5178,30 @@ def _read_trade_ref_review_candidate(db_path: Path, refid: str) -> tuple[bool, b
 
     conn = _open_read_only_sqlite(db_path)
     try:
-        unmatched = (
-            conn.execute(
-                """
-                SELECT 1
-                FROM ledger_entries AS le
-                LEFT JOIN trades AS t ON t.id = le.refid
-                WHERE le.type = 'trade'
-                  AND le.refid IS NOT NULL
-                  AND TRIM(le.refid) != ''
-                  AND le.refid = ?
-                  AND t.id IS NULL
-                LIMIT 1
-                """,
-                (refid,),
-            ).fetchone()
-            is not None
+        row = conn.execute(
+            """
+            SELECT
+                COUNT(*) AS unmatched_count,
+                SUM(CASE WHEN re.ledger_entry_id IS NULL THEN 1 ELSE 0 END)
+                    AS unreviewed_count
+            FROM ledger_entries AS le
+            LEFT JOIN trades AS t ON t.id = le.refid
+            LEFT JOIN reviewed_trade_ledger_ref_entries AS re
+              ON re.refid = le.refid
+             AND re.ledger_entry_id = le.id
+            WHERE le.type = 'trade'
+              AND le.refid IS NOT NULL
+              AND TRIM(le.refid) != ''
+              AND le.refid = ?
+              AND t.id IS NULL
+            """,
+            (refid,),
+        ).fetchone()
+        unmatched_count = int(row[0] or 0) if row else 0
+        unreviewed_count = int(row[1] or 0) if row else 0
+        return unmatched_count > 0 and unreviewed_count > 0, (
+            unmatched_count > 0 and unreviewed_count == 0
         )
-        reviewed = False
-        if unmatched and _sqlite_table_exists(conn, "reviewed_trade_ledger_refs"):
-            reviewed = (
-                conn.execute(
-                    """
-                    SELECT 1
-                    FROM reviewed_trade_ledger_refs
-                    WHERE refid = ?
-                    LIMIT 1
-                    """,
-                    (refid,),
-                ).fetchone()
-                is not None
-            )
-        return unmatched, reviewed
     finally:
         conn.close()
 
@@ -5192,13 +5209,13 @@ def _read_trade_ref_review_candidate(db_path: Path, refid: str) -> tuple[bool, b
 def _read_trade_ref_active_review(db_path: Path, refid: str) -> bool:
     conn = _open_read_only_sqlite(db_path)
     try:
-        if not _sqlite_table_exists(conn, "reviewed_trade_ledger_refs"):
+        if not _sqlite_table_exists(conn, "reviewed_trade_ledger_ref_entries"):
             return False
         return (
             conn.execute(
                 """
                 SELECT 1
-                FROM reviewed_trade_ledger_refs
+                FROM reviewed_trade_ledger_ref_entries
                 WHERE refid = ?
                 LIMIT 1
                 """,
@@ -5246,6 +5263,8 @@ def _db_unmatched_trade_refs_command(args: argparse.Namespace) -> int:
         print(
             "- "
             f"{item.refid} ({status}; ledgers={item.ledger_count}; "
+            f"reviewed={item.reviewed_ledger_count}; "
+            f"unreviewed={item.unreviewed_ledger_count}; "
             f"oldest={_format_utc_timestamp(item.oldest_time)}; "
             f"latest={_format_utc_timestamp(item.latest_time)})"
         )
@@ -5259,8 +5278,15 @@ def _db_unmatched_trade_refs_command(args: argparse.Namespace) -> int:
                 "  ledger "
                 f"{ledger['id']}: time={_format_utc_timestamp(ledger['time'])} "
                 f"asset={ledger['asset']} amount={ledger['amount']} "
-                f"fee={ledger['fee']} balance={ledger['balance']}"
+                f"fee={ledger['fee']} balance={ledger['balance']} "
+                f"reviewed={bool(ledger.get('reviewed'))}"
             )
+            if ledger.get("reviewed"):
+                print(
+                    "    review: "
+                    f"{ledger.get('reviewed_at')} by {ledger.get('reviewed_by')}; "
+                    f"reason={ledger.get('reason')}"
+                )
     return 0
 
 
@@ -5321,7 +5347,11 @@ def _db_mark_trade_ref_reviewed_command(args: argparse.Namespace) -> int:
                 refid=target.refid,
                 reviewed_by=reviewed_by,
                 reason=reason,
-                ledger_entry_ids=[str(entry["id"]) for entry in target.ledger_entries],
+                ledger_entry_ids=[
+                    str(entry["id"])
+                    for entry in target.ledger_entries
+                    if not bool(entry.get("reviewed"))
+                ],
                 context={
                     "command": "db-mark-trade-ref-reviewed",
                     "unmatched_trade_ledger_ref": target.to_dict(),

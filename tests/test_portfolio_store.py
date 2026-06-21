@@ -153,21 +153,38 @@ def test_fresh_schema_has_indexed_trade_ledger_lag_lookup(tmp_path):
     assert "idx_ledger_entries_type_refid_time" in indexes
 
 
-def test_fresh_schema_has_reviewed_trade_ledger_refs_table(tmp_path):
+def test_fresh_schema_has_scoped_trade_ledger_review_tables(tmp_path):
     db_path = tmp_path / "reviewed_trade_refs_fresh.db"
     SQLitePortfolioStore(str(db_path))
 
     with sqlite3.connect(db_path) as conn:
         tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master")}
+        columns = {
+            row[1]
+            for row in conn.execute(
+                "PRAGMA table_info(reviewed_trade_ledger_ref_entries)"
+            )
+        }
         indexes = {
             row[1]
-            for row in conn.execute("PRAGMA index_list(reviewed_trade_ledger_refs)")
+            for row in conn.execute(
+                "PRAGMA index_list(reviewed_trade_ledger_ref_entries)"
+            )
         }
 
-    assert "reviewed_trade_ledger_refs" in tables
+    assert "reviewed_trade_ledger_refs" not in tables
     assert "reviewed_trade_ledger_ref_entries" in tables
     assert "trade_ledger_ref_review_events" in tables
-    assert "idx_reviewed_trade_ledger_refs_reviewed_at" in indexes
+    assert {
+        "refid",
+        "ledger_entry_id",
+        "reviewed_at",
+        "reviewed_by",
+        "reason",
+        "context_json",
+        "review_event_id",
+    } <= columns
+    assert "idx_reviewed_trade_ledger_ref_entries_ledger_id" in indexes
 
 
 def test_v11_to_latest_migration_adds_trade_ref_review_tables(tmp_path):
@@ -182,12 +199,12 @@ def test_v11_to_latest_migration_adds_trade_ref_review_tables(tmp_path):
         tables = {item[0] for item in conn.execute("SELECT name FROM sqlite_master")}
 
     assert row == (str(CURRENT_SCHEMA_VERSION),)
-    assert "reviewed_trade_ledger_refs" in tables
+    assert "reviewed_trade_ledger_refs" not in tables
     assert "reviewed_trade_ledger_ref_entries" in tables
     assert "trade_ledger_ref_review_events" in tables
 
 
-def test_v12_to_v13_migration_backfills_review_entries_and_audit(tmp_path):
+def test_v12_to_latest_migration_backfills_review_entries_and_audit(tmp_path):
     db_path = tmp_path / "reviewed_trade_refs_v12_migrate.db"
     with sqlite3.connect(db_path) as conn:
         migrations._ensure_meta_table(conn)
@@ -222,7 +239,7 @@ def test_v12_to_v13_migration_backfills_review_entries_and_audit(tmp_path):
         migrations.run_migrations(conn, 12, CURRENT_SCHEMA_VERSION)
         entries = conn.execute(
             """
-            SELECT refid, ledger_entry_id
+            SELECT refid, ledger_entry_id, reviewed_by, reason, context_json
             FROM reviewed_trade_ledger_ref_entries
             ORDER BY ledger_entry_id
             """
@@ -233,9 +250,82 @@ def test_v12_to_v13_migration_backfills_review_entries_and_audit(tmp_path):
             FROM trade_ledger_ref_review_events
             """
         ).fetchall()
+        tables = {item[0] for item in conn.execute("SELECT name FROM sqlite_master")}
 
-    assert entries == [("T-MISSING", "L-1"), ("T-MISSING", "L-2")]
+    assert "reviewed_trade_ledger_refs" not in tables
+    assert entries == [
+        ("T-MISSING", "L-1", "ops", "verified", '{"source": "test"}'),
+        ("T-MISSING", "L-2", "ops", "verified", '{"source": "test"}'),
+    ]
     assert events == [("T-MISSING", "review", "ops", '["L-1", "L-2"]')]
+
+
+def test_v12_empty_review_migrates_fail_closed_and_reviewable(tmp_path):
+    db_path = tmp_path / "reviewed_trade_refs_empty_v12_migrate.db"
+    store = SQLitePortfolioStore(str(db_path))
+    store.save_ledger_entry(
+        LedgerEntry(
+            id="L-1",
+            time=10.0,
+            type="trade",
+            subtype="",
+            aclass="currency",
+            asset="USD",
+            amount=Decimal("1"),
+            fee=Decimal("0"),
+            balance=None,
+            refid="T-MISSING",
+            misc=None,
+            raw={},
+        )
+    )
+    store.close()
+
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("DELETE FROM reviewed_trade_ledger_ref_entries")
+        conn.execute("DELETE FROM trade_ledger_ref_review_events")
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS reviewed_trade_ledger_refs (
+                refid TEXT PRIMARY KEY,
+                reviewed_at TEXT NOT NULL,
+                reviewed_by TEXT NOT NULL,
+                reason TEXT NOT NULL,
+                ledger_entry_ids_json TEXT NOT NULL,
+                context_json TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute("DELETE FROM reviewed_trade_ledger_refs")
+        conn.execute(
+            """
+            INSERT INTO reviewed_trade_ledger_refs (
+                refid, reviewed_at, reviewed_by, reason, ledger_entry_ids_json, context_json
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "T-MISSING",
+                "2026-01-02T03:04:05+00:00",
+                "ops",
+                "empty legacy review",
+                "[]",
+                "{}",
+            ),
+        )
+        migrations._set_schema_version(conn, 13)
+
+    migrated = SQLitePortfolioStore(str(db_path))
+
+    assert migrated.get_unmatched_trade_ledger_ref_times() == {"T-MISSING": 10.0}
+    review = migrated.mark_trade_ledger_ref_reviewed(
+        refid="T-MISSING",
+        reviewed_by="ops",
+        reason="review after migration",
+        ledger_entry_ids=["L-1"],
+        context={"source": "test"},
+    )
+    assert review.ledger_entry_ids == ["L-1"]
+    assert migrated.get_unmatched_trade_ledger_ref_times() == {}
 
 
 def test_unmatched_trade_ledger_ref_times_excludes_stored_trades(tmp_path):
@@ -341,9 +431,12 @@ def test_reviewed_trade_ledger_ref_only_excludes_reviewed_ledger_ids(tmp_path):
 
     assert len(reviewed) == 1
     assert reviewed[0].reviewed is True
+    assert reviewed[0].reviewed_ledger_count == 1
+    assert reviewed[0].unreviewed_ledger_count == 0
     assert reviewed[0].reviewed_by == "ops"
     assert reviewed[0].reason == "Verified manually in Kraken"
     assert reviewed[0].ledger_entries[0]["reviewed"] is True
+    assert reviewed[0].ledger_entries[0]["reviewed_by"] == "ops"
 
     with pytest.raises(ValueError):
         store.mark_trade_ledger_ref_reviewed(
@@ -359,7 +452,29 @@ def test_reviewed_trade_ledger_ref_only_excludes_reviewed_ledger_ids(tmp_path):
     assert store.get_unmatched_trade_ledger_ref_times() == {"T-MISSING": 20.0}
     unreviewed = store.get_unmatched_trade_ledger_refs()
     assert [entry["id"] for entry in unreviewed[0].ledger_entries] == ["L-missing-2"]
-    assert unreviewed[0].reviewed is True
+    assert unreviewed[0].reviewed is False
+    assert unreviewed[0].reviewed_ledger_count == 0
+    assert unreviewed[0].unreviewed_ledger_count == 1
+
+    with pytest.raises(ValueError, match="set changed"):
+        store.mark_trade_ledger_ref_reviewed(
+            refid="T-MISSING",
+            reviewed_by="ops",
+            reason="stale ids",
+            ledger_entry_ids=["L-missing"],
+            context={},
+        )
+
+    append_review = store.mark_trade_ledger_ref_reviewed(
+        refid="T-MISSING",
+        reviewed_by="ops",
+        reason="Verified second ledger manually in Kraken",
+        ledger_entry_ids=["L-missing-2"],
+        context={"source": "test"},
+        reviewed_at="2026-01-02T03:05:05+00:00",
+    )
+    assert append_review.ledger_entry_ids == ["L-missing-2"]
+    assert store.get_unmatched_trade_ledger_ref_times() == {}
 
     event = store.revoke_trade_ledger_ref_review(
         refid="T-MISSING",
@@ -370,7 +485,7 @@ def test_reviewed_trade_ledger_ref_only_excludes_reviewed_ledger_ids(tmp_path):
     )
 
     assert event.event_type == "revoke"
-    assert set(event.ledger_entry_ids) == {"L-missing"}
+    assert set(event.ledger_entry_ids) == {"L-missing", "L-missing-2"}
     assert store.get_unmatched_trade_ledger_ref_times() == {"T-MISSING": 10.0}
 
     with pytest.raises(ValueError):

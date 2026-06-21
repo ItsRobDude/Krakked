@@ -39,7 +39,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-CURRENT_SCHEMA_VERSION = 13
+CURRENT_SCHEMA_VERSION = 14
 
 MAX_ML_TRAINING_EXAMPLES = 5000
 MIN_ML_BOOTSTRAP_EXAMPLES = 50
@@ -106,6 +106,8 @@ class UnmatchedTradeLedgerRef:
     ledger_count: int
     ledger_entries: List[Dict[str, Any]]
     reviewed: bool = False
+    reviewed_ledger_count: int = 0
+    unreviewed_ledger_count: int = 0
     reviewed_at: Optional[str] = None
     reviewed_by: Optional[str] = None
     reason: Optional[str] = None
@@ -119,6 +121,8 @@ class UnmatchedTradeLedgerRef:
             "ledger_count": self.ledger_count,
             "ledger_entries": list(self.ledger_entries),
             "reviewed": self.reviewed,
+            "reviewed_ledger_count": self.reviewed_ledger_count,
+            "unreviewed_ledger_count": self.unreviewed_ledger_count,
             "reviewed_at": self.reviewed_at,
             "reviewed_by": self.reviewed_by,
             "reason": self.reason,
@@ -607,28 +611,14 @@ def ensure_portfolio_tables(conn: sqlite3.Connection) -> None:
     )
     cursor.execute(
         """
-        CREATE TABLE IF NOT EXISTS reviewed_trade_ledger_refs (
-            refid TEXT PRIMARY KEY,
-            reviewed_at TEXT NOT NULL,
-            reviewed_by TEXT NOT NULL,
-            reason TEXT NOT NULL,
-            ledger_entry_ids_json TEXT NOT NULL,
-            context_json TEXT NOT NULL
-        )
-        """
-    )
-    cursor.execute(
-        """
-        CREATE INDEX IF NOT EXISTS idx_reviewed_trade_ledger_refs_reviewed_at
-            ON reviewed_trade_ledger_refs(reviewed_at)
-        """
-    )
-    cursor.execute(
-        """
         CREATE TABLE IF NOT EXISTS reviewed_trade_ledger_ref_entries (
             refid TEXT NOT NULL,
             ledger_entry_id TEXT NOT NULL,
             reviewed_at TEXT NOT NULL,
+            reviewed_by TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            context_json TEXT NOT NULL,
+            review_event_id INTEGER,
             PRIMARY KEY (refid, ledger_entry_id)
         )
         """
@@ -1450,14 +1440,13 @@ class SQLitePortfolioStore(PortfolioStore):
                     le.balance,
                     le.misc,
                     le.raw_json,
-                    r.reviewed_at,
-                    r.reviewed_by,
-                    r.reason,
-                    r.context_json,
-                    re.ledger_entry_id AS reviewed_ledger_entry_id
+                    re.reviewed_at,
+                    re.reviewed_by,
+                    re.reason,
+                    re.context_json,
+                    re.review_event_id
                 FROM ledger_entries AS le
                 LEFT JOIN trades AS t ON t.id = le.refid
-                LEFT JOIN reviewed_trade_ledger_refs AS r ON r.refid = le.refid
                 LEFT JOIN reviewed_trade_ledger_ref_entries AS re
                   ON re.refid = le.refid
                  AND re.ledger_entry_id = le.id
@@ -1478,7 +1467,7 @@ class SQLitePortfolioStore(PortfolioStore):
             ledger_time = float(row[2])
             raw_json = _json_dict_or_empty(row[11])
             context = _json_dict_or_empty(row[15])
-            ledger_reviewed = row[16] is not None
+            ledger_reviewed = row[12] is not None
 
             group = grouped.setdefault(
                 refid,
@@ -1486,14 +1475,30 @@ class SQLitePortfolioStore(PortfolioStore):
                     "oldest_time": ledger_time,
                     "latest_time": ledger_time,
                     "ledger_entries": [],
-                    "reviewed_at": row[12],
-                    "reviewed_by": row[13],
-                    "reason": row[14],
-                    "context": context,
+                    "reviewed_ledger_count": 0,
+                    "unreviewed_ledger_count": 0,
+                    "reviewed_at": None,
+                    "reviewed_by": None,
+                    "reason": None,
+                    "context": {},
                 },
             )
             group["oldest_time"] = min(float(group["oldest_time"]), ledger_time)
             group["latest_time"] = max(float(group["latest_time"]), ledger_time)
+            if ledger_reviewed:
+                group["reviewed_ledger_count"] = int(group["reviewed_ledger_count"]) + 1
+                reviewed_at = str(row[12])
+                if group["reviewed_at"] is None or reviewed_at > str(
+                    group["reviewed_at"]
+                ):
+                    group["reviewed_at"] = reviewed_at
+                    group["reviewed_by"] = row[13]
+                    group["reason"] = row[14]
+                    group["context"] = context
+            else:
+                group["unreviewed_ledger_count"] = (
+                    int(group["unreviewed_ledger_count"]) + 1
+                )
             group["ledger_entries"].append(
                 {
                     "id": row[1],
@@ -1509,24 +1514,37 @@ class SQLitePortfolioStore(PortfolioStore):
                     "misc": row[10],
                     "raw": raw_json,
                     "reviewed": ledger_reviewed,
+                    "reviewed_at": row[12],
+                    "reviewed_by": row[13],
+                    "reason": row[14],
+                    "context": context if ledger_reviewed else {},
+                    "review_event_id": row[16],
                 }
             )
 
-        return [
-            UnmatchedTradeLedgerRef(
-                refid=refid,
-                oldest_time=float(group["oldest_time"]),
-                latest_time=float(group["latest_time"]),
-                ledger_count=len(group["ledger_entries"]),
-                ledger_entries=list(group["ledger_entries"]),
-                reviewed=bool(group.get("reviewed_at")),
-                reviewed_at=group.get("reviewed_at"),
-                reviewed_by=group.get("reviewed_by"),
-                reason=group.get("reason"),
-                context=group.get("context"),
+        results: List[UnmatchedTradeLedgerRef] = []
+        for refid, group in grouped.items():
+            reviewed_count = int(group["reviewed_ledger_count"])
+            unreviewed_count = int(group["unreviewed_ledger_count"])
+            ledger_count = len(group["ledger_entries"])
+            fully_reviewed = ledger_count > 0 and unreviewed_count == 0
+            results.append(
+                UnmatchedTradeLedgerRef(
+                    refid=refid,
+                    oldest_time=float(group["oldest_time"]),
+                    latest_time=float(group["latest_time"]),
+                    ledger_count=ledger_count,
+                    ledger_entries=list(group["ledger_entries"]),
+                    reviewed=fully_reviewed,
+                    reviewed_ledger_count=reviewed_count,
+                    unreviewed_ledger_count=unreviewed_count,
+                    reviewed_at=group.get("reviewed_at") if fully_reviewed else None,
+                    reviewed_by=group.get("reviewed_by") if fully_reviewed else None,
+                    reason=group.get("reason") if fully_reviewed else None,
+                    context=group.get("context") if fully_reviewed else {},
+                )
             )
-            for refid, group in grouped.items()
-        ]
+        return results
 
     def mark_trade_ledger_ref_reviewed(
         self,
@@ -1548,31 +1566,28 @@ class SQLitePortfolioStore(PortfolioStore):
         if not cleaned_reason:
             raise ValueError("reason is required")
         reviewed_at_value = reviewed_at or _utc_now_iso()
-        _ = ledger_entry_ids
+        supplied_ledger_ids: List[str] = []
+        seen_ledger_ids: set[str] = set()
+        for ledger_id in ledger_entry_ids:
+            cleaned_ledger_id = str(ledger_id).strip()
+            if cleaned_ledger_id and cleaned_ledger_id not in seen_ledger_ids:
+                seen_ledger_ids.add(cleaned_ledger_id)
+                supplied_ledger_ids.append(cleaned_ledger_id)
+        if not supplied_ledger_ids:
+            raise ValueError("ledger_entry_ids are required")
         with self._lock:
             conn = self._get_conn()
             cursor = conn.cursor()
             try:
                 cursor.execute("BEGIN IMMEDIATE")
-                active_review = cursor.execute(
+                unmatched_rows = cursor.execute(
                     """
-                    SELECT 1
-                    FROM reviewed_trade_ledger_refs
-                    WHERE refid = ?
-                    LIMIT 1
-                    """,
-                    (cleaned_refid,),
-                ).fetchone()
-                if active_review is not None:
-                    raise ValueError(
-                        f"Trade ledger ref already reviewed: {cleaned_refid}"
-                    )
-
-                rows = cursor.execute(
-                    """
-                    SELECT le.id
+                    SELECT le.id, re.ledger_entry_id
                     FROM ledger_entries AS le
                     LEFT JOIN trades AS t ON t.id = le.refid
+                    LEFT JOIN reviewed_trade_ledger_ref_entries AS re
+                      ON re.refid = le.refid
+                     AND re.ledger_entry_id = le.id
                     WHERE le.type = 'trade'
                       AND le.refid = ?
                       AND t.id IS NULL
@@ -1580,12 +1595,24 @@ class SQLitePortfolioStore(PortfolioStore):
                     """,
                     (cleaned_refid,),
                 ).fetchall()
-                if not rows:
+                if not unmatched_rows:
                     raise ValueError(
                         f"Unmatched trade ledger ref not found: {cleaned_refid}"
                     )
 
-                ledger_ids = [str(row[0]) for row in rows]
+                current_unreviewed_ids = [
+                    str(row[0]) for row in unmatched_rows if row[1] is None
+                ]
+                if not current_unreviewed_ids:
+                    raise ValueError(
+                        f"Trade ledger ref already reviewed: {cleaned_refid}"
+                    )
+                if set(supplied_ledger_ids) != set(current_unreviewed_ids):
+                    raise ValueError(
+                        "Unmatched trade ledger set changed; re-run list and retry"
+                    )
+
+                ledger_ids = current_unreviewed_ids
                 review = TradeLedgerRefReview(
                     refid=cleaned_refid,
                     reviewed_at=reviewed_at_value,
@@ -1593,37 +1620,6 @@ class SQLitePortfolioStore(PortfolioStore):
                     reason=cleaned_reason,
                     ledger_entry_ids=ledger_ids,
                     context=dict(context),
-                )
-                cursor.execute(
-                    """
-                    INSERT INTO reviewed_trade_ledger_refs (
-                        refid,
-                        reviewed_at,
-                        reviewed_by,
-                        reason,
-                        ledger_entry_ids_json,
-                        context_json
-                    ) VALUES (?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        review.refid,
-                        review.reviewed_at,
-                        review.reviewed_by,
-                        review.reason,
-                        json.dumps(review.ledger_entry_ids, sort_keys=True),
-                        json.dumps(review.context, sort_keys=True),
-                    ),
-                )
-                cursor.executemany(
-                    """
-                    INSERT INTO reviewed_trade_ledger_ref_entries (
-                        refid, ledger_entry_id, reviewed_at
-                    ) VALUES (?, ?, ?)
-                    """,
-                    [
-                        (review.refid, ledger_id, review.reviewed_at)
-                        for ledger_id in review.ledger_entry_ids
-                    ],
                 )
                 cursor.execute(
                     """
@@ -1645,6 +1641,35 @@ class SQLitePortfolioStore(PortfolioStore):
                         json.dumps(review.ledger_entry_ids, sort_keys=True),
                         json.dumps(review.context, sort_keys=True),
                     ),
+                )
+                review_event_id_raw = cursor.lastrowid
+                if review_event_id_raw is None:
+                    raise sqlite3.IntegrityError("review audit event insert failed")
+                review_event_id = int(review_event_id_raw)
+                cursor.executemany(
+                    """
+                    INSERT INTO reviewed_trade_ledger_ref_entries (
+                        refid,
+                        ledger_entry_id,
+                        reviewed_at,
+                        reviewed_by,
+                        reason,
+                        context_json,
+                        review_event_id
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    [
+                        (
+                            review.refid,
+                            ledger_id,
+                            review.reviewed_at,
+                            review.reviewed_by,
+                            review.reason,
+                            json.dumps(review.context, sort_keys=True),
+                            review_event_id,
+                        )
+                        for ledger_id in review.ledger_entry_ids
+                    ],
                 )
                 conn.commit()
             except Exception:
@@ -1676,49 +1701,42 @@ class SQLitePortfolioStore(PortfolioStore):
             cursor = conn.cursor()
             try:
                 cursor.execute("BEGIN IMMEDIATE")
-                row = cursor.execute(
+                rows = cursor.execute(
                     """
                     SELECT
+                        ledger_entry_id,
                         reviewed_at,
                         reviewed_by,
                         reason,
-                        ledger_entry_ids_json,
-                        context_json
-                    FROM reviewed_trade_ledger_refs
+                        context_json,
+                        review_event_id
+                    FROM reviewed_trade_ledger_ref_entries
                     WHERE refid = ?
+                    ORDER BY ledger_entry_id ASC
                     """,
                     (cleaned_refid,),
-                ).fetchone()
-                if row is None:
+                ).fetchall()
+                if not rows:
                     raise ValueError(
                         f"Trade ledger ref review is not active: {cleaned_refid}"
                     )
 
-                ledger_ids = _json_str_list_or_empty(row[3])
-                if not ledger_ids:
-                    ledger_ids = [
-                        str(item[0])
-                        for item in cursor.execute(
-                            """
-                            SELECT ledger_entry_id
-                            FROM reviewed_trade_ledger_ref_entries
-                            WHERE refid = ?
-                            ORDER BY ledger_entry_id ASC
-                            """,
-                            (cleaned_refid,),
-                        ).fetchall()
-                    ]
+                ledger_ids = [str(row[0]) for row in rows]
                 event_context = dict(context)
                 event_context.setdefault(
-                    "active_review",
-                    {
-                        "refid": cleaned_refid,
-                        "reviewed_at": row[0],
-                        "reviewed_by": row[1],
-                        "reason": row[2],
-                        "ledger_entry_ids": ledger_ids,
-                        "context": _json_dict_or_empty(row[4]),
-                    },
+                    "active_reviews",
+                    [
+                        {
+                            "refid": cleaned_refid,
+                            "ledger_entry_id": str(row[0]),
+                            "reviewed_at": row[1],
+                            "reviewed_by": row[2],
+                            "reason": row[3],
+                            "context": _json_dict_or_empty(row[4]),
+                            "review_event_id": row[5],
+                        }
+                        for row in rows
+                    ],
                 )
                 event = TradeLedgerRefReviewEvent(
                     refid=cleaned_refid,
@@ -1731,10 +1749,6 @@ class SQLitePortfolioStore(PortfolioStore):
                 )
                 cursor.execute(
                     "DELETE FROM reviewed_trade_ledger_ref_entries WHERE refid = ?",
-                    (cleaned_refid,),
-                )
-                cursor.execute(
-                    "DELETE FROM reviewed_trade_ledger_refs WHERE refid = ?",
                     (cleaned_refid,),
                 )
                 cursor.execute(

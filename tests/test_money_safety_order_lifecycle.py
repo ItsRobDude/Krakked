@@ -922,6 +922,9 @@ def test_real_account_truth_provider_gates_live_opening_risk(tmp_path):
     drift_portfolio.sync()
     assert drift_portfolio.get_drift_status().drift_flag is False
     drift_client._balances["ZUSD"] = Decimal("9889.0")
+    drift_portfolio._last_balance_reconcile_at = datetime.now(UTC) - timedelta(
+        seconds=10
+    )
     drift_service = _service_with_account_truth(
         drift_client,
         cast(SQLitePortfolioStore, drift_portfolio.store),
@@ -939,6 +942,9 @@ def test_real_account_truth_provider_gates_live_opening_risk(tmp_path):
     unavailable_portfolio = _portfolio_service(unavailable_client, unavailable_db)
     unavailable_portfolio.sync()
     unavailable_client.fail_balance_reads(count=1)
+    unavailable_portfolio._last_balance_reconcile_at = datetime.now(UTC) - timedelta(
+        seconds=10
+    )
     unavailable_service = _service_with_account_truth(
         unavailable_client,
         cast(SQLitePortfolioStore, unavailable_portfolio.store),

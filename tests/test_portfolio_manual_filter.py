@@ -130,22 +130,51 @@ class InMemoryStore(PortfolioStore):
         return refs
 
     def get_unmatched_trade_ledger_refs(self, *, include_reviewed=False):
-        ref_times = self.get_unmatched_trade_ledger_ref_times()
-        reviewed_refs = getattr(self, "reviewed_trade_ledger_refs", {})
-        if include_reviewed:
-            ref_times.update(
-                {refid: 0.0 for refid in reviewed_refs if refid not in ref_times}
+        stored_trade_ids = {
+            str(trade.get("id"))
+            for trade in getattr(self, "trades", [])
+            if isinstance(trade, dict) and trade.get("id")
+        }
+        reviewed_entries = getattr(self, "reviewed_trade_ledger_entries", {})
+        groups = {}
+        for entry in getattr(self, "ledger_entries", []):
+            if entry.type != "trade" or not entry.refid:
+                continue
+            if str(entry.refid) in stored_trade_ids:
+                continue
+            review = reviewed_entries.get(str(entry.id))
+            if review is not None and not include_reviewed:
+                continue
+            group = groups.setdefault(
+                str(entry.refid),
+                {
+                    "oldest": entry.time,
+                    "latest": entry.time,
+                    "entries": [],
+                    "reviewed_count": 0,
+                    "unreviewed_count": 0,
+                },
             )
+            group["oldest"] = min(group["oldest"], entry.time)
+            group["latest"] = max(group["latest"], entry.time)
+            reviewed = review is not None
+            if reviewed:
+                group["reviewed_count"] += 1
+            else:
+                group["unreviewed_count"] += 1
+            group["entries"].append({"id": str(entry.id), "reviewed": reviewed})
         return [
             UnmatchedTradeLedgerRef(
                 refid=refid,
-                oldest_time=time,
-                latest_time=time,
-                ledger_count=1,
-                ledger_entries=[],
-                reviewed=refid in reviewed_refs,
+                oldest_time=group["oldest"],
+                latest_time=group["latest"],
+                ledger_count=len(group["entries"]),
+                ledger_entries=list(group["entries"]),
+                reviewed=group["unreviewed_count"] == 0,
+                reviewed_ledger_count=group["reviewed_count"],
+                unreviewed_ledger_count=group["unreviewed_count"],
             )
-            for refid, time in ref_times.items()
+            for refid, group in groups.items()
         ]
 
     def mark_trade_ledger_ref_reviewed(
@@ -158,17 +187,21 @@ class InMemoryStore(PortfolioStore):
         context,
         reviewed_at=None,
     ):
-        reviews = getattr(self, "reviewed_trade_ledger_refs", {})
-        if refid in reviews:
-            raise ValueError(f"{refid} already reviewed")
+        reviews = getattr(self, "reviewed_trade_ledger_entries", {})
         matching_ledgers = [
             entry
             for entry in getattr(self, "ledger_entries", [])
-            if entry.type == "trade" and str(entry.refid) == str(refid)
+            if entry.type == "trade"
+            and str(entry.refid) == str(refid)
+            and str(entry.id) not in reviews
         ]
         if not matching_ledgers:
             raise ValueError(f"{refid} is not unmatched")
         ledger_ids = [str(entry.id) for entry in matching_ledgers]
+        if set(str(item) for item in ledger_entry_ids) != set(ledger_ids):
+            raise ValueError(
+                "Unmatched trade ledger set changed; re-run list and retry"
+            )
         review = TradeLedgerRefReview(
             refid=refid,
             reviewed_at=reviewed_at or "2026-01-01T00:00:00+00:00",
@@ -177,8 +210,9 @@ class InMemoryStore(PortfolioStore):
             ledger_entry_ids=ledger_ids,
             context=dict(context),
         )
-        reviews[refid] = review
-        self.reviewed_trade_ledger_refs = reviews
+        for ledger_id in ledger_ids:
+            reviews[ledger_id] = review
+        self.reviewed_trade_ledger_entries = reviews
         reviewed_ids = set(getattr(self, "reviewed_trade_ledger_entry_ids", set()))
         reviewed_ids.update(ledger_ids)
         self.reviewed_trade_ledger_entry_ids = reviewed_ids
@@ -187,13 +221,19 @@ class InMemoryStore(PortfolioStore):
     def revoke_trade_ledger_ref_review(
         self, *, refid, revoked_by, reason, context, revoked_at=None
     ):
-        reviews = getattr(self, "reviewed_trade_ledger_refs", {})
-        review = reviews.pop(refid, None)
-        if review is None:
+        reviews = getattr(self, "reviewed_trade_ledger_entries", {})
+        active_ids = [
+            ledger_id
+            for ledger_id, review in reviews.items()
+            if str(review.refid) == str(refid)
+        ]
+        if not active_ids:
             raise ValueError(f"{refid} is not reviewed")
-        self.reviewed_trade_ledger_refs = reviews
+        for ledger_id in active_ids:
+            reviews.pop(ledger_id, None)
+        self.reviewed_trade_ledger_entries = reviews
         reviewed_ids = set(getattr(self, "reviewed_trade_ledger_entry_ids", set()))
-        reviewed_ids.difference_update(review.ledger_entry_ids)
+        reviewed_ids.difference_update(active_ids)
         self.reviewed_trade_ledger_entry_ids = reviewed_ids
         return TradeLedgerRefReviewEvent(
             refid=refid,
@@ -201,7 +241,7 @@ class InMemoryStore(PortfolioStore):
             event_at=revoked_at or "2026-01-01T00:00:00+00:00",
             actor=revoked_by,
             reason=reason,
-            ledger_entry_ids=list(review.ledger_entry_ids),
+            ledger_entry_ids=list(active_ids),
             context=dict(context),
         )
 
