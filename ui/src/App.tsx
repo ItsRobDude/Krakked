@@ -18,6 +18,7 @@ import {
   fetchSystemHealth,
   fetchSessionState,
   fetchProfiles, ProfileSummary,
+  fetchProfileNameSuggestion,
   fetchStrategies,
   fetchStrategyPerformance,
   applyRiskPreset,
@@ -59,7 +60,7 @@ import {
   updateSessionConfig,
 } from './services/api';
 import { RISK_PRESET_META, formatPresetSummary } from './constants/riskPresets';
-import { getRuntimeTrust } from './utils/operatorTrust';
+import { getRuntimeTrust, isDriftInfoUnknown } from './utils/operatorTrust';
 import { getStrategyTradingEffect, getStrategyTruthNote } from './utils/strategyTruth';
 
 const DASHBOARD_REFRESH_MS = Number(import.meta.env.VITE_REFRESH_DASHBOARD_MS ?? 5000) || 5000;
@@ -197,6 +198,34 @@ const formatMarketDataHint = (
     return `${reason}: ${state.market_data_detail}.`;
   }
   return reason || 'Streaming or REST market data is degraded.';
+};
+
+const getDriftDisplay = (health: SystemHealth | null | undefined) => {
+  if (health?.drift_detected) {
+    return {
+      value: 'Detected',
+      panelValue: 'Drift detected',
+      tone: 'warning' as const,
+      panelClass: ' text--danger',
+      hint: health.drift_reason || 'Expected positions and tracked balances do not line up cleanly.',
+    };
+  }
+  if (isDriftInfoUnknown(health?.drift_info)) {
+    return {
+      value: 'Unknown',
+      panelValue: 'Unknown',
+      tone: 'warning' as const,
+      panelClass: '',
+      hint: 'Cached drift status has not been warmed yet.',
+    };
+  }
+  return {
+    value: 'Clear',
+    panelValue: 'Clear',
+    tone: 'ok' as const,
+    panelClass: ' text--success',
+    hint: 'Expected positions and local balances remain aligned.',
+  };
 };
 
 const isRiskProfile = (value: unknown): value is StrategyRiskProfile =>
@@ -1069,6 +1098,11 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
     }
   };
 
+  const handleSuggestProfileName = async () => {
+    const suggestion = await fetchProfileNameSuggestion('paper-validation');
+    return suggestion.name;
+  };
+
   const handleSaveConfig = async () => {
     if (health?.ui_read_only) {
       throw new Error('Backend is in read-only mode.');
@@ -1626,6 +1660,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
         systemMessage={systemMessage}
         startupMlEnabled={startupMlEnabled}
         liveReadiness={liveReadiness}
+        onSuggestProfileName={handleSuggestProfileName}
         onCreateProfile={handleCreateProfile}
         onProfileChange={handleProfileChange}
         onSaveConfig={handleSaveConfig}
@@ -1635,6 +1670,7 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
     );
   }
 
+  const driftDisplay = getDriftDisplay(health);
   const dashboardAlerts: DashboardAlert[] = [];
   if (health?.portfolio_sync_ok === false) {
     dashboardAlerts.push({
@@ -1671,6 +1707,13 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
       tone: 'warning',
       title: 'Portfolio drift detected',
       message: health.drift_reason || 'Expected positions and tracked balances do not line up cleanly.',
+    });
+  } else if (isDriftInfoUnknown(health?.drift_info)) {
+    dashboardAlerts.push({
+      id: 'drift-unknown',
+      tone: 'info',
+      title: 'Drift status unknown',
+      message: 'Cached drift status has not been warmed yet. Live opening risk still forces a fresh account-truth check.',
     });
   }
   if (refreshIssues.strategies) {
@@ -1715,6 +1758,8 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
   const runtimeTrust = getRuntimeTrust(health, connectionState, marketDataScope);
   const runtimeProvenance = formatRuntimeProvenance(health);
   const runtimeProvenanceHint = formatRuntimeProvenanceHint(health);
+  const operatorPaths = health?.operator_paths ?? null;
+  const operatorPathErrors = operatorPaths?.path_errors ?? {};
 
   const systemStatusItems = [
     {
@@ -1784,9 +1829,9 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
     },
     {
       label: 'Drift',
-      value: health?.drift_detected ? 'Detected' : 'Clear',
-      tone: health?.drift_detected ? 'warning' as const : 'ok' as const,
-      hint: health?.drift_reason || 'Portfolio within expected bounds',
+      value: driftDisplay.value,
+      tone: driftDisplay.tone,
+      hint: driftDisplay.hint,
     },
   ];
 
@@ -1965,15 +2010,13 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
               <h2>Portfolio Integrity</h2>
               <p className="panel__hint">Health based on sync state, drift, exposure, and live runtime status.</p>
             </div>
-            {session.mode === 'paper' ? (
-              <button
-                type="button"
-                className="ghost-button"
-                onClick={() => setShowIntegrityAdvanced((current) => !current)}
-              >
-                {showIntegrityAdvanced ? 'Hide advanced' : 'Advanced'}
-              </button>
-            ) : null}
+            <button
+              type="button"
+              className="ghost-button"
+              onClick={() => setShowIntegrityAdvanced((current) => !current)}
+            >
+              {showIntegrityAdvanced ? 'Hide advanced' : 'Advanced'}
+            </button>
           </div>
           <div className="integrity-panel__list">
             <div className="integrity-panel__item">
@@ -2016,11 +2059,11 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
             </div>
             <div className="integrity-panel__item">
               <p className="integrity-panel__label">Drift monitor</p>
-              <p className={`integrity-panel__value${health?.drift_detected ? ' text--danger' : ' text--success'}`}>
-                {health?.drift_detected ? 'Drift detected' : 'Clear'}
+              <p className={`integrity-panel__value${driftDisplay.panelClass}`}>
+                {driftDisplay.panelValue}
               </p>
               <p className="integrity-panel__hint">
-                {health?.drift_reason || 'Expected positions and local balances remain aligned.'}
+                {driftDisplay.hint}
               </p>
             </div>
             <div className="integrity-panel__item">
@@ -2042,28 +2085,80 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
               </p>
             </div>
           </div>
-          {session.mode === 'paper' && showIntegrityAdvanced ? (
+          {showIntegrityAdvanced ? (
             <div className="integrity-panel__advanced">
               <div className="integrity-panel__item">
-                <p className="integrity-panel__label">Paper account source</p>
-                <p className="integrity-panel__value">Persistent synthetic paper wallet</p>
+                <p className="integrity-panel__label">Portfolio DB</p>
+                <p
+                  className="integrity-panel__value path-text"
+                  title={operatorPaths?.portfolio_db_path ?? operatorPathErrors.portfolio_db_path ?? 'Unavailable'}
+                >
+                  {operatorPaths?.portfolio_db_path ?? 'Unavailable'}
+                </p>
                 <p className="integrity-panel__hint">
-                  Profile-scoped local paper state starts at $10,000 and persists across restarts.
+                  {operatorPathErrors.portfolio_db_path
+                    ? operatorPathErrors.portfolio_db_path
+                    : (operatorPaths?.active_profile_name
+                      ? `Profile ${operatorPaths.active_profile_name}`
+                      : 'No active profile')}
                 </p>
               </div>
               <div className="integrity-panel__item">
-                <p className="integrity-panel__label">Exchange reference</p>
-                <p className="integrity-panel__value">
-                  {summary?.exchange_reference_equity_usd != null
-                    ? `${formatCurrency(summary.exchange_reference_equity_usd)} equity`
-                    : 'Unavailable'}
+                <p className="integrity-panel__label">Profile config</p>
+                <p
+                  className="integrity-panel__value path-text"
+                  title={operatorPaths?.active_profile_config_path ?? operatorPathErrors.active_profile_config_path ?? 'Unavailable'}
+                >
+                  {operatorPaths?.active_profile_config_path ?? 'Unavailable'}
                 </p>
                 <p className="integrity-panel__hint">
-                  {summary?.exchange_reference_equity_usd != null
-                    ? `${formatCurrency(summary.exchange_reference_cash_usd)} cash as of ${formatDateTime(summary.exchange_reference_checked_at ?? null)}`
-                    : 'Optional comparison only. The paper account does not mirror these balances.'}
+                  {operatorPathErrors.active_profile_config_path || 'Active profile config file'}
                 </p>
               </div>
+              <div className="integrity-panel__item">
+                <p className="integrity-panel__label">Config dir</p>
+                <p
+                  className="integrity-panel__value path-text"
+                  title={operatorPaths?.config_dir ?? 'Unavailable'}
+                >
+                  {operatorPaths?.config_dir ?? 'Unavailable'}
+                </p>
+                <p className="integrity-panel__hint">Runtime configuration root</p>
+              </div>
+              <div className="integrity-panel__item">
+                <p className="integrity-panel__label">Data dir</p>
+                <p
+                  className="integrity-panel__value path-text"
+                  title={operatorPaths?.data_dir ?? 'Unavailable'}
+                >
+                  {operatorPaths?.data_dir ?? 'Unavailable'}
+                </p>
+                <p className="integrity-panel__hint">Runtime data root</p>
+              </div>
+              {session.mode === 'paper' ? (
+                <>
+                  <div className="integrity-panel__item">
+                    <p className="integrity-panel__label">Paper account source</p>
+                    <p className="integrity-panel__value">Persistent synthetic paper wallet</p>
+                    <p className="integrity-panel__hint">
+                      Profile-scoped local paper state starts at $10,000 and persists across restarts.
+                    </p>
+                  </div>
+                  <div className="integrity-panel__item">
+                    <p className="integrity-panel__label">Exchange reference</p>
+                    <p className="integrity-panel__value">
+                      {summary?.exchange_reference_equity_usd != null
+                        ? `${formatCurrency(summary.exchange_reference_equity_usd)} equity`
+                        : 'Unavailable'}
+                    </p>
+                    <p className="integrity-panel__hint">
+                      {summary?.exchange_reference_equity_usd != null
+                        ? `${formatCurrency(summary.exchange_reference_cash_usd)} cash as of ${formatDateTime(summary.exchange_reference_checked_at ?? null)}`
+                        : 'Optional comparison only. The paper account does not mirror these balances.'}
+                    </p>
+                  </div>
+                </>
+              ) : null}
             </div>
           ) : null}
         </section>

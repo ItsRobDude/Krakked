@@ -102,7 +102,10 @@ This is the recommended operator workflow for customers and non-developer instal
 ## Operational Notes
 
 - `KRAKKED_CONFIG_DIR` and `KRAKKED_DATA_DIR` are supported environment overrides for container deployments.
-- The container health check targets `GET /api/health`.
+- The container health check targets `GET /api/health`. On Unraid, Docker's
+  health status can be noisy if Docker cannot start the in-container probe; use
+  the app HTTP health endpoint as the authoritative readiness signal when the
+  container is running and `/api/health` returns OK.
 - `paper` is the recommended operating and research environment for v1; move to
   `live` only after deployment, safety, and strategy evidence are deliberately
   reviewed.
@@ -121,5 +124,8 @@ docker compose run --rm krakked export-install \
 ```
 
 - `deploy/state` is the safest default destination for backups and exports because it is already mounted and persisted.
+- The UI health surface reports the active portfolio DB path under operator
+  paths. Use that path with `db-backup` and `export-install --db-path` when a
+  profile uses profile-scoped paper state.
 - See [`docs/upgrades.md`](upgrades.md) before changing image tags and [`docs/backup-restore.md`](backup-restore.md) for recovery workflows.
 - If your target host is Unraid, see [`docs/unraid.md`](unraid.md) for a translated version of this flow using persistent share paths.

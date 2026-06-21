@@ -127,17 +127,18 @@ Completed evidence:
 
 Remaining proof targets:
 
-- Stop paper-mode in-progress portfolio sync from rendering as a reasonless
-  degraded blocker.
-- Decide whether the Unraid Docker healthcheck should be hardened, removed, or
-  documented as less authoritative than the app health endpoint.
-- Investigate recurring `ADA/USD` stream staleness and decide how single-pair
-  staleness should affect live readiness for multi-pair profiles.
-- Use a clean dated validation profile for the next run so evidence is easier
-  to compare.
+- Keep paper-mode in-progress portfolio sync visible as verification work, not
+  as a reasonless degraded blocker.
+- Keep the Docker healthcheck, but treat the app HTTP health endpoint as
+  authoritative on Unraid when Docker exec health is noisy.
+- Keep stale pairs used by enabled strategies or open positions as
+  session-critical blockers. Disabled/watchlist/global stale pairs, including
+  recurring `ADA/USD` noise, should remain warnings.
+- Use the dated paper-validation profile suggestion for the next run so
+  evidence is easier to compare.
 - Re-run emergency flatten with seeded synthetic positions and open-order state.
-- Make backup/export profile-aware, or expose the active DB path clearly enough
-  that operators cannot export the wrong database by default.
+- Use the active DB path shown in the operator paths health surface for
+  `db-backup` and `export-install --db-path`.
 
 This is the bridge between "the deterministic gates exist" and "an operator can
 tell what the appliance is doing, why it is safe, and why it is or is not
@@ -191,7 +192,8 @@ For strategy evidence:
 
 1. Fix the small operator-truth findings from the 2026-06-20 paper validation:
    in-progress paper sync copy/state, Unraid Docker health signal, recurring
-   `ADA/USD` staleness noise, and clean dated profile naming.
+   `ADA/USD` staleness noise, clean dated profile naming, and active DB path
+   visibility.
 2. Re-run emergency flatten with seeded synthetic positions and open-order
    state.
 3. Clean up the remaining operator affordances from the soak: pause/resume

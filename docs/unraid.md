@@ -87,6 +87,11 @@ trust. The running app reports `runtime_source`, image name/tag, build SHA, and
 deployment drift fields in `/api/health` and `/api/system/health`; image-mode
 proofs fail when those values do not match expectations.
 
+Docker health on Unraid is useful but not the final truth source. If Docker
+reports the container as unhealthy while the container is running and
+`http://<unraid-ip>:8088/api/health` returns OK, treat app HTTP health as
+authoritative and inspect Docker/Unraid exec plumbing separately.
+
 ## First Good Backup
 
 After the UI boots successfully, make one export before experimenting:
@@ -109,6 +114,10 @@ The export lands under:
 ```text
 /mnt/user/appdata/krakked/state/krakked-first-backup.zip
 ```
+
+Before exporting a profile-backed paper session, open the UI health/operator
+paths view and confirm the active portfolio DB path. Use that exact value for
+`--db-path`; profile-scoped paper sessions may not use `/krakked/state/portfolio.db`.
 
 ## Current-main Proof
 

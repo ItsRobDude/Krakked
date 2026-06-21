@@ -92,7 +92,13 @@ class _TradeHistoryLagStatus:
         return bool(self.escalated_refids)
 
 
-def resolve_portfolio_db_path(config: AppConfig, db_path: Optional[str] = None) -> str:
+def resolve_portfolio_db_path(
+    config: AppConfig,
+    db_path: Optional[str] = None,
+    *,
+    create_parent: bool = True,
+    profile_name: Optional[str] = None,
+) -> str:
     configured_path = str(
         db_path
         or getattr(config.portfolio, "db_path", None)
@@ -101,13 +107,14 @@ def resolve_portfolio_db_path(config: AppConfig, db_path: Optional[str] = None) 
     if (
         getattr(config.execution, "mode", None) == "paper"
         and configured_path == DEFAULT_PORTFOLIO_DB_NAME
-        and getattr(config.session, "profile_name", None)
+        and (profile_name or getattr(config.session, "profile_name", None))
     ):
-        profile_name = str(config.session.profile_name)
+        profile_name = str(profile_name or config.session.profile_name)
         target = (
             get_config_dir() / "profiles" / profile_name / DEFAULT_PROFILE_PAPER_DB_NAME
         )
-        target.parent.mkdir(parents=True, exist_ok=True)
+        if create_parent:
+            target.parent.mkdir(parents=True, exist_ok=True)
         return str(target)
 
     resolved = Path(configured_path).expanduser()

@@ -14,6 +14,9 @@ export type RuntimeTrust = {
 export const takeImportantWarnings = (warnings: string[] | null | undefined, limit = 2) =>
   (warnings ?? []).filter(Boolean).slice(0, limit);
 
+export const isDriftInfoUnknown = (driftInfo: Record<string, unknown> | null | undefined) =>
+  driftInfo?.status === 'unknown';
+
 export const getReplayTrustBadge = (
   replay: Pick<ReplayLatestSummary, 'available' | 'trust_level'> | null,
 ): TrustBadge => {
@@ -64,6 +67,7 @@ export const getRuntimeTrust = (
     health.execution_ok &&
     marketDataSessionOk &&
     !health.drift_detected &&
+    !isDriftInfoUnknown(health.drift_info) &&
     !health.kill_switch_active;
 
   if (coreRuntimeOk) {
@@ -81,6 +85,14 @@ export const getRuntimeTrust = (
       label: 'Paused',
       sidebarTone: 'danger',
       hint: 'Trading is paused by the kill switch.',
+    };
+  }
+
+  if (isDriftInfoUnknown(health.drift_info)) {
+    return {
+      label: 'Needs review',
+      sidebarTone: 'warning',
+      hint: 'Cached drift status is not warmed yet. Live opening risk still forces a fresh account-truth check.',
     };
   }
 

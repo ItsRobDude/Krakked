@@ -5,6 +5,7 @@ from .config_loader import (
     RUNTIME_OVERRIDES_FILENAME,
     dump_runtime_overrides,
     get_config_dir,
+    get_data_dir,
     get_default_ohlc_store_config,
     load_config,
 )
@@ -57,6 +58,7 @@ __all__ = [
     # loader/runtime
     "RUNTIME_OVERRIDES_FILENAME",
     "get_config_dir",
+    "get_data_dir",
     "get_default_ohlc_store_config",
     "dump_runtime_overrides",
     "load_config",

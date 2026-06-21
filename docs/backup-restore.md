@@ -17,6 +17,10 @@ docker compose run --rm krakked db-backup --db-path /krakked/state/portfolio.db
 
 This creates a timestamped `.bak` file and uses SQLite's backup API so WAL-backed changes are captured safely.
 
+For profile-backed paper sessions, confirm the active portfolio DB path in the
+UI health/operator paths view first. Use that exact path with `--db-path` so the
+backup captures the active profile database rather than a default idle database.
+
 ## Full Install Export
 
 To capture config, the portfolio database, and cached data in one archive:
@@ -36,6 +40,9 @@ The archive contains:
 - `config/`
 - `state/portfolio.db`
 - `data/` when `--include-data` is used
+
+`export-install` does not infer the active profile database. Pass the active DB
+path shown by the UI health/operator paths view as `--db-path`.
 
 ## Restore Onto A New Machine Or Deployment
 

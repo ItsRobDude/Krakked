@@ -20,6 +20,7 @@ from krakked.credentials import CredentialResult, CredentialStatus
 from krakked.execution.models import ExecutionResult, LocalOrder
 from krakked.market_data.api import MarketDataStatus
 from krakked.metrics import SystemMetrics
+from krakked.portfolio.models import SpotPosition
 from krakked.portfolio.sync_status import (
     LIVE_SYNC_COLD_START_REASON,
     LIVE_SYNC_IN_PROGRESS_REASON,
@@ -252,6 +253,180 @@ def test_system_health_enveloped(client, system_context):
     assert payload["data"]["portfolio_sync_reason"] is None
     assert payload["data"]["portfolio_last_sync_at"] is None
     assert payload["data"]["portfolio_baseline"] == "ledger_history"
+    assert payload["data"]["operator_paths"]["portfolio_db_path"].endswith(
+        "portfolio.db"
+    )
+
+
+def test_paper_sync_in_progress_is_neutral_in_system_health(client, system_context):
+    system_context.config.execution.mode = "paper"
+    system_context.portfolio.last_sync_ok = False
+    system_context.portfolio.last_sync_reason = None
+    system_context.portfolio.last_sync_at = None
+    system_context.portfolio.sync_in_progress = True
+
+    response = client.get("/api/system/health")
+
+    assert response.status_code == 200
+    payload = response.json()["data"]
+    assert payload["portfolio_sync_ok"] is True
+    assert payload["portfolio_sync_reason"] is None
+    assert payload["portfolio_sync_in_progress"] is True
+
+
+def test_system_health_reports_profile_scoped_operator_paths_without_creating_dirs(
+    client, system_context, tmp_path, monkeypatch
+):
+    import krakked.portfolio.manager as portfolio_manager
+    import krakked.ui.routes.system as system_routes
+
+    config_dir = tmp_path / "config"
+    data_dir = tmp_path / "data"
+    config_dir.mkdir()
+    data_dir.mkdir()
+    system_context.config.execution.mode = "paper"
+    system_context.config.portfolio.db_path = "portfolio.db"
+    system_context.config.session.profile_name = "PaperValidation"
+    system_context.session.profile_name = "PaperValidation"
+    system_context.config.profiles["PaperValidation"] = ProfileConfig(
+        name="PaperValidation",
+        config_path="profiles/PaperValidation.yaml",
+    )
+
+    monkeypatch.setattr(system_routes, "get_config_dir", lambda: config_dir)
+    monkeypatch.setattr(system_routes, "get_data_dir", lambda: data_dir)
+    monkeypatch.setattr(portfolio_manager, "get_config_dir", lambda: config_dir)
+
+    response = client.get("/api/system/health")
+
+    assert response.status_code == 200
+    operator_paths = response.json()["data"]["operator_paths"]
+    assert operator_paths == {
+        "active_profile_name": "PaperValidation",
+        "active_profile_config_path": str(
+            (config_dir / "profiles" / "PaperValidation.yaml").resolve()
+        ),
+        "portfolio_db_path": str(
+            (
+                config_dir / "profiles" / "PaperValidation" / "portfolio.paper.db"
+            ).resolve()
+        ),
+        "config_dir": str(config_dir.resolve()),
+        "data_dir": str(data_dir.resolve()),
+        "path_errors": {},
+    }
+    assert not (config_dir / "profiles" / "PaperValidation").exists()
+
+
+def test_system_health_reports_resolved_relative_operator_db_path(
+    client, system_context, tmp_path, monkeypatch
+):
+    import krakked.portfolio.manager as portfolio_manager
+    import krakked.ui.routes.system as system_routes
+
+    config_dir = tmp_path / "config"
+    data_dir = tmp_path / "data"
+    run_dir = tmp_path / "runtime"
+    config_dir.mkdir()
+    data_dir.mkdir()
+    run_dir.mkdir()
+    system_context.config.execution.mode = "paper"
+    system_context.config.portfolio.db_path = "state/custom.db"
+
+    monkeypatch.chdir(run_dir)
+    monkeypatch.setattr(system_routes, "get_config_dir", lambda: config_dir)
+    monkeypatch.setattr(system_routes, "get_data_dir", lambda: data_dir)
+    monkeypatch.setattr(portfolio_manager, "get_config_dir", lambda: config_dir)
+
+    response = client.get("/api/system/health")
+
+    assert response.status_code == 200
+    operator_paths = response.json()["data"]["operator_paths"]
+    assert operator_paths["portfolio_db_path"] == str(
+        (run_dir / "state" / "custom.db").resolve()
+    )
+
+
+def test_system_health_operator_path_error_is_logged_and_surfaced(
+    client, system_context, monkeypatch, caplog
+):
+    import krakked.ui.routes.system as system_routes
+
+    def fail_resolver(*_args, **_kwargs):
+        raise RuntimeError("boom from resolver")
+
+    monkeypatch.setattr(system_routes, "resolve_portfolio_db_path", fail_resolver)
+
+    with caplog.at_level(logging.WARNING):
+        response = client.get("/api/system/health")
+
+    assert response.status_code == 200
+    operator_paths = response.json()["data"]["operator_paths"]
+    assert operator_paths["portfolio_db_path"] is None
+    assert operator_paths["path_errors"] == {
+        "portfolio_db_path": "Unable to resolve portfolio DB path."
+    }
+    assert any(
+        getattr(record, "event", None) == "operator_portfolio_db_path_unavailable"
+        for record in caplog.records
+    )
+
+
+def test_system_health_operator_paths_use_one_active_profile_source(
+    client, system_context, tmp_path, monkeypatch
+):
+    import krakked.portfolio.manager as portfolio_manager
+    import krakked.ui.routes.system as system_routes
+
+    config_dir = tmp_path / "config"
+    data_dir = tmp_path / "data"
+    config_dir.mkdir()
+    data_dir.mkdir()
+    system_context.config.execution.mode = "paper"
+    system_context.config.portfolio.db_path = "portfolio.db"
+    system_context.session.profile_name = "SessionProfile"
+    system_context.config.session.profile_name = "ConfigProfile"
+    system_context.config.profiles["SessionProfile"] = ProfileConfig(
+        name="SessionProfile",
+        config_path="profiles/SessionProfile.yaml",
+    )
+    system_context.config.profiles["ConfigProfile"] = ProfileConfig(
+        name="ConfigProfile",
+        config_path="profiles/ConfigProfile.yaml",
+    )
+
+    monkeypatch.setattr(system_routes, "get_config_dir", lambda: config_dir)
+    monkeypatch.setattr(system_routes, "get_data_dir", lambda: data_dir)
+    monkeypatch.setattr(portfolio_manager, "get_config_dir", lambda: config_dir)
+
+    response = client.get("/api/system/health")
+
+    assert response.status_code == 200
+    operator_paths = response.json()["data"]["operator_paths"]
+    assert operator_paths["active_profile_name"] == "SessionProfile"
+    assert operator_paths["active_profile_config_path"] == str(
+        (config_dir / "profiles" / "SessionProfile.yaml").resolve()
+    )
+    assert operator_paths["portfolio_db_path"] == str(
+        (config_dir / "profiles" / "SessionProfile" / "portfolio.paper.db").resolve()
+    )
+
+
+def test_setup_health_skips_operator_portfolio_db_resolution(
+    client, system_context, monkeypatch
+):
+    import krakked.ui.routes.system as system_routes
+
+    def fail_resolver(*_args, **_kwargs):
+        raise AssertionError("setup health must not resolve portfolio DB paths")
+
+    monkeypatch.setattr(system_routes, "resolve_portfolio_db_path", fail_resolver)
+    system_context.is_setup_mode = True
+
+    response = client.get("/api/system/health")
+
+    assert response.status_code == 200
+    assert response.json()["data"]["operator_paths"] is None
 
 
 def test_system_health_treats_live_missing_sync_time_as_degraded(
@@ -320,6 +495,7 @@ def test_system_health_and_live_readiness_use_account_truth_snapshot(
     assert health["portfolio_sync_reason"] == LIVE_SYNC_IN_PROGRESS_REASON
     assert health["portfolio_sync_in_progress"] is True
     assert health["drift_detected"] is True
+    assert health["drift_info"] == {"source": "account-truth-snapshot"}
     assert "portfolio mismatch" in health["drift_reason"]
 
     readiness_response = client.get("/api/system/live-readiness")
@@ -332,6 +508,50 @@ def test_system_health_and_live_readiness_use_account_truth_snapshot(
     assert checks["portfolio_sync"]["status"] == "blocked"
     assert checks["portfolio_sync"]["message"] == LIVE_SYNC_IN_PROGRESS_REASON
     assert checks["drift_monitor"]["status"] == "blocked"
+
+
+def test_system_health_and_live_readiness_warn_on_unknown_drift(client, system_context):
+    system_context.config.execution.mode = "live"
+    system_context.config.execution.validate_only = False
+    system_context.config.execution.allow_live_trading = True
+    system_context.config.execution.paper_tests_completed = True
+    system_context.session.mode = "live"
+    system_context.session.active = True
+    system_context.strategy_engine.get_risk_status.return_value = SimpleNamespace(
+        kill_switch_active=False,
+        drift_flag=False,
+    )
+
+    def _snapshot(**_kwargs):
+        return SimpleNamespace(
+            portfolio_sync_ok=True,
+            portfolio_sync_reason=None,
+            portfolio_last_sync_at=datetime.now(timezone.utc),
+            portfolio_sync_in_progress=False,
+            drift_flag=False,
+            drift_info={
+                "status": "unknown",
+                "source": "cached",
+                "reason": "cached_drift_status_unavailable",
+            },
+        )
+
+    system_context.portfolio.get_account_truth_snapshot = _snapshot
+
+    health_response = client.get("/api/system/health")
+    assert health_response.status_code == 200
+    health = health_response.json()["data"]
+    assert health["drift_detected"] is False
+    assert health["drift_info"]["status"] == "unknown"
+
+    readiness_response = client.get("/api/system/live-readiness")
+    assert readiness_response.status_code == 200
+    data = readiness_response.json()["data"]
+    drift_warning = next(
+        check for check in data["warnings"] if check["id"] == "drift_monitor"
+    )
+    assert drift_warning["status"] == "warning"
+    assert "Cached portfolio drift has not been warmed" in drift_warning["message"]
 
 
 def test_system_health_reports_risk_drift_as_blocker(client, system_context):
@@ -1427,6 +1647,54 @@ def test_cockpit_market_data_marks_active_strategy_stale_pair_session_critical(
     assert readiness_blocker["message"] == "Session market data stale: BTC/USD."
 
 
+def test_cockpit_market_data_marks_position_stale_pair_session_critical(
+    client, system_context
+):
+    system_context.market_data.get_cached_data_status.return_value = SimpleNamespace(
+        rest_api_reachable=True,
+        websocket_connected=True,
+        streaming_pairs=3,
+        stale_pairs=1,
+        subscription_errors=0,
+    )
+    system_context.market_data.get_cached_health_status.return_value = MarketDataStatus(
+        health="degraded",
+        reason="data_stale",
+        detail="ADA/USD",
+        stale_pairs=["ADA/USD"],
+    )
+    system_context.strategy_engine.get_cached_strategy_state.return_value = [
+        _strategy_state("dca_overlay", enabled=True, pairs=["BTC/USD", "ETH/USD"]),
+        _strategy_state("rs_rotation", enabled=False, pairs=["ADA/USD"]),
+    ]
+    system_context.market_data.get_pair_metadata.return_value = None
+    system_context.portfolio.get_cached_positions.return_value = [
+        SpotPosition(
+            pair="ADA/USD",
+            base_asset="ADA",
+            quote_asset="USD",
+            base_size=25.0,
+            avg_entry_price=0.4,
+            realized_pnl_base=0.0,
+            fees_paid_base=0.0,
+            current_value_base=10.0,
+        )
+    ]
+
+    response = client.get("/api/system/cockpit")
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["market_data"]["classification"] == "session_critical"
+    assert data["market_data"]["session_stale_pairs"] == ["ADA/USD"]
+    readiness_blocker = next(
+        check
+        for check in data["live_readiness"]["blockers"]
+        if check["id"] == "market_data"
+    )
+    assert readiness_blocker["message"] == "Session market data stale: ADA/USD."
+
+
 def test_live_readiness_blocks_missing_enabled_strategy_risk_caps(
     client, system_context
 ):
@@ -2077,6 +2345,49 @@ def test_create_profile_updates_registry_and_allows_immediate_selection(
     assert select_payload["error"] is None
     assert select_payload["data"]["profile_name"] == "SwingAlpha"
     assert system_context.session.profile_name == "SwingAlpha"
+
+
+def test_profile_name_suggestion_returns_unique_dated_name(
+    client, system_context, tmp_path, monkeypatch
+):
+    import krakked.ui.routes.system as system_routes
+
+    config_dir = tmp_path / "config"
+    profiles_dir = config_dir / "profiles"
+    profiles_dir.mkdir(parents=True)
+    system_context.config.profiles["paper-validation-2026-06-21"] = ProfileConfig(
+        name="paper-validation-2026-06-21",
+        config_path="profiles/paper-validation-2026-06-21.yaml",
+    )
+    (profiles_dir / "paper-validation-2026-06-21-2.yaml").write_text("{}\n")
+
+    monkeypatch.setattr(system_routes, "get_config_dir", lambda: config_dir)
+    monkeypatch.setattr(system_routes, "_profile_suggestion_date", lambda: "2026-06-21")
+
+    response = client.get(
+        "/api/system/profile-name-suggestion",
+        params={"purpose": "paper-validation"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["error"] is None
+    assert payload["data"] == {
+        "purpose": "paper-validation",
+        "name": "paper-validation-2026-06-21-3",
+    }
+
+
+def test_profile_name_suggestion_rejects_unknown_purpose(client):
+    response = client.get(
+        "/api/system/profile-name-suggestion",
+        params={"purpose": "live-smoke"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["data"] is None
+    assert "Unsupported profile-name suggestion purpose" in payload["error"]
 
 
 def test_create_profile_preserves_existing_registry_entries_in_memory(

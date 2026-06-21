@@ -402,6 +402,10 @@ Use the packaged console script for the common workflows:
 * `poetry run krakked db-backup --db-path <path>` / `db-info` / `db-check` — backup and inspect the portfolio database before upgrades.
 * `poetry run krakked export-install --output <archive.zip> --include-data` — capture config, SQLite state, and optional cached data for migration or support bundles.
 * `poetry run krakked import-install --input <archive.zip> [--force]` — restore a previously exported install onto a new machine or deployment.
+
+For profile-backed paper sessions, confirm the active portfolio DB path in the
+UI health/operator paths view and pass that exact value to `db-backup` or
+`export-install --db-path`.
 * `poetry run krakked setup` / `poetry run krakked smoke-test` — interactive credential bootstrap and a basic authenticated probe.
 
 See the `--help` output of `poetry run krakked` for the full command list; all subcommands honor `--allow-interactive-setup` and `--db-path` where applicable.

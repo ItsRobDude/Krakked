@@ -140,8 +140,19 @@ export type SystemHealth = {
   portfolio_last_sync_at?: string | null;
   portfolio_sync_in_progress: boolean;
   portfolio_baseline?: string | null;
+  operator_paths?: OperatorPaths | null;
   drift_detected: boolean;
   drift_reason?: string | null;
+  drift_info?: Record<string, unknown> | null;
+};
+
+export type OperatorPaths = {
+  active_profile_name?: string | null;
+  active_profile_config_path?: string | null;
+  portfolio_db_path?: string | null;
+  config_dir: string;
+  data_dir: string;
+  path_errors?: Record<string, string>;
 };
 
 export type SystemMetrics = {
@@ -410,6 +421,11 @@ export type SessionConfigRequest = {
 export type ProfileSummary = {
   name: string;
   description: string;
+};
+
+export type ProfileNameSuggestion = {
+  purpose: string;
+  name: string;
 };
 
 export type SetupStatus = {
@@ -743,11 +759,23 @@ export async function performUnlock(password: string): Promise<void> {
 
 // --- Profile management ---
 
-export async function createProfile(name: string, description = ''): Promise<ProfileCreateResponse> {
+export async function createProfile(
+  name: string,
+  description = '',
+): Promise<ProfileCreateResponse> {
   return fetchJsonStrict<ProfileCreateResponse>('/system/profiles', {
     method: 'POST',
     body: JSON.stringify({ name, description, default_mode: 'paper', base_config: {} }),
   });
+}
+
+export async function fetchProfileNameSuggestion(
+  purpose = 'paper-validation',
+): Promise<ProfileNameSuggestion> {
+  const query = new URLSearchParams({ purpose });
+  return fetchJsonStrict<ProfileNameSuggestion>(
+    `/system/profile-name-suggestion?${query.toString()}`,
+  );
 }
 
 // --- Config persistence ---
