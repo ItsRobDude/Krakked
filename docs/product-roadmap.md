@@ -85,13 +85,14 @@ Implemented or substantially in place:
 - Strategy-silence diagnostics now distinguish closed-bar deferrals, missing
   data, stale data, strategy errors, no-signal decisions, and emitted intents
   for enabled starter strategies
-- Live Balance reconciliation failure and never-synced live startup now degrade
-  portfolio sync and block live opening risk through the normal loop and OMS
-  gate
+- Live Balance, TradesHistory, Ledgers, never-synced startup, stale sync age,
+  missing trade-history evidence, and material drift now degrade account truth
+  and block live opening risk through the normal loop and OMS gate
 - The fake Kraken harness now proves one narrow coherent
   AddOrder/OpenOrders/ClosedOrders/Balance/TradesHistory/Ledgers lifecycle,
-  including full fill, partial fill, restart reconciliation, and balance-read
-  degradation
+  including full fill, partial fill, restart reconciliation, private-read
+  degradation/staleness, and the trade-ledger `refid` to TradesHistory ID
+  assumption used by the account-truth gate
 - Strategy-source evidence currently does not support runtime promotion for the tested bundled/source candidates
 - Strict cached `4h` and `1d` OHLC now covers `BTC/USD`, `ETH/USD`,
   `SOL/USD`, and `ADA/USD` from `2025-12-01` through the current tail; `1h`
@@ -111,7 +112,9 @@ Still needing real-world validation or product work:
 - Unified strategy evidence reporting with explicit cost semantics and
   cash/buy-hold comparisons
 - Live-trading readiness drills and operator runbooks after paper/execution reliability is proven
-- Stale-sync age and relative/material drift gates before any live-capital claim
+- Cleanup from the short paper validation: operator copy for in-progress paper
+  sync, Unraid Docker health signal, recurring `ADA/USD` stream staleness, and
+  clear dated profile naming before any live-capital claim
 - Live automation UX polish so a prepared operator can start live automation
   from the UI with one obvious start action after readiness is visible.
 - Commercial packaging, licensing, and legal/business review
@@ -122,10 +125,10 @@ Krakked is now closer to an operator-facing control room than a hobby bot shell,
 
 - Paper mode is a local persistent synthetic wallet that can exercise the strategy, risk, OMS, and portfolio loops without transmitting live orders.
 - Exchange balances are now optional reference context in paper mode, not the paper account baseline.
-- In live mode, missing or failed balance reconciliation is treated as degraded
-  account truth and blocks new opening risk. That is not the same as full live
-  readiness: stale sync age and material drift thresholds still need explicit
-  gates.
+- In live mode, missing, failed, stale, or materially drifting account truth
+  blocks new opening risk. That is not the same as full live readiness: the
+  short paper validation produced useful paper OMS/trade evidence, but seeded
+  operator drills are still required before any live-capital claim.
 - Current strategy-source evidence does not yet support runtime promotion of `rs_rotation`, `rs_rotation_v2`, `trend_core` signal-quality claims, global top-N momentum proxies, or pair-local source variants.
 - ML remains in scope as infrastructure, but the current volatility-forecasting
   lane is closed for runtime influence: the 2026-06-16 strict rerun was ready
@@ -214,8 +217,9 @@ The next milestones are product-facing rather than architecture-facing:
 3. Reliability and Live-Readiness Plumbing
    - Formalize operational runbooks and pre-live checklists.
    - Tighten live-mode guidance, safety prompts, and emergency control flows.
-   - Add stale-sync age and relative/material drift gates so old or mismatched
-     account truth cannot permit new live opening risk.
+   - Keep stale-sync age, private-read failure, missing trade-history, and
+     material-drift gates visible in operator-facing health/live-readiness
+     surfaces.
    - Keep extending the fake Kraken/fault harness only around production seams
      needed to prove reconciliation, stale reads, failed reads, and restart
      recovery.

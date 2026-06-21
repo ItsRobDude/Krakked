@@ -274,9 +274,12 @@ Status as of 2026-06-20:
   so future paper runs do not depend on constructor defaults for proof context.
 - The fake Kraken harness now proves one narrow coherent order lifecycle:
   AddOrder, OpenOrders, ClosedOrders, Balance, TradesHistory, Ledgers, full
-  fill, partial fill, restart reconciliation, and degraded Balance reads.
-- Live Balance unavailability and never-synced live cold start now keep
-  portfolio sync degraded and block live opening risk.
+  fill, partial fill, restart reconciliation, degraded/stale private reads, and
+  the trade-ledger `refid` to TradesHistory ID assumption used by the
+  account-truth gate.
+- Live Balance/TradesHistory/Ledgers unavailability, never-synced live cold
+  start, stale sync age, missing trade-history evidence, and material drift now
+  keep account truth degraded and block live opening risk.
 
 Still open from this soak:
 
@@ -285,5 +288,5 @@ Still open from this soak:
 - Restart no-auto-resume wording.
 - Profile-aware backup/export.
 - Seeded emergency flatten with positions and open orders.
-- Stale-sync age and relative/material drift gates before any live-capital
-  readiness claim.
+- Short paper validation of the new diagnostics/account-truth surfaces before
+  any live-capital readiness claim.
