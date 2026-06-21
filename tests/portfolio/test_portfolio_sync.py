@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -7,20 +7,23 @@ import pytest
 
 from krakked.config import PortfolioConfig
 from krakked.market_data.exceptions import PairNotFoundError
-from krakked.portfolio.manager import PortfolioService
+from krakked.portfolio.manager import PortfolioService, _TradeHistoryLagStatus
 from krakked.portfolio.portfolio import Portfolio
 from krakked.portfolio.sync_status import (
     LIVE_SYNC_DEGRADED_REASON,
+    LIVE_SYNC_TRADE_HISTORY_LAGGING_REASON,
     PORTFOLIO_SYNC_FAILED_REASON,
+    max_live_sync_age_seconds,
 )
 
 
 def _build_service(store, portfolio, api_client):
-    store.get_trade_ledger_ref_times.return_value = {}
+    store.get_unmatched_trade_ledger_ref_times.return_value = {}
     store.get_trade_ids_by_ids.side_effect = lambda trade_ids: set()
     service = PortfolioService.__new__(PortfolioService)
     service.config = PortfolioConfig()
     service.app_config = SimpleNamespace(execution=SimpleNamespace(mode="live"))
+    service._clock = None
     service.store = store
     service.portfolio = portfolio
     service.rest_client = api_client
@@ -41,6 +44,19 @@ def _build_service(store, portfolio, api_client):
     service._refresh_cached_views = Mock()
     service._reconcile = Mock(return_value=True)
     return service
+
+
+class _SequenceAlerts:
+    def __init__(self, outcomes):
+        self.outcomes = list(outcomes)
+        self.events = []
+
+    def send(self, **kwargs):
+        self.events.append(kwargs)
+        outcome = self.outcomes.pop(0) if self.outcomes else True
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
 
 
 def test_sync_in_progress_preserves_last_completed_state_during_attempt():
@@ -76,6 +92,117 @@ def test_sync_in_progress_preserves_last_completed_state_during_attempt():
     assert service.last_sync_ok is True
     assert service.last_sync_reason is None
     assert service.last_sync_at is not previous_sync_at
+
+
+def test_sync_unmatched_trade_refs_ignore_last_sync_at_cutoff():
+    store = Mock()
+    portfolio = Mock()
+    api_client = Mock()
+    service = _build_service(store, portfolio, api_client)
+    previous_sync_at = datetime(2026, 1, 2, 3, 4, tzinfo=timezone.utc)
+    now = previous_sync_at + timedelta(seconds=2)
+    service._clock = lambda: now
+    service._last_sync_ok = True
+    service._last_sync_reason = None
+    service._last_sync_at = previous_sync_at
+
+    store.get_trades.return_value = []
+    service._sync_trades_history = Mock(
+        return_value=SimpleNamespace(count=0, trade_ids=set(), failed=False)
+    )
+    service._sync_ledgers = Mock(
+        return_value=SimpleNamespace(
+            cash_flow_count=0, trade_refids={"T-LATE"}, failed=False
+        )
+    )
+    store.get_unmatched_trade_ledger_ref_times.return_value = {
+        "T-LATE": (previous_sync_at - timedelta(seconds=1)).timestamp()
+    }
+
+    result = service.sync()
+
+    assert result == {"new_trades": 0, "new_cash_flows": 0}
+    assert service.last_sync_ok is False
+    assert service.last_sync_reason == LIVE_SYNC_TRADE_HISTORY_LAGGING_REASON
+    assert service.last_sync_at is previous_sync_at
+    store.get_unmatched_trade_ledger_ref_times.assert_called_once_with(
+        include_refids={"T-LATE"}
+    )
+    service._reconcile.assert_not_called()
+
+
+def test_missing_trade_history_refs_use_injected_clock_for_escalation():
+    store = Mock()
+    portfolio = Mock()
+    api_client = Mock()
+    service = _build_service(store, portfolio, api_client)
+    now = datetime(2026, 1, 2, 3, 4, tzinfo=timezone.utc)
+    service._clock = lambda: now
+    max_age = max_live_sync_age_seconds(service.config)
+    store.get_unmatched_trade_ledger_ref_times.return_value = {
+        "T-FRESH": now.timestamp() - max_age,
+        "T-OLD": now.timestamp() - max_age - 1,
+        "T-FETCHED": now.timestamp() - max_age - 1,
+    }
+
+    status = service._missing_trade_history_refs({"T-FETCHED"}, {"T-FRESH"})
+
+    assert status.missing_refids == {"T-FRESH", "T-OLD"}
+    assert status.escalated_refids == {"T-OLD"}
+    store.get_unmatched_trade_ledger_ref_times.assert_called_once_with(
+        include_refids={"T-FRESH"}
+    )
+
+
+def test_trade_history_lag_alert_retries_until_delivery_succeeds():
+    store = Mock()
+    portfolio = Mock()
+    api_client = Mock()
+    service = _build_service(store, portfolio, api_client)
+    alerts = _SequenceAlerts([False, True])
+    service.alert_notifier = alerts
+    status = _TradeHistoryLagStatus(
+        ref_times={"T-1": 1.0},
+        escalated_refids={"T-1"},
+        max_age_seconds=600,
+    )
+
+    service._send_trade_history_lag_alert(status)
+
+    assert alerts.events
+    assert service._trade_history_lag_alerted_refs == set()
+
+    service._send_trade_history_lag_alert(status)
+
+    assert len(alerts.events) == 2
+    assert service._trade_history_lag_alerted_refs == {"T-1"}
+
+    service._send_trade_history_lag_alert(status)
+
+    assert len(alerts.events) == 2
+
+
+def test_trade_history_lag_alert_exception_remains_retryable():
+    store = Mock()
+    portfolio = Mock()
+    api_client = Mock()
+    service = _build_service(store, portfolio, api_client)
+    alerts = _SequenceAlerts([RuntimeError("webhook down"), True])
+    service.alert_notifier = alerts
+    status = _TradeHistoryLagStatus(
+        ref_times={"T-1": 1.0},
+        escalated_refids={"T-1"},
+        max_age_seconds=600,
+    )
+
+    service._send_trade_history_lag_alert(status)
+
+    assert service._trade_history_lag_alerted_refs == set()
+
+    service._send_trade_history_lag_alert(status)
+
+    assert len(alerts.events) == 2
+    assert service._trade_history_lag_alerted_refs == {"T-1"}
 
 
 def test_sync_outer_exception_stores_sanitized_reason_and_logs_raw_detail(caplog):

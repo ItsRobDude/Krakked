@@ -3,6 +3,7 @@
 import json
 import sqlite3
 from datetime import datetime, timezone
+from decimal import Decimal
 
 import pytest
 
@@ -10,7 +11,12 @@ import krakked.portfolio.store as store_module
 from krakked.execution.models import ExecutionResult, LocalOrder
 from krakked.portfolio import migrations
 from krakked.portfolio.exceptions import PortfolioSchemaError
-from krakked.portfolio.models import AssetValuation, CashFlowRecord, PortfolioSnapshot
+from krakked.portfolio.models import (
+    AssetValuation,
+    CashFlowRecord,
+    LedgerEntry,
+    PortfolioSnapshot,
+)
 from krakked.portfolio.store import CURRENT_SCHEMA_VERSION, SQLitePortfolioStore
 from krakked.strategy.models import DecisionRecord, ExecutionPlan, RiskAdjustedAction
 
@@ -135,6 +141,75 @@ def test_fresh_schema_has_indexed_client_order_id(tmp_path):
 
     assert "client_order_id" in columns
     assert "idx_execution_orders_client_order_id" in indexes
+
+
+def test_fresh_schema_has_indexed_trade_ledger_lag_lookup(tmp_path):
+    db_path = tmp_path / "trade_ledger_lag_index.db"
+    SQLitePortfolioStore(str(db_path))
+
+    with sqlite3.connect(db_path) as conn:
+        indexes = {row[1] for row in conn.execute("PRAGMA index_list(ledger_entries)")}
+
+    assert "idx_ledger_entries_type_refid_time" in indexes
+
+
+def test_unmatched_trade_ledger_ref_times_excludes_stored_trades(tmp_path):
+    db_path = tmp_path / "unmatched_trade_refs.db"
+    store = SQLitePortfolioStore(str(db_path))
+
+    def ledger_entry(entry_id: str, refid: str, time: float) -> LedgerEntry:
+        return LedgerEntry(
+            id=entry_id,
+            time=time,
+            type="trade",
+            subtype="",
+            aclass="currency",
+            asset="USD",
+            amount=Decimal("1"),
+            fee=Decimal("0"),
+            balance=None,
+            refid=refid,
+            misc=None,
+            raw={},
+        )
+
+    store.save_ledger_entry(ledger_entry("L-missing-newer", "T-MISSING", 20.0))
+    store.save_ledger_entry(ledger_entry("L-missing-older", "T-MISSING", 10.0))
+    store.save_ledger_entry(ledger_entry("L-matched", "T-MATCHED", 5.0))
+    store.save_ledger_entry(
+        LedgerEntry(
+            id="L-deposit",
+            time=1.0,
+            type="deposit",
+            subtype="",
+            aclass="currency",
+            asset="USD",
+            amount=Decimal("1"),
+            fee=Decimal("0"),
+            balance=None,
+            refid="T-DEPOSIT",
+            misc=None,
+            raw={},
+        )
+    )
+    store.save_trades(
+        [
+            {
+                "id": "T-MATCHED",
+                "pair": "XBTUSD",
+                "time": 5.0,
+                "type": "buy",
+                "price": "100",
+                "cost": "100",
+                "fee": "0",
+                "vol": "1",
+            }
+        ]
+    )
+
+    assert store.get_unmatched_trade_ledger_ref_times(
+        include_refids={"T-MISSING", "T-MATCHED"}
+    ) == {"T-MISSING": 10.0}
 
 
 def test_save_order_populates_indexed_client_order_id(tmp_path):

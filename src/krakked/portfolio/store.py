@@ -511,6 +511,12 @@ def ensure_portfolio_tables(conn: sqlite3.Connection) -> None:
     cursor.execute(
         "CREATE INDEX IF NOT EXISTS idx_ledger_entries_refid ON ledger_entries(refid)"
     )
+    cursor.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_ledger_entries_type_refid_time
+            ON ledger_entries(type, refid, time)
+        """
+    )
 
     # Balance Snapshots Table
     cursor.execute(
@@ -586,10 +592,10 @@ class PortfolioStore(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def get_trade_ledger_ref_times(
-        self, since: Optional[float] = None
+    def get_unmatched_trade_ledger_ref_times(
+        self, include_refids: Optional[set[str]] = None
     ) -> Dict[str, float]:
-        """Return trade ledger ref IDs mapped to their oldest ledger timestamp."""
+        """Return unmatched trade ledger ref IDs mapped to their oldest timestamp."""
         pass
 
     @abc.abstractmethod
@@ -1188,25 +1194,25 @@ class SQLitePortfolioStore(PortfolioStore):
 
         return entries
 
-    def get_trade_ledger_ref_times(
-        self, since: Optional[float] = None
+    def get_unmatched_trade_ledger_ref_times(
+        self, include_refids: Optional[set[str]] = None
     ) -> Dict[str, float]:
+        _ = include_refids
         with self._lock:
             conn = self._get_conn()
             cursor = conn.cursor()
-            query = """
-                SELECT refid, MIN(time)
-                FROM ledger_entries
-                WHERE type = 'trade'
-                  AND refid IS NOT NULL
-                  AND TRIM(refid) != ''
+            cursor.execute(
+                """
+                SELECT le.refid, MIN(le.time)
+                FROM ledger_entries AS le
+                LEFT JOIN trades AS t ON t.id = le.refid
+                WHERE le.type = 'trade'
+                  AND le.refid IS NOT NULL
+                  AND TRIM(le.refid) != ''
+                  AND t.id IS NULL
+                GROUP BY le.refid
             """
-            params: List[Any] = []
-            if since is not None:
-                query += " AND time >= ?"
-                params.append(since)
-            query += " GROUP BY refid"
-            cursor.execute(query, params)
+            )
             rows = cursor.fetchall()
 
         return {str(row[0]): float(row[1]) for row in rows}

@@ -106,14 +106,19 @@ class InMemoryStore(PortfolioStore):
             entries = entries[:limit]
         return entries
 
-    def get_trade_ledger_ref_times(self, since=None):
+    def get_unmatched_trade_ledger_ref_times(self, include_refids=None):
         refs = {}
+        stored_trade_ids = {
+            str(trade.get("id"))
+            for trade in getattr(self, "trades", [])
+            if isinstance(trade, dict) and trade.get("id")
+        }
         for entry in getattr(self, "ledger_entries", []):
             if entry.type != "trade" or not entry.refid:
                 continue
-            if since is not None and entry.time < since:
-                continue
             refid = str(entry.refid)
+            if refid in stored_trade_ids:
+                continue
             refs[refid] = min(refs.get(refid, entry.time), entry.time)
         return refs
 
