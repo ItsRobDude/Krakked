@@ -7,7 +7,7 @@ from decimal import Decimal
 from pathlib import Path
 from threading import RLock
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Set, Union, cast
 
 from krakked.config import AppConfig, get_config_dir
 from krakked.connection.rate_limiter import RateLimiter
@@ -117,10 +117,12 @@ class PortfolioService:
         rest_client: Optional[KrakenRESTClient] = None,
         rate_limiter: Optional[RateLimiter] = None,
         alert_notifier: Optional[Any] = None,
+        clock: Optional[Callable[[], datetime]] = None,
     ):
         self.config = config.portfolio
         self.app_config = config  # Keep full config if needed
         self.market_data = market_data
+        self._clock = clock
         resolved_db_path = resolve_portfolio_db_path(config, db_path)
         self.store: PortfolioStore = SQLitePortfolioStore(
             db_path=resolved_db_path,
@@ -169,6 +171,17 @@ class PortfolioService:
         self._exchange_reference_checked_at: Optional[datetime] = None
         self._exchange_reference_equity: Optional[EquityView] = None
         self._trade_history_lag_alerted_refs: Set[str] = set()
+
+    def _now(self) -> datetime:
+        clock = getattr(self, "_clock", None)
+        now = (
+            cast(Callable[[], datetime], clock)()
+            if callable(clock)
+            else datetime.now(timezone.utc)
+        )
+        if now.tzinfo is None:
+            return now.replace(tzinfo=timezone.utc)
+        return now.astimezone(timezone.utc)
 
     @property
     def last_sync_ok(self) -> bool:
@@ -432,6 +445,7 @@ class PortfolioService:
 
             trade_history_lag = self._missing_trade_history_refs(
                 trade_result.trade_ids,
+                ledger_result.trade_refids,
             )
             if trade_history_lag.missing_refids:
                 self._set_last_sync_state(
@@ -468,7 +482,7 @@ class PortfolioService:
             self._set_last_sync_state(
                 ok=True,
                 reason=None,
-                last_sync_at=datetime.now(timezone.utc),
+                last_sync_at=self._now(),
             )
 
             return {
@@ -523,7 +537,7 @@ class PortfolioService:
     def _sync_paper_wallet(self) -> Dict[str, int]:
         """Persist local paper state without overwriting it from Kraken balances."""
 
-        now = datetime.now(timezone.utc)
+        now = self._now()
         self._baseline_source = "paper_wallet"
         self._refresh_exchange_reference(now)
         self._save_balance_snapshot(now)
@@ -929,14 +943,11 @@ class PortfolioService:
         )
 
     def _missing_trade_history_refs(
-        self, fetched_trade_ids: Set[str]
+        self, fetched_trade_ids: Set[str], ledger_trade_refids: Set[str]
     ) -> _TradeHistoryLagStatus:
-        since_ts = (
-            self._last_sync_at.timestamp()
-            if isinstance(self._last_sync_at, datetime)
-            else None
+        ref_times = self.store.get_unmatched_trade_ledger_ref_times(
+            include_refids=ledger_trade_refids
         )
-        ref_times = self.store.get_trade_ledger_ref_times(since=since_ts)
         if not ref_times:
             return _TradeHistoryLagStatus(
                 ref_times={},
@@ -945,15 +956,14 @@ class PortfolioService:
             )
 
         candidate_refs = set(ref_times)
-        known_trade_ids = set(fetched_trade_ids)
-        known_trade_ids.update(self.store.get_trade_ids_by_ids(candidate_refs))
+        known_trade_ids = {str(trade_id) for trade_id in fetched_trade_ids}
         missing = {
             refid: ref_times[refid]
             for refid in candidate_refs
             if refid not in known_trade_ids
         }
         max_age_seconds = max_live_sync_age_seconds(self.config)
-        now_ts = datetime.now(timezone.utc).timestamp()
+        now_ts = self._now().timestamp()
         escalated_refids = {
             refid
             for refid, ledger_time in missing.items()
@@ -981,11 +991,10 @@ class PortfolioService:
 
         notifier = getattr(self, "alert_notifier", None)
         if notifier is None or not hasattr(notifier, "send"):
-            self._trade_history_lag_alerted_refs.update(new_escalated_refids)
             return
 
         try:
-            notifier.send(
+            delivered = notifier.send(
                 event="portfolio_trade_history_lag_escalated",
                 title=LIVE_SYNC_TRADE_HISTORY_LAG_ALERT_TITLE,
                 message=self._trade_history_lag_reason(status),
@@ -997,6 +1006,8 @@ class PortfolioService:
                     "oldest_unmatched_ledger_time": min(status.ref_times.values()),
                 },
             )
+            if delivered is True:
+                self._trade_history_lag_alerted_refs.update(new_escalated_refids)
         except Exception as exc:  # noqa: BLE001
             logger.error(
                 "Failed to send trade-history lag alert",
@@ -1005,8 +1016,6 @@ class PortfolioService:
                     error=str(exc),
                 ),
             )
-        finally:
-            self._trade_history_lag_alerted_refs.update(new_escalated_refids)
 
     def _reconcile(self) -> bool:
         """Fetch live balances and flag drift."""

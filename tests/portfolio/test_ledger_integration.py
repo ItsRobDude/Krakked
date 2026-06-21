@@ -19,6 +19,7 @@ def mock_store():
     store.get_latest_balance_snapshot.return_value = None
     store.get_trades.return_value = []
     store.get_all_ledger_entries.return_value = []
+    store.get_unmatched_trade_ledger_ref_times.return_value = {}
     return store
 
 

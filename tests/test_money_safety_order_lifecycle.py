@@ -12,7 +12,7 @@ response.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any, Dict, cast
 from unittest.mock import MagicMock
@@ -245,6 +245,7 @@ def _portfolio_service(
     db_path,
     *,
     alert_notifier: Any | None = None,
+    clock: Any | None = None,
 ) -> PortfolioService:
     service = PortfolioService(
         config=_app_config(str(db_path)),
@@ -252,6 +253,7 @@ def _portfolio_service(
         db_path=str(db_path),
         rest_client=cast(KrakenRESTClient, client),
         alert_notifier=alert_notifier,
+        clock=clock,
     )
     return service
 
@@ -740,6 +742,54 @@ def test_trade_ledger_refs_without_matching_trades_stay_degraded_until_recovery(
     assert ledger_refs <= stored_trade_ids
 
 
+def test_backfilled_trade_ledger_ref_stays_degraded_until_recovery(tmp_path):
+    client = FakeKrakenRESTClient(add_order_mode=ACCEPT)
+    db_path = tmp_path / "portfolio.db"
+    store = SQLitePortfolioStore(str(db_path))
+    service = _service(client, store)
+    result = service.execute_plan(_plan(plan_id="plan-before-backfilled-lag"))
+    order = result.orders[0]
+    assert order.kraken_order_id is not None
+
+    verified_at = datetime(2026, 1, 2, 12, 10, tzinfo=UTC)
+    portfolio = _portfolio_service(client, db_path, clock=lambda: verified_at)
+    initial_sync = portfolio.sync()
+
+    assert initial_sync["new_trades"] == 0
+    assert portfolio.last_sync_ok is True
+    assert portfolio.last_sync_at == verified_at
+
+    client.stale_trades_history_reads(count=2)
+    client.set_clock((verified_at - timedelta(minutes=5)).timestamp())
+    client.close_order(order.kraken_order_id, price=100.0)
+
+    first_lagged = portfolio.sync()
+
+    assert first_lagged["new_trades"] == 0
+    assert portfolio.last_sync_ok is False
+    assert portfolio.last_sync_reason == LIVE_SYNC_TRADE_HISTORY_LAGGING_REASON
+    assert portfolio.last_sync_at == verified_at
+
+    second_lagged = portfolio.sync()
+
+    assert second_lagged["new_trades"] == 0
+    assert portfolio.last_sync_ok is False
+    assert portfolio.last_sync_reason == LIVE_SYNC_TRADE_HISTORY_LAGGING_REASON
+
+    recovered = portfolio.sync()
+
+    assert recovered["new_trades"] == 1
+    assert portfolio.last_sync_ok is True
+    assert portfolio.last_sync_reason is None
+    stored_trade_ids = {trade["id"] for trade in portfolio.store.get_trades()}
+    ledger_refs = {
+        entry.refid
+        for entry in portfolio.store.get_ledger_entries()
+        if entry.type == "trade"
+    }
+    assert ledger_refs <= stored_trade_ids
+
+
 def test_old_trade_ledger_ref_lag_escalates_and_alerts_once(tmp_path):
     client = FakeKrakenRESTClient(add_order_mode=ACCEPT)
     db_path = tmp_path / "portfolio.db"
@@ -933,7 +983,7 @@ def test_cancel_all_reaches_fake_kraken_when_portfolio_drift_detected(tmp_path):
     assert client.cancel_all_calls == 1
 
 
-def test_live_risk_reducing_action_not_blocked_by_degraded_portfolio_sync(tmp_path):
+def test_live_risk_reducing_actions_not_blocked_by_degraded_portfolio_sync(tmp_path):
     client = FakeKrakenRESTClient(add_order_mode=ACCEPT)
     store = SQLitePortfolioStore(str(tmp_path / "portfolio.db"))
     service = _service_with_risk(client, store, _degraded_risk)
@@ -947,7 +997,13 @@ def test_live_risk_reducing_action_not_blocked_by_degraded_portfolio_sync(tmp_pa
                 current_base_size=1.0,
                 target_base_size=0.0,
                 target_notional_usd=0.0,
-            )
+            ),
+            _action(
+                action_type="reduce",
+                current_base_size=1.0,
+                target_base_size=0.5,
+                target_notional_usd=50.0,
+            ),
         ],
         metadata={"order_type": "limit"},
         emergency_reduce_only=True,
@@ -956,9 +1012,8 @@ def test_live_risk_reducing_action_not_blocked_by_degraded_portfolio_sync(tmp_pa
     result = service.execute_plan(plan)
 
     assert not result.errors
-    assert len(client.add_order_calls) == 1
-    assert result.orders
-    assert result.orders[0].status == "open"
+    assert len(client.add_order_calls) == 2
+    assert [order.status for order in result.orders] == ["open", "open"]
 
 
 def test_cancel_all_reaches_fake_kraken_when_portfolio_sync_degraded(tmp_path):
