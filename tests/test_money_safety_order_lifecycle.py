@@ -17,7 +17,9 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 from typing import Any, Dict, cast
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
+
+from starlette.testclient import TestClient
 
 from krakked import cli
 from krakked.config import (
@@ -38,7 +40,9 @@ from krakked.execution.oms import (
     PORTFOLIO_SYNC_ORDER_BLOCKED_MESSAGE,
     ExecutionService,
 )
+from krakked.main import _run_loop_iteration
 from krakked.market_data.models import PairMetadata
+from krakked.metrics import SystemMetrics
 from krakked.portfolio.manager import PortfolioService
 from krakked.portfolio.models import LedgerEntry
 from krakked.portfolio.store import SQLitePortfolioStore
@@ -54,6 +58,8 @@ from krakked.portfolio.sync_status import (
 )
 from krakked.strategy.engine import StrategyEngine
 from krakked.strategy.models import ExecutionPlan, RiskAdjustedAction
+from krakked.ui.api import create_api
+from krakked.ui.context import AppContext, SessionState
 from tests.fakes.fake_kraken import (
     ACCEPT,
     ACCEPT_THEN_LOST,
@@ -308,6 +314,385 @@ def _service_with_alerts(
         risk_status_provider=_inactive_risk,
         alert_notifier=alerts,
     )
+
+
+def _seed_sellable_position(
+    client: FakeKrakenRESTClient,
+    db_path,
+    *,
+    size: float = 1.0,
+    price: float = 100.0,
+    plan_id: str = "seed-sellable-position",
+) -> PortfolioService:
+    store = SQLitePortfolioStore(str(db_path))
+    service = _service(client, store)
+    result = service.execute_plan(
+        ExecutionPlan(
+            plan_id=plan_id,
+            generated_at=datetime.now(UTC),
+            actions=[
+                _action(
+                    target_base_size=size,
+                    target_notional_usd=size * price,
+                    current_base_size=0.0,
+                )
+            ],
+            metadata={"order_type": "limit", "requested_price": price},
+        )
+    )
+    assert result.success is True
+    order = result.orders[0]
+    assert order.kraken_order_id is not None
+
+    client.close_order(order.kraken_order_id, price=price)
+    service.refresh_open_orders()
+    service.reconcile_orders()
+    store.close()
+
+    portfolio = _portfolio_service(client, db_path)
+    sync_result = portfolio.sync()
+    assert sync_result["new_trades"] == 1
+    assert portfolio.last_sync_ok is True
+    assert portfolio.get_positions()
+    return portfolio
+
+
+def _seed_dust_position(
+    client: FakeKrakenRESTClient,
+    db_path,
+    *,
+    size: str = "0.00000001",
+    price: float = 100.0,
+) -> PortfolioService:
+    response = client.add_order(
+        {
+            "pair": "XBTUSD",
+            "type": "buy",
+            "ordertype": "limit",
+            "volume": size,
+            "price": str(price),
+            "cl_ord_id": "seed-dust-position",
+        }
+    )
+    txid = response["txid"][0]
+    client.close_order(txid, price=price)
+
+    portfolio = _portfolio_service(client, db_path)
+    sync_result = portfolio.sync()
+    assert sync_result["new_trades"] == 1
+    assert portfolio.last_sync_ok is True
+    assert portfolio.get_positions()
+    return portfolio
+
+
+def _real_flatten_context(
+    client: FakeKrakenRESTClient,
+    portfolio: PortfolioService,
+) -> tuple[TestClient, AppContext, StrategyEngine, ExecutionService, MagicMock]:
+    config = portfolio.app_config
+    market_data = _market_data()
+    strategy_engine = StrategyEngine(config, market_data, portfolio)
+    execution_service = _service_with_account_truth(
+        client,
+        cast(SQLitePortfolioStore, portfolio.store),
+        portfolio,
+    )
+    session = SessionState(
+        active=False,
+        mode=config.execution.mode,
+        loop_interval_sec=config.session.loop_interval_sec,
+        profile_name=config.session.profile_name,
+        ml_enabled=config.ml.enabled,
+        emergency_flatten=config.session.emergency_flatten,
+        account_id=config.session.account_id or "default",
+    )
+    refresh_metrics_state = MagicMock(name="refresh_metrics_state")
+    context = AppContext(
+        config=config,
+        client=cast(KrakenRESTClient, client),
+        market_data=market_data,
+        portfolio_service=portfolio,
+        portfolio=portfolio,
+        strategy_engine=strategy_engine,
+        execution_service=execution_service,
+        metrics=SystemMetrics(),
+        session=session,
+    )
+    app = create_api(context)
+    test_client = TestClient(app)
+    test_client.context = context  # type: ignore[attr-defined]
+    return (
+        test_client,
+        context,
+        strategy_engine,
+        execution_service,
+        refresh_metrics_state,
+    )
+
+
+def _run_emergency_flatten_once(
+    *,
+    now: datetime,
+    portfolio: PortfolioService,
+    market_data,
+    strategy_engine: StrategyEngine,
+    execution_service: ExecutionService,
+    session: SessionState,
+    refresh_metrics_state: MagicMock,
+) -> None:
+    _run_loop_iteration(
+        now=now,
+        strategy_interval=1,
+        portfolio_interval=1,
+        last_strategy_cycle=now - timedelta(seconds=2),
+        last_portfolio_sync=now - timedelta(seconds=2),
+        portfolio=portfolio,
+        market_data=market_data,
+        strategy_engine=strategy_engine,
+        execution_service=execution_service,
+        metrics=SystemMetrics(),
+        refresh_metrics_state=refresh_metrics_state,
+        session_active=False,
+        session=session,
+    )
+
+
+def test_seeded_flatten_route_cancels_then_closes_and_resume_clears(tmp_path):
+    client = FakeKrakenRESTClient(add_order_mode=ACCEPT)
+    db_path = tmp_path / "seeded-route-flatten.db"
+    portfolio = _seed_sellable_position(client, db_path)
+    test_client, context, _strategy_engine, execution_service, refresh_metrics = (
+        _real_flatten_context(client, portfolio)
+    )
+
+    working = execution_service.execute_plan(_plan("seed-working-open-order"))
+    assert working.success is True
+    assert working.orders[0].kraken_order_id is not None
+    assert portfolio.store.get_open_orders()
+
+    route_event_start = len(client.call_log)
+    add_order_count_before_route = len(client.add_order_calls)
+
+    with patch("krakked.ui.routes.execution.dump_runtime_overrides") as mock_dump:
+        response = test_client.post(
+            "/api/execution/flatten_all", json={"confirmation": "FLATTEN ALL"}
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["error"] is None
+    assert context.session.emergency_flatten is True
+    assert context.config.session.emergency_flatten is True
+    mock_dump.assert_called_once()
+
+    route_events = client.call_log[route_event_start:]
+    cancel_index = next(
+        idx
+        for idx, event in enumerate(route_events)
+        if event["event"] == "cancel_all_orders"
+    )
+    close_index = next(
+        idx
+        for idx, event in enumerate(route_events)
+        if event["event"] == "add_order"
+        and event["params"].get("type") == "sell"
+        and event["params"].get("ordertype") == "market"
+    )
+    assert cancel_index < close_index
+    assert client.cancel_all_calls == 1
+    assert len(client.add_order_calls) == add_order_count_before_route + 1
+
+    flatten_result = execution_service.get_recent_executions()[-1]
+    assert flatten_result.plan_id.startswith("flatten_")
+    assert flatten_result.success is True
+    assert len(flatten_result.orders) == 1
+    close_order = flatten_result.orders[0]
+    assert close_order.side == "sell"
+    assert close_order.risk_reducing is True
+    assert close_order.kraken_order_id is not None
+
+    persisted_results = portfolio.store.get_execution_results(limit=20)
+    assert any(result.plan_id == flatten_result.plan_id for result in persisted_results)
+
+    client.close_order(close_order.kraken_order_id, price=100.0)
+    with patch("krakked.main.dump_runtime_overrides") as mock_dump_main:
+        _run_emergency_flatten_once(
+            now=datetime.now(UTC),
+            portfolio=portfolio,
+            market_data=context.market_data,
+            strategy_engine=context.strategy_engine,
+            execution_service=execution_service,
+            session=context.session,
+            refresh_metrics_state=refresh_metrics,
+        )
+
+    assert context.session.emergency_flatten is False
+    assert context.config.session.emergency_flatten is False
+    mock_dump_main.assert_called_once()
+    assert portfolio.last_sync_ok is True
+    assert all(
+        abs(position.base_size) <= 1e-9 for position in portfolio.get_positions()
+    )
+    assert portfolio.store.get_open_orders() == []
+
+    persisted_close = portfolio.store.get_order_by_reference(
+        kraken_order_id=close_order.kraken_order_id
+    )
+    assert persisted_close is not None
+    assert persisted_close.status == "closed"
+    assert persisted_close.cumulative_base_filled == close_order.requested_base_size
+    assert client.get_private("Balance")["XXBT"] == "0.00000000"
+
+
+def test_seeded_flatten_route_keeps_armed_when_open_orders_remain(tmp_path):
+    client = FakeKrakenRESTClient(
+        add_order_mode=ACCEPT,
+        cancel_all_leaves_orders_open=True,
+    )
+    db_path = tmp_path / "seeded-open-orders-remain.db"
+    portfolio = _seed_sellable_position(client, db_path)
+    test_client, context, _strategy_engine, execution_service, _refresh_metrics = (
+        _real_flatten_context(client, portfolio)
+    )
+
+    working = execution_service.execute_plan(_plan("seed-uncleared-open-order"))
+    assert working.success is True
+    assert working.orders[0].kraken_order_id is not None
+    add_order_count_before_route = len(client.add_order_calls)
+
+    with patch("krakked.ui.routes.execution.dump_runtime_overrides") as mock_dump:
+        response = test_client.post(
+            "/api/execution/flatten_all", json={"confirmation": "FLATTEN ALL"}
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["data"] is None
+    assert payload["error"] is not None
+    assert "waiting for open orders" in payload["error"]
+    assert "open orders remaining" in payload["error"]
+    assert context.session.emergency_flatten is True
+    mock_dump.assert_called_once()
+    assert client.cancel_all_calls == 1
+    assert len(client.add_order_calls) == add_order_count_before_route
+    assert portfolio.store.get_open_orders()
+
+
+def test_seeded_flatten_route_refuses_blind_close_when_account_truth_degraded(
+    tmp_path,
+):
+    client = FakeKrakenRESTClient(add_order_mode=ACCEPT)
+    db_path = tmp_path / "seeded-degraded-flatten.db"
+    portfolio = _seed_sellable_position(client, db_path)
+    test_client, context, _strategy_engine, _execution_service, _refresh_metrics = (
+        _real_flatten_context(client, portfolio)
+    )
+    add_order_count_before_route = len(client.add_order_calls)
+    client.fail_balance_reads(count=1)
+
+    with patch("krakked.ui.routes.execution.dump_runtime_overrides") as mock_dump:
+        response = test_client.post(
+            "/api/execution/flatten_all", json={"confirmation": "FLATTEN ALL"}
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["data"] is None
+    assert payload["error"] is not None
+    assert "Can't verify your account right now" in payload["error"]
+    assert "will not place close orders blind" in payload["error"]
+    assert "account sync unavailable" in payload["error"]
+    assert context.session.emergency_flatten is True
+    assert context.config.session.emergency_flatten is True
+    mock_dump.assert_called_once()
+    assert client.cancel_all_calls == 1
+    assert len(client.add_order_calls) == add_order_count_before_route
+    assert portfolio.last_sync_ok is False
+
+
+def test_seeded_background_emergency_flatten_retries_until_flat(tmp_path):
+    client = FakeKrakenRESTClient(add_order_mode=ACCEPT)
+    db_path = tmp_path / "seeded-background-flatten.db"
+    portfolio = _seed_sellable_position(client, db_path)
+    _test_client, context, _strategy_engine, execution_service, refresh_metrics = (
+        _real_flatten_context(client, portfolio)
+    )
+    context.session.emergency_flatten = True
+    context.config.session.emergency_flatten = True
+    add_order_count_before_resume = len(client.add_order_calls)
+
+    with patch("krakked.main.dump_runtime_overrides") as mock_dump_main:
+        _run_emergency_flatten_once(
+            now=datetime.now(UTC),
+            portfolio=portfolio,
+            market_data=context.market_data,
+            strategy_engine=context.strategy_engine,
+            execution_service=execution_service,
+            session=context.session,
+            refresh_metrics_state=refresh_metrics,
+        )
+
+    assert mock_dump_main.call_count == 0
+    assert context.session.emergency_flatten is True
+    assert len(client.add_order_calls) == add_order_count_before_resume + 1
+    close_result = execution_service.get_recent_executions()[-1]
+    close_order = close_result.orders[0]
+    assert close_order.side == "sell"
+    assert close_order.kraken_order_id is not None
+    assert portfolio.store.get_open_orders()
+
+    client.close_order(close_order.kraken_order_id, price=100.0)
+    with patch("krakked.main.dump_runtime_overrides") as mock_dump_main:
+        _run_emergency_flatten_once(
+            now=datetime.now(UTC) + timedelta(seconds=2),
+            portfolio=portfolio,
+            market_data=context.market_data,
+            strategy_engine=context.strategy_engine,
+            execution_service=execution_service,
+            session=context.session,
+            refresh_metrics_state=refresh_metrics,
+        )
+
+    assert mock_dump_main.call_count == 1
+    assert context.session.emergency_flatten is False
+    assert context.config.session.emergency_flatten is False
+    assert all(
+        abs(position.base_size) <= 1e-9 for position in portfolio.get_positions()
+    )
+    assert portfolio.store.get_open_orders() == []
+
+
+def test_seeded_background_emergency_flatten_clears_dust_without_retry_loop(
+    tmp_path,
+):
+    client = FakeKrakenRESTClient(add_order_mode=ACCEPT)
+    db_path = tmp_path / "seeded-dust-flatten.db"
+    portfolio = _seed_dust_position(client, db_path)
+    _test_client, context, _strategy_engine, execution_service, refresh_metrics = (
+        _real_flatten_context(client, portfolio)
+    )
+    context.session.emergency_flatten = True
+    context.config.session.emergency_flatten = True
+    add_order_count_before_resume = len(client.add_order_calls)
+
+    with patch("krakked.main.dump_runtime_overrides") as mock_dump_main:
+        _run_emergency_flatten_once(
+            now=datetime.now(UTC),
+            portfolio=portfolio,
+            market_data=context.market_data,
+            strategy_engine=context.strategy_engine,
+            execution_service=execution_service,
+            session=context.session,
+            refresh_metrics_state=refresh_metrics,
+        )
+
+    assert mock_dump_main.call_count == 1
+    assert context.session.emergency_flatten is False
+    assert context.config.session.emergency_flatten is False
+    assert len(client.add_order_calls) == add_order_count_before_resume
+    assert execution_service.get_recent_executions() == []
+    assert portfolio.get_positions()
+    assert client.get_private("Balance")["XXBT"] == "0.00000001"
 
 
 def test_happy_path_live_order_lifecycle_persists_and_is_recoverable(tmp_path):

@@ -37,13 +37,17 @@ Current trust level: Level 0, research and paper only.
   deterministic Balance/TradesHistory/Ledgers failures plus narrow stale-read
   and trade-ledger/trade-history matching proofs for a single account scenario.
 - Milestones B-E, order lifecycle, reconciliation, risk limits, and emergency
-  operations: building blocks exist. Milestone B now has an initial passing
+  operations: deterministic single-account proofs exist for the core safety
+  lanes. Milestone B now has an initial passing
   proof for AddOrder response-loss duplicate-submit prevention, manual
   `submit_unknown` recovery tooling, and one restart/closed-order/portfolio-sync
   reconciliation drill. Milestone C now has a deterministic account-truth gate
   proof for missing, failed, stale, and materially drifting live reconciliation.
-  Broader process-death, cancel timing, stale-read, multi-asset, and
-  emergency-operation proofs remain incomplete.
+  Milestone E now has a seeded emergency-flatten drill proving cancel-first,
+  open-order residue, degraded account-truth refusal, background retry/resume,
+  verified closeout, persisted execution state, and dust/no-retry behavior.
+  Broader process-death, multi-asset, dead-man, and alert proofs remain
+  incomplete.
 - Milestone F, data continuity: continuity tooling exists, but strict replay
   gates do not yet consume continuity gaps directly.
 - Milestone G, paper soak, validate-only drill, and tiny live smoke: first
@@ -56,9 +60,9 @@ Known live blockers:
 - fake Kraken/fault harness now models one coherent account/fill/trade/ledger
   path plus narrow failing/stale private reads, but it is intentionally narrow
   and does not yet cover broad exchange behavior or multiple pairs/assets;
-- crash-safe submit-intent behavior is only proven for the initial AddOrder
-  response-loss scenario; broader process-death and reconciliation drills remain
-  incomplete;
+- crash-safe submit-intent behavior is proven for the initial AddOrder
+  response-loss scenario plus seeded emergency-flatten retry/resume, but broader
+  process-death and reconciliation drills remain incomplete;
 - live Balance/TradesHistory/Ledgers unavailability, never-synced live cold
   start, stale reconciliation age, missing trade-history evidence, and material
   drift now block normal-loop/live-opening-risk paths;
@@ -574,36 +578,40 @@ Why it matters:
 The operator needs the system to stop cleanly when something is wrong. Emergency
 controls are live-money features, not UI conveniences.
 
-Current building blocks:
+Current proof:
 
 - cancel single order;
 - cancel all orders;
 - emergency flatten route;
 - emergency flatten session persistence;
 - background emergency flatten loop;
+- deterministic seeded emergency-flatten tests using real `PortfolioService`,
+  real `ExecutionService`, SQLite store, and `FakeKrakenRESTClient`;
 - dead-man switch heartbeat support;
-- admin CLI panic path.
+- admin CLI panic path;
 - webhook alert transport for initial submit-unknown and blocked-opening
   fail-closed events.
 
-Proof gap:
+Covered by the seeded emergency-flatten drill:
 
-- emergency behavior is not proven against live-like exchange edge cases;
-- flatten can be unsafe if open orders remain, sync fails, or positions are
-  stale;
+- emergency flatten is now proven against the live-like single-account fake
+  exchange path for cancel-before-close, open-order residue, degraded account
+  truth, retry/resume, verified closeout, persisted execution state, and
+  dust/untradeable no-retry behavior;
+
+Remaining gaps:
+
+- broader emergency behavior is not yet proven across process death during
+  submission, multiple assets/pairs, manual exchange-side intervention, or
+  real Kraken;
 - dead-man heartbeat needs realistic live validation;
 - only the submit-unknown and blocked-opening alert path is currently proved;
   kill-switch, drift, stale reconciliation, dead-man, emergency-flatten, and
   unexpected-stop alerts still need coverage;
 - runbooks and proof outputs should be tied to tests/drills.
 
-Done when:
+Remaining done when:
 
-- tests prove cancel-all reconciles open/closed state after success;
-- tests prove flatten refuses to sell against stale positions or uncleared open
-  orders;
-- tests prove emergency flatten intent persists and resumes after restart;
-- tests prove dust/untradeable positions are reported without infinite retry;
 - tests prove dead-man heartbeat is refreshed only when live submission is
   actually allowed;
 - tests prove kill-switch fire, drift block, stale or failed reconciliation,
@@ -710,17 +718,13 @@ trades, portfolio positions, and useful closed-bar/no-signal diagnostics. See
 
 Recommended next behavior slice:
 
-1. Finish the operator-truth cleanup from the validation pass: keep paper sync
-   refreshes neutral, make Unraid Docker health secondary to app HTTP health
-   when exec is noisy, keep stale disabled/watchlist pairs as warnings, use
-   dated validation profile suggestions, and show the active DB path for
-   backup/export.
-2. Re-run emergency flatten with seeded synthetic positions and open-order
-   state.
-3. Prove cancel-all, no close-order placement under degraded account truth, and
-   close-order behavior under verified account truth.
-4. Re-run a short paper validation only if the cleanup changes affect operator
-   health/readiness surfaces.
+1. Run a decision-useful paper soak on a supported window/pair set so the
+   hardened gates see a real strategy-intent -> OMS -> fill -> portfolio event
+   stream.
+2. Keep dead-man heartbeat and broader fail-closed alert proofs on the
+   money-safety backlog.
+3. Re-run a short paper validation only if the next cleanup changes health,
+   readiness, or control surfaces.
 
 That slice should not broaden into strategy promotion, ML authority, multi-pair
 simulation, or data-continuity scoreboards.
@@ -747,9 +751,9 @@ When adding or modifying money-safety behavior:
 Do not prioritize another strategy scoreboard as the next money-safety task.
 Do not prioritize broad live UI polish as the next money-safety task.
 
-The stale-sync/material-drift account-truth gates now have a narrow
-deterministic proof, and the 2026-06-20 paper validation proved the paper loop
-can produce decision-useful strategy, OMS, trade, and portfolio evidence. Do not
-start live smoke yet. First fix the operator-truth gaps surfaced by that run,
-then move to the deterministic emergency-flatten drill with seeded synthetic
-positions, open orders, partial fills, restart, and reconciliation checks.
+The stale-sync/material-drift account-truth gates and seeded emergency-flatten
+drill now have narrow deterministic proofs, and the 2026-06-20 paper validation
+proved the paper loop can produce decision-useful strategy, OMS, trade, and
+portfolio evidence. Do not start live smoke yet. Next run a decision-useful
+paper soak that exercises strategy intents, OMS rows, paper fills, portfolio
+sync, and the proved safety gates together.
