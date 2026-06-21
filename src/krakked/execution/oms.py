@@ -1,5 +1,6 @@
 # src/krakked/execution/oms.py
 
+import inspect
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -94,7 +95,7 @@ class ExecutionService:
         market_data: MarketDataAPI | None = None,
         rate_limiter: Optional[RateLimiter] = None,
         risk_status_provider: Optional[Callable[[], "RiskStatus"]] = None,
-        account_truth_provider: Optional[Callable[[], Any]] = None,
+        account_truth_provider: Optional[Callable[..., Any]] = None,
         alert_notifier: Optional[Any] = None,
     ):
         self.adapter = adapter or get_execution_adapter(
@@ -318,8 +319,62 @@ class ExecutionService:
             "execution.live_strategy_allowlist"
         )
 
-    def _portfolio_sync_block_reason(
+    def _account_truth_provider_accepts_fresh_drift(self) -> bool:
+        provider = self._account_truth_provider
+        if provider is None:
+            return False
+        try:
+            signature = inspect.signature(provider)
+        except (TypeError, ValueError):
+            return False
+        for parameter in signature.parameters.values():
+            if parameter.kind == inspect.Parameter.VAR_KEYWORD:
+                return True
+            if parameter.name == "force_fresh_drift":
+                return True
+        return False
+
+    def _fresh_account_truth_for_opening_risk(
         self, action: "RiskAdjustedAction"
+    ) -> tuple[Any | None, _PortfolioSyncBlock | None]:
+        if not self._account_truth_provider:
+            return None, None
+        if not self._account_truth_provider_accepts_fresh_drift():
+            logger.warning(
+                "Account truth provider cannot force fresh drift for live opening risk",
+                extra=structured_log_extra(
+                    event="account_truth_provider_missing_fresh_drift",
+                    strategy_id=getattr(action, "strategy_id", None),
+                    pair=getattr(action, "pair", None),
+                ),
+            )
+            return None, _PortfolioSyncBlock(
+                PORTFOLIO_SYNC_RUNTIME_CHECKS_UNAVAILABLE_MESSAGE,
+                detail="account truth provider cannot refresh drift",
+            )
+        try:
+            return self._account_truth_provider(force_fresh_drift=True), None
+        except Exception as exc:  # noqa: BLE001
+            logger.exception(
+                "Account truth provider failed while checking live opening risk",
+                extra=structured_log_extra(
+                    event="account_truth_provider_error",
+                    strategy_id=getattr(action, "strategy_id", None),
+                    pair=getattr(action, "pair", None),
+                    error=str(exc),
+                ),
+            )
+            return None, _PortfolioSyncBlock(
+                PORTFOLIO_SYNC_RUNTIME_CHECKS_UNAVAILABLE_MESSAGE,
+                detail="account truth provider failed",
+            )
+
+    def _portfolio_sync_block_reason(
+        self,
+        action: "RiskAdjustedAction",
+        *,
+        account_truth: Any | None = None,
+        account_truth_error: _PortfolioSyncBlock | None = None,
     ) -> _PortfolioSyncBlock | None:
         if not self._live_submit_enabled():
             return None
@@ -327,24 +382,15 @@ class ExecutionService:
         if self._is_true_risk_reducing_action(action):
             return None
 
-        if self._account_truth_provider:
-            try:
-                account_truth = self._account_truth_provider()
-            except Exception as exc:  # noqa: BLE001
-                logger.exception(
-                    "Account truth provider failed while checking portfolio sync",
-                    extra=structured_log_extra(
-                        event="account_truth_provider_error",
-                        strategy_id=getattr(action, "strategy_id", None),
-                        pair=getattr(action, "pair", None),
-                        error=str(exc),
-                    ),
-                )
-                return _PortfolioSyncBlock(
-                    PORTFOLIO_SYNC_RUNTIME_CHECKS_UNAVAILABLE_MESSAGE,
-                    detail="account truth provider failed",
-                )
-
+        if account_truth_error is not None:
+            return account_truth_error
+        if account_truth is None and self._account_truth_provider:
+            account_truth, account_truth_error = (
+                self._fresh_account_truth_for_opening_risk(action)
+            )
+            if account_truth_error is not None:
+                return account_truth_error
+        if account_truth is not None:
             if bool(getattr(account_truth, "portfolio_sync_ok", False)):
                 return None
 
@@ -388,7 +434,11 @@ class ExecutionService:
         )
 
     def _portfolio_drift_block_reason(
-        self, action: "RiskAdjustedAction"
+        self,
+        action: "RiskAdjustedAction",
+        *,
+        account_truth: Any | None = None,
+        account_truth_error: _PortfolioSyncBlock | None = None,
     ) -> _PortfolioSyncBlock | None:
         if not self._live_submit_enabled():
             return None
@@ -396,22 +446,23 @@ class ExecutionService:
         if self._is_true_risk_reducing_action(action):
             return None
 
-        if self._account_truth_provider:
-            try:
-                account_truth = self._account_truth_provider()
-            except Exception as exc:  # noqa: BLE001
-                logger.exception(
-                    "Account truth provider failed while checking portfolio drift",
-                    extra=structured_log_extra(
-                        event="account_truth_drift_provider_error",
-                        strategy_id=getattr(action, "strategy_id", None),
-                        pair=getattr(action, "pair", None),
-                        error=str(exc),
-                    ),
-                )
+        if account_truth_error is not None:
+            return account_truth_error
+        if account_truth is None and self._account_truth_provider:
+            account_truth, account_truth_error = (
+                self._fresh_account_truth_for_opening_risk(action)
+            )
+            if account_truth_error is not None:
+                return account_truth_error
+        if account_truth is not None:
+            portfolio_sync_ok = getattr(account_truth, "portfolio_sync_ok", None)
+            if portfolio_sync_ok is not None and not bool(portfolio_sync_ok):
+                reason = getattr(account_truth, "portfolio_sync_reason", None)
                 return _PortfolioSyncBlock(
                     PORTFOLIO_SYNC_RUNTIME_CHECKS_UNAVAILABLE_MESSAGE,
-                    detail="account truth provider failed",
+                    detail=(
+                        reason if isinstance(reason, str) and reason.strip() else None
+                    ),
                 )
 
             if not bool(getattr(account_truth, "drift_flag", False)):
@@ -733,6 +784,18 @@ class ExecutionService:
             actions_to_process=actions_to_process,
             total_target_notional=total_target_notional,
         )
+        opening_risk_actions = [
+            action
+            for action in actions_to_process
+            if not self._is_true_risk_reducing_action(action)
+        ]
+        opening_account_truth: Any | None = None
+        opening_account_truth_error: _PortfolioSyncBlock | None = None
+        if self._live_submit_enabled() and opening_risk_actions:
+            (
+                opening_account_truth,
+                opening_account_truth_error,
+            ) = self._fresh_account_truth_for_opening_risk(opening_risk_actions[0])
 
         for action in actions_to_process:
             live_strategy_block_reason = self._live_strategy_block_reason(action)
@@ -755,7 +818,11 @@ class ExecutionService:
                 result.orders.append(blocked_order)
                 continue
 
-            portfolio_sync_block = self._portfolio_sync_block_reason(action)
+            portfolio_sync_block = self._portfolio_sync_block_reason(
+                action,
+                account_truth=opening_account_truth,
+                account_truth_error=opening_account_truth_error,
+            )
             if portfolio_sync_block:
                 blocked_order = self._create_rejected_order(
                     plan, action, portfolio_sync_block.message
@@ -776,7 +843,11 @@ class ExecutionService:
                 result.orders.append(blocked_order)
                 continue
 
-            portfolio_drift_block = self._portfolio_drift_block_reason(action)
+            portfolio_drift_block = self._portfolio_drift_block_reason(
+                action,
+                account_truth=opening_account_truth,
+                account_truth_error=opening_account_truth_error,
+            )
             if portfolio_drift_block:
                 blocked_order = self._create_rejected_order(
                     plan, action, portfolio_drift_block.message

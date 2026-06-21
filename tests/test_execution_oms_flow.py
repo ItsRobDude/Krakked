@@ -8,7 +8,11 @@ import pytest
 from krakked.config import ExecutionConfig
 from krakked.execution.adapter import DryRunExecutionAdapter
 from krakked.execution.models import LocalOrder
-from krakked.execution.oms import PORTFOLIO_SYNC_ORDER_BLOCKED_MESSAGE, ExecutionService
+from krakked.execution.oms import (
+    PORTFOLIO_SYNC_ORDER_BLOCKED_MESSAGE,
+    PORTFOLIO_SYNC_RUNTIME_CHECKS_UNAVAILABLE_MESSAGE,
+    ExecutionService,
+)
 from krakked.market_data.models import PairMetadata
 from krakked.portfolio.sync_status import LIVE_SYNC_IN_PROGRESS_REASON
 from krakked.safety_messages import PORTFOLIO_DRIFT_ORDER_BLOCKED_MESSAGE
@@ -437,6 +441,17 @@ def test_live_execution_blocks_sync_in_progress_from_fresh_account_truth():
     adapter.submit_order.side_effect = (
         lambda order, pair_metadata, latest_price=None: order
     )
+
+    def account_truth_provider(*, force_fresh_drift: bool = False):
+        assert force_fresh_drift is True
+        return SimpleNamespace(
+            portfolio_sync_ok=False,
+            portfolio_sync_reason=LIVE_SYNC_IN_PROGRESS_REASON,
+            portfolio_sync_in_progress=True,
+            drift_flag=False,
+            drift_info=None,
+        )
+
     service = ExecutionService(
         adapter=adapter,
         market_data=_market_data(mid_price=100.0),
@@ -445,13 +460,7 @@ def test_live_execution_blocks_sync_in_progress_from_fresh_account_truth():
             portfolio_sync_ok=True,
             drift_flag=False,
         ),
-        account_truth_provider=lambda: SimpleNamespace(
-            portfolio_sync_ok=False,
-            portfolio_sync_reason=LIVE_SYNC_IN_PROGRESS_REASON,
-            portfolio_sync_in_progress=True,
-            drift_flag=False,
-            drift_info=None,
-        ),
+        account_truth_provider=account_truth_provider,
     )
 
     plan = ExecutionPlan(
@@ -481,6 +490,17 @@ def test_live_execution_allows_healthy_idle_fresh_account_truth():
     adapter.submit_order.side_effect = (
         lambda order, pair_metadata, latest_price=None: order
     )
+
+    def account_truth_provider(*, force_fresh_drift: bool = False):
+        assert force_fresh_drift is True
+        return SimpleNamespace(
+            portfolio_sync_ok=True,
+            portfolio_sync_reason=None,
+            portfolio_sync_in_progress=False,
+            drift_flag=False,
+            drift_info=None,
+        )
+
     service = ExecutionService(
         adapter=adapter,
         market_data=_market_data(mid_price=100.0),
@@ -489,13 +509,7 @@ def test_live_execution_allows_healthy_idle_fresh_account_truth():
             portfolio_sync_ok=False,
             drift_flag=False,
         ),
-        account_truth_provider=lambda: SimpleNamespace(
-            portfolio_sync_ok=True,
-            portfolio_sync_reason=None,
-            portfolio_sync_in_progress=False,
-            drift_flag=False,
-            drift_info=None,
-        ),
+        account_truth_provider=account_truth_provider,
     )
 
     plan = ExecutionPlan(
@@ -524,6 +538,17 @@ def test_live_execution_blocks_fresh_account_truth_drift_over_cached_healthy_sta
     adapter.submit_order.side_effect = (
         lambda order, pair_metadata, latest_price=None: order
     )
+
+    def account_truth_provider(*, force_fresh_drift: bool = False):
+        assert force_fresh_drift is True
+        return SimpleNamespace(
+            portfolio_sync_ok=True,
+            portfolio_sync_reason=None,
+            portfolio_sync_in_progress=False,
+            drift_flag=True,
+            drift_info={"source": "fresh-account-truth"},
+        )
+
     service = ExecutionService(
         adapter=adapter,
         market_data=_market_data(mid_price=100.0),
@@ -532,13 +557,7 @@ def test_live_execution_blocks_fresh_account_truth_drift_over_cached_healthy_sta
             portfolio_sync_ok=True,
             drift_flag=False,
         ),
-        account_truth_provider=lambda: SimpleNamespace(
-            portfolio_sync_ok=True,
-            portfolio_sync_reason=None,
-            portfolio_sync_in_progress=False,
-            drift_flag=True,
-            drift_info={"source": "fresh-account-truth"},
-        ),
+        account_truth_provider=account_truth_provider,
     )
 
     plan = ExecutionPlan(
@@ -554,6 +573,147 @@ def test_live_execution_blocks_fresh_account_truth_drift_over_cached_healthy_sta
     assert result.errors == [PORTFOLIO_DRIFT_ORDER_BLOCKED_MESSAGE]
     assert result.orders[0].status == "rejected"
     adapter.submit_order.assert_not_called()
+
+
+def test_live_execution_blocks_provider_without_force_fresh_drift():
+    adapter = MagicMock()
+    adapter.config = ExecutionConfig(
+        mode="live",
+        validate_only=False,
+        allow_live_trading=True,
+        paper_tests_completed=True,
+        live_strategy_allowlist=["strat"],
+    )
+
+    def submit_order(order, pair_metadata, latest_price=None):  # noqa: ARG001
+        order.status = "open"
+        return order
+
+    adapter.submit_order.side_effect = submit_order
+    service = ExecutionService(
+        adapter=adapter,
+        market_data=_market_data(mid_price=100.0),
+        risk_status_provider=lambda: SimpleNamespace(
+            kill_switch_active=False,
+            portfolio_sync_ok=True,
+            drift_flag=False,
+        ),
+        account_truth_provider=lambda: SimpleNamespace(
+            portfolio_sync_ok=True,
+            drift_flag=False,
+        ),
+    )
+
+    result = service.execute_plan(
+        ExecutionPlan(
+            plan_id="plan_account_truth_provider_no_force",
+            generated_at=datetime.now(UTC),
+            actions=[_ttl_action(strategy_id="strat")],
+            metadata={"order_type": "limit"},
+        )
+    )
+
+    assert result.success is False
+    assert result.errors == [PORTFOLIO_SYNC_RUNTIME_CHECKS_UNAVAILABLE_MESSAGE]
+    adapter.submit_order.assert_not_called()
+
+
+def test_live_execution_blocks_internal_type_error_from_fresh_provider():
+    adapter = MagicMock()
+    adapter.config = ExecutionConfig(
+        mode="live",
+        validate_only=False,
+        allow_live_trading=True,
+        paper_tests_completed=True,
+        live_strategy_allowlist=["strat"],
+    )
+    adapter.submit_order.side_effect = (
+        lambda order, pair_metadata, latest_price=None: order
+    )
+
+    def account_truth_provider(*, force_fresh_drift: bool = False):
+        assert force_fresh_drift is True
+        raise TypeError("internal recompute bug")
+
+    service = ExecutionService(
+        adapter=adapter,
+        market_data=_market_data(mid_price=100.0),
+        risk_status_provider=lambda: SimpleNamespace(
+            kill_switch_active=False,
+            portfolio_sync_ok=True,
+            drift_flag=False,
+        ),
+        account_truth_provider=account_truth_provider,
+    )
+
+    result = service.execute_plan(
+        ExecutionPlan(
+            plan_id="plan_account_truth_provider_type_error",
+            generated_at=datetime.now(UTC),
+            actions=[_ttl_action(strategy_id="strat")],
+            metadata={"order_type": "limit"},
+        )
+    )
+
+    assert result.success is False
+    assert result.errors == [PORTFOLIO_SYNC_RUNTIME_CHECKS_UNAVAILABLE_MESSAGE]
+    adapter.submit_order.assert_not_called()
+
+
+def test_live_execution_uses_one_fresh_account_truth_preflight_for_plan():
+    adapter = MagicMock()
+    adapter.config = ExecutionConfig(
+        mode="live",
+        validate_only=False,
+        allow_live_trading=True,
+        paper_tests_completed=True,
+        live_strategy_allowlist=["strat"],
+    )
+
+    def submit_order(order, pair_metadata, latest_price=None):  # noqa: ARG001
+        order.status = "open"
+        return order
+
+    adapter.submit_order.side_effect = submit_order
+    provider_calls = []
+
+    def account_truth_provider(*, force_fresh_drift: bool = False):
+        provider_calls.append(force_fresh_drift)
+        return SimpleNamespace(
+            portfolio_sync_ok=True,
+            portfolio_sync_reason=None,
+            portfolio_sync_in_progress=False,
+            drift_flag=False,
+            drift_info=None,
+        )
+
+    service = ExecutionService(
+        adapter=adapter,
+        market_data=_market_data(mid_price=100.0),
+        risk_status_provider=lambda: SimpleNamespace(
+            kill_switch_active=False,
+            portfolio_sync_ok=True,
+            drift_flag=False,
+        ),
+        account_truth_provider=account_truth_provider,
+    )
+
+    result = service.execute_plan(
+        ExecutionPlan(
+            plan_id="plan_account_truth_provider_once",
+            generated_at=datetime.now(UTC),
+            actions=[
+                _ttl_action(strategy_id="strat", pair="XBTUSD"),
+                _ttl_action(strategy_id="strat", pair="ETHUSD"),
+            ],
+            metadata={"order_type": "limit"},
+        )
+    )
+
+    assert result.success is True
+    assert result.errors == []
+    assert provider_calls == [True]
+    assert adapter.submit_order.call_count == 2
 
 
 def test_live_reduce_and_close_exempt_from_sync_in_progress_account_truth():

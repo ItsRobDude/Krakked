@@ -5,7 +5,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
-from threading import RLock
+from threading import Lock, RLock
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Set, Union, cast
 
@@ -15,8 +15,12 @@ from krakked.connection.rest_client import KrakenRESTClient
 from krakked.logging_config import structured_log_extra
 from krakked.market_data.api import MarketDataAPI
 from krakked.portfolio.sync_status import (
+    LIVE_ACCOUNT_TRUTH_LOCK_TIMEOUT_SECONDS,
+    LIVE_ACCOUNT_TRUTH_REFRESH_TIMEOUT_REASON,
+    LIVE_DRIFT_FRESHNESS_BUDGET_SECONDS,
     LIVE_SYNC_DEGRADED_REASON,
     LIVE_SYNC_LEDGERS_UNAVAILABLE_REASON,
+    LIVE_SYNC_STUCK_REASON,
     LIVE_SYNC_TRADE_HISTORY_LAG_ALERT_TITLE,
     LIVE_SYNC_TRADE_HISTORY_LAGGING_REASON,
     LIVE_SYNC_TRADES_UNAVAILABLE_REASON,
@@ -153,10 +157,13 @@ class PortfolioService:
         # Compatibility default; live safety surfaces treat missing sync time
         # as degraded.
         self._account_truth_lock = RLock()
+        self._sync_run_lock = Lock()
         self._sync_in_progress: bool = False
+        self._sync_started_at: Optional[datetime] = None
         self._last_sync_ok: bool = True
         self._last_sync_at: Optional[datetime] = None
         self._last_sync_reason: Optional[str] = None
+        self._last_balance_reconcile_at: Optional[datetime] = None
         self._baseline_source: str = (
             "paper_wallet"
             if getattr(config.execution, "mode", "paper") == "paper"
@@ -225,11 +232,14 @@ class PortfolioService:
 
     def _set_sync_in_progress(self, value: bool) -> None:
         lock = getattr(self, "_account_truth_lock", None)
+        started_at = self._now() if value else None
         if lock is None:
             self._sync_in_progress = bool(value)
+            self._sync_started_at = started_at
             return
         with lock:
             self._sync_in_progress = bool(value)
+            self._sync_started_at = started_at
 
     def _set_last_sync_state(
         self,
@@ -260,13 +270,72 @@ class PortfolioService:
         mode = getattr(execution_config, "mode", None)
         return mode if isinstance(mode, str) else None
 
+    def _fresh_balance_reconcile_available(self, now_value: datetime) -> bool:
+        lock = getattr(self, "_account_truth_lock", None)
+        if lock is None:
+            last_reconcile_at = getattr(self, "_last_balance_reconcile_at", None)
+            last_sync_ok = bool(getattr(self, "_last_sync_ok", True))
+        else:
+            with lock:
+                last_reconcile_at = self._last_balance_reconcile_at
+                last_sync_ok = self._last_sync_ok
+        if not last_sync_ok or not isinstance(last_reconcile_at, datetime):
+            return False
+        age_seconds = (now_value - last_reconcile_at).total_seconds()
+        return 0 <= age_seconds <= LIVE_DRIFT_FRESHNESS_BUDGET_SECONDS
+
+    def _mark_account_truth_refresh_timeout(self) -> None:
+        self._set_last_sync_state(
+            ok=False,
+            reason=LIVE_ACCOUNT_TRUTH_REFRESH_TIMEOUT_REASON,
+        )
+        logger.warning(
+            "Timed out waiting to refresh live account truth for opening-risk check.",
+            extra=structured_log_extra(event="portfolio_truth_refresh_timeout"),
+        )
+
+    def _ensure_fresh_drift_for_opening_risk(self, now_value: datetime) -> None:
+        if self._fresh_balance_reconcile_available(now_value):
+            return
+
+        sync_lock = getattr(self, "_sync_run_lock", None)
+        if sync_lock is None:
+            reconcile_ok = self._reconcile()
+            if reconcile_ok:
+                self._refresh_cached_views()
+            return
+
+        acquired = sync_lock.acquire(timeout=LIVE_ACCOUNT_TRUTH_LOCK_TIMEOUT_SECONDS)
+        if not acquired:
+            self._mark_account_truth_refresh_timeout()
+            return
+
+        try:
+            refreshed_now = self._now()
+            if self._fresh_balance_reconcile_available(refreshed_now):
+                return
+            reconcile_ok = self._reconcile()
+            if reconcile_ok:
+                self._refresh_cached_views()
+        finally:
+            sync_lock.release()
+
     def get_account_truth_snapshot(
         self,
         *,
         execution_mode: Optional[str] = None,
         now: Optional[datetime] = None,
+        force_fresh_drift: bool = False,
     ) -> AccountTruthSnapshot:
         """Return a small atomic view of sync and drift truth for safety checks."""
+
+        now_value = now if isinstance(now, datetime) else self._now()
+        if now_value.tzinfo is None:
+            now_value = now_value.replace(tzinfo=timezone.utc)
+        else:
+            now_value = now_value.astimezone(timezone.utc)
+        if force_fresh_drift:
+            self._ensure_fresh_drift_for_opening_risk(now_value)
 
         lock = getattr(self, "_account_truth_lock", None)
         if lock is None:
@@ -287,7 +356,6 @@ class PortfolioService:
                     sync_in_progress=self._sync_in_progress,
                 )
 
-        now_value = now if isinstance(now, datetime) else datetime.now(timezone.utc)
         sync_status = read_portfolio_sync_status(
             state,
             execution_mode=execution_mode or self._execution_mode(),
@@ -402,7 +470,44 @@ class PortfolioService:
         self._refresh_cached_views()
         self._bootstrapped = True
 
+    def _mark_stuck_sync_if_stale(self) -> None:
+        now_value = self._now()
+        lock = getattr(self, "_account_truth_lock", None)
+        if lock is None:
+            sync_started_at = getattr(self, "_sync_started_at", None)
+        else:
+            with lock:
+                sync_started_at = self._sync_started_at
+        if not isinstance(sync_started_at, datetime):
+            return
+        sync_age_seconds = (now_value - sync_started_at).total_seconds()
+        if sync_age_seconds <= max_live_sync_age_seconds(self.config):
+            return
+        self._set_last_sync_state(ok=False, reason=LIVE_SYNC_STUCK_REASON)
+        logger.warning(
+            "Portfolio sync lock timed out and the in-progress sync appears stale.",
+            extra=structured_log_extra(
+                event="portfolio_sync_stuck",
+                sync_age_seconds=sync_age_seconds,
+            ),
+        )
+
     def sync(self) -> Dict[str, int]:
+        """Synchronize portfolio state with single-flight protection."""
+
+        sync_lock = getattr(self, "_sync_run_lock", None)
+        if sync_lock is None:
+            return self._sync_unlocked()
+        acquired = sync_lock.acquire(timeout=LIVE_ACCOUNT_TRUTH_LOCK_TIMEOUT_SECONDS)
+        if not acquired:
+            self._mark_stuck_sync_if_stale()
+            return {"new_trades": 0, "new_cash_flows": 0}
+        try:
+            return self._sync_unlocked()
+        finally:
+            sync_lock.release()
+
+    def _sync_unlocked(self) -> Dict[str, int]:
         """
         Synchronizes local state with the Kraken API via a multi-stage update.
 
@@ -1033,6 +1138,13 @@ class PortfolioService:
             return False
 
         drift_detected = self.portfolio.reconcile(balance_resp)
+        reconcile_at = self._now()
+        lock = getattr(self, "_account_truth_lock", None)
+        if lock is None:
+            self._last_balance_reconcile_at = reconcile_at
+        else:
+            with lock:
+                self._last_balance_reconcile_at = reconcile_at
 
         # Additional: Compare Ledger Balances vs Live Balances
         # self.portfolio.balances IS the ledger balance now.

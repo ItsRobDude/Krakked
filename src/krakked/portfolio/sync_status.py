@@ -10,6 +10,8 @@ DEFAULT_PORTFOLIO_SYNC_INTERVAL_SECONDS = 300
 MAX_LIVE_PORTFOLIO_SYNC_INTERVAL_SECONDS = 300
 MIN_LIVE_SYNC_MAX_AGE_SECONDS = 120
 MAX_LIVE_SYNC_MAX_AGE_SECONDS = 600
+LIVE_DRIFT_FRESHNESS_BUDGET_SECONDS = 5.0
+LIVE_ACCOUNT_TRUTH_LOCK_TIMEOUT_SECONDS = 5.0
 
 LIVE_SYNC_COLD_START_REASON = (
     "Starting up - verifying your live account before allowing orders."
@@ -37,6 +39,15 @@ LIVE_SYNC_LEDGERS_UNAVAILABLE_REASON = (
 LIVE_SYNC_TRADE_HISTORY_LAGGING_REASON = (
     "Kraken trade history has not caught up to new ledger entries yet. Orders "
     "will resume automatically once account sync recovers."
+)
+LIVE_ACCOUNT_TRUTH_REFRESH_TIMEOUT_REASON = (
+    "Krakked could not refresh live account truth because another portfolio sync "
+    "is still running. Orders will resume automatically once account sync "
+    "recovers."
+)
+LIVE_SYNC_STUCK_REASON = (
+    "Krakked portfolio sync appears stuck. Orders will resume automatically once "
+    "account sync recovers."
 )
 LIVE_SYNC_TRADE_HISTORY_LAG_ALERT_TITLE = "Kraken trade history needs review"
 _RAW_BALANCE_UNAVAILABLE_PREFIX = "Live balance reconciliation unavailable:"
@@ -158,23 +169,17 @@ def read_portfolio_sync_status(
             in_progress=raw_in_progress,
         )
 
-    if raw_in_progress:
-        max_age = max_live_sync_age_seconds(portfolio)
-        return PortfolioSyncStatus(
-            ok=False,
-            reason=LIVE_SYNC_IN_PROGRESS_REASON,
-            last_sync_at=last_sync_at,
-            in_progress=True,
-            max_age_seconds=max_age,
-        )
-
     if last_sync_at is None:
         max_age = max_live_sync_age_seconds(portfolio)
         return PortfolioSyncStatus(
             ok=False,
-            reason=reason or LIVE_SYNC_COLD_START_REASON,
+            reason=(
+                reason
+                or (LIVE_SYNC_IN_PROGRESS_REASON if raw_in_progress else None)
+                or LIVE_SYNC_COLD_START_REASON
+            ),
             last_sync_at=None,
-            in_progress=False,
+            in_progress=raw_in_progress,
             max_age_seconds=max_age,
         )
 
@@ -184,7 +189,7 @@ def read_portfolio_sync_status(
             ok=False,
             reason=reason or LIVE_SYNC_DEGRADED_REASON,
             last_sync_at=last_sync_at,
-            in_progress=False,
+            in_progress=raw_in_progress,
             max_age_seconds=max_age,
         )
 
@@ -196,7 +201,7 @@ def read_portfolio_sync_status(
             ok=False,
             reason=live_sync_stale_reason(max_age),
             last_sync_at=last_sync_at,
-            in_progress=False,
+            in_progress=raw_in_progress,
             max_age_seconds=max_age,
             age_seconds=age_seconds,
         )
@@ -205,7 +210,7 @@ def read_portfolio_sync_status(
         ok=True,
         reason=None,
         last_sync_at=last_sync_at,
-        in_progress=False,
+        in_progress=raw_in_progress,
         max_age_seconds=max_age,
         age_seconds=age_seconds,
     )

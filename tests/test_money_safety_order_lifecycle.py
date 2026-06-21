@@ -13,10 +13,12 @@ response.
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from types import SimpleNamespace
 from typing import Any, Dict, cast
 from unittest.mock import MagicMock
 
+from krakked import cli
 from krakked.config import (
     AppConfig,
     ExecutionConfig,
@@ -237,6 +239,25 @@ def _service_with_risk(
         config=config,
         market_data=_market_data(),
         risk_status_provider=risk_status_provider,
+    )
+
+
+def _service_with_account_truth(
+    client: FakeKrakenRESTClient,
+    store: SQLitePortfolioStore,
+    portfolio: PortfolioService,
+) -> ExecutionService:
+    config = _live_config()
+    adapter = KrakenExecutionAdapter(
+        client=cast(KrakenRESTClient, client), config=config
+    )
+    return ExecutionService(
+        adapter=adapter,
+        store=store,
+        config=config,
+        market_data=_market_data(),
+        risk_status_provider=_inactive_risk,
+        account_truth_provider=portfolio.get_account_truth_snapshot,
     )
 
 
@@ -788,6 +809,201 @@ def test_backfilled_trade_ledger_ref_stays_degraded_until_recovery(tmp_path):
         if entry.type == "trade"
     }
     assert ledger_refs <= stored_trade_ids
+
+
+def test_reviewed_trade_ledger_refs_unblock_only_reviewed_refs(tmp_path):
+    client = FakeKrakenRESTClient(add_order_mode=ACCEPT)
+    db_path = tmp_path / "portfolio.db"
+    store = SQLitePortfolioStore(str(db_path))
+    service = _service(client, store)
+
+    first_order = service.execute_plan(
+        _plan(plan_id="plan-before-reviewed-lag-1")
+    ).orders[0]
+    second_order = service.execute_plan(
+        _plan(plan_id="plan-before-reviewed-lag-2")
+    ).orders[0]
+    assert first_order.kraken_order_id is not None
+    assert second_order.kraken_order_id is not None
+
+    client.stale_trades_history_reads(count=4)
+    client.close_order(first_order.kraken_order_id, price=100.0)
+    client.close_order(second_order.kraken_order_id, price=100.0)
+
+    portfolio = _portfolio_service(client, db_path)
+    first_sync = portfolio.sync()
+
+    assert first_sync["new_trades"] == 0
+    assert portfolio.last_sync_ok is False
+    assert portfolio.last_sync_reason is not None
+    assert "trade" in portfolio.last_sync_reason.lower()
+
+    unmatched_refs = sorted(portfolio.store.get_unmatched_trade_ledger_ref_times())
+    assert len(unmatched_refs) == 2
+
+    first_review_exit = cli.main(
+        [
+            "db-mark-trade-ref-reviewed",
+            unmatched_refs[0],
+            "--db-path",
+            str(db_path),
+            "--reviewed-by",
+            "ops",
+            "--reason",
+            "Verified manually in Kraken",
+            "--confirm",
+            f"MARK {unmatched_refs[0]} REVIEWED",
+        ]
+    )
+
+    assert first_review_exit == 0
+
+    second_sync = portfolio.sync()
+
+    assert second_sync["new_trades"] == 0
+    assert portfolio.last_sync_ok is False
+    assert portfolio.last_sync_reason is not None
+    assert "trade" in portfolio.last_sync_reason.lower()
+    assert sorted(portfolio.store.get_unmatched_trade_ledger_ref_times()) == [
+        unmatched_refs[1]
+    ]
+
+    second_review_exit = cli.main(
+        [
+            "db-mark-trade-ref-reviewed",
+            unmatched_refs[1],
+            "--db-path",
+            str(db_path),
+            "--reviewed-by",
+            "ops",
+            "--reason",
+            "Verified manually in Kraken",
+            "--confirm",
+            f"MARK {unmatched_refs[1]} REVIEWED",
+        ]
+    )
+
+    assert second_review_exit == 0
+
+    recovered_sync = portfolio.sync()
+
+    assert recovered_sync["new_trades"] == 0
+    assert portfolio.last_sync_ok is True
+    assert portfolio.last_sync_reason is None
+    assert portfolio.store.get_unmatched_trade_ledger_ref_times() == {}
+
+
+def test_real_account_truth_provider_gates_live_opening_risk(tmp_path):
+    healthy_client = FakeKrakenRESTClient(add_order_mode=ACCEPT)
+    healthy_db = tmp_path / "healthy.db"
+    healthy_portfolio = _portfolio_service(healthy_client, healthy_db)
+    healthy_portfolio.sync()
+    healthy_service = _service_with_account_truth(
+        healthy_client,
+        cast(SQLitePortfolioStore, healthy_portfolio.store),
+        healthy_portfolio,
+    )
+
+    healthy_result = healthy_service.execute_plan(_plan("plan-healthy-provider"))
+
+    assert healthy_result.success is True
+    assert len(healthy_client.add_order_calls) == 1
+
+    drift_client = FakeKrakenRESTClient(add_order_mode=ACCEPT)
+    drift_db = tmp_path / "drift.db"
+    drift_store = SQLitePortfolioStore(str(drift_db))
+    drift_seed_service = _service(drift_client, drift_store)
+    drift_seed_order = drift_seed_service.execute_plan(
+        _plan("plan-seed-drift-provider")
+    ).orders[0]
+    assert drift_seed_order.kraken_order_id is not None
+    drift_client.close_order(drift_seed_order.kraken_order_id, price=100.0)
+    drift_portfolio = _portfolio_service(drift_client, drift_db)
+    drift_portfolio.sync()
+    assert drift_portfolio.get_drift_status().drift_flag is False
+    drift_client._balances["ZUSD"] = Decimal("9889.0")
+    drift_portfolio._last_balance_reconcile_at = datetime.now(UTC) - timedelta(
+        seconds=10
+    )
+    drift_service = _service_with_account_truth(
+        drift_client,
+        cast(SQLitePortfolioStore, drift_portfolio.store),
+        drift_portfolio,
+    )
+
+    drift_result = drift_service.execute_plan(_plan("plan-drift-provider"))
+
+    assert drift_result.success is False
+    assert drift_result.errors == [PORTFOLIO_DRIFT_ORDER_BLOCKED_MESSAGE]
+    assert len(drift_client.add_order_calls) == 1
+
+    unavailable_client = FakeKrakenRESTClient(add_order_mode=ACCEPT)
+    unavailable_db = tmp_path / "unavailable.db"
+    unavailable_portfolio = _portfolio_service(unavailable_client, unavailable_db)
+    unavailable_portfolio.sync()
+    unavailable_client.fail_balance_reads(count=1)
+    unavailable_portfolio._last_balance_reconcile_at = datetime.now(UTC) - timedelta(
+        seconds=10
+    )
+    unavailable_service = _service_with_account_truth(
+        unavailable_client,
+        cast(SQLitePortfolioStore, unavailable_portfolio.store),
+        unavailable_portfolio,
+    )
+
+    unavailable_result = unavailable_service.execute_plan(
+        _plan("plan-unavailable-provider")
+    )
+
+    assert unavailable_result.success is False
+    assert len(unavailable_client.add_order_calls) == 0
+
+    unmatched_client = FakeKrakenRESTClient(add_order_mode=ACCEPT)
+    unmatched_db = tmp_path / "unmatched.db"
+    unmatched_store = SQLitePortfolioStore(str(unmatched_db))
+    seed_service = _service(unmatched_client, unmatched_store)
+    seed_order = seed_service.execute_plan(_plan("plan-seed-unmatched")).orders[0]
+    assert seed_order.kraken_order_id is not None
+    unmatched_client.stale_trades_history_reads(count=2)
+    unmatched_client.close_order(seed_order.kraken_order_id, price=100.0)
+    unmatched_portfolio = _portfolio_service(unmatched_client, unmatched_db)
+    unmatched_portfolio.sync()
+    unmatched_service = _service_with_account_truth(
+        unmatched_client,
+        cast(SQLitePortfolioStore, unmatched_portfolio.store),
+        unmatched_portfolio,
+    )
+
+    unmatched_result = unmatched_service.execute_plan(_plan("plan-unmatched-provider"))
+
+    assert unmatched_result.success is False
+    assert unmatched_result.errors == [PORTFOLIO_SYNC_ORDER_BLOCKED_MESSAGE]
+    assert len(unmatched_client.add_order_calls) == 1
+
+    reducing_plan = ExecutionPlan(
+        plan_id="plan-reduce-close-provider",
+        generated_at=datetime.now(UTC),
+        actions=[
+            _action(
+                action_type="reduce",
+                current_base_size=1.0,
+                target_base_size=0.5,
+                target_notional_usd=50.0,
+            ),
+            _action(
+                action_type="close",
+                current_base_size=1.0,
+                target_base_size=0.0,
+                target_notional_usd=0.0,
+            ),
+        ],
+        metadata={"order_type": "limit"},
+    )
+
+    reducing_result = unmatched_service.execute_plan(reducing_plan)
+
+    assert reducing_result.success is True
+    assert len(unmatched_client.add_order_calls) == 3
 
 
 def test_old_trade_ledger_ref_lag_escalates_and_alerts_once(tmp_path):

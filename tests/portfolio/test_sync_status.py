@@ -5,7 +5,6 @@ from krakked.portfolio.sync_status import (
     DEFAULT_PORTFOLIO_SYNC_INTERVAL_SECONDS,
     LIVE_SYNC_COLD_START_REASON,
     LIVE_SYNC_DEGRADED_REASON,
-    LIVE_SYNC_IN_PROGRESS_REASON,
     MAX_LIVE_PORTFOLIO_SYNC_INTERVAL_SECONDS,
     effective_portfolio_sync_interval_seconds,
     live_sync_stale_reason,
@@ -87,11 +86,50 @@ def test_non_live_cold_start_preserves_compatibility():
     assert status.last_sync_at is None
 
 
-def test_live_sync_in_progress_blocks_with_verifying_reason():
-    synced_at = datetime(2026, 1, 2, 3, 4, tzinfo=timezone.utc)
+def test_live_sync_in_progress_preserves_fresh_previous_success():
+    now = datetime(2026, 1, 2, 3, 5, tzinfo=timezone.utc)
+    synced_at = now - timedelta(seconds=30)
     portfolio = SimpleNamespace(
+        config=SimpleNamespace(sync_interval_seconds=300),
         last_sync_ok=True,
         last_sync_reason=None,
+        last_sync_at=synced_at,
+        sync_in_progress=True,
+    )
+
+    status = read_portfolio_sync_status(portfolio, execution_mode="live", now=now)
+
+    assert status.ok is True
+    assert status.reason is None
+    assert status.last_sync_at is synced_at
+    assert status.in_progress is True
+    assert status.age_seconds == 30
+
+
+def test_live_sync_in_progress_blocks_when_previous_success_is_stale():
+    now = datetime(2026, 1, 2, 3, 20, tzinfo=timezone.utc)
+    synced_at = now - timedelta(seconds=601)
+    portfolio = SimpleNamespace(
+        config=SimpleNamespace(sync_interval_seconds=300),
+        last_sync_ok=True,
+        last_sync_reason=None,
+        last_sync_at=synced_at,
+        sync_in_progress=True,
+    )
+
+    status = read_portfolio_sync_status(portfolio, execution_mode="live", now=now)
+
+    assert status.ok is False
+    assert status.reason == live_sync_stale_reason(600)
+    assert status.last_sync_at is synced_at
+    assert status.in_progress is True
+
+
+def test_live_sync_in_progress_blocks_when_previous_sync_failed():
+    synced_at = datetime(2026, 1, 2, 3, 4, tzinfo=timezone.utc)
+    portfolio = SimpleNamespace(
+        last_sync_ok=False,
+        last_sync_reason=LIVE_SYNC_DEGRADED_REASON,
         last_sync_at=synced_at,
         sync_in_progress=True,
     )
@@ -99,7 +137,7 @@ def test_live_sync_in_progress_blocks_with_verifying_reason():
     status = read_portfolio_sync_status(portfolio, execution_mode="live")
 
     assert status.ok is False
-    assert status.reason == LIVE_SYNC_IN_PROGRESS_REASON
+    assert status.reason == LIVE_SYNC_DEGRADED_REASON
     assert status.last_sync_at is synced_at
     assert status.in_progress is True
 

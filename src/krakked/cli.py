@@ -102,6 +102,7 @@ from krakked.portfolio.store import (
     CURRENT_SCHEMA_VERSION,
     SchemaStatus,
     SQLitePortfolioStore,
+    UnmatchedTradeLedgerRef,
     ensure_portfolio_schema,
     ensure_portfolio_tables,
 )
@@ -4986,6 +4987,456 @@ def _db_check_command(args: argparse.Namespace) -> int:
     return 0 if result == "ok" else 1
 
 
+def _format_utc_timestamp(timestamp: float) -> str:
+    return datetime.fromtimestamp(float(timestamp), tz=UTC).isoformat()
+
+
+def _open_portfolio_store(db_path: Path) -> SQLitePortfolioStore:
+    return SQLitePortfolioStore(db_path.as_posix())
+
+
+def _open_read_only_sqlite(db_path: Path) -> sqlite3.Connection:
+    conn = sqlite3.connect(f"{db_path.as_uri()}?mode=ro", uri=True)
+    conn.execute("PRAGMA query_only = ON")
+    return conn
+
+
+def _sqlite_table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+        (table_name,),
+    ).fetchone()
+    return row is not None
+
+
+def _read_schema_version_from_conn(conn: sqlite3.Connection) -> int | None:
+    if not _sqlite_table_exists(conn, "meta"):
+        return None
+    row = conn.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()
+    if row is None:
+        return None
+    try:
+        return int(row[0])
+    except (TypeError, ValueError):
+        return None
+
+
+def _review_metadata_migration_message(db_path: Path) -> str:
+    return (
+        "Review metadata requires portfolio schema v14. Run: "
+        f"poetry run krakked migrate --db-path {db_path}"
+    )
+
+
+def _read_unmatched_trade_ledger_refs_read_only(
+    db_path: Path, *, include_reviewed: bool = False
+) -> list[UnmatchedTradeLedgerRef]:
+    conn = _open_read_only_sqlite(db_path)
+    try:
+        schema_version = _read_schema_version_from_conn(conn)
+        required_tables = {
+            "ledger_entries",
+            "trades",
+            "reviewed_trade_ledger_ref_entries",
+            "trade_ledger_ref_review_events",
+        }
+        if (
+            schema_version is None
+            or schema_version < 14
+            or not all(_sqlite_table_exists(conn, table) for table in required_tables)
+        ):
+            raise ValueError(_review_metadata_migration_message(db_path))
+
+        rows = conn.execute(
+            """
+            SELECT
+                le.refid,
+                le.id,
+                le.time,
+                le.type,
+                le.subtype,
+                le.aclass,
+                le.asset,
+                le.amount,
+                le.fee,
+                le.balance,
+                le.misc,
+                le.raw_json,
+                re.reviewed_at,
+                re.reviewed_by,
+                re.reason,
+                re.context_json,
+                re.review_event_id
+            FROM ledger_entries AS le
+            LEFT JOIN trades AS t ON t.id = le.refid
+            LEFT JOIN reviewed_trade_ledger_ref_entries AS re
+              ON re.refid = le.refid
+             AND re.ledger_entry_id = le.id
+            WHERE le.type = 'trade'
+              AND le.refid IS NOT NULL
+              AND TRIM(le.refid) != ''
+              AND t.id IS NULL
+              AND (? OR re.ledger_entry_id IS NULL)
+            ORDER BY le.refid ASC, le.time ASC, le.id ASC
+            """,
+            (1 if include_reviewed else 0,),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    grouped: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        refid = str(row[0])
+        ledger_time = float(row[2])
+        try:
+            parsed_raw = json.loads(row[11]) if row[11] else {}
+            raw_json = parsed_raw if isinstance(parsed_raw, dict) else {}
+        except (TypeError, json.JSONDecodeError):
+            raw_json = {}
+        try:
+            parsed_context = json.loads(row[15]) if row[15] else {}
+            context = parsed_context if isinstance(parsed_context, dict) else {}
+        except (TypeError, json.JSONDecodeError):
+            context = {}
+        ledger_reviewed = row[12] is not None
+        group = grouped.setdefault(
+            refid,
+            {
+                "oldest_time": ledger_time,
+                "latest_time": ledger_time,
+                "ledger_entries": [],
+                "reviewed_ledger_count": 0,
+                "unreviewed_ledger_count": 0,
+                "reviewed_at": None,
+                "reviewed_by": None,
+                "reason": None,
+                "context": {},
+            },
+        )
+        group["oldest_time"] = min(float(group["oldest_time"]), ledger_time)
+        group["latest_time"] = max(float(group["latest_time"]), ledger_time)
+        if ledger_reviewed:
+            group["reviewed_ledger_count"] = int(group["reviewed_ledger_count"]) + 1
+            reviewed_at = str(row[12])
+            if group["reviewed_at"] is None or reviewed_at > str(group["reviewed_at"]):
+                group["reviewed_at"] = reviewed_at
+                group["reviewed_by"] = row[13]
+                group["reason"] = row[14]
+                group["context"] = context
+        else:
+            group["unreviewed_ledger_count"] = int(group["unreviewed_ledger_count"]) + 1
+        group["ledger_entries"].append(
+            {
+                "id": row[1],
+                "time": ledger_time,
+                "type": row[3],
+                "subtype": row[4],
+                "aclass": row[5],
+                "asset": row[6],
+                "amount": row[7],
+                "fee": row[8],
+                "balance": row[9],
+                "refid": refid,
+                "misc": row[10],
+                "raw": raw_json,
+                "reviewed": ledger_reviewed,
+                "reviewed_at": row[12],
+                "reviewed_by": row[13],
+                "reason": row[14],
+                "context": context if ledger_reviewed else {},
+                "review_event_id": row[16],
+            }
+        )
+
+    refs: list[UnmatchedTradeLedgerRef] = []
+    for refid, group in grouped.items():
+        ledger_count = len(group["ledger_entries"])
+        reviewed_count = int(group["reviewed_ledger_count"])
+        unreviewed_count = int(group["unreviewed_ledger_count"])
+        fully_reviewed = ledger_count > 0 and unreviewed_count == 0
+        refs.append(
+            UnmatchedTradeLedgerRef(
+                refid=refid,
+                oldest_time=float(group["oldest_time"]),
+                latest_time=float(group["latest_time"]),
+                ledger_count=ledger_count,
+                ledger_entries=list(group["ledger_entries"]),
+                reviewed=fully_reviewed,
+                reviewed_ledger_count=reviewed_count,
+                unreviewed_ledger_count=unreviewed_count,
+                reviewed_at=group.get("reviewed_at") if fully_reviewed else None,
+                reviewed_by=group.get("reviewed_by") if fully_reviewed else None,
+                reason=group.get("reason") if fully_reviewed else None,
+                context=group.get("context") if fully_reviewed else {},
+            )
+        )
+    return refs
+
+
+def _read_trade_ref_review_candidate(db_path: Path, refid: str) -> tuple[bool, bool]:
+    """Read whether ``refid`` is unmatched and already reviewed without writing."""
+
+    conn = _open_read_only_sqlite(db_path)
+    try:
+        row = conn.execute(
+            """
+            SELECT
+                COUNT(*) AS unmatched_count,
+                SUM(CASE WHEN re.ledger_entry_id IS NULL THEN 1 ELSE 0 END)
+                    AS unreviewed_count
+            FROM ledger_entries AS le
+            LEFT JOIN trades AS t ON t.id = le.refid
+            LEFT JOIN reviewed_trade_ledger_ref_entries AS re
+              ON re.refid = le.refid
+             AND re.ledger_entry_id = le.id
+            WHERE le.type = 'trade'
+              AND le.refid IS NOT NULL
+              AND TRIM(le.refid) != ''
+              AND le.refid = ?
+              AND t.id IS NULL
+            """,
+            (refid,),
+        ).fetchone()
+        unmatched_count = int(row[0] or 0) if row else 0
+        unreviewed_count = int(row[1] or 0) if row else 0
+        return unmatched_count > 0 and unreviewed_count > 0, (
+            unmatched_count > 0 and unreviewed_count == 0
+        )
+    finally:
+        conn.close()
+
+
+def _read_trade_ref_active_review(db_path: Path, refid: str) -> bool:
+    conn = _open_read_only_sqlite(db_path)
+    try:
+        if not _sqlite_table_exists(conn, "reviewed_trade_ledger_ref_entries"):
+            return False
+        return (
+            conn.execute(
+                """
+                SELECT 1
+                FROM reviewed_trade_ledger_ref_entries
+                WHERE refid = ?
+                LIMIT 1
+                """,
+                (refid,),
+            ).fetchone()
+            is not None
+        )
+    finally:
+        conn.close()
+
+
+def _db_unmatched_trade_refs_command(args: argparse.Namespace) -> int:
+    """List unmatched trade ledger refs and the ledger rows behind them."""
+
+    resolved_path = Path(args.db_path).expanduser().resolve()
+
+    if not _db_path_exists(resolved_path.as_posix()):
+        return _print_error(f"DB file not found: {resolved_path}")
+
+    try:
+        refs = _read_unmatched_trade_ledger_refs_read_only(
+            resolved_path, include_reviewed=bool(args.include_reviewed)
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _print_error(f"Failed to list unmatched trade ledger refs: {exc}")
+
+    payload = {
+        "db_path": str(resolved_path),
+        "include_reviewed": bool(args.include_reviewed),
+        "unmatched_trade_ledger_refs": [item.to_dict() for item in refs],
+    }
+
+    if args.json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return 0
+
+    if not refs:
+        print("No unmatched trade ledger refs found.")
+        return 0
+
+    print(f"DB path: {resolved_path}")
+    print("Unmatched trade ledger refs:")
+    for item in refs:
+        status = "reviewed" if item.reviewed else "unreviewed"
+        print(
+            "- "
+            f"{item.refid} ({status}; ledgers={item.ledger_count}; "
+            f"reviewed={item.reviewed_ledger_count}; "
+            f"unreviewed={item.unreviewed_ledger_count}; "
+            f"oldest={_format_utc_timestamp(item.oldest_time)}; "
+            f"latest={_format_utc_timestamp(item.latest_time)})"
+        )
+        if item.reviewed:
+            print(
+                "  review: "
+                f"{item.reviewed_at} by {item.reviewed_by}; reason={item.reason}"
+            )
+        for ledger in item.ledger_entries:
+            print(
+                "  ledger "
+                f"{ledger['id']}: time={_format_utc_timestamp(ledger['time'])} "
+                f"asset={ledger['asset']} amount={ledger['amount']} "
+                f"fee={ledger['fee']} balance={ledger['balance']} "
+                f"reviewed={bool(ledger.get('reviewed'))}"
+            )
+            if ledger.get("reviewed"):
+                print(
+                    "    review: "
+                    f"{ledger.get('reviewed_at')} by {ledger.get('reviewed_by')}; "
+                    f"reason={ledger.get('reason')}"
+                )
+    return 0
+
+
+def _db_mark_trade_ref_reviewed_command(args: argparse.Namespace) -> int:
+    """Mark an unmatched trade ledger ref as operator-reviewed."""
+
+    resolved_path = Path(args.db_path).expanduser().resolve()
+    refid = str(args.refid).strip()
+    reviewed_by = str(args.reviewed_by).strip()
+    reason = str(args.reason).strip()
+    expected_confirm = f"MARK {refid} REVIEWED"
+
+    if not refid:
+        return _print_error("REFID is required.")
+    if not reviewed_by:
+        return _print_error("--reviewed-by is required.")
+    if not reason:
+        return _print_error("--reason is required.")
+    if args.confirm != expected_confirm:
+        return _print_error(
+            f'Confirmation mismatch. Re-run with --confirm "{expected_confirm}".'
+        )
+    if not _db_path_exists(resolved_path.as_posix()):
+        return _print_error(f"DB file not found: {resolved_path}")
+
+    try:
+        candidate_exists, already_reviewed = _read_trade_ref_review_candidate(
+            resolved_path, refid
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _print_error(f"Failed to inspect trade ledger ref: {exc}")
+
+    if not candidate_exists:
+        return _print_error(
+            f"Unmatched trade ledger ref not found: {refid}. "
+            "Refusing to review a ref that is absent or already matched."
+        )
+    if already_reviewed:
+        return _print_error(f"Trade ledger ref already reviewed: {refid}")
+
+    backup_path = _make_timestamped_backup_path(resolved_path)
+
+    try:
+        _backup_sqlite_database(resolved_path, backup_path)
+        store = _open_portfolio_store(resolved_path)
+        try:
+            refs = store.get_unmatched_trade_ledger_refs(include_reviewed=True)
+            target = next((item for item in refs if item.refid == refid), None)
+            if target is None:
+                return _print_error(
+                    f"Unmatched trade ledger ref not found: {refid}. "
+                    "Refusing to review a ref that is absent or already matched."
+                )
+            if target.reviewed:
+                return _print_error(f"Trade ledger ref already reviewed: {refid}")
+
+            review = store.mark_trade_ledger_ref_reviewed(
+                refid=target.refid,
+                reviewed_by=reviewed_by,
+                reason=reason,
+                ledger_entry_ids=[
+                    str(entry["id"])
+                    for entry in target.ledger_entries
+                    if not bool(entry.get("reviewed"))
+                ],
+                context={
+                    "command": "db-mark-trade-ref-reviewed",
+                    "unmatched_trade_ledger_ref": target.to_dict(),
+                },
+            )
+        finally:
+            store.close()
+    except (sqlite3.IntegrityError, ValueError) as exc:
+        return _print_error(f"Failed to mark reviewed: {exc}")
+    except Exception as exc:  # noqa: BLE001
+        return _print_error(f"Failed to mark reviewed: {exc}")
+
+    print(f"Backup created at {backup_path}")
+    print(
+        "Reviewed unmatched trade ledger ref "
+        f"{review.refid} at {review.reviewed_at} by {review.reviewed_by}."
+    )
+    print(
+        "WARNING: This only records operator review and suppresses the unmatched-ref "
+        "live blocker. It does not synthesize missing TradesHistory rows; PnL and "
+        "trade attribution may remain incomplete."
+    )
+    return 0
+
+
+def _db_revoke_trade_ref_review_command(args: argparse.Namespace) -> int:
+    """Revoke an active operator review for an unmatched trade ledger ref."""
+
+    resolved_path = Path(args.db_path).expanduser().resolve()
+    refid = str(args.refid).strip()
+    revoked_by = str(args.revoked_by).strip()
+    reason = str(args.reason).strip()
+    expected_confirm = f"REVOKE {refid} REVIEW"
+
+    if not refid:
+        return _print_error("REFID is required.")
+    if not revoked_by:
+        return _print_error("--revoked-by is required.")
+    if not reason:
+        return _print_error("--reason is required.")
+    if args.confirm != expected_confirm:
+        return _print_error(
+            f'Confirmation mismatch. Re-run with --confirm "{expected_confirm}".'
+        )
+    if not _db_path_exists(resolved_path.as_posix()):
+        return _print_error(f"DB file not found: {resolved_path}")
+
+    try:
+        active_review = _read_trade_ref_active_review(resolved_path, refid)
+    except Exception as exc:  # noqa: BLE001
+        return _print_error(f"Failed to inspect trade ledger ref review: {exc}")
+    if not active_review:
+        return _print_error(f"Trade ledger ref review is not active: {refid}")
+
+    backup_path = _make_timestamped_backup_path(resolved_path)
+    try:
+        _backup_sqlite_database(resolved_path, backup_path)
+        store = _open_portfolio_store(resolved_path)
+        try:
+            event = store.revoke_trade_ledger_ref_review(
+                refid=refid,
+                revoked_by=revoked_by,
+                reason=reason,
+                context={"command": "db-revoke-trade-ref-review"},
+            )
+        finally:
+            store.close()
+    except (sqlite3.IntegrityError, ValueError) as exc:
+        return _print_error(f"Failed to revoke review: {exc}")
+    except Exception as exc:  # noqa: BLE001
+        return _print_error(f"Failed to revoke review: {exc}")
+
+    print(f"Backup created at {backup_path}")
+    print(
+        "Revoked reviewed unmatched trade ledger ref "
+        f"{event.refid} at {event.event_at} by {event.actor}."
+    )
+    print(
+        "WARNING: The unmatched-ref live blocker is restored for the revoked "
+        "ledger rows until matching TradesHistory rows are stored or another "
+        "explicit review is recorded."
+    )
+    return 0
+
+
 def _export_install_command(args: argparse.Namespace) -> int:
     """Export a self-hosted Krakked install into a single zip archive."""
 
@@ -6055,6 +6506,69 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     _add_db_path_argument(db_check_parser)
     db_check_parser.set_defaults(func=_db_check_command)
+
+    unmatched_refs_parser = subparsers.add_parser(
+        "db-unmatched-trade-refs",
+        help="List unmatched trade ledger refs and their ledger details",
+    )
+    _add_db_path_argument(unmatched_refs_parser)
+    unmatched_refs_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print unmatched trade ledger refs as JSON",
+    )
+    unmatched_refs_parser.add_argument(
+        "--include-reviewed",
+        action="store_true",
+        help="Include refs already marked as operator-reviewed",
+    )
+    unmatched_refs_parser.set_defaults(func=_db_unmatched_trade_refs_command)
+
+    mark_reviewed_parser = subparsers.add_parser(
+        "db-mark-trade-ref-reviewed",
+        help="Mark one unmatched trade ledger ref as operator-reviewed",
+    )
+    mark_reviewed_parser.add_argument("refid", help="Trade ledger refid to review")
+    _add_db_path_argument(mark_reviewed_parser)
+    mark_reviewed_parser.add_argument(
+        "--reviewed-by",
+        required=True,
+        help="Operator name or handle performing the review",
+    )
+    mark_reviewed_parser.add_argument(
+        "--reason",
+        required=True,
+        help="Why this unmatched ref is accepted as reviewed",
+    )
+    mark_reviewed_parser.add_argument(
+        "--confirm",
+        required=True,
+        help='Exact confirmation string: "MARK <REFID> REVIEWED"',
+    )
+    mark_reviewed_parser.set_defaults(func=_db_mark_trade_ref_reviewed_command)
+
+    revoke_review_parser = subparsers.add_parser(
+        "db-revoke-trade-ref-review",
+        help="Revoke an active operator review for one unmatched trade ledger ref",
+    )
+    revoke_review_parser.add_argument("refid", help="Trade ledger refid to revoke")
+    _add_db_path_argument(revoke_review_parser)
+    revoke_review_parser.add_argument(
+        "--revoked-by",
+        required=True,
+        help="Operator name or handle revoking the review",
+    )
+    revoke_review_parser.add_argument(
+        "--reason",
+        required=True,
+        help="Why this reviewed ref is being revoked",
+    )
+    revoke_review_parser.add_argument(
+        "--confirm",
+        required=True,
+        help='Exact confirmation string: "REVOKE <REFID> REVIEW"',
+    )
+    revoke_review_parser.set_defaults(func=_db_revoke_trade_ref_review_command)
 
     export_parser = subparsers.add_parser(
         "export-install",
