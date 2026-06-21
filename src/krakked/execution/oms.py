@@ -94,6 +94,7 @@ class ExecutionService:
         market_data: MarketDataAPI | None = None,
         rate_limiter: Optional[RateLimiter] = None,
         risk_status_provider: Optional[Callable[[], "RiskStatus"]] = None,
+        account_truth_provider: Optional[Callable[[], Any]] = None,
         alert_notifier: Optional[Any] = None,
     ):
         self.adapter = adapter or get_execution_adapter(
@@ -107,6 +108,7 @@ class ExecutionService:
         self.recent_executions: List[ExecutionResult] = []
         self.kraken_to_local: Dict[str, str] = {}
         self._risk_status_provider = risk_status_provider
+        self._account_truth_provider = account_truth_provider
         self.alert_notifier = alert_notifier
         self._last_dead_man_refresh_at: Optional[datetime] = None
 
@@ -325,6 +327,33 @@ class ExecutionService:
         if self._is_true_risk_reducing_action(action):
             return None
 
+        if self._account_truth_provider:
+            try:
+                account_truth = self._account_truth_provider()
+            except Exception as exc:  # noqa: BLE001
+                logger.exception(
+                    "Account truth provider failed while checking portfolio sync",
+                    extra=structured_log_extra(
+                        event="account_truth_provider_error",
+                        strategy_id=getattr(action, "strategy_id", None),
+                        pair=getattr(action, "pair", None),
+                        error=str(exc),
+                    ),
+                )
+                return _PortfolioSyncBlock(
+                    PORTFOLIO_SYNC_RUNTIME_CHECKS_UNAVAILABLE_MESSAGE,
+                    detail="account truth provider failed",
+                )
+
+            if bool(getattr(account_truth, "portfolio_sync_ok", False)):
+                return None
+
+            reason = getattr(account_truth, "portfolio_sync_reason", None)
+            return _PortfolioSyncBlock(
+                PORTFOLIO_SYNC_ORDER_BLOCKED_MESSAGE,
+                detail=reason if isinstance(reason, str) and reason.strip() else None,
+            )
+
         if not self._risk_status_provider:
             return _PortfolioSyncBlock(
                 PORTFOLIO_SYNC_RUNTIME_CHECKS_UNAVAILABLE_MESSAGE,
@@ -366,6 +395,32 @@ class ExecutionService:
 
         if self._is_true_risk_reducing_action(action):
             return None
+
+        if self._account_truth_provider:
+            try:
+                account_truth = self._account_truth_provider()
+            except Exception as exc:  # noqa: BLE001
+                logger.exception(
+                    "Account truth provider failed while checking portfolio drift",
+                    extra=structured_log_extra(
+                        event="account_truth_drift_provider_error",
+                        strategy_id=getattr(action, "strategy_id", None),
+                        pair=getattr(action, "pair", None),
+                        error=str(exc),
+                    ),
+                )
+                return _PortfolioSyncBlock(
+                    PORTFOLIO_SYNC_RUNTIME_CHECKS_UNAVAILABLE_MESSAGE,
+                    detail="account truth provider failed",
+                )
+
+            if not bool(getattr(account_truth, "drift_flag", False)):
+                return None
+
+            return _PortfolioSyncBlock(
+                PORTFOLIO_DRIFT_ORDER_BLOCKED_MESSAGE,
+                detail=getattr(account_truth, "drift_info", None),
+            )
 
         if not self._risk_status_provider:
             return None

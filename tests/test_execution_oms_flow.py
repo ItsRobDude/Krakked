@@ -10,6 +10,8 @@ from krakked.execution.adapter import DryRunExecutionAdapter
 from krakked.execution.models import LocalOrder
 from krakked.execution.oms import PORTFOLIO_SYNC_ORDER_BLOCKED_MESSAGE, ExecutionService
 from krakked.market_data.models import PairMetadata
+from krakked.portfolio.sync_status import LIVE_SYNC_IN_PROGRESS_REASON
+from krakked.safety_messages import PORTFOLIO_DRIFT_ORDER_BLOCKED_MESSAGE
 from krakked.strategy.models import ExecutionPlan, RiskAdjustedAction
 
 
@@ -421,6 +423,195 @@ def test_live_execution_allows_explicit_healthy_portfolio_sync_fields():
     assert result.success is True
     assert result.errors == []
     adapter.submit_order.assert_called_once()
+
+
+def test_live_execution_blocks_sync_in_progress_from_fresh_account_truth():
+    adapter = MagicMock()
+    adapter.config = ExecutionConfig(
+        mode="live",
+        validate_only=False,
+        allow_live_trading=True,
+        paper_tests_completed=True,
+        live_strategy_allowlist=["strat"],
+    )
+    adapter.submit_order.side_effect = (
+        lambda order, pair_metadata, latest_price=None: order
+    )
+    service = ExecutionService(
+        adapter=adapter,
+        market_data=_market_data(mid_price=100.0),
+        risk_status_provider=lambda: SimpleNamespace(
+            kill_switch_active=False,
+            portfolio_sync_ok=True,
+            drift_flag=False,
+        ),
+        account_truth_provider=lambda: SimpleNamespace(
+            portfolio_sync_ok=False,
+            portfolio_sync_reason=LIVE_SYNC_IN_PROGRESS_REASON,
+            portfolio_sync_in_progress=True,
+            drift_flag=False,
+            drift_info=None,
+        ),
+    )
+
+    plan = ExecutionPlan(
+        plan_id="plan_account_truth_sync_in_progress",
+        generated_at=datetime.now(UTC),
+        actions=[_ttl_action(strategy_id="strat")],
+        metadata={"order_type": "limit"},
+    )
+
+    result = service.execute_plan(plan)
+
+    assert result.success is False
+    assert result.errors == [PORTFOLIO_SYNC_ORDER_BLOCKED_MESSAGE]
+    assert result.orders[0].status == "rejected"
+    adapter.submit_order.assert_not_called()
+
+
+def test_live_execution_allows_healthy_idle_fresh_account_truth():
+    adapter = MagicMock()
+    adapter.config = ExecutionConfig(
+        mode="live",
+        validate_only=False,
+        allow_live_trading=True,
+        paper_tests_completed=True,
+        live_strategy_allowlist=["strat"],
+    )
+    adapter.submit_order.side_effect = (
+        lambda order, pair_metadata, latest_price=None: order
+    )
+    service = ExecutionService(
+        adapter=adapter,
+        market_data=_market_data(mid_price=100.0),
+        risk_status_provider=lambda: SimpleNamespace(
+            kill_switch_active=False,
+            portfolio_sync_ok=False,
+            drift_flag=False,
+        ),
+        account_truth_provider=lambda: SimpleNamespace(
+            portfolio_sync_ok=True,
+            portfolio_sync_reason=None,
+            portfolio_sync_in_progress=False,
+            drift_flag=False,
+            drift_info=None,
+        ),
+    )
+
+    plan = ExecutionPlan(
+        plan_id="plan_account_truth_healthy",
+        generated_at=datetime.now(UTC),
+        actions=[_ttl_action(strategy_id="strat")],
+        metadata={"order_type": "limit"},
+    )
+
+    result = service.execute_plan(plan)
+
+    assert result.success is True
+    assert result.errors == []
+    adapter.submit_order.assert_called_once()
+
+
+def test_live_execution_blocks_fresh_account_truth_drift_over_cached_healthy_status():
+    adapter = MagicMock()
+    adapter.config = ExecutionConfig(
+        mode="live",
+        validate_only=False,
+        allow_live_trading=True,
+        paper_tests_completed=True,
+        live_strategy_allowlist=["strat"],
+    )
+    adapter.submit_order.side_effect = (
+        lambda order, pair_metadata, latest_price=None: order
+    )
+    service = ExecutionService(
+        adapter=adapter,
+        market_data=_market_data(mid_price=100.0),
+        risk_status_provider=lambda: SimpleNamespace(
+            kill_switch_active=False,
+            portfolio_sync_ok=True,
+            drift_flag=False,
+        ),
+        account_truth_provider=lambda: SimpleNamespace(
+            portfolio_sync_ok=True,
+            portfolio_sync_reason=None,
+            portfolio_sync_in_progress=False,
+            drift_flag=True,
+            drift_info={"source": "fresh-account-truth"},
+        ),
+    )
+
+    plan = ExecutionPlan(
+        plan_id="plan_fresh_account_truth_drift",
+        generated_at=datetime.now(UTC),
+        actions=[_ttl_action(strategy_id="strat")],
+        metadata={"order_type": "limit"},
+    )
+
+    result = service.execute_plan(plan)
+
+    assert result.success is False
+    assert result.errors == [PORTFOLIO_DRIFT_ORDER_BLOCKED_MESSAGE]
+    assert result.orders[0].status == "rejected"
+    adapter.submit_order.assert_not_called()
+
+
+def test_live_reduce_and_close_exempt_from_sync_in_progress_account_truth():
+    adapter = MagicMock()
+    adapter.config = ExecutionConfig(
+        mode="live",
+        validate_only=False,
+        allow_live_trading=True,
+        paper_tests_completed=True,
+        live_strategy_allowlist=["strat"],
+    )
+    adapter.submit_order.side_effect = (
+        lambda order, pair_metadata, latest_price=None: order
+    )
+    service = ExecutionService(
+        adapter=adapter,
+        market_data=_market_data(mid_price=100.0),
+        risk_status_provider=lambda: SimpleNamespace(
+            kill_switch_active=False,
+            portfolio_sync_ok=True,
+            drift_flag=False,
+        ),
+        account_truth_provider=lambda: SimpleNamespace(
+            portfolio_sync_ok=False,
+            portfolio_sync_reason=LIVE_SYNC_IN_PROGRESS_REASON,
+            portfolio_sync_in_progress=True,
+            drift_flag=True,
+            drift_info={"source": "fresh-account-truth"},
+        ),
+    )
+
+    plan = ExecutionPlan(
+        plan_id="plan_reduce_close_sync_in_progress",
+        generated_at=datetime.now(UTC),
+        actions=[
+            _ttl_action(
+                strategy_id="strat",
+                action_type="reduce",
+                current_base_size=1.0,
+                target_base_size=0.5,
+                target_notional_usd=50.0,
+            ),
+            _ttl_action(
+                strategy_id="strat",
+                action_type="close",
+                current_base_size=1.0,
+                target_base_size=0.0,
+                target_notional_usd=0.0,
+            ),
+        ],
+        metadata={"order_type": "limit"},
+    )
+
+    result = service.execute_plan(plan)
+
+    assert result.success is True
+    assert result.errors == []
+    assert adapter.submit_order.call_count == 2
 
 
 def test_refresh_open_orders_updates_tracked_orders(inactive_risk_status):

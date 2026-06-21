@@ -200,11 +200,11 @@ Code review of the current path explains the mismatch:
 - `StrategyEngine.get_risk_status()` returns cached risk status, so it can still
   show the previous healthy state during a very short in-progress sync window.
 
-Finding: this is a real operator-truth blemish, but it is not evidence that the
-PR 840 live gate is failing. In paper mode, the health surface can briefly show
-an unexplained portfolio-sync blocker while a sync is in progress. The operator
-copy should distinguish in-progress sync from degraded sync, or avoid surfacing
-a reasonless paper-mode blocker.
+Finding: this paper-mode blip was not evidence of a submitted live order bypass,
+but it did expose a broader account-truth consistency issue with live
+implications. Health, readiness, risk status, and OMS checks should read one
+atomic account-truth snapshot so an in-progress sync is visible as verification
+work, not a reasonless degraded state.
 
 ## Docker Health
 
@@ -257,8 +257,9 @@ difference plainly.
 
 Immediate cleanup before the next operator drill:
 
-1. Fix the paper-mode portfolio-sync health wording/state so an in-progress sync
-   does not appear as an unexplained degraded blocker.
+1. Fix account-truth snapshot consistency so in-progress sync, last completed
+   sync state, and drift are reported consistently across health, readiness,
+   risk status, and OMS gates.
 2. Decide whether Unraid Docker health should be removed, softened, documented
    as non-authoritative, or supplemented by an app-level external probe.
 3. Investigate recurring `ADA/USD` WebSocket staleness and decide whether

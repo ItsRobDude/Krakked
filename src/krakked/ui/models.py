@@ -77,6 +77,7 @@ class RiskStatusPayload(BaseModel):
     portfolio_sync_ok: bool = True
     portfolio_sync_reason: Optional[str] = None
     portfolio_last_sync_at: Optional[datetime] = None
+    portfolio_sync_in_progress: bool = False
 
 
 class RiskDecisionPayload(BaseModel):
@@ -403,6 +404,10 @@ class SystemHealthPayload(BaseModel):
     portfolio_last_sync_at: Optional[datetime] = Field(
         None,
         description="Timestamp of the most recent successful portfolio sync.",
+    )
+    portfolio_sync_in_progress: bool = Field(
+        False,
+        description="Whether portfolio sync is currently verifying account state.",
     )
     portfolio_baseline: Optional[str] = Field(
         None,

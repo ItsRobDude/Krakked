@@ -29,6 +29,7 @@ from krakked.market_data.models import PairMetadata
 from krakked.metrics import SystemMetrics
 from krakked.portfolio.sync_status import (
     LIVE_SYNC_DEGRADED_REASON,
+    LIVE_SYNC_IN_PROGRESS_REASON,
     live_sync_stale_reason,
 )
 from krakked.strategy.engine import StrategyEngine
@@ -260,6 +261,30 @@ def test_get_risk_status_uses_real_cached_portfolio_sync_status(client, risk_con
     assert payload["data"]["portfolio_sync_ok"] is False
     assert payload["data"]["portfolio_sync_reason"] == LIVE_SYNC_DEGRADED_REASON
     assert payload["data"]["portfolio_last_sync_at"] in {
+        "2026-01-02T03:04:00Z",
+        "2026-01-02T03:04:00+00:00",
+    }
+
+
+def test_get_risk_status_uses_real_account_truth_sync_in_progress(client, risk_context):
+    risk_context.config.execution.mode = "live"
+    portfolio = make_portfolio_service_mock()
+    portfolio.last_sync_ok = True
+    portfolio.last_sync_reason = None
+    portfolio.last_sync_at = datetime(2026, 1, 2, 3, 4, tzinfo=UTC)
+    portfolio.sync_in_progress = True
+    engine = StrategyEngine(risk_context.config, risk_context.market_data, portfolio)
+    engine.refresh_runtime_snapshots()
+    risk_context.strategy_engine = engine
+
+    response = client.get("/api/risk/status")
+
+    assert response.status_code == 200
+    payload = response.json()["data"]
+    assert payload["portfolio_sync_ok"] is False
+    assert payload["portfolio_sync_reason"] == LIVE_SYNC_IN_PROGRESS_REASON
+    assert payload["portfolio_sync_in_progress"] is True
+    assert payload["portfolio_last_sync_at"] in {
         "2026-01-02T03:04:00Z",
         "2026-01-02T03:04:00+00:00",
     }

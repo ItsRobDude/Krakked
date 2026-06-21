@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Sequence, Type
+from typing import Any, Dict, List, Optional, Sequence, Type, cast
 
 from krakked.config import AppConfig, StrategyConfig
 from krakked.execution.router import classify_volume, dust_reason
@@ -21,6 +21,7 @@ from krakked.market_regime import (
 from krakked.portfolio.manager import PortfolioService
 from krakked.portfolio.models import SpotPosition
 from krakked.portfolio.sync_status import (
+    AccountTruthSnapshot,
     PortfolioSyncStatus,
     read_portfolio_sync_status,
 )
@@ -107,6 +108,7 @@ class StrategyEngine:
             portfolio_sync_ok=portfolio_sync.ok,
             portfolio_sync_reason=portfolio_sync.reason,
             portfolio_last_sync_at=portfolio_sync.last_sync_at,
+            portfolio_sync_in_progress=portfolio_sync.in_progress,
         )
         self._cached_strategy_state: List[StrategyState] = []
         self.last_cycle_intents: List[StrategyIntent] = []
@@ -122,6 +124,18 @@ class StrategyEngine:
             self.portfolio,
             execution_mode=self._execution_mode(),
         )
+
+    def _account_truth_snapshot(self) -> AccountTruthSnapshot | None:
+        snapshot_reader = getattr(self.portfolio, "get_account_truth_snapshot", None)
+        if not callable(snapshot_reader):
+            return None
+        try:
+            return cast(
+                AccountTruthSnapshot,
+                snapshot_reader(execution_mode=self._execution_mode()),
+            )
+        except TypeError:
+            return cast(AccountTruthSnapshot, snapshot_reader())
 
     def initialize(self) -> None:
         logger.info(
@@ -396,6 +410,7 @@ class StrategyEngine:
             portfolio_sync_ok=portfolio_sync.ok,
             portfolio_sync_reason=portfolio_sync.reason,
             portfolio_last_sync_at=portfolio_sync.last_sync_at,
+            portfolio_sync_in_progress=portfolio_sync.in_progress,
         )
         self._cached_strategy_state = [
             StrategyState(
@@ -1417,16 +1432,25 @@ class StrategyEngine:
             )
             return False
 
-        # Fail closed: a degraded sync returns normally but leaves last_sync_ok
-        # False (account truth unavailable). Do not build a cycle on unverified
-        # balances just because sync did not raise.
-        if not self.portfolio.last_sync_ok:
+        # Fail closed: a degraded sync returns normally but leaves account truth
+        # unavailable. Do not build a cycle on unverified balances just because
+        # sync did not raise.
+        account_truth = self._account_truth_snapshot()
+        if account_truth is not None:
+            sync_ok = account_truth.portfolio_sync_ok
+            sync_reason = account_truth.portfolio_sync_reason
+        else:
+            sync_status = self._portfolio_sync_status()
+            sync_ok = sync_status.ok
+            sync_reason = sync_status.reason
+
+        if not sync_ok:
             logger.error(
                 "Account truth unavailable; skipping strategy cycle: %s",
-                self.portfolio.last_sync_reason,
+                sync_reason,
                 extra=structured_log_extra(
                     event="portfolio_sync_unverified",
-                    reason=self.portfolio.last_sync_reason,
+                    reason=sync_reason,
                 ),
             )
             return False
@@ -1514,7 +1538,26 @@ class StrategyEngine:
             )
 
     def get_risk_status(self) -> RiskStatus:
-        return self._cached_risk_status
+        account_truth = self._account_truth_snapshot()
+        if account_truth is None:
+            portfolio_sync = self._portfolio_sync_status()
+            return replace(
+                self._cached_risk_status,
+                portfolio_sync_ok=portfolio_sync.ok,
+                portfolio_sync_reason=portfolio_sync.reason,
+                portfolio_last_sync_at=portfolio_sync.last_sync_at,
+                portfolio_sync_in_progress=portfolio_sync.in_progress,
+            )
+
+        return replace(
+            self._cached_risk_status,
+            portfolio_sync_ok=account_truth.portfolio_sync_ok,
+            portfolio_sync_reason=account_truth.portfolio_sync_reason,
+            portfolio_last_sync_at=account_truth.portfolio_last_sync_at,
+            portfolio_sync_in_progress=account_truth.portfolio_sync_in_progress,
+            drift_flag=account_truth.drift_flag,
+            drift_info=account_truth.drift_info,
+        )
 
     def build_emergency_flatten_plan(
         self, positions: Sequence[SpotPosition], reason: str = "Manual flatten all"

@@ -1751,12 +1751,20 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
   const integrityItems = [
     {
       label: 'Portfolio Sync',
-      value: health?.portfolio_sync_ok ? 'Healthy' : 'Degraded',
-      tone: health?.portfolio_sync_ok ? 'ok' as const : 'danger' as const,
+      value: health?.portfolio_sync_in_progress
+        ? 'Verifying'
+        : (health?.portfolio_sync_ok ? 'Healthy' : 'Degraded'),
+      tone: health?.portfolio_sync_in_progress
+        ? 'warning' as const
+        : (health?.portfolio_sync_ok ? 'ok' as const : 'danger' as const),
       hint: health?.portfolio_sync_ok
         ? (session.mode === 'paper'
-          ? `Synthetic paper account last synced ${formatDateTime(health.portfolio_last_sync_at)}`
-          : `Last sync ${formatDateTime(health.portfolio_last_sync_at)}`)
+          ? (health?.portfolio_sync_in_progress
+            ? 'Synthetic paper account sync is refreshing'
+            : `Synthetic paper account last synced ${formatDateTime(health.portfolio_last_sync_at)}`)
+          : (health?.portfolio_sync_in_progress
+            ? 'Verifying live account balances with Kraken'
+            : `Last sync ${formatDateTime(health.portfolio_last_sync_at)}`))
         : (health?.portfolio_sync_reason || 'Latest sync failed'),
     },
     {
@@ -1970,14 +1978,20 @@ function DashboardShell({ onLogout }: { onLogout: () => void }) {
           <div className="integrity-panel__list">
             <div className="integrity-panel__item">
               <p className="integrity-panel__label">Portfolio sync</p>
-              <p className={`integrity-panel__value${health?.portfolio_sync_ok ? ' text--success' : ' text--danger'}`}>
-                {health?.portfolio_sync_ok ? 'Healthy' : 'Degraded'}
+              <p className={`integrity-panel__value${health?.portfolio_sync_in_progress ? '' : (health?.portfolio_sync_ok ? ' text--success' : ' text--danger')}`}>
+                {health?.portfolio_sync_in_progress
+                  ? 'Verifying'
+                  : (health?.portfolio_sync_ok ? 'Healthy' : 'Degraded')}
               </p>
               <p className="integrity-panel__hint">
                 {health?.portfolio_sync_ok
                   ? (session.mode === 'paper'
-                    ? `Synthetic paper account refreshed ${formatDateTime(health?.portfolio_last_sync_at)}`
-                    : `Last successful sync ${formatDateTime(health?.portfolio_last_sync_at)}`)
+                    ? (health?.portfolio_sync_in_progress
+                      ? 'Synthetic paper account sync is refreshing'
+                      : `Synthetic paper account refreshed ${formatDateTime(health?.portfolio_last_sync_at)}`)
+                    : (health?.portfolio_sync_in_progress
+                      ? 'Verifying live account balances with Kraken'
+                      : `Last successful sync ${formatDateTime(health?.portfolio_last_sync_at)}`))
                   : (health?.portfolio_sync_reason || 'Latest sync failed')}
               </p>
             </div>

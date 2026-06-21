@@ -22,6 +22,7 @@ from krakked.market_data.api import MarketDataStatus
 from krakked.metrics import SystemMetrics
 from krakked.portfolio.sync_status import (
     LIVE_SYNC_COLD_START_REASON,
+    LIVE_SYNC_IN_PROGRESS_REASON,
     live_sync_stale_reason,
 )
 from krakked.strategy.models import DecisionRecord, ExecutionPlan, RiskAdjustedAction
@@ -285,6 +286,52 @@ def test_system_health_treats_live_stale_sync_time_as_degraded(client, system_co
     payload = response.json()["data"]
     assert payload["portfolio_sync_ok"] is False
     assert payload["portfolio_sync_reason"] == live_sync_stale_reason(600)
+
+
+def test_system_health_and_live_readiness_use_account_truth_snapshot(
+    client, system_context
+):
+    synced_at = datetime(2026, 4, 19, 19, 30, tzinfo=timezone.utc)
+    system_context.config.execution.mode = "live"
+    system_context.config.execution.validate_only = False
+    system_context.config.execution.allow_live_trading = True
+    system_context.config.execution.paper_tests_completed = True
+    system_context.strategy_engine.get_risk_status.return_value = SimpleNamespace(
+        kill_switch_active=False,
+        drift_flag=False,
+    )
+
+    def _snapshot(**_kwargs):
+        return SimpleNamespace(
+            portfolio_sync_ok=False,
+            portfolio_sync_reason=LIVE_SYNC_IN_PROGRESS_REASON,
+            portfolio_last_sync_at=synced_at,
+            portfolio_sync_in_progress=True,
+            drift_flag=True,
+            drift_info={"source": "account-truth-snapshot"},
+        )
+
+    system_context.portfolio.get_account_truth_snapshot = _snapshot
+
+    health_response = client.get("/api/system/health")
+    assert health_response.status_code == 200
+    health = health_response.json()["data"]
+    assert health["portfolio_sync_ok"] is False
+    assert health["portfolio_sync_reason"] == LIVE_SYNC_IN_PROGRESS_REASON
+    assert health["portfolio_sync_in_progress"] is True
+    assert health["drift_detected"] is True
+    assert "portfolio mismatch" in health["drift_reason"]
+
+    readiness_response = client.get("/api/system/live-readiness")
+    assert readiness_response.status_code == 200
+    data = readiness_response.json()["data"]
+    checks = {
+        check["id"]: check
+        for check in data["blockers"] + data["warnings"] + data["passed"]
+    }
+    assert checks["portfolio_sync"]["status"] == "blocked"
+    assert checks["portfolio_sync"]["message"] == LIVE_SYNC_IN_PROGRESS_REASON
+    assert checks["drift_monitor"]["status"] == "blocked"
 
 
 def test_system_health_reports_risk_drift_as_blocker(client, system_context):

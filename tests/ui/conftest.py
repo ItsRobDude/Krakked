@@ -199,6 +199,8 @@ def build_test_context(
     portfolio.last_sync_ok = True
     portfolio.last_sync_reason = None
     portfolio.last_sync_at = None
+    portfolio.sync_in_progress = False
+    portfolio.get_account_truth_snapshot = None
     portfolio.baseline_source = "ledger_history"
 
     strategy_engine = MagicMock(name="strategy_engine")

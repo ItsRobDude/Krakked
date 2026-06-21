@@ -14,6 +14,14 @@ MAX_LIVE_SYNC_MAX_AGE_SECONDS = 600
 LIVE_SYNC_COLD_START_REASON = (
     "Starting up - verifying your live account before allowing orders."
 )
+LIVE_SYNC_IN_PROGRESS_REASON = (
+    "Krakked is verifying your live account. Orders will resume automatically "
+    "once account sync finishes."
+)
+PORTFOLIO_SYNC_FAILED_REASON = (
+    "Krakked could not complete portfolio sync. Orders will resume "
+    "automatically once account sync recovers."
+)
 LIVE_SYNC_DEGRADED_REASON = (
     "Krakked could not verify live balances with Kraken. Orders will resume "
     "automatically once account sync recovers."
@@ -39,6 +47,20 @@ class PortfolioSyncStatus:
     ok: bool
     reason: str | None
     last_sync_at: datetime | None
+    in_progress: bool = False
+    max_age_seconds: int | None = None
+    age_seconds: float | None = None
+
+
+@dataclass(frozen=True)
+class AccountTruthSnapshot:
+    portfolio_sync_ok: bool
+    portfolio_sync_reason: str | None
+    portfolio_last_sync_at: datetime | None
+    portfolio_sync_in_progress: bool
+    drift_flag: bool
+    drift_info: dict[str, Any] | None
+    generated_at: datetime
     max_age_seconds: int | None = None
     age_seconds: float | None = None
 
@@ -118,6 +140,7 @@ def read_portfolio_sync_status(
 
     raw_ok = bool(getattr(portfolio, "last_sync_ok", True))
     raw_reason = getattr(portfolio, "last_sync_reason", None)
+    raw_in_progress = bool(getattr(portfolio, "sync_in_progress", False))
     reason = raw_reason.strip() if isinstance(raw_reason, str) else None
     if reason == "":
         reason = None
@@ -132,6 +155,17 @@ def read_portfolio_sync_status(
             ok=raw_ok,
             reason=reason,
             last_sync_at=last_sync_at,
+            in_progress=raw_in_progress,
+        )
+
+    if raw_in_progress:
+        max_age = max_live_sync_age_seconds(portfolio)
+        return PortfolioSyncStatus(
+            ok=False,
+            reason=LIVE_SYNC_IN_PROGRESS_REASON,
+            last_sync_at=last_sync_at,
+            in_progress=True,
+            max_age_seconds=max_age,
         )
 
     if last_sync_at is None:
@@ -140,6 +174,7 @@ def read_portfolio_sync_status(
             ok=False,
             reason=reason or LIVE_SYNC_COLD_START_REASON,
             last_sync_at=None,
+            in_progress=False,
             max_age_seconds=max_age,
         )
 
@@ -149,6 +184,7 @@ def read_portfolio_sync_status(
             ok=False,
             reason=reason or LIVE_SYNC_DEGRADED_REASON,
             last_sync_at=last_sync_at,
+            in_progress=False,
             max_age_seconds=max_age,
         )
 
@@ -160,6 +196,7 @@ def read_portfolio_sync_status(
             ok=False,
             reason=live_sync_stale_reason(max_age),
             last_sync_at=last_sync_at,
+            in_progress=False,
             max_age_seconds=max_age,
             age_seconds=age_seconds,
         )
@@ -168,6 +205,7 @@ def read_portfolio_sync_status(
         ok=True,
         reason=None,
         last_sync_at=last_sync_at,
+        in_progress=False,
         max_age_seconds=max_age,
         age_seconds=age_seconds,
     )
