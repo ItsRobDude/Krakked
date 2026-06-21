@@ -255,28 +255,35 @@ difference plainly.
 
 ## Recommendations
 
-Immediate cleanup before the next operator drill:
+Follow-up status:
 
-1. Fix account-truth snapshot consistency so in-progress sync, last completed
+- The operator-truth cleanup landed after this validation pass.
+- The deterministic seeded emergency-flatten drill now proves the API and
+  background resume paths for cancel-first behavior, remaining open-order
+  residue, degraded account-truth refusal, verified closeout, persisted
+  execution state, and dust/no-retry behavior.
+
+Cleanup completed after this report:
+
+1. Account-truth snapshot consistency now keeps in-progress sync, last completed
    sync state, and drift are reported consistently across health, readiness,
    risk status, and OMS gates.
-2. Decide whether Unraid Docker health should be removed, softened, documented
-   as non-authoritative, or supplemented by an app-level external probe.
-3. Investigate recurring `ADA/USD` WebSocket staleness and decide whether
-   single-pair staleness should block live readiness for profiles whose active
-   strategies can continue on other fresh pairs.
-4. Use a clean, dated paper validation profile name for the next run. The
-   current reused `paper-soak-2026-06-18` name made the evidence harder to read.
+2. Unraid proof output now treats app HTTP health as authoritative when Docker
+   exec health is noisy.
+3. Recurring `ADA/USD` staleness is legible under the policy that enabled/open
+   position pairs block while disabled/watchlist/global pairs warn.
+4. Dated paper-validation profile suggestions and active DB path affordances
+   make the next run easier to name, back up, and export.
 
 Recommended next proof:
 
-1. Run a deterministic emergency-flatten drill with seeded paper positions and
-   open orders.
-2. Prove cancel-all, no close-order placement under degraded account truth, and
-   close-order behavior under verified account truth.
-3. Re-run a short paper validation only after the health wording and Docker
-   health signal are less confusing.
+1. Run a decision-useful paper soak on a supported window/pair set so strategy
+   intents, OMS rows, paper fills, portfolio sync, and the proved safety gates
+   are exercised together.
+2. Re-run a short paper validation only after future health/readiness/control
+   surface changes.
 
 Do not tune strategies or start a tiny live smoke from this evidence alone. The
-paper loop is finally producing useful records, but the operator health surface
-still has small trust gaps that should be made boring first.
+paper loop is finally producing useful records, and the next step is to exercise
+those records in a longer decision-useful soak under the now-hardened operator
+and money-safety surfaces.

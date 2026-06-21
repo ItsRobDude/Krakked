@@ -102,14 +102,16 @@ Verification commands used for this local lane:
 - `poetry run pytest tests/ui/test_system_routes.py -k "cockpit_snapshot"`
 - `npm run test:run -- App.operator-paths.test.tsx`
 
-## Next Lane: Operator-Truth Cleanup And Flatten Drill
+## Next Lane: Decision-Useful Paper Soak
 
 Before optimizing strategy knobs or planning live smoke, make the operator
 surface boring around the account and control states that the 2026-06-20
 validation surfaced. The first paper soak covered runtime lifecycle. The short
 paper validation proved that the paper loop can produce strategy, OMS, trade,
-and portfolio evidence. The next lane is to remove the confusing health signals
-around that evidence and then run the seeded emergency-flatten drill.
+and portfolio evidence. The operator-truth cleanup and seeded emergency-flatten
+drill now close the main remaining operator-control proof gap. The next lane is
+to run a decision-useful paper soak that exercises strategy intents, OMS rows,
+paper fills, portfolio sync, and the proved safety gates together.
 
 Completed evidence:
 
@@ -119,24 +121,24 @@ Completed evidence:
 - Container restart preserved profile/config/wallet and avoided image drift, but
   did not auto-resume the active session.
 - Backup/export/restore worked after using the profile-isolated DB path.
-- Emergency flatten's no-position path was safe but did not exercise real
-  close-out behavior.
+- Emergency flatten is now covered by deterministic seeded tests for the API
+  route and background resume path: cancel-first, remaining open-order residue,
+  degraded account-truth refusal, verified closeout, persisted execution state,
+  and dust/no-retry behavior.
 - A short paper validation on `v0.1.1-rc.8` produced strategy intents, OMS
   dry-run fills, paper trades, portfolio positions, and useful
   deferred/no-signal strategy summaries.
 
 Remaining proof targets:
 
-- Keep paper-mode in-progress portfolio sync visible as verification work, not
-  as a reasonless degraded blocker.
-- Keep the Docker healthcheck, but treat the app HTTP health endpoint as
-  authoritative on Unraid when Docker exec health is noisy.
+- Run a decision-useful paper soak on a supported window/pair set, with real
+  strategy decisions flowing through OMS, fills, portfolio sync, and operator
+  health surfaces.
 - Keep stale pairs used by enabled strategies or open positions as
   session-critical blockers. Disabled/watchlist/global stale pairs, including
   recurring `ADA/USD` noise, should remain warnings.
 - Use the dated paper-validation profile suggestion for the next run so
   evidence is easier to compare.
-- Re-run emergency flatten with seeded synthetic positions and open-order state.
 - Use the active DB path shown in the operator paths health surface for
   `db-backup` and `export-install --db-path`.
 
@@ -190,16 +192,11 @@ For strategy evidence:
 
 ## Recommended Order
 
-1. Fix the small operator-truth findings from the 2026-06-20 paper validation:
-   in-progress paper sync copy/state, Unraid Docker health signal, recurring
-   `ADA/USD` staleness noise, clean dated profile naming, and active DB path
-   visibility.
-2. Re-run emergency flatten with seeded synthetic positions and open-order
-   state.
-3. Clean up the remaining operator affordances from the soak: pause/resume
+1. Run a decision-useful paper soak on a supported window/pair set.
+2. Clean up the remaining operator affordances from the soak: pause/resume
    wording, restart no-auto-resume wording, and profile-aware backup/export.
-4. Re-run a short paper validation only if the cleanup changes health,
+3. Re-run a short paper validation only if the cleanup changes health,
    readiness, or control surfaces.
-5. Only after account-truth gates and operator drills are boring should tiny
+4. Only after account-truth gates and operator drills are boring should tiny
    live smoke testing be considered, with conservative caps and a written stop
    condition.

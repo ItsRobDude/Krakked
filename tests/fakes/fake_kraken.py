@@ -43,6 +43,7 @@ class FakeKrakenRESTClient:
         add_order_modes: Optional[list[str]] = None,
         reject_error: str = "EOrder:Insufficient funds",
         echo_client_order_id: bool = True,
+        cancel_all_leaves_orders_open: bool = False,
     ) -> None:
         self.add_order_mode = add_order_mode
         self._add_order_modes = list(add_order_modes or [])
@@ -51,6 +52,7 @@ class FakeKrakenRESTClient:
         # When False, the exchange still filters by cl_ord_id but does NOT echo
         # it back in the returned order payload (the unproven-echo case).
         self.echo_client_order_id = echo_client_order_id
+        self.cancel_all_leaves_orders_open = cancel_all_leaves_orders_open
 
         # Simulated exchange state.
         self._open: dict[str, dict[str, Any]] = {}
@@ -85,6 +87,7 @@ class FakeKrakenRESTClient:
         self.cancel_calls: list[str] = []
         self.cancel_all_calls = 0
         self.cancel_all_after_calls: list[int] = []
+        self.call_log: list[dict[str, Any]] = []
 
     # ------------------------------------------------------------------ helpers
     def _next_txid(self) -> str:
@@ -254,6 +257,9 @@ class FakeKrakenRESTClient:
     def get_private(
         self, endpoint: str, params: Optional[dict[str, Any]] = None
     ) -> dict[str, Any]:
+        self.call_log.append(
+            {"event": "get_private", "endpoint": endpoint, "params": dict(params or {})}
+        )
         if endpoint == "Balance":
             self.balance_read_count += 1
             if self._balance_failures_remaining > 0:
@@ -288,6 +294,7 @@ class FakeKrakenRESTClient:
         raise ServiceUnavailableError(f"fake: unsupported private endpoint {endpoint}")
 
     def add_order(self, params: dict[str, Any]) -> dict[str, Any]:
+        self.call_log.append({"event": "add_order", "params": dict(params)})
         self.add_order_calls.append(dict(params))
         mode = (
             self._add_order_modes.pop(0)
@@ -319,6 +326,7 @@ class FakeKrakenRESTClient:
     def get_open_orders(
         self, params: Optional[dict[str, Any]] = None
     ) -> dict[str, Any]:
+        self.call_log.append({"event": "get_open_orders", "params": dict(params or {})})
         self.get_open_order_calls.append(dict(params or {}))
         userref = (params or {}).get("userref")
         client_order_id = (params or {}).get("cl_ord_id")
@@ -344,6 +352,9 @@ class FakeKrakenRESTClient:
     def get_closed_orders(
         self, params: Optional[dict[str, Any]] = None
     ) -> dict[str, Any]:
+        self.call_log.append(
+            {"event": "get_closed_orders", "params": dict(params or {})}
+        )
         self.get_closed_order_calls.append(dict(params or {}))
         userref = (params or {}).get("userref")
         client_order_id = (params or {}).get("cl_ord_id")
@@ -364,6 +375,7 @@ class FakeKrakenRESTClient:
         return {"closed": closed_orders}
 
     def get_ledgers(self, params: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+        self.call_log.append({"event": "get_ledgers", "params": dict(params or {})})
         if self._ledgers_failures_remaining > 0:
             self._ledgers_failures_remaining -= 1
             raise ServiceUnavailableError("fake: ledgers unavailable")
@@ -377,6 +389,7 @@ class FakeKrakenRESTClient:
         return {"ledger": self._filter_by_start(ledgers, params)}
 
     def cancel_order(self, txid: str) -> dict[str, Any]:
+        self.call_log.append({"event": "cancel_order", "txid": txid})
         self.cancel_calls.append(txid)
         detail = self._open.pop(txid, None)
         if detail is not None:
@@ -385,8 +398,11 @@ class FakeKrakenRESTClient:
         return {"error": [], "count": 1 if detail else 0}
 
     def cancel_all_orders(self) -> dict[str, Any]:
+        self.call_log.append({"event": "cancel_all_orders"})
         self.cancel_all_calls += 1
         count = len(self._open)
+        if self.cancel_all_leaves_orders_open:
+            return {"error": [], "count": count}
         for txid, detail in list(self._open.items()):
             detail["status"] = "canceled"
             self._closed[txid] = detail
