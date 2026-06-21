@@ -81,6 +81,7 @@ class RiskStatus:
     portfolio_sync_ok: bool = True
     portfolio_sync_reason: Optional[str] = None
     portfolio_last_sync_at: Optional[datetime] = None
+    portfolio_sync_in_progress: bool = False
 
 
 @dataclass

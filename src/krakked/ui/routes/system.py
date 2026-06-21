@@ -401,6 +401,7 @@ def _build_system_health_payload(ctx) -> SystemHealthPayload:
             portfolio_sync_ok=False,
             portfolio_sync_reason="setup_required",
             portfolio_last_sync_at=None,
+            portfolio_sync_in_progress=False,
             portfolio_baseline=None,
             drift_detected=False,
             market_data_max_staleness=None,
@@ -484,15 +485,35 @@ def _build_system_health_payload(ctx) -> SystemHealthPayload:
         or get_live_trading_block_reason(execution_config) is None
     )
     risk_status = ctx.strategy_engine.get_risk_status()
-    portfolio_sync = read_portfolio_sync_status(
-        ctx.portfolio,
-        execution_mode=getattr(execution_config, "mode", None),
-    )
+    account_truth = None
+    snapshot_reader = getattr(ctx.portfolio, "get_account_truth_snapshot", None)
+    if callable(snapshot_reader):
+        try:
+            account_truth = snapshot_reader(
+                execution_mode=getattr(execution_config, "mode", None)
+            )
+        except TypeError:
+            account_truth = snapshot_reader()
+    if account_truth is None:
+        portfolio_sync = read_portfolio_sync_status(
+            ctx.portfolio,
+            execution_mode=getattr(execution_config, "mode", None),
+        )
+        portfolio_sync_ok = portfolio_sync.ok
+        portfolio_sync_reason = portfolio_sync.reason
+        portfolio_last_sync_at = portfolio_sync.last_sync_at
+        portfolio_sync_in_progress = portfolio_sync.in_progress
+        truth_drift_flag = bool(getattr(risk_status, "drift_flag", False))
+    else:
+        portfolio_sync_ok = bool(getattr(account_truth, "portfolio_sync_ok", True))
+        portfolio_sync_reason = getattr(account_truth, "portfolio_sync_reason", None)
+        portfolio_last_sync_at = getattr(account_truth, "portfolio_last_sync_at", None)
+        portfolio_sync_in_progress = bool(
+            getattr(account_truth, "portfolio_sync_in_progress", False)
+        )
+        truth_drift_flag = bool(getattr(account_truth, "drift_flag", False))
     portfolio_baseline = getattr(ctx.portfolio, "baseline_source", None)
-    drift_detected = bool(
-        metrics_snapshot.get("drift_detected")
-        or getattr(risk_status, "drift_flag", False)
-    )
+    drift_detected = bool(metrics_snapshot.get("drift_detected") or truth_drift_flag)
     drift_reason = metrics_snapshot.get("drift_reason")
     if drift_reason is None and drift_detected:
         drift_reason = PORTFOLIO_DRIFT_BLOCKED_MESSAGE
@@ -516,9 +537,10 @@ def _build_system_health_payload(ctx) -> SystemHealthPayload:
         current_mode=execution_config.mode,
         ui_read_only=ctx.config.ui.read_only,
         kill_switch_active=getattr(risk_status, "kill_switch_active", None),
-        portfolio_sync_ok=portfolio_sync.ok,
-        portfolio_sync_reason=portfolio_sync.reason,
-        portfolio_last_sync_at=portfolio_sync.last_sync_at,
+        portfolio_sync_ok=portfolio_sync_ok,
+        portfolio_sync_reason=portfolio_sync_reason,
+        portfolio_last_sync_at=portfolio_last_sync_at,
+        portfolio_sync_in_progress=portfolio_sync_in_progress,
         portfolio_baseline=portfolio_baseline,
         drift_detected=drift_detected,
         drift_reason=drift_reason,

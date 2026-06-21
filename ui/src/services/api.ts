@@ -51,6 +51,7 @@ export type RiskStatus = {
   portfolio_sync_ok?: boolean;
   portfolio_sync_reason?: string | null;
   portfolio_last_sync_at?: string | null;
+  portfolio_sync_in_progress?: boolean;
 };
 
 export type RiskDecision = {
@@ -137,6 +138,7 @@ export type SystemHealth = {
   portfolio_sync_ok: boolean;
   portfolio_sync_reason?: string | null;
   portfolio_last_sync_at?: string | null;
+  portfolio_sync_in_progress: boolean;
   portfolio_baseline?: string | null;
   drift_detected: boolean;
   drift_reason?: string | null;

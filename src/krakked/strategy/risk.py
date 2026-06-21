@@ -1313,4 +1313,5 @@ class RiskEngine:
             portfolio_sync_ok=portfolio_sync.ok,
             portfolio_sync_reason=portfolio_sync.reason,
             portfolio_last_sync_at=portfolio_sync.last_sync_at,
+            portfolio_sync_in_progress=portfolio_sync.in_progress,
         )

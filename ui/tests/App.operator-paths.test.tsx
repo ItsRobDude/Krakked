@@ -84,6 +84,7 @@ const healthyHealth: SystemHealth = {
   kill_switch_active: false,
   portfolio_sync_ok: true,
   portfolio_last_sync_at: '2026-05-02T03:00:00Z',
+  portfolio_sync_in_progress: false,
   portfolio_baseline: 'paper_wallet',
   drift_detected: false,
   drift_reason: null,

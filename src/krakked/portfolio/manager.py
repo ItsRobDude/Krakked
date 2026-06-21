@@ -1,10 +1,12 @@
 # src/krakked/portfolio/manager.py
 
 import logging
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
+from threading import RLock
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Union
 
 from krakked.config import AppConfig, get_config_dir
@@ -18,8 +20,11 @@ from krakked.portfolio.sync_status import (
     LIVE_SYNC_TRADE_HISTORY_LAG_ALERT_TITLE,
     LIVE_SYNC_TRADE_HISTORY_LAGGING_REASON,
     LIVE_SYNC_TRADES_UNAVAILABLE_REASON,
+    PORTFOLIO_SYNC_FAILED_REASON,
+    AccountTruthSnapshot,
     live_sync_trade_history_lag_escalated_reason,
     max_live_sync_age_seconds,
+    read_portfolio_sync_status,
 )
 from krakked.strategy.performance import compute_strategy_performance
 
@@ -47,6 +52,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_PAPER_STARTING_CASH_USD = 10_000.0
 DEFAULT_PORTFOLIO_DB_NAME = "portfolio.db"
 DEFAULT_PROFILE_PAPER_DB_NAME = "portfolio.paper.db"
+_SYNC_TIME_UNSET = object()
 
 
 @dataclass(frozen=True)
@@ -144,6 +150,8 @@ class PortfolioService:
         self._bootstrapped = False
         # Compatibility default; live safety surfaces treat missing sync time
         # as degraded.
+        self._account_truth_lock = RLock()
+        self._sync_in_progress: bool = False
         self._last_sync_ok: bool = True
         self._last_sync_at: Optional[datetime] = None
         self._last_sync_reason: Optional[str] = None
@@ -166,19 +174,134 @@ class PortfolioService:
     def last_sync_ok(self) -> bool:
         """True if the last sync completed successfully."""
 
-        return self._last_sync_ok
+        lock = getattr(self, "_account_truth_lock", None)
+        if lock is None:
+            return getattr(self, "_last_sync_ok", True)
+        with lock:
+            return self._last_sync_ok
 
     @property
     def last_sync_at(self) -> Optional[datetime]:
         """Timestamp of the most recent successful sync."""
 
-        return self._last_sync_at
+        lock = getattr(self, "_account_truth_lock", None)
+        if lock is None:
+            return getattr(self, "_last_sync_at", None)
+        with lock:
+            return self._last_sync_at
 
     @property
     def last_sync_reason(self) -> Optional[str]:
         """Reason for the last failed sync, if any."""
 
-        return self._last_sync_reason
+        lock = getattr(self, "_account_truth_lock", None)
+        if lock is None:
+            return getattr(self, "_last_sync_reason", None)
+        with lock:
+            return self._last_sync_reason
+
+    @property
+    def sync_in_progress(self) -> bool:
+        """True while a portfolio sync attempt is currently running."""
+
+        lock = getattr(self, "_account_truth_lock", None)
+        if lock is None:
+            return bool(getattr(self, "_sync_in_progress", False))
+        with lock:
+            return self._sync_in_progress
+
+    def _set_sync_in_progress(self, value: bool) -> None:
+        lock = getattr(self, "_account_truth_lock", None)
+        if lock is None:
+            self._sync_in_progress = bool(value)
+            return
+        with lock:
+            self._sync_in_progress = bool(value)
+
+    def _set_last_sync_state(
+        self,
+        *,
+        ok: bool,
+        reason: Optional[str],
+        last_sync_at: object = _SYNC_TIME_UNSET,
+    ) -> None:
+        lock = getattr(self, "_account_truth_lock", None)
+        if lock is None:
+            self._last_sync_ok = bool(ok)
+            self._last_sync_reason = reason
+            if last_sync_at is not _SYNC_TIME_UNSET:
+                self._last_sync_at = (
+                    last_sync_at if isinstance(last_sync_at, datetime) else None
+                )
+            return
+        with lock:
+            self._last_sync_ok = bool(ok)
+            self._last_sync_reason = reason
+            if last_sync_at is not _SYNC_TIME_UNSET:
+                self._last_sync_at = (
+                    last_sync_at if isinstance(last_sync_at, datetime) else None
+                )
+
+    def _execution_mode(self) -> Optional[str]:
+        execution_config = getattr(getattr(self, "app_config", None), "execution", None)
+        mode = getattr(execution_config, "mode", None)
+        return mode if isinstance(mode, str) else None
+
+    def get_account_truth_snapshot(
+        self,
+        *,
+        execution_mode: Optional[str] = None,
+        now: Optional[datetime] = None,
+    ) -> AccountTruthSnapshot:
+        """Return a small atomic view of sync and drift truth for safety checks."""
+
+        lock = getattr(self, "_account_truth_lock", None)
+        if lock is None:
+            state = SimpleNamespace(
+                config=self.config,
+                last_sync_ok=getattr(self, "_last_sync_ok", True),
+                last_sync_reason=getattr(self, "_last_sync_reason", None),
+                last_sync_at=getattr(self, "_last_sync_at", None),
+                sync_in_progress=bool(getattr(self, "_sync_in_progress", False)),
+            )
+        else:
+            with lock:
+                state = SimpleNamespace(
+                    config=self.config,
+                    last_sync_ok=self._last_sync_ok,
+                    last_sync_reason=self._last_sync_reason,
+                    last_sync_at=self._last_sync_at,
+                    sync_in_progress=self._sync_in_progress,
+                )
+
+        now_value = now if isinstance(now, datetime) else datetime.now(timezone.utc)
+        sync_status = read_portfolio_sync_status(
+            state,
+            execution_mode=execution_mode or self._execution_mode(),
+            now=now_value,
+        )
+        drift_status = self.get_drift_status()
+        drift_flag = bool(getattr(drift_status, "drift_flag", False))
+        drift_info: Optional[Dict[str, Any]]
+        if drift_status is None:
+            drift_info = None
+        else:
+            try:
+                drift_info = asdict(drift_status)
+            except TypeError:
+                drift_info = None
+
+        return AccountTruthSnapshot(
+            portfolio_sync_ok=sync_status.ok,
+            portfolio_sync_reason=sync_status.reason,
+            portfolio_last_sync_at=sync_status.last_sync_at,
+            portfolio_sync_in_progress=sync_status.in_progress,
+            drift_flag=drift_flag,
+            drift_info=drift_info,
+            generated_at=now_value,
+            max_age_seconds=sync_status.max_age_seconds,
+            age_seconds=sync_status.age_seconds,
+        )
 
     @property
     def baseline_source(self) -> str:
@@ -287,11 +410,10 @@ class PortfolioService:
             extra=structured_log_extra(event="portfolio_sync_start"),
         )
 
-        self._bootstrap_from_store()
-        self._last_sync_ok = False
-        self._last_sync_reason = None
-
+        self._set_sync_in_progress(True)
         try:
+            self._bootstrap_from_store()
+
             if self._is_paper_mode():
                 return self._sync_paper_wallet()
 
@@ -312,8 +434,9 @@ class PortfolioService:
                 trade_result.trade_ids,
             )
             if trade_history_lag.missing_refids:
-                self._last_sync_reason = self._trade_history_lag_reason(
-                    trade_history_lag
+                self._set_last_sync_state(
+                    ok=False,
+                    reason=self._trade_history_lag_reason(trade_history_lag),
                 )
                 self._refresh_cached_views()
                 logger.warning(
@@ -342,17 +465,28 @@ class PortfolioService:
                     "new_cash_flows": ledger_result.cash_flow_count,
                 }
 
-            self._last_sync_ok = True
-            self._last_sync_reason = None
-            self._last_sync_at = datetime.now(timezone.utc)
+            self._set_last_sync_state(
+                ok=True,
+                reason=None,
+                last_sync_at=datetime.now(timezone.utc),
+            )
 
             return {
                 "new_trades": trade_result.count,
                 "new_cash_flows": ledger_result.cash_flow_count,
             }
         except Exception as exc:
-            self._last_sync_reason = str(exc)
+            self._set_last_sync_state(ok=False, reason=PORTFOLIO_SYNC_FAILED_REASON)
+            logger.exception(
+                "Portfolio sync failed unexpectedly.",
+                extra=structured_log_extra(
+                    event="portfolio_sync_failed",
+                    error=str(exc),
+                ),
+            )
             raise
+        finally:
+            self._set_sync_in_progress(False)
 
     def _is_paper_mode(self) -> bool:
         execution_config = getattr(getattr(self, "app_config", None), "execution", None)
@@ -396,9 +530,7 @@ class PortfolioService:
         self.portfolio.maybe_snapshot(now=int(now.timestamp()))
         self._refresh_cached_views()
 
-        self._last_sync_ok = True
-        self._last_sync_reason = None
-        self._last_sync_at = now
+        self._set_last_sync_state(ok=True, reason=None, last_sync_at=now)
         return {"new_trades": 0, "new_cash_flows": 0}
 
     def _refresh_exchange_reference(self, now: datetime) -> None:
@@ -691,7 +823,10 @@ class PortfolioService:
                     )
                     break
         except Exception as exc:  # noqa: BLE001
-            self._last_sync_reason = LIVE_SYNC_TRADES_UNAVAILABLE_REASON
+            self._set_last_sync_state(
+                ok=False,
+                reason=LIVE_SYNC_TRADES_UNAVAILABLE_REASON,
+            )
             logger.warning(
                 "TradesHistory sync unavailable; account truth is degraded until Kraken trade history can be verified.",
                 extra=structured_log_extra(
@@ -709,7 +844,10 @@ class PortfolioService:
                     "portfolio.sync.ingest_trades_failed",
                     extra={"since": since_ts, "count": len(new_trades)},
                 )
-                self._last_sync_reason = LIVE_SYNC_TRADES_UNAVAILABLE_REASON
+                self._set_last_sync_state(
+                    ok=False,
+                    reason=LIVE_SYNC_TRADES_UNAVAILABLE_REASON,
+                )
                 return _TradeSyncResult(count=0, trade_ids=set(), failed=True)
 
             normalized_trades = [
@@ -740,7 +878,10 @@ class PortfolioService:
             ledger_resp = self.rest_client.get_ledgers(params=ledger_params)
             ledger_dict = ledger_resp.get("ledger", {})
         except Exception as exc:  # noqa: BLE001
-            self._last_sync_reason = LIVE_SYNC_LEDGERS_UNAVAILABLE_REASON
+            self._set_last_sync_state(
+                ok=False,
+                reason=LIVE_SYNC_LEDGERS_UNAVAILABLE_REASON,
+            )
             logger.warning(
                 "Ledgers sync unavailable; account truth is degraded until Kraken ledgers can be verified.",
                 extra=structured_log_extra(
@@ -872,8 +1013,7 @@ class PortfolioService:
         try:
             balance_resp = self.rest_client.get_private("Balance")
         except Exception as exc:  # noqa: BLE001
-            self._last_sync_ok = False
-            self._last_sync_reason = LIVE_SYNC_DEGRADED_REASON
+            self._set_last_sync_state(ok=False, reason=LIVE_SYNC_DEGRADED_REASON)
             logger.warning(
                 "Live balance reconciliation unavailable; local ledger balances are display-only until Kraken balances can be verified.",
                 extra=structured_log_extra(

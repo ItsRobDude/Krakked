@@ -18,6 +18,7 @@ from krakked.portfolio.models import SpotPosition
 from krakked.portfolio.sync_status import (
     LIVE_SYNC_COLD_START_REASON,
     LIVE_SYNC_DEGRADED_REASON,
+    LIVE_SYNC_IN_PROGRESS_REASON,
     live_sync_stale_reason,
 )
 from krakked.strategy.base import Strategy
@@ -1902,6 +1903,47 @@ def test_initial_cached_risk_status_treats_live_cold_start_as_degraded():
     assert status.portfolio_sync_ok is False
     assert status.portfolio_sync_reason == LIVE_SYNC_COLD_START_REASON
     assert status.portfolio_last_sync_at is None
+
+
+def test_initial_cached_risk_status_reports_live_sync_in_progress():
+    synced_at = datetime(2026, 1, 2, 3, 4, tzinfo=timezone.utc)
+    portfolio = make_portfolio_service_mock()
+    portfolio.last_sync_ok = True
+    portfolio.last_sync_reason = None
+    portfolio.last_sync_at = synced_at
+    portfolio.sync_in_progress = True
+
+    engine = _data_ready_engine(portfolio, execution_mode="live")
+
+    status = engine.get_risk_status()
+
+    assert status.portfolio_sync_ok is False
+    assert status.portfolio_sync_reason == LIVE_SYNC_IN_PROGRESS_REASON
+    assert status.portfolio_last_sync_at == synced_at
+    assert status.portfolio_sync_in_progress is True
+
+
+def test_get_risk_status_overlays_fresh_drift_over_cached_healthy_status():
+    portfolio = make_portfolio_service_mock(drift_flag=False)
+    portfolio.last_sync_ok = True
+    portfolio.last_sync_reason = None
+    portfolio.last_sync_at = datetime.now(timezone.utc)
+
+    engine = _data_ready_engine(portfolio, execution_mode="live")
+    assert engine._cached_risk_status.drift_flag is False
+
+    portfolio.get_drift_status.return_value = SimpleNamespace(
+        drift_flag=True,
+        expected_position_value_base=100.0,
+        actual_balance_value_base=95.0,
+        tolerance_base=1.0,
+        mismatched_assets=[],
+    )
+
+    status = engine.get_risk_status()
+
+    assert status.drift_flag is True
+    assert status.drift_info["expected_position_value_base"] == 100.0
 
 
 def test_cached_risk_status_treats_live_stale_sync_as_degraded():

@@ -1,11 +1,18 @@
+import logging
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import Mock
+
+import pytest
 
 from krakked.config import PortfolioConfig
 from krakked.market_data.exceptions import PairNotFoundError
 from krakked.portfolio.manager import PortfolioService
 from krakked.portfolio.portfolio import Portfolio
-from krakked.portfolio.sync_status import LIVE_SYNC_DEGRADED_REASON
+from krakked.portfolio.sync_status import (
+    LIVE_SYNC_DEGRADED_REASON,
+    PORTFOLIO_SYNC_FAILED_REASON,
+)
 
 
 def _build_service(store, portfolio, api_client):
@@ -13,6 +20,7 @@ def _build_service(store, portfolio, api_client):
     store.get_trade_ids_by_ids.side_effect = lambda trade_ids: set()
     service = PortfolioService.__new__(PortfolioService)
     service.config = PortfolioConfig()
+    service.app_config = SimpleNamespace(execution=SimpleNamespace(mode="live"))
     service.store = store
     service.portfolio = portfolio
     service.rest_client = api_client
@@ -33,6 +41,66 @@ def _build_service(store, portfolio, api_client):
     service._refresh_cached_views = Mock()
     service._reconcile = Mock(return_value=True)
     return service
+
+
+def test_sync_in_progress_preserves_last_completed_state_during_attempt():
+    store = Mock()
+    portfolio = Mock()
+    api_client = Mock()
+    service = _build_service(store, portfolio, api_client)
+    previous_sync_at = datetime(2026, 1, 2, 3, 4, tzinfo=timezone.utc)
+    service._last_sync_ok = True
+    service._last_sync_reason = None
+    service._last_sync_at = previous_sync_at
+
+    store.get_trades.return_value = []
+    service._sync_ledgers = Mock(
+        return_value=SimpleNamespace(
+            cash_flow_count=0, trade_refids=set(), failed=False
+        )
+    )
+
+    def _trade_probe(_since_ts):
+        assert service.sync_in_progress is True
+        assert service.last_sync_ok is True
+        assert service.last_sync_reason is None
+        assert service.last_sync_at is previous_sync_at
+        return SimpleNamespace(count=0, trade_ids=set(), failed=False)
+
+    service._sync_trades_history = Mock(side_effect=_trade_probe)
+
+    result = service.sync()
+
+    assert result == {"new_trades": 0, "new_cash_flows": 0}
+    assert service.sync_in_progress is False
+    assert service.last_sync_ok is True
+    assert service.last_sync_reason is None
+    assert service.last_sync_at is not previous_sync_at
+
+
+def test_sync_outer_exception_stores_sanitized_reason_and_logs_raw_detail(caplog):
+    store = Mock()
+    portfolio = Mock()
+    api_client = Mock()
+    service = _build_service(store, portfolio, api_client)
+    previous_sync_at = datetime(2026, 1, 2, 3, 4, tzinfo=timezone.utc)
+    service._last_sync_ok = True
+    service._last_sync_reason = None
+    service._last_sync_at = previous_sync_at
+
+    store.get_trades.return_value = []
+    service._sync_trades_history = Mock(side_effect=RuntimeError("raw Kraken detail"))
+
+    with caplog.at_level(logging.ERROR):
+        with pytest.raises(RuntimeError):
+            service.sync()
+
+    assert service.sync_in_progress is False
+    assert service.last_sync_ok is False
+    assert service.last_sync_reason == PORTFOLIO_SYNC_FAILED_REASON
+    assert "raw Kraken detail" not in service.last_sync_reason
+    assert service.last_sync_at is previous_sync_at
+    assert "raw Kraken detail" in caplog.text
 
 
 def test_sync_ingests_before_saving():
@@ -134,7 +202,7 @@ def test_sync_keeps_degraded_when_live_reconcile_unavailable():
     service._last_sync_at = previous_sync_at
 
     def _reconcile_unavailable():
-        service._last_sync_reason = LIVE_SYNC_DEGRADED_REASON
+        service._set_last_sync_state(ok=False, reason=LIVE_SYNC_DEGRADED_REASON)
         return False
 
     service._reconcile.side_effect = _reconcile_unavailable

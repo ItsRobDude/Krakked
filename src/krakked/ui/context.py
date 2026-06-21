@@ -93,6 +93,7 @@ def build_app_context(allow_interactive_setup: bool = True) -> AppContext:
         store=portfolio.store,
         rate_limiter=rate_limiter,
         risk_status_provider=strategy_engine.get_risk_status,
+        account_truth_provider=portfolio.get_account_truth_snapshot,
         alert_notifier=WebhookAlertNotifier(config.alerts),
     )
 
