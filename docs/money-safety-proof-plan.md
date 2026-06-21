@@ -53,7 +53,11 @@ Current trust level: Level 0, research and paper only.
 - Milestone G, paper soak, validate-only drill, and tiny live smoke: first
   pinned-image paper soak completed on 2026-06-19, but only as lifecycle
   evidence. It did not produce strategy actions, risk blocks, OMS orders,
-  execution results, trades, or ledger entries, so the milestone remains open.
+  execution results, trades, or ledger entries. A short 2026-06-20 paper
+  validation produced decision-useful paper records, but paper mode still does
+  not exercise live account-truth gates or real Kraken reconciliation. The
+  milestone remains open until the decision-loop proof/soak acceptance lane is
+  run and reported honestly.
 
 Known live blockers:
 
@@ -718,9 +722,11 @@ trades, portfolio positions, and useful closed-bar/no-signal diagnostics. See
 
 Recommended next behavior slice:
 
-1. Run a decision-useful paper soak on a supported window/pair set so the
-   hardened gates see a real strategy-intent -> OMS -> fill -> portfolio event
-   stream.
+1. Run the decision-loop proof sequence in
+   [`decision-loop-proof-plan.md`](./decision-loop-proof-plan.md): strict 4h
+   preflight, deterministic replay with a `decision_helpful` trust note,
+   strategy-generated fake-Kraken live-config gate proof, then a forward paper
+   soak only if the deterministic checks pass.
 2. Keep dead-man heartbeat and broader fail-closed alert proofs on the
    money-safety backlog.
 3. Re-run a short paper validation only if the next cleanup changes health,
@@ -754,6 +760,7 @@ Do not prioritize broad live UI polish as the next money-safety task.
 The stale-sync/material-drift account-truth gates and seeded emergency-flatten
 drill now have narrow deterministic proofs, and the 2026-06-20 paper validation
 proved the paper loop can produce decision-useful strategy, OMS, trade, and
-portfolio evidence. Do not start live smoke yet. Next run a decision-useful
-paper soak that exercises strategy intents, OMS rows, paper fills, portfolio
-sync, and the proved safety gates together.
+portfolio evidence. Do not start live smoke yet. Next run the
+decision-loop proof/soak acceptance sequence. Keep the claim boundary explicit:
+replay proves simulated decision flow, fake-Kraken tests prove live-gate
+behavior, and paper soak proves runtime/operator behavior.

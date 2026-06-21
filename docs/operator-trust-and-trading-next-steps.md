@@ -102,7 +102,7 @@ Verification commands used for this local lane:
 - `poetry run pytest tests/ui/test_system_routes.py -k "cockpit_snapshot"`
 - `npm run test:run -- App.operator-paths.test.tsx`
 
-## Next Lane: Decision-Useful Paper Soak
+## Next Lane: Decision-Loop Proof And Paper Soak
 
 Before optimizing strategy knobs or planning live smoke, make the operator
 surface boring around the account and control states that the 2026-06-20
@@ -110,8 +110,19 @@ validation surfaced. The first paper soak covered runtime lifecycle. The short
 paper validation proved that the paper loop can produce strategy, OMS, trade,
 and portfolio evidence. The operator-truth cleanup and seeded emergency-flatten
 drill now close the main remaining operator-control proof gap. The next lane is
-to run a decision-useful paper soak that exercises strategy intents, OMS rows,
-paper fills, portfolio sync, and the proved safety gates together.
+to run the decision-loop proof sequence in
+[`decision-loop-proof-plan.md`](./decision-loop-proof-plan.md) before starting
+the longer paper soak.
+
+Claim boundary:
+
+- deterministic replay proves strategy/risk/OMS with simulated fills;
+- deterministic fake-Kraken live-config tests prove live account-truth gates on
+  strategy-generated opening risk;
+- forward paper soak proves runtime/operator behavior with synthetic paper
+  fills;
+- paper mode does not exercise live account-truth gates or real Kraken
+  reconciliation.
 
 Completed evidence:
 
@@ -131,8 +142,10 @@ Completed evidence:
 
 Remaining proof targets:
 
-- Run a decision-useful paper soak on a supported window/pair set, with real
-  strategy decisions flowing through OMS, fills, portfolio sync, and operator
+- Run strict 4h preflight and deterministic replay for the dated decision-soak
+  profile; proceed only if the replay report is `decision_helpful`.
+- Run a forward paper soak on a supported window/pair set, with real strategy
+  decisions flowing through OMS, paper fills, portfolio sync, and operator
   health surfaces.
 - Keep stale pairs used by enabled strategies or open positions as
   session-critical blockers. Disabled/watchlist/global stale pairs, including
@@ -192,7 +205,9 @@ For strategy evidence:
 
 ## Recommended Order
 
-1. Run a decision-useful paper soak on a supported window/pair set.
+1. Run the deterministic decision-loop proof sequence, then a decision-useful
+   paper soak on a supported window/pair set if the replay is
+   `decision_helpful`.
 2. Clean up the remaining operator affordances from the soak: pause/resume
    wording, restart no-auto-resume wording, and profile-aware backup/export.
 3. Re-run a short paper validation only if the cleanup changes health,
