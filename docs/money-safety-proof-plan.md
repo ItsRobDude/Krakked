@@ -644,26 +644,27 @@ Explicit non-goals:
 
 The initial AddOrder response-loss, submit-unknown, one coherent
 fill/restart/portfolio-sync reconciliation proof, and narrow account-truth gates
-are now green. The next slice should be a short decision-useful paper validation
-pass that checks whether the newly legible strategy diagnostics and account
-truth gates render sanely in a real operator session.
+are now green. A short pinned-image paper validation on 2026-06-20 produced the
+missing paper-session evidence: strategy intents, OMS dry-run fills, paper
+trades, portfolio positions, and useful closed-bar/no-signal diagnostics. See
+[`soak-reports/2026-06-20-paper-validation.md`](./soak-reports/2026-06-20-paper-validation.md).
 
 Recommended next behavior slice:
 
-1. Run a short paper validation pass, not a 24-hour soak, using the explicit
-   starter profile/config.
-2. Confirm the Strategies panel shows useful evaluated/deferred/no-signal
-   reasons.
-3. Confirm system health/live readiness distinguish market-data freshness,
-   closed-bar readiness, portfolio sync age, and drift blockers.
-4. Capture whether any strategy actions, OMS records, portfolio snapshots, or
-   risk blocks appear.
-5. Decide from that evidence whether to continue paper validation, adjust
-   diagnostics/operator copy, or move to a deterministic emergency-flatten drill.
+1. Clean up the small operator-truth findings from the validation pass:
+   paper-mode in-progress portfolio sync briefly rendered as an unexplained
+   degraded blocker, Unraid Docker health remained noisy, `ADA/USD` WebSocket
+   staleness recurred, and the reused profile name made evidence harder to
+   read.
+2. Re-run emergency flatten with seeded synthetic positions and open-order
+   state.
+3. Prove cancel-all, no close-order placement under degraded account truth, and
+   close-order behavior under verified account truth.
+4. Re-run a short paper validation only if the cleanup changes affect operator
+   health/readiness surfaces.
 
 That slice should not broaden into strategy promotion, ML authority, multi-pair
-simulation, or data-continuity scoreboards until the operator session produces
-decision-useful evidence.
+simulation, or data-continuity scoreboards.
 
 ## Documentation Rules For Future Work
 
@@ -688,14 +689,8 @@ Do not prioritize another strategy scoreboard as the next money-safety task.
 Do not prioritize broad live UI polish as the next money-safety task.
 
 The stale-sync/material-drift account-truth gates now have a narrow
-deterministic proof. Prioritize a short decision-useful paper validation pass on
-the pinned-image install. That pass should prove whether the newly legible
-strategy diagnostics, live-readiness blockers, portfolio sync age, drift state,
-OMS records, and portfolio snapshots make sense to an operator in a real paper
-session.
-
-If that validation is boring, move next to the deterministic emergency-flatten
-drill with seeded synthetic positions, open orders, partial fills, restart, and
-reconciliation checks. If the validation is confusing, fix the operator copy,
-runtime state, or profile/export affordance that made it confusing before
-adding another safety subsystem.
+deterministic proof, and the 2026-06-20 paper validation proved the paper loop
+can produce decision-useful strategy, OMS, trade, and portfolio evidence. Do not
+start live smoke yet. First fix the operator-truth gaps surfaced by that run,
+then move to the deterministic emergency-flatten drill with seeded synthetic
+positions, open orders, partial fills, restart, and reconciliation checks.

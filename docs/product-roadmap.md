@@ -112,8 +112,9 @@ Still needing real-world validation or product work:
 - Unified strategy evidence reporting with explicit cost semantics and
   cash/buy-hold comparisons
 - Live-trading readiness drills and operator runbooks after paper/execution reliability is proven
-- Short paper validation of strategy diagnostics, account-truth blockers, OMS
-  evidence, portfolio snapshots, and operator copy before any live-capital claim
+- Cleanup from the short paper validation: operator copy for in-progress paper
+  sync, Unraid Docker health signal, recurring `ADA/USD` stream staleness, and
+  clear dated profile naming before any live-capital claim
 - Live automation UX polish so a prepared operator can start live automation
   from the UI with one obvious start action after readiness is visible.
 - Commercial packaging, licensing, and legal/business review
@@ -125,9 +126,9 @@ Krakked is now closer to an operator-facing control room than a hobby bot shell,
 - Paper mode is a local persistent synthetic wallet that can exercise the strategy, risk, OMS, and portfolio loops without transmitting live orders.
 - Exchange balances are now optional reference context in paper mode, not the paper account baseline.
 - In live mode, missing, failed, stale, or materially drifting account truth
-  blocks new opening risk. That is not the same as full live readiness: the next
-  proof step is a short paper validation pass plus seeded operator drills, not a
-  live-capital claim.
+  blocks new opening risk. That is not the same as full live readiness: the
+  short paper validation produced useful paper OMS/trade evidence, but seeded
+  operator drills are still required before any live-capital claim.
 - Current strategy-source evidence does not yet support runtime promotion of `rs_rotation`, `rs_rotation_v2`, `trend_core` signal-quality claims, global top-N momentum proxies, or pair-local source variants.
 - ML remains in scope as infrastructure, but the current volatility-forecasting
   lane is closed for runtime influence: the 2026-06-16 strict rerun was ready
@@ -216,8 +217,9 @@ The next milestones are product-facing rather than architecture-facing:
 3. Reliability and Live-Readiness Plumbing
    - Formalize operational runbooks and pre-live checklists.
    - Tighten live-mode guidance, safety prompts, and emergency control flows.
-   - Validate the stale-sync age, private-read failure, missing trade-history,
-     and material-drift gates in operator-facing health/live-readiness surfaces.
+   - Keep stale-sync age, private-read failure, missing trade-history, and
+     material-drift gates visible in operator-facing health/live-readiness
+     surfaces.
    - Keep extending the fake Kraken/fault harness only around production seams
      needed to prove reconciliation, stale reads, failed reads, and restart
      recovery.

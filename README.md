@@ -15,7 +15,7 @@ This repository includes working, test-covered implementations across the core t
 | **Phase 5: Execution** | ✅ Implemented with safety follow-ups | OMS with market-data-driven routing, retries/backoff, dead-man switch hooks, panic cancel, SQLite persistence, fail-closed live gates, portfolio-sync opening-risk blocks, and synthetic paper execution. |
 | **Phase 6: UI/Control** | ✅ Implemented | CLI/web interface for monitoring and manual control. See [Phase 6 contract](docs/phases/phase6.md#status--todo) for the completed scope and API details. |
 | **Phase 7: Ops & Runtime** | ✅ Implemented with follow-up validation | Orchestrator, structured logging, metrics, schema guard, CI, packaging, release workflow, backup/export/import, and Docker deployment docs are in place. |
-| **Current Product Track** | 🚧 In progress | Pinned-image Unraid deploy/upgrade/rollback proof has passed; the main remaining work is short paper validation, seeded emergency-flatten proof, operator truth-labeling, paper/execution polish, strategy evidence reporting, ML/research reporting, and commercial/distribution polish. |
+| **Current Product Track** | 🚧 In progress | Pinned-image Unraid deploy/upgrade/rollback proof and a short decision-useful paper validation have passed; the main remaining work is seeded emergency-flatten proof, operator truth-labeling, paper/execution polish, strategy evidence reporting, ML/research reporting, and commercial/distribution polish. |
 
 The repo now has a strong engineering base and has moved past the original phase plan. The current work is less about building missing architecture and more about productization:
 
@@ -26,7 +26,7 @@ The repo now has a strong engineering base and has moved past the original phase
 * Live Balance/TradesHistory/Ledgers unavailability, never-synced cold start, stale reconciliation age, missing trade-history evidence, and material portfolio drift now degrade account-truth checks and block live opening risk through the normal loop and OMS gate.
 * The fake Kraken harness proves one narrow AddOrder/OpenOrders/ClosedOrders/Balance/TradesHistory/Ledgers fill/restart/reconcile lifecycle, including the trade-ledger `refid` to TradesHistory ID assumption used by the account-truth gate.
 * Current bundled strategies are research-stage; recent unified evidence has not yet shown a production edge.
-* The next money-safety milestone is a short decision-useful paper validation pass rather than another major subsystem.
+* A short decision-useful paper validation pass on `v0.1.1-rc.8` produced strategy intents, OMS dry-run fills, paper trades, and portfolio positions; the next money-safety milestone is a deterministic emergency-flatten drill after the small operator-truth findings from that run are cleaned up.
 
 See the consolidated phase contract in [`docs/contract.md`](docs/contract.md) for the full design scope across Phases 1–7. Individual phase files remain available for historical reference.
 
