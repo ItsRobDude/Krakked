@@ -57,6 +57,12 @@ DEFAULT_PAPER_STARTING_CASH_USD = 10_000.0
 DEFAULT_PORTFOLIO_DB_NAME = "portfolio.db"
 DEFAULT_PROFILE_PAPER_DB_NAME = "portfolio.paper.db"
 _SYNC_TIME_UNSET = object()
+_NOOP_SYNC_RESULT = {"new_trades": 0, "new_cash_flows": 0}
+_TRANSIENT_ACCOUNT_TRUTH_REASONS = {
+    LIVE_ACCOUNT_TRUTH_REFRESH_TIMEOUT_REASON,
+    LIVE_SYNC_DEGRADED_REASON,
+    LIVE_SYNC_STUCK_REASON,
+}
 
 
 @dataclass(frozen=True)
@@ -164,6 +170,7 @@ class PortfolioService:
         self._last_sync_at: Optional[datetime] = None
         self._last_sync_reason: Optional[str] = None
         self._last_balance_reconcile_at: Optional[datetime] = None
+        self._last_sync_result: Dict[str, int] = dict(_NOOP_SYNC_RESULT)
         self._baseline_source: str = (
             "paper_wallet"
             if getattr(config.execution, "mode", "paper") == "paper"
@@ -284,6 +291,39 @@ class PortfolioService:
         age_seconds = (now_value - last_reconcile_at).total_seconds()
         return 0 <= age_seconds <= LIVE_DRIFT_FRESHNESS_BUDGET_SECONDS
 
+    def _last_completed_sync_fresh_for_live(self, now_value: datetime) -> bool:
+        lock = getattr(self, "_account_truth_lock", None)
+        if lock is None:
+            last_sync_at = getattr(self, "_last_sync_at", None)
+        else:
+            with lock:
+                last_sync_at = self._last_sync_at
+        if not isinstance(last_sync_at, datetime):
+            return False
+        if last_sync_at.tzinfo is None:
+            last_sync_at = last_sync_at.replace(tzinfo=timezone.utc)
+        else:
+            last_sync_at = last_sync_at.astimezone(timezone.utc)
+        age_seconds = (now_value - last_sync_at).total_seconds()
+        return 0 <= age_seconds <= max_live_sync_age_seconds(self.config)
+
+    def _clear_transient_account_truth_failure_after_reconcile(
+        self, now_value: datetime
+    ) -> None:
+        if not self._last_completed_sync_fresh_for_live(now_value):
+            return
+        lock = getattr(self, "_account_truth_lock", None)
+        if lock is None:
+            reason = getattr(self, "_last_sync_reason", None)
+            if reason in _TRANSIENT_ACCOUNT_TRUTH_REASONS:
+                self._last_sync_ok = True
+                self._last_sync_reason = None
+            return
+        with lock:
+            if self._last_sync_reason in _TRANSIENT_ACCOUNT_TRUTH_REASONS:
+                self._last_sync_ok = True
+                self._last_sync_reason = None
+
     def _mark_account_truth_refresh_timeout(self) -> None:
         self._set_last_sync_state(
             ok=False,
@@ -294,74 +334,39 @@ class PortfolioService:
             extra=structured_log_extra(event="portfolio_truth_refresh_timeout"),
         )
 
-    def _ensure_fresh_drift_for_opening_risk(self, now_value: datetime) -> None:
-        if self._fresh_balance_reconcile_available(now_value):
-            return
-
-        sync_lock = getattr(self, "_sync_run_lock", None)
-        if sync_lock is None:
-            reconcile_ok = self._reconcile()
-            if reconcile_ok:
-                self._refresh_cached_views()
-            return
-
-        acquired = sync_lock.acquire(timeout=LIVE_ACCOUNT_TRUTH_LOCK_TIMEOUT_SECONDS)
-        if not acquired:
-            self._mark_account_truth_refresh_timeout()
-            return
-
-        try:
-            refreshed_now = self._now()
-            if self._fresh_balance_reconcile_available(refreshed_now):
-                return
-            reconcile_ok = self._reconcile()
-            if reconcile_ok:
-                self._refresh_cached_views()
-        finally:
-            sync_lock.release()
-
-    def get_account_truth_snapshot(
-        self,
-        *,
-        execution_mode: Optional[str] = None,
-        now: Optional[datetime] = None,
-        force_fresh_drift: bool = False,
-    ) -> AccountTruthSnapshot:
-        """Return a small atomic view of sync and drift truth for safety checks."""
-
-        now_value = now if isinstance(now, datetime) else self._now()
-        if now_value.tzinfo is None:
-            now_value = now_value.replace(tzinfo=timezone.utc)
-        else:
-            now_value = now_value.astimezone(timezone.utc)
-        if force_fresh_drift:
-            self._ensure_fresh_drift_for_opening_risk(now_value)
-
+    def _account_truth_state(self) -> SimpleNamespace:
         lock = getattr(self, "_account_truth_lock", None)
         if lock is None:
-            state = SimpleNamespace(
+            return SimpleNamespace(
                 config=self.config,
                 last_sync_ok=getattr(self, "_last_sync_ok", True),
                 last_sync_reason=getattr(self, "_last_sync_reason", None),
                 last_sync_at=getattr(self, "_last_sync_at", None),
                 sync_in_progress=bool(getattr(self, "_sync_in_progress", False)),
             )
-        else:
-            with lock:
-                state = SimpleNamespace(
-                    config=self.config,
-                    last_sync_ok=self._last_sync_ok,
-                    last_sync_reason=self._last_sync_reason,
-                    last_sync_at=self._last_sync_at,
-                    sync_in_progress=self._sync_in_progress,
-                )
+        with lock:
+            return SimpleNamespace(
+                config=self.config,
+                last_sync_ok=self._last_sync_ok,
+                last_sync_reason=self._last_sync_reason,
+                last_sync_at=self._last_sync_at,
+                sync_in_progress=self._sync_in_progress,
+            )
 
+    def _build_account_truth_snapshot(
+        self,
+        *,
+        now_value: datetime,
+        execution_mode: Optional[str],
+        drift_status: Optional[DriftStatus] = None,
+    ) -> AccountTruthSnapshot:
         sync_status = read_portfolio_sync_status(
-            state,
+            self._account_truth_state(),
             execution_mode=execution_mode or self._execution_mode(),
             now=now_value,
         )
-        drift_status = self.get_drift_status()
+        if drift_status is None:
+            drift_status = self.get_drift_status()
         drift_flag = bool(getattr(drift_status, "drift_flag", False))
         drift_info: Optional[Dict[str, Any]]
         if drift_status is None:
@@ -382,6 +387,72 @@ class PortfolioService:
             generated_at=now_value,
             max_age_seconds=sync_status.max_age_seconds,
             age_seconds=sync_status.age_seconds,
+        )
+
+    def _forced_fresh_account_truth_snapshot(
+        self, *, now_value: datetime, execution_mode: Optional[str]
+    ) -> AccountTruthSnapshot:
+        sync_lock = getattr(self, "_sync_run_lock", None)
+        if sync_lock is None:
+            if not self._fresh_balance_reconcile_available(now_value):
+                reconcile_ok = self._reconcile()
+                if reconcile_ok:
+                    self._refresh_cached_views()
+                    self._clear_transient_account_truth_failure_after_reconcile(
+                        self._now()
+                    )
+            return self._build_account_truth_snapshot(
+                now_value=now_value,
+                execution_mode=execution_mode,
+            )
+
+        acquired = sync_lock.acquire(timeout=LIVE_ACCOUNT_TRUTH_LOCK_TIMEOUT_SECONDS)
+        if not acquired:
+            self._mark_account_truth_refresh_timeout()
+            return self._build_account_truth_snapshot(
+                now_value=now_value,
+                execution_mode=execution_mode,
+            )
+
+        try:
+            refreshed_now = self._now()
+            if (
+                not self._fresh_balance_reconcile_available(refreshed_now)
+                and self._reconcile()
+            ):
+                self._refresh_cached_views()
+                self._clear_transient_account_truth_failure_after_reconcile(self._now())
+            drift_status = self.get_drift_status()
+            return self._build_account_truth_snapshot(
+                now_value=now_value,
+                execution_mode=execution_mode,
+                drift_status=drift_status,
+            )
+        finally:
+            sync_lock.release()
+
+    def get_account_truth_snapshot(
+        self,
+        *,
+        execution_mode: Optional[str] = None,
+        now: Optional[datetime] = None,
+        force_fresh_drift: bool = False,
+    ) -> AccountTruthSnapshot:
+        """Return a small atomic view of sync and drift truth for safety checks."""
+
+        now_value = now if isinstance(now, datetime) else self._now()
+        if now_value.tzinfo is None:
+            now_value = now_value.replace(tzinfo=timezone.utc)
+        else:
+            now_value = now_value.astimezone(timezone.utc)
+        if force_fresh_drift:
+            return self._forced_fresh_account_truth_snapshot(
+                now_value=now_value,
+                execution_mode=execution_mode,
+            )
+        return self._build_account_truth_snapshot(
+            now_value=now_value,
+            execution_mode=execution_mode,
         )
 
     @property
@@ -492,18 +563,45 @@ class PortfolioService:
             ),
         )
 
+    def _last_or_noop_sync_result(self) -> Dict[str, int]:
+        result = getattr(self, "_last_sync_result", None)
+        if not isinstance(result, dict):
+            return dict(_NOOP_SYNC_RESULT)
+        return {
+            "new_trades": int(result.get("new_trades", 0) or 0),
+            "new_cash_flows": int(result.get("new_cash_flows", 0) or 0),
+        }
+
+    def _remember_sync_result(self, result: Dict[str, int]) -> Dict[str, int]:
+        normalized = {
+            "new_trades": int(result.get("new_trades", 0) or 0),
+            "new_cash_flows": int(result.get("new_cash_flows", 0) or 0),
+        }
+        self._last_sync_result = dict(normalized)
+        return normalized
+
     def sync(self) -> Dict[str, int]:
         """Synchronize portfolio state with single-flight protection."""
 
         sync_lock = getattr(self, "_sync_run_lock", None)
         if sync_lock is None:
-            return self._sync_unlocked()
-        acquired = sync_lock.acquire(timeout=LIVE_ACCOUNT_TRUTH_LOCK_TIMEOUT_SECONDS)
-        if not acquired:
+            return self._remember_sync_result(self._sync_unlocked())
+
+        acquired = sync_lock.acquire(blocking=False)
+        if acquired:
+            try:
+                return self._remember_sync_result(self._sync_unlocked())
+            finally:
+                sync_lock.release()
+
+        acquired_after_wait = sync_lock.acquire(
+            timeout=LIVE_ACCOUNT_TRUTH_LOCK_TIMEOUT_SECONDS
+        )
+        if not acquired_after_wait:
             self._mark_stuck_sync_if_stale()
             return {"new_trades": 0, "new_cash_flows": 0}
         try:
-            return self._sync_unlocked()
+            return self._last_or_noop_sync_result()
         finally:
             sync_lock.release()
 

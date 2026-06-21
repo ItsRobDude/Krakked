@@ -462,7 +462,7 @@ Operator repair path for unmatched trade ledger refs:
 3. Inspect the blocker:
    `poetry run krakked db-unmatched-trade-refs --db-path <db> --json`.
    This command opens SQLite read-only and does not run migrations. It requires
-   schema v14 review metadata; if metadata is not available, run
+   schema v15 review metadata; if metadata is not available, run
    `poetry run krakked migrate --db-path <db>` deliberately, then re-run the
    list command.
 4. Compare each listed `refid` and ledger row against Kraken trade and ledger
@@ -490,8 +490,9 @@ Warnings:
   `refid` re-block live opening risk.
 - Revoke is audited and restores the unmatched-ref live blocker for the
   reviewed ledger rows.
-- Legacy empty or invalid reviewed-ref metadata migrates fail-closed: it does
-  not suppress blockers, and the ref remains reviewable through the CLI.
+- Legacy empty, invalid, absent/future, matched, or refid-mismatched
+  reviewed-ref metadata migrates fail-closed: it does not suppress blockers,
+  and the ref remains reviewable through the CLI.
 - Other unmatched refs, stale sync age, private-read failures, and material
   drift remain live blockers.
 - If Kraken later returns the missing trade, the stored trade can still be
@@ -512,6 +513,9 @@ Initial live reconciliation policy now implemented and proved narrowly:
 - one routine sync may be in progress without blocking opening risk when the
   previous completed live sync is still successful and fresh; cold, stale, or
   previously degraded account truth still blocks while a sync is in progress;
+- live opening-risk plans reuse a fresh Balance reconcile only inside the
+  short 5-second intra-burst budget; normal sync cadence still controls broader
+  live account-truth freshness;
 - balance fetch failure, unknown reconciliation status, stale reconciliation,
   or unpriced material mismatch blocks new opening risk while preserving cancel
   and reduce-only emergency paths.

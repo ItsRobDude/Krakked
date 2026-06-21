@@ -476,6 +476,7 @@ account-truth blockers:
 
 * `db-unmatched-trade-refs --db-path <db> [--json] [--include-reviewed]`: Read-only list of trade ledger refs whose `refid` still has no matching stored TradesHistory row, including per-ledger review state plus reviewed/unreviewed counts. It does not auto-migrate the database; if review metadata is missing, run `poetry run krakked migrate --db-path <db>` explicitly.
 * `db-mark-trade-ref-reviewed REFID --db-path <db> --reviewed-by <name> --reason <text> --confirm "MARK <REFID> REVIEWED"`: High-friction break-glass path for manually verified unmatched trade ledger rows. It creates a timestamped DB backup first and writes only audit state for the currently unreviewed unmatched ledger row IDs. It does **not** synthesize missing TradesHistory rows, so PnL attribution may remain incomplete. New unmatched ledger rows for the same `refid` re-block live opening risk and require a new explicit review.
+  Ambiguous legacy review suppressions are removed during schema migration so those rows fail closed and can be reviewed again with current ledger evidence.
 * `db-revoke-trade-ref-review REFID --db-path <db> --revoked-by <name> --reason <text> --confirm "REVOKE <REFID> REVIEW"`: Audited revoke for active trade-ref reviews. It creates a timestamped backup, removes active per-ledger review state, keeps append-only audit events, and restores the unmatched-ref live blocker until TradesHistory catches up or a new explicit review is recorded.
 
 ### ✅ Live Readiness Checklist

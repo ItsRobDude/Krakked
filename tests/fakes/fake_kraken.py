@@ -81,6 +81,7 @@ class FakeKrakenRESTClient:
         self.add_order_calls: list[dict[str, Any]] = []
         self.get_open_order_calls: list[dict[str, Any]] = []
         self.get_closed_order_calls: list[dict[str, Any]] = []
+        self.balance_read_count = 0
         self.cancel_calls: list[str] = []
         self.cancel_all_calls = 0
         self.cancel_all_after_calls: list[int] = []
@@ -254,6 +255,7 @@ class FakeKrakenRESTClient:
         self, endpoint: str, params: Optional[dict[str, Any]] = None
     ) -> dict[str, Any]:
         if endpoint == "Balance":
+            self.balance_read_count += 1
             if self._balance_failures_remaining > 0:
                 self._balance_failures_remaining -= 1
                 raise ServiceUnavailableError("fake: balance unavailable")

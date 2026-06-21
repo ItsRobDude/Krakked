@@ -50,6 +50,13 @@ def seed_schema_version(db_path, version: int) -> None:
         conn.commit()
 
 
+def create_minimal_trade_ledger_tables(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS ledger_entries (id TEXT PRIMARY KEY, time REAL, type TEXT, refid TEXT)"
+    )
+    conn.execute("CREATE TABLE IF NOT EXISTS trades (id TEXT PRIMARY KEY)")
+
+
 def test_schema_version_initialized(tmp_path):
     db_path = tmp_path / "schema_init.db"
     SQLitePortfolioStore(str(db_path))
@@ -209,6 +216,14 @@ def test_v12_to_latest_migration_backfills_review_entries_and_audit(tmp_path):
     with sqlite3.connect(db_path) as conn:
         migrations._ensure_meta_table(conn)
         migrations._set_schema_version(conn, 12)
+        create_minimal_trade_ledger_tables(conn)
+        conn.executemany(
+            "INSERT INTO ledger_entries (id, time, type, refid) VALUES (?, ?, 'trade', ?)",
+            [
+                ("L-1", 10.0, "T-MISSING"),
+                ("L-2", 11.0, "T-MISSING"),
+            ],
+        )
         conn.execute(
             """
             CREATE TABLE reviewed_trade_ledger_refs (
@@ -326,6 +341,115 @@ def test_v12_empty_review_migrates_fail_closed_and_reviewable(tmp_path):
     )
     assert review.ledger_entry_ids == ["L-1"]
     assert migrated.get_unmatched_trade_ledger_ref_times() == {}
+
+
+def test_v14_cleanup_removes_ambiguous_active_reviews(tmp_path):
+    db_path = tmp_path / "reviewed_trade_refs_v14_cleanup.db"
+    store = SQLitePortfolioStore(str(db_path))
+
+    def ledger_entry(
+        entry_id: str, refid: str, entry_type: str = "trade"
+    ) -> LedgerEntry:
+        return LedgerEntry(
+            id=entry_id,
+            time=10.0,
+            type=entry_type,
+            subtype="",
+            aclass="currency",
+            asset="USD",
+            amount=Decimal("1"),
+            fee=Decimal("0"),
+            balance=None,
+            refid=refid,
+            misc=None,
+            raw={},
+        )
+
+    store.save_ledger_entry(ledger_entry("L-valid", "T-VALID"))
+    store.save_ledger_entry(ledger_entry("L-matched", "T-MATCHED"))
+    store.save_ledger_entry(ledger_entry("L-mismatch", "T-ACTUAL"))
+    store.save_ledger_entry(ledger_entry("L-deposit", "T-DEPOSIT", "deposit"))
+    store.save_trades(
+        [
+            {
+                "id": "T-MATCHED",
+                "pair": "XBTUSD",
+                "time": 10.0,
+                "type": "buy",
+                "price": "100",
+                "cost": "100",
+                "fee": "0",
+                "vol": "1",
+            }
+        ]
+    )
+    store.close()
+
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("DELETE FROM reviewed_trade_ledger_ref_entries")
+        conn.executemany(
+            """
+            INSERT INTO reviewed_trade_ledger_ref_entries (
+                refid,
+                ledger_entry_id,
+                reviewed_at,
+                reviewed_by,
+                reason,
+                context_json,
+                review_event_id
+            ) VALUES (?, ?, '2026-01-02T03:04:05+00:00', 'ops', 'legacy', '{}', NULL)
+            """,
+            [
+                ("T-VALID", "L-valid"),
+                ("T-FUTURE", "L-future"),
+                ("T-MATCHED", "L-matched"),
+                ("T-EXPECTED", "L-mismatch"),
+                ("T-DEPOSIT", "L-deposit"),
+            ],
+        )
+        migrations._set_schema_version(conn, 14)
+
+    migrated = SQLitePortfolioStore(str(db_path))
+
+    with sqlite3.connect(db_path) as conn:
+        active_rows = conn.execute(
+            """
+            SELECT refid, ledger_entry_id
+            FROM reviewed_trade_ledger_ref_entries
+            ORDER BY refid, ledger_entry_id
+            """
+        ).fetchall()
+        cleanup_events = conn.execute(
+            """
+            SELECT refid, event_type, actor, ledger_entry_ids_json, context_json
+            FROM trade_ledger_ref_review_events
+            WHERE event_type = 'migration_cleanup'
+            ORDER BY refid
+            """
+        ).fetchall()
+
+    assert active_rows == [("T-VALID", "L-valid")]
+    assert migrated.get_unmatched_trade_ledger_ref_times() == {"T-ACTUAL": 10.0}
+    assert {row[0] for row in cleanup_events} == {
+        "T-DEPOSIT",
+        "T-EXPECTED",
+        "T-FUTURE",
+        "T-MATCHED",
+    }
+    assert all(row[2] == "migration" for row in cleanup_events)
+    assert any("removed_active_reviews" in row[4] for row in cleanup_events)
+
+    migrated.save_ledger_entry(ledger_entry("L-future", "T-FUTURE"))
+
+    assert migrated.get_unmatched_trade_ledger_ref_times()["T-FUTURE"] == 10.0
+    review = migrated.mark_trade_ledger_ref_reviewed(
+        refid="T-FUTURE",
+        reviewed_by="ops",
+        reason="review after cleanup",
+        ledger_entry_ids=["L-future"],
+        context={"source": "test"},
+    )
+    assert review.ledger_entry_ids == ["L-future"]
 
 
 def test_unmatched_trade_ledger_ref_times_excludes_stored_trades(tmp_path):

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from datetime import datetime, timezone
 from typing import Any, Callable, Dict
 
 Migration = Callable[[sqlite3.Connection], None]
@@ -307,6 +308,7 @@ def run_migrations(
         11: migrate_11_to_12,
         12: migrate_12_to_13,
         13: migrate_13_to_14,
+        14: migrate_14_to_15,
     }
 
     for version in range(from_version, to_version):
@@ -740,6 +742,136 @@ def _json_str_list_or_empty(value: Any) -> list[str]:
     return [str(item) for item in parsed if str(item).strip()]
 
 
+def _json_dict_or_empty(value: Any) -> dict[str, Any]:
+    try:
+        parsed = json.loads(value) if value else {}
+    except (TypeError, json.JSONDecodeError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _cleanup_ambiguous_trade_ref_reviews(
+    conn: sqlite3.Connection, *, migration_name: str
+) -> None:
+    """Fail closed on active review rows that cannot be proven current/unmatched."""
+
+    required_tables = {
+        "reviewed_trade_ledger_ref_entries",
+        "trade_ledger_ref_review_events",
+    }
+    if not all(_table_exists(conn, table) for table in required_tables):
+        return
+
+    cursor = conn.cursor()
+    validation_tables_present = all(
+        _table_exists(conn, table) for table in {"ledger_entries", "trades"}
+    )
+    if validation_tables_present:
+        rows = cursor.execute(
+            """
+            SELECT
+                re.refid,
+                re.ledger_entry_id,
+                re.reviewed_at,
+                re.reviewed_by,
+                re.reason,
+                re.context_json,
+                re.review_event_id,
+                CASE
+                    WHEN le.id IS NULL THEN 'ledger_entry_missing_or_mismatched'
+                    WHEN t.id IS NOT NULL THEN 'trade_history_now_matched'
+                    ELSE 'unknown'
+                END AS cleanup_reason
+            FROM reviewed_trade_ledger_ref_entries AS re
+            LEFT JOIN ledger_entries AS le
+              ON le.id = re.ledger_entry_id
+             AND le.refid = re.refid
+             AND le.type = 'trade'
+             AND le.refid IS NOT NULL
+             AND TRIM(le.refid) != ''
+            LEFT JOIN trades AS t ON t.id = re.refid
+            WHERE le.id IS NULL
+               OR t.id IS NOT NULL
+            ORDER BY re.refid ASC, re.ledger_entry_id ASC
+            """
+        ).fetchall()
+    else:
+        rows = cursor.execute(
+            """
+            SELECT
+                refid,
+                ledger_entry_id,
+                reviewed_at,
+                reviewed_by,
+                reason,
+                context_json,
+                review_event_id,
+                'validation_tables_missing' AS cleanup_reason
+            FROM reviewed_trade_ledger_ref_entries
+            ORDER BY refid ASC, ledger_entry_id ASC
+            """
+        ).fetchall()
+
+    if not rows:
+        return
+
+    grouped: dict[str, list[tuple[Any, ...]]] = {}
+    for row in rows:
+        grouped.setdefault(str(row[0]), []).append(row)
+
+    event_at = datetime.now(timezone.utc).isoformat()
+    reason = "Removed ambiguous active trade-ledger review suppression during migration"
+    for refid, ref_rows in grouped.items():
+        ledger_ids = [str(row[1]) for row in ref_rows]
+        removed_reviews = [
+            {
+                "refid": refid,
+                "ledger_entry_id": str(row[1]),
+                "reviewed_at": row[2],
+                "reviewed_by": row[3],
+                "reason": row[4],
+                "context": _json_dict_or_empty(row[5]),
+                "review_event_id": row[6],
+                "cleanup_reason": row[7],
+            }
+            for row in ref_rows
+        ]
+        cursor.execute(
+            """
+            INSERT INTO trade_ledger_ref_review_events (
+                refid,
+                event_type,
+                event_at,
+                actor,
+                reason,
+                ledger_entry_ids_json,
+                context_json
+            ) VALUES (?, 'migration_cleanup', ?, 'migration', ?, ?, ?)
+            """,
+            (
+                refid,
+                event_at,
+                reason,
+                json.dumps(ledger_ids, sort_keys=True),
+                json.dumps(
+                    {
+                        "migration": migration_name,
+                        "removed_active_reviews": removed_reviews,
+                    },
+                    sort_keys=True,
+                ),
+            ),
+        )
+        cursor.executemany(
+            """
+            DELETE FROM reviewed_trade_ledger_ref_entries
+            WHERE refid = ?
+              AND ledger_entry_id = ?
+            """,
+            [(refid, ledger_id) for ledger_id in ledger_ids],
+        )
+
+
 def migrate_13_to_14(conn: sqlite3.Connection) -> None:
     """Make reviewed trade-ledger suppression per-entry and drop refid state."""
 
@@ -941,5 +1073,13 @@ def migrate_13_to_14(conn: sqlite3.Connection) -> None:
         ],
     )
 
+    _cleanup_ambiguous_trade_ref_reviews(conn, migration_name="v13_to_v14")
+
     cursor.execute("DROP TABLE IF EXISTS reviewed_trade_ledger_ref_entries_v13")
     cursor.execute("DROP TABLE IF EXISTS reviewed_trade_ledger_refs")
+
+
+def migrate_14_to_15(conn: sqlite3.Connection) -> None:
+    """Remove ambiguous active trade-ledger review suppressions."""
+
+    _cleanup_ambiguous_trade_ref_reviews(conn, migration_name="v14_to_v15")

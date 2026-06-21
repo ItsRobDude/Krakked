@@ -13,8 +13,10 @@ from krakked.portfolio.manager import PortfolioService, _TradeHistoryLagStatus
 from krakked.portfolio.portfolio import Portfolio
 from krakked.portfolio.sync_status import (
     LIVE_SYNC_DEGRADED_REASON,
+    LIVE_SYNC_LEDGERS_UNAVAILABLE_REASON,
     LIVE_SYNC_STUCK_REASON,
     LIVE_SYNC_TRADE_HISTORY_LAGGING_REASON,
+    LIVE_SYNC_TRADES_UNAVAILABLE_REASON,
     PORTFOLIO_SYNC_FAILED_REASON,
     max_live_sync_age_seconds,
 )
@@ -35,6 +37,7 @@ def _build_service(store, portfolio, api_client):
     service._last_sync_reason = None
     service._last_sync_at = None
     service._last_balance_reconcile_at = None
+    service._last_sync_result = {"new_trades": 0, "new_cash_flows": 0}
     service._sync_started_at = None
     service._cached_equity = None
     service._cached_positions = []
@@ -128,7 +131,15 @@ def test_account_truth_force_fresh_reuses_recent_balance_reconcile():
     service._last_sync_ok = True
     service._last_sync_at = now - timedelta(seconds=30)
     service._last_balance_reconcile_at = now - timedelta(seconds=1)
-    service.get_drift_status = Mock(return_value=SimpleNamespace(drift_flag=False))
+
+    def _drift_probe():
+        acquired = service._sync_run_lock.acquire(blocking=False)
+        if acquired:
+            service._sync_run_lock.release()
+        assert acquired is False
+        return SimpleNamespace(drift_flag=False)
+
+    service.get_drift_status = Mock(side_effect=_drift_probe)
 
     snapshot = service.get_account_truth_snapshot(force_fresh_drift=True)
 
@@ -157,6 +168,33 @@ def test_account_truth_force_fresh_reconciles_once_when_budget_expired():
     service._refresh_cached_views.assert_called_once_with()
 
 
+def test_account_truth_force_fresh_reads_drift_under_sync_lock():
+    store = Mock()
+    portfolio = Mock()
+    api_client = Mock()
+    service = _build_service(store, portfolio, api_client)
+    service._sync_run_lock = Lock()
+    now = datetime(2026, 1, 2, 3, 4, tzinfo=timezone.utc)
+    service._clock = lambda: now
+    service._last_sync_ok = True
+    service._last_sync_at = now - timedelta(seconds=30)
+    service._last_balance_reconcile_at = now - timedelta(seconds=10)
+
+    def _drift_probe():
+        acquired = service._sync_run_lock.acquire(blocking=False)
+        if acquired:
+            service._sync_run_lock.release()
+        assert acquired is False
+        return SimpleNamespace(drift_flag=True)
+
+    service.get_drift_status = Mock(side_effect=_drift_probe)
+
+    snapshot = service.get_account_truth_snapshot(force_fresh_drift=True)
+
+    assert snapshot.drift_flag is True
+    service._reconcile.assert_called_once_with()
+
+
 def test_account_truth_force_fresh_times_out_on_sync_lock(monkeypatch):
     store = Mock()
     portfolio = Mock()
@@ -181,7 +219,71 @@ def test_account_truth_force_fresh_times_out_on_sync_lock(monkeypatch):
     assert service._reconcile.call_count == 0
 
 
-def test_sync_singleflight_serializes_concurrent_attempts():
+def test_account_truth_timeout_recovers_after_successful_forced_reconcile(
+    monkeypatch,
+):
+    store = Mock()
+    portfolio = Mock()
+    api_client = Mock()
+    service = _build_service(store, portfolio, api_client)
+    service._sync_run_lock = Lock()
+    service._sync_run_lock.acquire()
+    monkeypatch.setattr(manager_module, "LIVE_ACCOUNT_TRUTH_LOCK_TIMEOUT_SECONDS", 0.01)
+    now = datetime(2026, 1, 2, 3, 4, tzinfo=timezone.utc)
+    service._clock = lambda: now
+    service._last_sync_ok = True
+    service._last_sync_at = now - timedelta(seconds=30)
+    service.get_drift_status = Mock(return_value=SimpleNamespace(drift_flag=False))
+
+    try:
+        timed_out = service.get_account_truth_snapshot(force_fresh_drift=True)
+    finally:
+        service._sync_run_lock.release()
+
+    recovered = service.get_account_truth_snapshot(force_fresh_drift=True)
+
+    assert timed_out.portfolio_sync_ok is False
+    assert service._reconcile.call_count == 1
+    assert recovered.portfolio_sync_ok is True
+    assert service.last_sync_ok is True
+    assert service.last_sync_reason is None
+
+
+@pytest.mark.parametrize(
+    "reason,last_sync_age_seconds",
+    [
+        (LIVE_SYNC_TRADE_HISTORY_LAGGING_REASON, 30),
+        (LIVE_SYNC_TRADES_UNAVAILABLE_REASON, 30),
+        (LIVE_SYNC_LEDGERS_UNAVAILABLE_REASON, 30),
+        (PORTFOLIO_SYNC_FAILED_REASON, 30),
+        (LIVE_SYNC_DEGRADED_REASON, 601),
+    ],
+)
+def test_successful_forced_reconcile_does_not_clear_non_transient_blockers(
+    reason,
+    last_sync_age_seconds,
+):
+    store = Mock()
+    portfolio = Mock()
+    api_client = Mock()
+    service = _build_service(store, portfolio, api_client)
+    service._sync_run_lock = Lock()
+    now = datetime(2026, 1, 2, 3, 4, tzinfo=timezone.utc)
+    service._clock = lambda: now
+    service._last_sync_ok = False
+    service._last_sync_reason = reason
+    service._last_sync_at = now - timedelta(seconds=last_sync_age_seconds)
+    service._last_balance_reconcile_at = now - timedelta(seconds=10)
+    service.get_drift_status = Mock(return_value=SimpleNamespace(drift_flag=False))
+
+    snapshot = service.get_account_truth_snapshot(force_fresh_drift=True)
+
+    assert snapshot.portfolio_sync_ok is False
+    assert service.last_sync_ok is False
+    assert service.last_sync_reason == reason
+
+
+def test_sync_singleflight_coalesces_concurrent_attempts():
     store = Mock()
     portfolio = Mock()
     api_client = Mock()
@@ -225,7 +327,7 @@ def test_sync_singleflight_serializes_concurrent_attempts():
 
     assert not first_thread.is_alive()
     assert not second_thread.is_alive()
-    assert calls == [1, 2]
+    assert calls == [1]
     assert results == [
         {"new_trades": 0, "new_cash_flows": 0},
         {"new_trades": 0, "new_cash_flows": 0},
@@ -255,6 +357,33 @@ def test_sync_lock_timeout_marks_stuck_sync_when_started_at_is_stale(monkeypatch
     assert result == {"new_trades": 0, "new_cash_flows": 0}
     assert service.last_sync_ok is False
     assert service.last_sync_reason == LIVE_SYNC_STUCK_REASON
+    service._sync_trades_history.assert_not_called()
+
+
+def test_sync_lock_timeout_does_not_mark_fresh_in_progress_sync_stuck(monkeypatch):
+    store = Mock()
+    portfolio = Mock()
+    api_client = Mock()
+    service = _build_service(store, portfolio, api_client)
+    service._sync_run_lock = Lock()
+    service._sync_run_lock.acquire()
+    now = datetime(2026, 1, 2, 3, 4, tzinfo=timezone.utc)
+    service._clock = lambda: now
+    service._last_sync_ok = True
+    service._last_sync_reason = None
+    service._last_sync_at = now - timedelta(seconds=30)
+    service._sync_started_at = now - timedelta(seconds=30)
+    service._sync_trades_history = Mock()
+    monkeypatch.setattr(manager_module, "LIVE_ACCOUNT_TRUTH_LOCK_TIMEOUT_SECONDS", 0.01)
+
+    try:
+        result = service.sync()
+    finally:
+        service._sync_run_lock.release()
+
+    assert result == {"new_trades": 0, "new_cash_flows": 0}
+    assert service.last_sync_ok is True
+    assert service.last_sync_reason is None
     service._sync_trades_history.assert_not_called()
 
 
