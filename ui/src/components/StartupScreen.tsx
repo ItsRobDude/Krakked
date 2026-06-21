@@ -15,6 +15,7 @@ export type StartupScreenProps = {
   systemMessage?: { tone: 'info' | 'success' | 'error'; message: string } | null;
   startupMlEnabled?: boolean;
   liveReadiness?: LiveReadinessPayload | null;
+  onSuggestProfileName?: () => Promise<string | null>;
   onCreateProfile: (name: string) => Promise<void>;
   onProfileChange: (name: string) => Promise<void> | void;
   onSaveConfig: () => Promise<void>;
@@ -33,6 +34,7 @@ export function StartupScreen({
   systemMessage,
   startupMlEnabled = true,
   liveReadiness,
+  onSuggestProfileName,
   onCreateProfile,
   onProfileChange,
   onSaveConfig,
@@ -55,6 +57,8 @@ export function StartupScreen({
     [profiles, selectedProfile],
   );
   const liveBlocked = mode === 'live' && liveReadiness?.status === 'blocked';
+  const liveReadinessUnavailable = mode === 'live' && !liveReadiness;
+  const liveStartDisabled = liveBlocked || liveReadinessUnavailable;
   const readinessLabel =
     liveReadiness?.status === 'ready'
       ? 'Ready'
@@ -62,7 +66,7 @@ export function StartupScreen({
         ? 'Needs review'
         : liveReadiness?.status === 'blocked'
           ? 'Blocked'
-          : 'Checking';
+          : 'Unavailable';
   const readinessPill =
     liveReadiness?.status === 'ready'
       ? 'pill--success'
@@ -88,6 +92,23 @@ export function StartupScreen({
       setError(err instanceof Error ? err.message : 'Unable to switch profile');
     } finally {
       setBusy(false);
+    }
+  };
+
+  const handleToggleNewProfile = async () => {
+    setShowNewProfile((current) => !current);
+    setError(null);
+    if (showNewProfile || newProfileName.trim() || !onSuggestProfileName) {
+      return;
+    }
+
+    try {
+      const suggestion = await onSuggestProfileName();
+      if (suggestion && !newProfileName.trim()) {
+        setNewProfileName(suggestion);
+      }
+    } catch {
+      // Suggestion is an operator convenience; manual naming remains available.
     }
   };
 
@@ -161,6 +182,11 @@ export function StartupScreen({
       return;
     }
 
+    if (liveReadinessUnavailable) {
+      setError('Live readiness must load before the UI can start live automation.');
+      return;
+    }
+
     setBusy(true);
     setError(null);
 
@@ -217,10 +243,7 @@ export function StartupScreen({
               <button
                 type="button"
                 className="ghost-button"
-                onClick={() => {
-                  setShowNewProfile((current) => !current);
-                  setError(null);
-                }}
+                onClick={() => void handleToggleNewProfile()}
                 disabled={busy || modeBusy || readOnly}
               >
                 New profile
@@ -339,7 +362,9 @@ export function StartupScreen({
                     )}
                   </>
                 ) : (
-                  <p className="field__hint">Checking live readiness before start.</p>
+                  <p className="field__hint">
+                    Live readiness must load before the UI can start live automation.
+                  </p>
                 )}
               </div>
             ) : null}
@@ -400,7 +425,7 @@ export function StartupScreen({
             type="button"
             className="primary-button"
             onClick={handleStart}
-            disabled={busy || modeBusy || readOnly || !selectedProfile || liveBlocked}
+            disabled={busy || modeBusy || readOnly || !selectedProfile || liveStartDisabled}
             aria-busy={busy}
           >
             {busy ? 'Starting…' : mode === 'live' ? 'Start live automation' : 'Start session'}

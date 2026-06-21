@@ -17,6 +17,7 @@ const apiMocks = vi.hoisted(() => ({
   fetchSystemHealth: vi.fn(),
   fetchSessionState: vi.fn(),
   fetchProfiles: vi.fn(),
+  fetchProfileNameSuggestion: vi.fn(),
   fetchStrategies: vi.fn(),
   fetchStrategyPerformance: vi.fn(),
   applyRiskPreset: vi.fn(),
@@ -86,8 +87,17 @@ const healthyHealth: SystemHealth = {
   portfolio_last_sync_at: '2026-05-02T03:00:00Z',
   portfolio_sync_in_progress: false,
   portfolio_baseline: 'paper_wallet',
+  operator_paths: {
+    active_profile_name: 'Rob',
+    active_profile_config_path: '/krakked/config/profiles/Rob.yaml',
+    portfolio_db_path: '/krakked/config/profiles/Rob/portfolio.db',
+    config_dir: '/krakked/config',
+    data_dir: '/krakked/data',
+    path_errors: {},
+  },
   drift_detected: false,
   drift_reason: null,
+  drift_info: null,
 };
 
 const liveHealthyHealth: SystemHealth = {
@@ -392,14 +402,18 @@ const buildCockpit = (overrides: Partial<CockpitSnapshot> = {}): CockpitSnapshot
   ...overrides,
 });
 
-const renderActiveCockpit = async (snapshot = buildCockpit()) => {
+const renderActiveCockpit = async (
+  snapshot = buildCockpit(),
+  session: SessionStateResponse = activeSession,
+  expectedRuntimeTrustText: string | null = 'Runtime trust: Healthy',
+) => {
   apiMocks.fetchSetupStatus.mockResolvedValue({
     configured: true,
     secrets_exist: true,
     unlocked: true,
     lifecycle: 'active',
   });
-  apiMocks.fetchSessionState.mockResolvedValue(activeSession);
+  apiMocks.fetchSessionState.mockResolvedValue(session);
   apiMocks.fetchCockpitSnapshot.mockResolvedValue(snapshot);
   apiMocks.flattenAllPositions.mockResolvedValue({
     success: true,
@@ -410,9 +424,13 @@ const renderActiveCockpit = async (snapshot = buildCockpit()) => {
 
   const result = render(<App />);
 
-  await screen.findByRole('heading', { name: 'Paper Trading Overview' });
+  await screen.findByRole('heading', {
+    name: session.mode === 'live' ? 'Live Trading Overview' : 'Paper Trading Overview',
+  });
   await waitFor(() => expect(apiMocks.fetchCockpitSnapshot).toHaveBeenCalled());
-  await screen.findByText('Runtime trust: Healthy');
+  if (expectedRuntimeTrustText) {
+    await screen.findByText(expectedRuntimeTrustText);
+  }
 
   return result;
 };
@@ -423,6 +441,10 @@ beforeEach(() => {
   apiMocks.fetchSystemHealth.mockResolvedValue(healthyHealth);
   apiMocks.fetchSystemConfig.mockResolvedValue(null);
   apiMocks.fetchLiveReadiness.mockResolvedValue(buildCockpit().live_readiness);
+  apiMocks.fetchProfileNameSuggestion.mockResolvedValue({
+    purpose: 'paper-validation',
+    name: 'paper-validation-2026-06-21',
+  });
 });
 
 afterEach(() => {
@@ -724,6 +746,155 @@ describe('cockpit operator paths', () => {
     expect(screen.getByText(/live submission gates are closed/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Start live automation' })).toBeDisabled();
     expect(apiMocks.startSession).not.toHaveBeenCalled();
+  });
+
+  test('keeps live start disabled while readiness is unavailable', async () => {
+    const user = userEvent.setup();
+
+    apiMocks.fetchSetupStatus.mockResolvedValue({
+      configured: true,
+      secrets_exist: true,
+      unlocked: true,
+      lifecycle: 'ready',
+    });
+    apiMocks.fetchSessionState.mockResolvedValue(inactiveSession);
+    apiMocks.fetchProfiles.mockResolvedValue([{ name: 'Rob', description: 'Primary profile' }]);
+    apiMocks.fetchSystemHealth.mockResolvedValue(healthyHealth);
+    apiMocks.fetchSystemConfig.mockResolvedValue({ ml: { enabled: false } });
+    apiMocks.fetchLiveReadiness.mockResolvedValue(null);
+
+    render(<App />);
+
+    await screen.findByRole('heading', { name: 'Start a session' });
+    await user.selectOptions(screen.getByLabelText('Mode'), 'live');
+
+    expect(screen.getByText('Live readiness')).toBeInTheDocument();
+    expect(screen.getByText('Unavailable')).toBeInTheDocument();
+    expect(
+      screen.getByText('Live readiness must load before the UI can start live automation.'),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Start live automation' })).toBeDisabled();
+    expect(apiMocks.setExecutionMode).not.toHaveBeenCalled();
+    expect(apiMocks.startSession).not.toHaveBeenCalled();
+  });
+
+  test('prefills new paper-validation profile name from suggestion endpoint', async () => {
+    const user = userEvent.setup();
+
+    apiMocks.fetchSetupStatus.mockResolvedValue({
+      configured: true,
+      secrets_exist: true,
+      unlocked: true,
+      lifecycle: 'ready',
+    });
+    apiMocks.fetchSessionState.mockResolvedValue(inactiveSession);
+    apiMocks.fetchProfiles.mockResolvedValue([{ name: 'Rob', description: 'Primary profile' }]);
+    apiMocks.fetchSystemHealth.mockResolvedValue(healthyHealth);
+    apiMocks.fetchSystemConfig.mockResolvedValue({ ml: { enabled: false } });
+
+    render(<App />);
+
+    await screen.findByRole('heading', { name: 'Start a session' });
+    await user.click(screen.getByRole('button', { name: 'New profile' }));
+
+    const input = await screen.findByLabelText('New profile name');
+    await waitFor(() => {
+      expect(input).toHaveValue('paper-validation-2026-06-21');
+    });
+    expect(apiMocks.fetchProfileNameSuggestion).toHaveBeenCalledWith('paper-validation');
+  });
+
+  test('shows active portfolio db path in portfolio integrity advanced view', async () => {
+    const user = userEvent.setup();
+
+    await renderActiveCockpit();
+
+    await user.click(await screen.findByTestId('cockpit-tab-positions'));
+    await user.click(screen.getByRole('button', { name: 'Advanced' }));
+
+    expect(screen.getByText('Portfolio DB')).toBeInTheDocument();
+    expect(
+      screen.getByText('/krakked/config/profiles/Rob/portfolio.db'),
+    ).toBeInTheDocument();
+    expect(screen.getByText('Profile Rob')).toBeInTheDocument();
+  });
+
+  test('shows operator paths in live mode advanced view', async () => {
+    const user = userEvent.setup();
+
+    await renderActiveCockpit(
+      buildCockpit({
+        health: liveHealthyHealth,
+        session: liveActiveSession,
+      }),
+      liveActiveSession,
+    );
+
+    await user.click(await screen.findByTestId('cockpit-tab-positions'));
+    await user.click(screen.getByRole('button', { name: 'Advanced' }));
+
+    expect(screen.getByText('Portfolio DB')).toBeInTheDocument();
+    expect(
+      screen.getByText('/krakked/config/profiles/Rob/portfolio.db'),
+    ).toBeInTheDocument();
+    expect(screen.queryByText('Paper account source')).not.toBeInTheDocument();
+  });
+
+  test('renders unknown drift without claiming runtime trust is healthy', async () => {
+    await renderActiveCockpit(
+      buildCockpit({
+        health: {
+          ...healthyHealth,
+          drift_detected: false,
+          drift_reason: null,
+          drift_info: {
+            status: 'unknown',
+            source: 'cached',
+            reason: 'cached_drift_status_unavailable',
+          },
+        },
+      }),
+      activeSession,
+      'Runtime trust: Needs review',
+    );
+
+    expect(screen.getByText('Runtime trust: Needs review')).toBeInTheDocument();
+    expect(screen.queryByText('Runtime trust: Healthy')).not.toBeInTheDocument();
+    expect(screen.getByText('Drift status unknown')).toBeInTheDocument();
+
+    const integrity = screen.getByRole('region', { name: 'Integrity' });
+    expect(within(integrity).getByText('Unknown')).toBeInTheDocument();
+    expect(within(integrity).queryByText('Clear')).not.toBeInTheDocument();
+  });
+
+  test('shows unavailable operator path rows explicitly', async () => {
+    const user = userEvent.setup();
+
+    await renderActiveCockpit(buildCockpit({
+      health: {
+        ...healthyHealth,
+        operator_paths: {
+          active_profile_name: 'Rob',
+          active_profile_config_path: null,
+          portfolio_db_path: null,
+          config_dir: '/krakked/config',
+          data_dir: '/krakked/data',
+          path_errors: {
+            portfolio_db_path: 'Unable to resolve portfolio DB path.',
+          },
+        },
+      },
+    }));
+
+    await user.click(await screen.findByTestId('cockpit-tab-positions'));
+    await user.click(screen.getByRole('button', { name: 'Advanced' }));
+
+    expect(screen.getByText('Portfolio DB')).toBeInTheDocument();
+    expect(screen.getByText('Profile config')).toBeInTheDocument();
+    expect(screen.getAllByText('Unavailable').length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByText('Unable to resolve portfolio DB path.')).toBeInTheDocument();
+    expect(screen.getByText('/krakked/config')).toBeInTheDocument();
+    expect(screen.getByText('/krakked/data')).toBeInTheDocument();
   });
 
   test('shows warning and ready live-readiness states distinctly', async () => {

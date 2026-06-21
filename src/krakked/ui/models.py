@@ -320,6 +320,24 @@ class ExecutionResultPayload(BaseModel):
     warnings: List[str]
 
 
+class OperatorPathsPayload(BaseModel):
+    active_profile_name: Optional[str] = Field(
+        None, description="Currently selected profile name, when one is active."
+    )
+    active_profile_config_path: Optional[str] = Field(
+        None, description="Resolved config file path for the active profile."
+    )
+    portfolio_db_path: Optional[str] = Field(
+        None, description="Resolved SQLite portfolio database path for this runtime."
+    )
+    config_dir: str = Field(..., description="Resolved Krakked config directory.")
+    data_dir: str = Field(..., description="Resolved Krakked data directory.")
+    path_errors: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Sanitized operator-path resolution diagnostics keyed by field.",
+    )
+
+
 class SystemHealthPayload(BaseModel):
     app_version: Optional[str] = Field(
         None, description="Application semantic version reported to the UI."
@@ -413,8 +431,15 @@ class SystemHealthPayload(BaseModel):
         None,
         description="Describes the portfolio baseline shown in the UI, such as exchange_balances or ledger_history.",
     )
+    operator_paths: Optional[OperatorPathsPayload] = Field(
+        None,
+        description="Operator-facing local paths for backup/export and profile diagnostics.",
+    )
     drift_detected: bool
     drift_reason: Optional[str] = None
+    drift_info: Optional[Dict[str, Any]] = Field(
+        None, description="Display-oriented drift detail, when available."
+    )
     alerts_enabled: bool = Field(
         False, description="Whether out-of-band safety alerts are configured/enabled."
     )

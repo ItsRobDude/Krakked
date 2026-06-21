@@ -54,6 +54,14 @@ def test_unraid_deployment_proof_requires_compose_reboot_persistence():
     assert "Docker Compose persistence check did not pass" in script
 
 
+def test_unraid_deployment_proof_softens_noisy_docker_health_with_api_health():
+    script = _script_text("unraid_deployment_proof.sh")
+
+    assert 'fetch_url "$HOST_URL/api/health"' in script
+    assert "Docker healthcheck is not healthy, but /api/health is OK" in script
+    assert "treating app HTTP health as authoritative" in script
+
+
 def test_unraid_compose_persistence_helper_is_idempotent_and_marked():
     script = _script_text("unraid_compose_persistence.sh")
 

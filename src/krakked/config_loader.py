@@ -148,14 +148,21 @@ def get_config_dir() -> Path:
     return Path(appdirs.user_config_dir("krakked"))
 
 
+def get_data_dir() -> Path:
+    """Return the OS-specific data directory for runtime market/state data."""
+
+    override = _get_path_override("KRAKKED_DATA_DIR")
+    if override is not None:
+        return override
+    return Path(appdirs.user_data_dir("krakked"))
+
+
 def get_default_ohlc_store_config() -> Dict[str, str]:
     """
     Provides a sensible default configuration for the OHLC store, pointing to
     a user-specific data directory with a Parquet backend.
     """
-    data_dir = _get_path_override("KRAKKED_DATA_DIR")
-    if data_dir is None:
-        data_dir = Path(appdirs.user_data_dir("krakked"))
+    data_dir = get_data_dir()
     default_root = data_dir / "ohlc"
     return {"root_dir": str(default_root), "backend": "parquet"}
 

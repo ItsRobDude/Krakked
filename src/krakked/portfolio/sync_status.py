@@ -162,6 +162,13 @@ def read_portfolio_sync_status(
     last_sync_at = _normalize_datetime(raw_last_sync_at)
 
     if str(execution_mode or "").lower() != "live":
+        if raw_in_progress and reason is None:
+            return PortfolioSyncStatus(
+                ok=True,
+                reason=None,
+                last_sync_at=last_sync_at,
+                in_progress=True,
+            )
         return PortfolioSyncStatus(
             ok=raw_ok,
             reason=reason,

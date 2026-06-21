@@ -27,7 +27,12 @@ from krakked.backtest import (
     load_backtest_report,
     summarize_latest_backtest_report,
 )
-from krakked.config import ProfileConfig, dump_runtime_overrides, get_config_dir
+from krakked.config import (
+    ProfileConfig,
+    dump_runtime_overrides,
+    get_config_dir,
+    get_data_dir,
+)
 from krakked.config_loader import (
     _load_yaml_mapping,
     _resolve_effective_env,
@@ -45,6 +50,7 @@ from krakked.connection.exceptions import (
 )
 from krakked.credentials import CredentialStatus
 from krakked.execution.adapter import get_live_trading_block_reason
+from krakked.logging_config import structured_log_extra
 from krakked.market_data.api import MarketDataStatus
 from krakked.market_data.exceptions import PairNotFoundError
 from krakked.password_store import (
@@ -52,6 +58,7 @@ from krakked.password_store import (
     get_saved_master_password,
     save_master_password,
 )
+from krakked.portfolio.manager import resolve_portfolio_db_path
 from krakked.portfolio.sync_status import read_portfolio_sync_status
 from krakked.risk_signal import EWMARiskSignalParams, build_ewma_risk_signal
 from krakked.runtime_provenance import build_runtime_provenance
@@ -79,6 +86,7 @@ from krakked.ui.models import (
     ExposureBreakdown,
     LiveReadinessCheckPayload,
     LiveReadinessPayload,
+    OperatorPathsPayload,
     PortfolioSummary,
     PositionPayload,
     ReplayLatestPayload,
@@ -238,6 +246,13 @@ class ProfileCreatePayload(BaseModel):
     base_config: Optional[dict] = None
 
 
+class ProfileNameSuggestionPayload(BaseModel):
+    """Suggested profile name for operator workflows."""
+
+    purpose: str
+    name: str
+
+
 # --- Account Payloads ---
 
 
@@ -277,19 +292,40 @@ def _context(request: Request):
     return request.app.state.context
 
 
+def _active_profile_name(ctx) -> str | None:
+    profile_name = getattr(getattr(ctx, "session", None), "profile_name", None)
+    if profile_name:
+        return str(profile_name)
+    config_profile_name = getattr(
+        getattr(ctx.config, "session", None), "profile_name", None
+    )
+    return str(config_profile_name) if config_profile_name else None
+
+
+def _profile_config_path_for_name(ctx, profile_name: str | None) -> Path | None:
+    if not profile_name:
+        return None
+    profile_entry = getattr(ctx.config, "profiles", {}).get(profile_name)
+    if profile_entry is None:
+        return None
+    profile_path_raw = getattr(profile_entry, "config_path", None)
+    if not profile_path_raw:
+        return None
+    profile_path = Path(str(profile_path_raw)).expanduser()
+    if not profile_path.is_absolute():
+        profile_path = get_config_dir() / profile_path
+    return profile_path
+
+
 def _resolve_execution_config_path(ctx) -> Path:
     """Resolve the persisted config file that owns the active execution settings."""
 
     config_dir = get_config_dir()
-    profile_name = ctx.session.profile_name
+    profile_name = _active_profile_name(ctx)
     if profile_name:
-        profiles_entry = ctx.config.profiles.get(profile_name)
-        if profiles_entry:
-            profile_path = Path(profiles_entry.config_path)
-            if not profile_path.is_absolute():
-                profile_path = config_dir / profile_path
-            if profile_path.exists():
-                return profile_path
+        profile_path = _profile_config_path_for_name(ctx, profile_name)
+        if profile_path is not None and profile_path.exists():
+            return profile_path
     return config_dir / "config.yaml"
 
 
@@ -377,6 +413,70 @@ def _alert_status(ctx) -> dict[str, Any]:
     }
 
 
+def _resolve_active_profile_config_path(ctx, profile_name: str | None) -> str | None:
+    profile_path = _profile_config_path_for_name(ctx, profile_name)
+    if profile_path is None:
+        return None
+    return str(profile_path.resolve())
+
+
+def _operator_path_error(message: str) -> str:
+    return message
+
+
+def _build_operator_paths_payload(ctx) -> OperatorPathsPayload:
+    config_dir = get_config_dir().expanduser().resolve()
+    data_dir = get_data_dir().expanduser().resolve()
+    profile_name = _active_profile_name(ctx)
+
+    portfolio_db_path: str | None = None
+    path_errors: dict[str, str] = {}
+    try:
+        db_candidate = resolve_portfolio_db_path(
+            ctx.config, create_parent=False, profile_name=profile_name
+        )
+        portfolio_db_path = str(Path(db_candidate).expanduser().resolve())
+    except Exception as exc:  # pragma: no cover - defensive diagnostic path
+        path_errors["portfolio_db_path"] = _operator_path_error(
+            "Unable to resolve portfolio DB path."
+        )
+        logger.warning(
+            "Failed to resolve operator portfolio DB path",
+            extra=structured_log_extra(
+                event="operator_portfolio_db_path_unavailable",
+                error_type=type(exc).__name__,
+                error=str(exc),
+            ),
+        )
+
+    active_profile_config_path = _resolve_active_profile_config_path(ctx, profile_name)
+    if profile_name and active_profile_config_path is None:
+        path_errors["active_profile_config_path"] = _operator_path_error(
+            "Active profile config path is not registered."
+        )
+
+    return OperatorPathsPayload(
+        active_profile_name=profile_name,
+        active_profile_config_path=active_profile_config_path,
+        portfolio_db_path=portfolio_db_path,
+        config_dir=str(config_dir),
+        data_dir=str(data_dir),
+        path_errors=path_errors,
+    )
+
+
+def _drift_status_from_info(drift_info: Any) -> str | None:
+    if isinstance(drift_info, dict):
+        status = drift_info.get("status")
+        if status is not None:
+            return str(status)
+    return None
+
+
+def _drift_info_unknown(drift_info: Any) -> bool:
+    return _drift_status_from_info(drift_info) == "unknown"
+
+
 def _build_system_health_payload(ctx) -> SystemHealthPayload:
     provenance = build_runtime_provenance(APP_VERSION)
     if ctx.is_setup_mode:
@@ -403,10 +503,13 @@ def _build_system_health_payload(ctx) -> SystemHealthPayload:
             portfolio_last_sync_at=None,
             portfolio_sync_in_progress=False,
             portfolio_baseline=None,
+            operator_paths=None,
             drift_detected=False,
+            drift_info=None,
             market_data_max_staleness=None,
         )
 
+    operator_paths = _build_operator_paths_payload(ctx)
     metrics_snapshot = ctx.metrics.snapshot()
     execution_config = ctx.config.execution
     data_status = ctx.market_data.get_cached_data_status()
@@ -504,6 +607,7 @@ def _build_system_health_payload(ctx) -> SystemHealthPayload:
         portfolio_last_sync_at = portfolio_sync.last_sync_at
         portfolio_sync_in_progress = portfolio_sync.in_progress
         truth_drift_flag = bool(getattr(risk_status, "drift_flag", False))
+        truth_drift_info = getattr(risk_status, "drift_info", None)
     else:
         portfolio_sync_ok = bool(getattr(account_truth, "portfolio_sync_ok", True))
         portfolio_sync_reason = getattr(account_truth, "portfolio_sync_reason", None)
@@ -512,6 +616,7 @@ def _build_system_health_payload(ctx) -> SystemHealthPayload:
             getattr(account_truth, "portfolio_sync_in_progress", False)
         )
         truth_drift_flag = bool(getattr(account_truth, "drift_flag", False))
+        truth_drift_info = getattr(account_truth, "drift_info", None)
     portfolio_baseline = getattr(ctx.portfolio, "baseline_source", None)
     drift_detected = bool(metrics_snapshot.get("drift_detected") or truth_drift_flag)
     drift_reason = metrics_snapshot.get("drift_reason")
@@ -542,8 +647,10 @@ def _build_system_health_payload(ctx) -> SystemHealthPayload:
         portfolio_last_sync_at=portfolio_last_sync_at,
         portfolio_sync_in_progress=portfolio_sync_in_progress,
         portfolio_baseline=portfolio_baseline,
+        operator_paths=operator_paths,
         drift_detected=drift_detected,
         drift_reason=drift_reason,
+        drift_info=truth_drift_info if isinstance(truth_drift_info, dict) else None,
     )
 
 
@@ -1375,16 +1482,25 @@ def _build_live_readiness_payload(
                 ),
             )
         )
+        drift_status: Literal["passed", "warning", "blocked"]
+        if health.drift_detected:
+            drift_status = "blocked"
+            drift_message = health.drift_reason or "Portfolio drift is detected."
+        elif _drift_info_unknown(health.drift_info):
+            drift_status = "warning"
+            drift_message = (
+                "Cached portfolio drift has not been warmed yet; live opening "
+                "risk still forces a fresh account-truth check before orders."
+            )
+        else:
+            drift_status = "passed"
+            drift_message = "No portfolio drift is currently reported."
         checks.append(
             _live_readiness_check(
                 "drift_monitor",
                 "Drift monitor",
-                "blocked" if health.drift_detected else "passed",
-                (
-                    health.drift_reason or "Portfolio drift is detected."
-                    if health.drift_detected
-                    else "No portfolio drift is currently reported."
-                ),
+                drift_status,
+                drift_message,
             )
         )
 
@@ -2715,6 +2831,58 @@ async def stop_session(request: Request) -> ApiEnvelope[SessionStatePayload]:
     )
 
     return ApiEnvelope(data=_session_payload(ctx), error=None)
+
+
+def _profile_suggestion_date() -> str:
+    return datetime.now(timezone.utc).date().isoformat()
+
+
+def _profile_name_taken(ctx, config_dir: Path, name: str) -> bool:
+    if name in getattr(ctx.config, "profiles", {}):
+        return True
+    return (config_dir / "profiles" / f"{name}.yaml").exists()
+
+
+def _suggest_profile_name(ctx, *, purpose: str) -> str:
+    if purpose != "paper-validation":
+        raise ValueError("Unsupported profile-name suggestion purpose")
+
+    config_dir = get_config_dir()
+    base_name = sanitize_filename(f"paper-validation-{_profile_suggestion_date()}")
+    candidate = base_name
+    counter = 2
+    while _profile_name_taken(ctx, config_dir, candidate):
+        candidate = f"{base_name}-{counter}"
+        counter += 1
+    return candidate
+
+
+@router.get(
+    "/profile-name-suggestion",
+    response_model=ApiEnvelope[ProfileNameSuggestionPayload],
+)
+async def profile_name_suggestion(
+    request: Request, purpose: str = "paper-validation"
+) -> ApiEnvelope[ProfileNameSuggestionPayload]:
+    """Return a read-only suggested profile name for operator validation runs."""
+
+    try:
+        ctx = _context(request)
+        suggestion = _suggest_profile_name(ctx, purpose=purpose)
+        return ApiEnvelope(
+            data=ProfileNameSuggestionPayload(purpose=purpose, name=suggestion),
+            error=None,
+        )
+    except ValueError as exc:
+        return ApiEnvelope(data=None, error=str(exc))
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.exception(
+            "Failed to suggest profile name",
+            extra=build_request_log_extra(
+                request, event="profile_name_suggestion_failed"
+            ),
+        )
+        return ApiEnvelope(data=None, error=str(exc))
 
 
 @router.get("/profiles", response_model=ApiEnvelope[list[ProfileSummaryPayload]])

@@ -710,11 +710,11 @@ trades, portfolio positions, and useful closed-bar/no-signal diagnostics. See
 
 Recommended next behavior slice:
 
-1. Clean up the small operator-truth findings from the validation pass:
-   paper-mode in-progress portfolio sync briefly rendered as an unexplained
-   degraded blocker, Unraid Docker health remained noisy, `ADA/USD` WebSocket
-   staleness recurred, and the reused profile name made evidence harder to
-   read.
+1. Finish the operator-truth cleanup from the validation pass: keep paper sync
+   refreshes neutral, make Unraid Docker health secondary to app HTTP health
+   when exec is noisy, keep stale disabled/watchlist pairs as warnings, use
+   dated validation profile suggestions, and show the active DB path for
+   backup/export.
 2. Re-run emergency flatten with seeded synthetic positions and open-order
    state.
 3. Prove cancel-all, no close-order placement under degraded account truth, and

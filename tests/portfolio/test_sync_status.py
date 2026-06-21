@@ -159,6 +159,37 @@ def test_non_live_sync_in_progress_preserves_previous_healthy_state():
     assert status.in_progress is True
 
 
+def test_non_live_reasonless_sync_in_progress_is_neutral():
+    portfolio = SimpleNamespace(
+        last_sync_ok=False,
+        last_sync_reason=None,
+        last_sync_at=None,
+        sync_in_progress=True,
+    )
+
+    status = read_portfolio_sync_status(portfolio, execution_mode="paper")
+
+    assert status.ok is True
+    assert status.reason is None
+    assert status.last_sync_at is None
+    assert status.in_progress is True
+
+
+def test_non_live_sync_in_progress_with_failure_reason_stays_degraded():
+    portfolio = SimpleNamespace(
+        last_sync_ok=False,
+        last_sync_reason="Ledger verification failed",
+        last_sync_at=None,
+        sync_in_progress=True,
+    )
+
+    status = read_portfolio_sync_status(portfolio, execution_mode="paper")
+
+    assert status.ok is False
+    assert status.reason == "Ledger verification failed"
+    assert status.in_progress is True
+
+
 def test_mock_like_bad_reason_and_timestamp_normalize_to_none():
     portfolio = SimpleNamespace(
         last_sync_ok=False,
