@@ -12,6 +12,7 @@ response.
 
 from __future__ import annotations
 
+import sqlite3
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
@@ -39,8 +40,10 @@ from krakked.execution.oms import (
 )
 from krakked.market_data.models import PairMetadata
 from krakked.portfolio.manager import PortfolioService
+from krakked.portfolio.models import LedgerEntry
 from krakked.portfolio.store import SQLitePortfolioStore
 from krakked.portfolio.sync_status import (
+    LIVE_ACCOUNT_TRUTH_REFRESH_TIMEOUT_REASON,
     LIVE_SYNC_DEGRADED_REASON,
     LIVE_SYNC_LEDGERS_UNAVAILABLE_REASON,
     LIVE_SYNC_TRADE_HISTORY_LAG_ALERT_TITLE,
@@ -898,6 +901,7 @@ def test_real_account_truth_provider_gates_live_opening_risk(tmp_path):
     healthy_db = tmp_path / "healthy.db"
     healthy_portfolio = _portfolio_service(healthy_client, healthy_db)
     healthy_portfolio.sync()
+    healthy_balance_reads_after_sync = healthy_client.balance_read_count
     healthy_service = _service_with_account_truth(
         healthy_client,
         cast(SQLitePortfolioStore, healthy_portfolio.store),
@@ -908,6 +912,37 @@ def test_real_account_truth_provider_gates_live_opening_risk(tmp_path):
 
     assert healthy_result.success is True
     assert len(healthy_client.add_order_calls) == 1
+    assert healthy_client.balance_read_count == healthy_balance_reads_after_sync
+
+    multi_client = FakeKrakenRESTClient(add_order_mode=ACCEPT)
+    multi_db = tmp_path / "multi.db"
+    multi_portfolio = _portfolio_service(multi_client, multi_db)
+    multi_portfolio.sync()
+    multi_portfolio._last_balance_reconcile_at = datetime.now(UTC) - timedelta(
+        seconds=10
+    )
+    multi_balance_reads_before_plan = multi_client.balance_read_count
+    multi_service = _service_with_account_truth(
+        multi_client,
+        cast(SQLitePortfolioStore, multi_portfolio.store),
+        multi_portfolio,
+    )
+
+    multi_result = multi_service.execute_plan(
+        ExecutionPlan(
+            plan_id="plan-multi-provider",
+            generated_at=datetime.now(UTC),
+            actions=[
+                _action(pair="XBTUSD"),
+                _action(pair="ETHUSD"),
+            ],
+            metadata={"order_type": "limit"},
+        )
+    )
+
+    assert multi_result.success is True
+    assert len(multi_client.add_order_calls) == 2
+    assert multi_client.balance_read_count == multi_balance_reads_before_plan + 1
 
     drift_client = FakeKrakenRESTClient(add_order_mode=ACCEPT)
     drift_db = tmp_path / "drift.db"
@@ -1004,6 +1039,132 @@ def test_real_account_truth_provider_gates_live_opening_risk(tmp_path):
 
     assert reducing_result.success is True
     assert len(unmatched_client.add_order_calls) == 3
+
+
+def test_real_account_truth_timeout_recovery_requires_successful_balance_reconcile(
+    tmp_path,
+):
+    client = FakeKrakenRESTClient(add_order_mode=ACCEPT)
+    db_path = tmp_path / "timeout-recovery.db"
+    portfolio = _portfolio_service(client, db_path)
+    portfolio.sync()
+    portfolio._last_balance_reconcile_at = datetime.now(UTC) - timedelta(seconds=10)
+    portfolio._set_last_sync_state(
+        ok=False,
+        reason=LIVE_ACCOUNT_TRUTH_REFRESH_TIMEOUT_REASON,
+    )
+    client.fail_balance_reads(count=1)
+    service = _service_with_account_truth(
+        client,
+        cast(SQLitePortfolioStore, portfolio.store),
+        portfolio,
+    )
+
+    failed_refresh = service.execute_plan(_plan("plan-timeout-recovery-fails-closed"))
+
+    assert failed_refresh.success is False
+    assert failed_refresh.errors == [PORTFOLIO_SYNC_ORDER_BLOCKED_MESSAGE]
+    assert len(client.add_order_calls) == 0
+    assert portfolio.last_sync_ok is False
+    assert portfolio.last_sync_reason == LIVE_SYNC_DEGRADED_REASON
+
+    portfolio._last_balance_reconcile_at = datetime.now(UTC) - timedelta(seconds=10)
+    portfolio._set_last_sync_state(
+        ok=False,
+        reason=LIVE_ACCOUNT_TRUTH_REFRESH_TIMEOUT_REASON,
+    )
+
+    recovered = service.execute_plan(_plan("plan-timeout-recovery-succeeds"))
+
+    assert recovered.success is True
+    assert len(client.add_order_calls) == 1
+    assert portfolio.last_sync_ok is True
+    assert portfolio.last_sync_reason is None
+
+
+def test_ambiguous_migrated_review_blocks_until_re_reviewed(tmp_path):
+    client = FakeKrakenRESTClient(add_order_mode=ACCEPT)
+    db_path = tmp_path / "ambiguous-review.db"
+    store = SQLitePortfolioStore(str(db_path))
+    store.close()
+
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO reviewed_trade_ledger_ref_entries (
+                refid,
+                ledger_entry_id,
+                reviewed_at,
+                reviewed_by,
+                reason,
+                context_json,
+                review_event_id
+            ) VALUES (
+                'T-FUTURE',
+                'L-future',
+                '2026-01-02T03:04:05+00:00',
+                'ops',
+                'legacy future id',
+                '{}',
+                NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO meta (key, value)
+            VALUES ('schema_version', '14')
+            ON CONFLICT(key) DO UPDATE SET value=excluded.value
+            """
+        )
+
+    portfolio = _portfolio_service(client, db_path)
+    portfolio.store.save_ledger_entry(
+        LedgerEntry(
+            id="L-future",
+            time=10.0,
+            type="trade",
+            subtype="",
+            aclass="currency",
+            asset="USD",
+            amount=Decimal("10000"),
+            fee=Decimal("0"),
+            balance=None,
+            refid="T-FUTURE",
+            misc=None,
+            raw={},
+        )
+    )
+
+    portfolio.sync()
+    blocked_service = _service_with_account_truth(
+        client,
+        cast(SQLitePortfolioStore, portfolio.store),
+        portfolio,
+    )
+    blocked = blocked_service.execute_plan(_plan("plan-ambiguous-review-blocked"))
+
+    assert blocked.success is False
+    assert blocked.errors == [PORTFOLIO_SYNC_ORDER_BLOCKED_MESSAGE]
+    assert len(client.add_order_calls) == 0
+    assert portfolio.store.get_unmatched_trade_ledger_ref_times() == {"T-FUTURE": 10.0}
+
+    review = portfolio.store.mark_trade_ledger_ref_reviewed(
+        refid="T-FUTURE",
+        reviewed_by="ops",
+        reason="review after migration cleanup",
+        ledger_entry_ids=["L-future"],
+        context={"source": "test"},
+    )
+    portfolio._bootstrapped = False
+    recovered_sync = portfolio.sync()
+    allowed = blocked_service.execute_plan(_plan("plan-ambiguous-review-allowed"))
+
+    assert review.ledger_entry_ids == ["L-future"]
+    assert recovered_sync["new_trades"] == 0
+    assert portfolio.last_sync_ok is True
+    assert allowed.success is True
+    assert len(client.add_order_calls) == 1
 
 
 def test_old_trade_ledger_ref_lag_escalates_and_alerts_once(tmp_path):

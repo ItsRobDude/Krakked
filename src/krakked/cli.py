@@ -5023,7 +5023,7 @@ def _read_schema_version_from_conn(conn: sqlite3.Connection) -> int | None:
 
 def _review_metadata_migration_message(db_path: Path) -> str:
     return (
-        "Review metadata requires portfolio schema v14. Run: "
+        "Review metadata requires portfolio schema v15. Run: "
         f"poetry run krakked migrate --db-path {db_path}"
     )
 
@@ -5042,7 +5042,7 @@ def _read_unmatched_trade_ledger_refs_read_only(
         }
         if (
             schema_version is None
-            or schema_version < 14
+            or schema_version < 15
             or not all(_sqlite_table_exists(conn, table) for table in required_tables)
         ):
             raise ValueError(_review_metadata_migration_message(db_path))
