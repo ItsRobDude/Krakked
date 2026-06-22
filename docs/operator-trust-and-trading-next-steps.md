@@ -143,7 +143,11 @@ Completed evidence:
 Remaining proof targets:
 
 - Run strict 4h preflight and deterministic replay for the dated decision-soak
-  profile; proceed only if the replay report is `decision_helpful`.
+  profile; proceed only if it passes the decision-loop replay rule in
+  [`decision-loop-proof-plan.md`](./decision-loop-proof-plan.md). A `limited`
+  replay is acceptable only when the limitation is low-ratio, legible guardrail
+  blocking rather than coverage gaps, zero fills, dominant blocking, or execution
+  errors.
 - Run a forward paper soak on a supported window/pair set, with real strategy
   decisions flowing through OMS, paper fills, portfolio sync, and operator
   health surfaces.
@@ -206,8 +210,8 @@ For strategy evidence:
 ## Recommended Order
 
 1. Run the deterministic decision-loop proof sequence, then a decision-useful
-   paper soak on a supported window/pair set if the replay is
-   `decision_helpful`.
+   paper soak on a supported window/pair set if the replay passes the
+   decision-loop rule.
 2. Clean up the remaining operator affordances from the soak: pause/resume
    wording, restart no-auto-resume wording, and profile-aware backup/export.
 3. Re-run a short paper validation only if the cleanup changes health,
