@@ -277,13 +277,20 @@ Cleanup completed after this report:
 
 Recommended next proof:
 
-1. Run a decision-useful paper soak on a supported window/pair set so strategy
-   intents, OMS rows, paper fills, portfolio sync, and the proved safety gates
-   are exercised together.
-2. Re-run a short paper validation only after future health/readiness/control
+1. Run the decision-loop proof sequence in
+   [`../decision-loop-proof-plan.md`](../decision-loop-proof-plan.md): strict
+   4h preflight, deterministic replay that reaches the existing
+   `decision_helpful` trust note, and the strategy-generated fake-Kraken
+   live-config gate proof.
+2. Only after that, run a decision-useful paper soak on a supported window/pair
+   set so strategy intents, OMS rows, paper fills, portfolio sync, and operator
+   diagnostics are exercised together.
+3. Re-run a short paper validation only after future health/readiness/control
    surface changes.
 
 Do not tune strategies or start a tiny live smoke from this evidence alone. The
 paper loop is finally producing useful records, and the next step is to exercise
 those records in a longer decision-useful soak under the now-hardened operator
-and money-safety surfaces.
+surfaces. Paper/replay evidence must not be described as proof that live
+account-truth gates or real Kraken reconciliation ran; those are covered by the
+deterministic fake-Kraken harness.

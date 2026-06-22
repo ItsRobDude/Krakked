@@ -29,6 +29,7 @@ from krakked.config import (
     PortfolioConfig,
     RegionCapabilities,
     RegionProfile,
+    RiskConfig,
     StrategiesConfig,
     StrategyConfig,
     UniverseConfig,
@@ -41,7 +42,8 @@ from krakked.execution.oms import (
     ExecutionService,
 )
 from krakked.main import _run_loop_iteration
-from krakked.market_data.models import PairMetadata
+from krakked.market_data.api import MarketDataAPI
+from krakked.market_data.models import ConnectionStatus, OHLCBar, PairMetadata
 from krakked.metrics import SystemMetrics
 from krakked.portfolio.manager import PortfolioService
 from krakked.portfolio.models import LedgerEntry
@@ -150,6 +152,121 @@ def _market_data(mid_price: float = 100.0) -> MagicMock:
     return md
 
 
+class _DecisionLoopMarketData:
+    """Deterministic market data that makes rs_rotation emit a real intent."""
+
+    pairs = ["XBTUSD", "ETHUSD", "SOLUSD", "ADAUSD"]
+    prices = {
+        "XBTUSD": 100.0,
+        "ETHUSD": 50.0,
+        "SOLUSD": 25.0,
+        "ADAUSD": 1.0,
+    }
+    returns = {
+        "XBTUSD": 0.24,
+        "ETHUSD": 0.08,
+        "SOLUSD": -0.03,
+        "ADAUSD": -0.08,
+    }
+
+    @staticmethod
+    def _canonical(pair: str) -> str:
+        compact = str(pair).replace("/", "").upper()
+        if compact.startswith("BTC"):
+            compact = "XBT" + compact[3:]
+        return compact
+
+    def get_data_status(self) -> ConnectionStatus:
+        return ConnectionStatus(
+            rest_api_reachable=True,
+            websocket_connected=True,
+            streaming_pairs=len(self.pairs),
+            stale_pairs=0,
+            subscription_errors=0,
+        )
+
+    def get_universe(self) -> list[str]:
+        return list(self.pairs)
+
+    def get_display_pair(self, pair: str) -> str:
+        compact = self._canonical(pair)
+        if compact.endswith("USD"):
+            return f"{compact[:-3]}/USD"
+        return compact
+
+    def normalize_asset(self, asset: str) -> str:
+        value = str(asset).upper()
+        return {
+            "ZUSD": "USD",
+            "USD": "USD",
+            "XXBT": "XBT",
+            "XBT": "XBT",
+            "BTC": "XBT",
+        }.get(value, value)
+
+    def get_valuation_pair(self, asset: str) -> str | None:
+        normalized = self.normalize_asset(asset)
+        if normalized == "USD":
+            return None
+        candidate = f"{normalized}USD"
+        return candidate if candidate in self.prices else None
+
+    def get_pair_metadata(self, pair: str) -> PairMetadata:
+        compact = self._canonical(pair)
+        if compact not in self.prices:
+            raise ValueError(f"Unknown pair {pair}")
+        base = compact[:-3] if compact.endswith("USD") else compact[:3]
+        quote = "USD" if compact.endswith("USD") else compact[3:]
+        return PairMetadata(
+            canonical=compact,
+            base=base,
+            quote=quote,
+            rest_symbol=compact,
+            ws_symbol=f"{base}/{quote}",
+            raw_name=compact,
+            price_decimals=1,
+            volume_decimals=8,
+            lot_size=0.00000001,
+            min_order_size=0.0001,
+            status="online",
+            liquidity_24h_usd=1_000_000_000.0,
+        )
+
+    def get_pair_metadata_or_raise(self, pair: str) -> PairMetadata:
+        return self.get_pair_metadata(pair)
+
+    def get_latest_price(self, pair: str) -> float:
+        return self.prices[self._canonical(pair)]
+
+    def get_best_bid_ask(self, pair: str) -> dict[str, float]:
+        price = self.get_latest_price(pair)
+        return {"bid": price - 0.1, "ask": price + 0.1}
+
+    def get_ohlc(self, pair: str, timeframe: str, lookback: int) -> list[OHLCBar]:
+        del timeframe
+        compact = self._canonical(pair)
+        last_close = self.prices[compact]
+        relative_return = self.returns.get(compact, 0.0)
+        first_close = last_close / (1.0 + relative_return)
+        count = max(int(lookback or 1), 1)
+        bars: list[OHLCBar] = []
+        for idx in range(count):
+            fraction = idx / (count - 1) if count > 1 else 1.0
+            close = first_close + ((last_close - first_close) * fraction)
+            open_price = close * 0.999
+            bars.append(
+                OHLCBar(
+                    timestamp=1_700_000_000 + (idx * 3600),
+                    open=open_price,
+                    high=max(open_price, close) * 1.001,
+                    low=min(open_price, close) * 0.999,
+                    close=close,
+                    volume=1_000.0,
+                )
+            )
+        return bars
+
+
 def _app_config(db_path: str) -> AppConfig:
     return AppConfig(
         region=RegionProfile(
@@ -183,6 +300,71 @@ def _app_config(db_path: str) -> AppConfig:
                     type="manual",
                     enabled=True,
                     userref=USERREF,
+                )
+            },
+        ),
+    )
+
+
+def _decision_loop_config(db_path: str) -> AppConfig:
+    execution = _live_config()
+    execution.live_strategy_allowlist = ["rs_rotation"]
+    execution.max_retries = 1
+
+    return AppConfig(
+        region=RegionProfile(
+            code="TEST",
+            capabilities=RegionCapabilities(
+                supports_margin=False,
+                supports_futures=False,
+                supports_staking=False,
+            ),
+        ),
+        universe=UniverseConfig(
+            include_pairs=list(_DecisionLoopMarketData.pairs),
+            exclude_pairs=[],
+            min_24h_volume_usd=0.0,
+        ),
+        market_data=MarketDataConfig(
+            ws={},
+            ohlc_store={},
+            backfill_timeframes=["4h"],
+            ws_timeframes=[],
+        ),
+        portfolio=PortfolioConfig(
+            db_path=db_path,
+            reconciliation_tolerance=0.0001,
+            valuation_pairs={
+                "XBT": "XBTUSD",
+                "ETH": "ETHUSD",
+                "SOL": "SOLUSD",
+                "ADA": "ADAUSD",
+            },
+        ),
+        execution=execution,
+        risk=RiskConfig(
+            max_portfolio_risk_pct=50.0,
+            max_per_asset_pct=20.0,
+            max_per_strategy_pct={"rs_rotation": 20.0},
+            min_liquidity_24h_usd=0.0,
+        ),
+        strategies=StrategiesConfig(
+            enabled=["rs_rotation"],
+            configs={
+                "rs_rotation": StrategyConfig(
+                    name="rs_rotation",
+                    type="relative_strength",
+                    enabled=True,
+                    userref=4242,
+                    params={
+                        "pairs": list(_DecisionLoopMarketData.pairs),
+                        "lookback_bars": 42,
+                        "timeframe": "4h",
+                        "rebalance_interval_hours": 24,
+                        "top_n": 1,
+                        "total_allocation_pct": 5.0,
+                        "confidence_return_bps": 100.0,
+                    },
                 )
             },
         ),
@@ -286,6 +468,33 @@ def _portfolio_service(
         clock=clock,
     )
     return service
+
+
+def _decision_loop_services(client: FakeKrakenRESTClient, db_path):
+    config = _decision_loop_config(str(db_path))
+    market_data = _DecisionLoopMarketData()
+    market_data_api = cast(MarketDataAPI, market_data)
+    portfolio = PortfolioService(
+        config=config,
+        market_data=market_data_api,
+        db_path=str(db_path),
+        rest_client=cast(KrakenRESTClient, client),
+    )
+    strategy_engine = StrategyEngine(config, market_data_api, portfolio)
+    strategy_engine.initialize()
+    adapter = KrakenExecutionAdapter(
+        client=cast(KrakenRESTClient, client),
+        config=config.execution,
+    )
+    execution_service = ExecutionService(
+        adapter=adapter,
+        store=cast(SQLitePortfolioStore, portfolio.store),
+        config=config.execution,
+        market_data=market_data_api,
+        risk_status_provider=strategy_engine.get_risk_status,
+        account_truth_provider=portfolio.get_account_truth_snapshot,
+    )
+    return portfolio, strategy_engine, execution_service
 
 
 class _RecordingAlerts:
@@ -1424,6 +1633,83 @@ def test_real_account_truth_provider_gates_live_opening_risk(tmp_path):
 
     assert reducing_result.success is True
     assert len(unmatched_client.add_order_calls) == 3
+
+
+def test_strategy_generated_rs_rotation_plan_exercises_live_account_truth_gate(
+    tmp_path,
+):
+    client = FakeKrakenRESTClient(add_order_mode=ACCEPT)
+    portfolio, strategy_engine, execution_service = _decision_loop_services(
+        client, tmp_path / "decision-loop-live.db"
+    )
+
+    plan = strategy_engine.run_cycle(now=datetime.now(UTC))
+
+    assert strategy_engine.last_cycle_intents
+    assert plan.actions
+    opening_actions = [
+        action
+        for action in plan.actions
+        if action.strategy_id == "rs_rotation"
+        and action.action_type in {"open", "increase"}
+    ]
+    assert len(opening_actions) == 1
+    assert opening_actions[0].blocked is False
+
+    portfolio._last_balance_reconcile_at = datetime.now(UTC) - timedelta(seconds=10)
+    balance_reads_before_execute = client.balance_read_count
+
+    execution = execution_service.execute_plan(plan)
+
+    assert execution.success is True
+    assert len(client.add_order_calls) == 1
+    assert client.balance_read_count == balance_reads_before_execute + 1
+    order = execution.orders[0]
+    assert order.strategy_id == "rs_rotation"
+    assert order.kraken_order_id is not None
+    assert order.raw_request["cl_ord_id"] == order.local_id
+    forced_balance_index = max(
+        index
+        for index, call in enumerate(client.call_log)
+        if call.get("event") == "get_private" and call.get("endpoint") == "Balance"
+    )
+    add_order_index = next(
+        index
+        for index, call in enumerate(client.call_log)
+        if call.get("event") == "add_order"
+    )
+    assert forced_balance_index < add_order_index
+
+    client.close_order(order.kraken_order_id, price=100.0)
+    execution_service.refresh_open_orders()
+    execution_service.reconcile_orders()
+    sync_result = portfolio.sync()
+
+    assert sync_result["new_trades"] == 1
+    assert portfolio.last_sync_ok is True
+    assert portfolio.store.get_trades(limit=10)
+    assert any(entry.type == "trade" for entry in portfolio.store.get_ledger_entries())
+    assert any(
+        position.strategy_tag == "rs_rotation" for position in portfolio.get_positions()
+    )
+
+    blocked_client = FakeKrakenRESTClient(add_order_mode=ACCEPT)
+    blocked_portfolio, blocked_strategy_engine, blocked_execution_service = (
+        _decision_loop_services(blocked_client, tmp_path / "decision-loop-blocked.db")
+    )
+    blocked_plan = blocked_strategy_engine.run_cycle(now=datetime.now(UTC))
+    assert blocked_plan.actions
+    blocked_client.fail_balance_reads(count=1)
+    blocked_portfolio._last_balance_reconcile_at = datetime.now(UTC) - timedelta(
+        seconds=10
+    )
+
+    blocked_execution = blocked_execution_service.execute_plan(blocked_plan)
+
+    assert blocked_execution.success is False
+    assert blocked_execution.errors == [PORTFOLIO_SYNC_ORDER_BLOCKED_MESSAGE]
+    assert len(blocked_client.add_order_calls) == 0
+    assert blocked_portfolio.last_sync_ok is False
 
 
 def test_real_account_truth_timeout_recovery_requires_successful_balance_reconcile(

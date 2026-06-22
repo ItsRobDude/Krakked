@@ -1,0 +1,147 @@
+# Decision-Loop Proof And Paper Soak Acceptance
+
+Date: 2026-06-21
+
+## Purpose
+
+The June 19 paper soak proved runtime lifecycle, but the loop was alive and
+silent: no strategy actions, orders, trades, or ledgers were produced. This
+proof lane answers one narrower question:
+
+> When a strategy produces an intent, does Krakked preserve a legible chain from
+> signal to risk, OMS, fill, portfolio state, UI/reporting, and diagnostics?
+
+This is not a strategy-edge proof and not a live-capital proof. `rs_rotation` is
+used only because the strict 4h evidence path reliably generates decisions while
+remaining research-only and unproven.
+
+## What Each Phase Proves
+
+| Phase | Mode | Proves | Does not prove |
+| --- | --- | --- | --- |
+| Strict preflight | cached/offline | The chosen 4h pair/window data is ready before replay | Strategy quality or exchange behavior |
+| Deterministic replay | `simulation` | Real strategy/risk/OMS path with simulated immediate fills, persisted decisions/orders/results, portfolio snapshots, and diagnostics | Kraken Balance/TradesHistory/Ledgers reconciliation or live account-truth gates |
+| Fake-Kraken live-config harness | test-only `live` config against `FakeKrakenRESTClient` | Strategy-generated opening risk reaches the live account-truth gate; healthy truth submits; degraded truth blocks; fake TradesHistory/Ledgers reconcile after fill | Real Kraken behavior, real latency, or production API-key safety |
+| Forward paper soak | `paper` | Runtime lifecycle, operator surfaces, synthetic paper wallet, paper fills, activity traces, profile backup/export, and diagnostics under a real session | Live account-truth gates, real Kraken reconciliation, or live AddOrder |
+
+Paper and replay mode must never be described as proof that live account-truth
+gates ran. Those gates are live-only and are proved separately by deterministic
+fake-Kraken tests.
+
+## Profile Recipe
+
+Use a fresh isolated profile named for the run date, for example
+`decision-soak-2026-06-21`.
+
+Profile intent:
+
+- mode: paper;
+- live submission: disabled (`allow_live_trading=false`);
+- pairs: `BTC/USD`, `ETH/USD`, `SOL/USD`, `ADA/USD`;
+- primary timeframe: `4h`;
+- data policy: strict coverage; do not loosen to force a run;
+- strategies: enable `rs_rotation` as the event generator and keep
+  `trend_core` / `majors_mean_rev` enabled only when their strict data
+  requirements are ready enough for useful silence diagnostics;
+- `rs_rotation` params: starter 4h params, explicit in the profile, with no
+  parameter tuning to manufacture trades.
+
+Minimal `rs_rotation` slice:
+
+```yaml
+strategies:
+  enabled:
+    - rs_rotation
+  configs:
+    rs_rotation:
+      name: rs_rotation
+      type: relative_strength
+      enabled: true
+      params:
+        pairs: ["BTC/USD", "ETH/USD", "SOL/USD", "ADA/USD"]
+        lookback_bars: 42
+        timeframe: "4h"
+        rebalance_interval_hours: 24
+        top_n: 2
+        total_allocation_pct: 5.0
+        confidence_return_bps: 250.0
+```
+
+## Deterministic Commands
+
+Use `backtest-preflight` and `backtest` directly for deterministic cached
+replay. `replay-run` is useful later, but it refreshes OHLC over public Kraken
+endpoints before running.
+
+```bash
+poetry run krakked backtest-preflight \
+  --config <decision-soak-config.yaml> \
+  --start 2025-12-01T00:00:00Z \
+  --end <current-4h-tail> \
+  --pair BTC/USD --pair ETH/USD --pair SOL/USD --pair ADA/USD \
+  --timeframe 4h \
+  --strict-data \
+  --json
+```
+
+```bash
+poetry run krakked backtest \
+  --config <decision-soak-config.yaml> \
+  --start 2025-12-01T00:00:00Z \
+  --end <current-4h-tail> \
+  --pair BTC/USD --pair ETH/USD --pair SOL/USD --pair ADA/USD \
+  --timeframe 4h \
+  --starting-cash-usd 10000 \
+  --fee-bps 25 \
+  --strict-data \
+  --db-path reports/decision-soak-YYYY-MM-DD/replay.db \
+  --save-report reports/decision-soak-YYYY-MM-DD/replay.json \
+  --json
+```
+
+Replay passes only when the saved report says:
+
+- `summary.trust_level == "decision_helpful"`;
+- `summary.trust_note == "Decision-helpful: coverage was complete and the replay produced filled trades."`;
+- actions, submitted orders, filled orders, and persisted execution records are
+  non-zero.
+
+If the replay is `weak_signal` or `limited`, do not start the overnight paper
+soak. Fix data coverage or choose a pre-registered supported 4h window.
+
+## Forward Paper Soak Acceptance
+
+Run the forward soak only after deterministic replay is decision-helpful.
+
+Required evidence:
+
+- non-zero strategy intents/actions from the session;
+- decision trace links signal reason, score/filter state, risk clamp/block
+  reason, OMS order/result, paper fill, paper trade, portfolio position delta,
+  and dashboard/operator diagnostics;
+- no-action diagnostics for strategies that remain silent;
+- stale enabled/open-position pairs block readiness, while disabled/watchlist
+  pairs are warnings;
+- backup/export uses the active DB path shown by the operator paths health
+  surface;
+- any paper emergency-flatten drill is explicitly labeled paper-only.
+
+The soak report must include a "scope boundary" section stating that paper mode
+did not exercise live account-truth gates or real Kraken reconciliation.
+
+## Deterministic Live-Gate Harness Status
+
+`tests/test_money_safety_order_lifecycle.py` includes a strategy-generated
+`rs_rotation` fake-Kraken live-config proof. It uses real `StrategyEngine`, real
+`PortfolioService`, real `ExecutionService`, and `FakeKrakenRESTClient` to prove:
+
+- healthy account truth allows a strategy-generated opening-risk action;
+- the live OMS path requests forced fresh account truth before `AddOrder`;
+- a fake exchange fill reconciles through TradesHistory/Ledgers into portfolio
+  state;
+- a fresh Balance failure blocks the same strategy-generated opening-risk path
+  before order submission.
+
+This harness is the bridge between strategy-generated decisions and the
+account-truth hardening work. It is still deterministic fake-exchange evidence,
+not a live Kraken smoke.
