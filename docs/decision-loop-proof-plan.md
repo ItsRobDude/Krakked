@@ -1,6 +1,6 @@
 # Decision-Loop Proof And Paper Soak Acceptance
 
-Date: 2026-06-21
+Date: 2026-06-22
 
 ## Purpose
 
@@ -99,19 +99,36 @@ poetry run krakked backtest \
   --json
 ```
 
-Replay passes only when the saved report says:
+Replay is judged by the decision-loop pass rule, not by `trust_level` alone.
+The shared replay `trust_level` remains strict for strategy-edge evaluation:
+any blocked action downgrades it to `limited`. For this plumbing proof, low-ratio
+guardrail blocks are acceptable and useful evidence when they are legible.
 
-- `summary.trust_level == "decision_helpful"`;
-- `summary.trust_note == "Decision-helpful: coverage was complete and the replay produced filled trades."`;
-- actions, submitted orders, filled orders, and persisted execution records are
-  non-zero.
+Decision-loop replay passes only when the saved report says:
 
-If the replay is `weak_signal` or `limited`, do not start the overnight paper
-soak. Fix data coverage or choose a pre-registered supported 4h window.
+- strict preflight coverage is complete: no missing or partial execution series;
+- warmup is ready;
+- `summary.total_actions > 0`;
+- `summary.filled_orders > 0`;
+- `summary.execution_errors == 0`;
+- `summary.blocked_actions / summary.total_actions < 0.75`;
+- every blocked action has a clear block reason in
+  `summary.blocked_reason_counts` or the persisted decisions table.
+
+`summary.trust_level == "limited"` is acceptable only when the limitation is
+caused solely by low-ratio, legible guardrail blocks. It remains a stop when the
+reason is incomplete coverage, zero fills, all or most actions blocked, or any
+execution error.
+
+If the replay is `weak_signal`, coverage/warmup is not ready, fills are zero,
+execution errors are non-zero, or blocked actions dominate the run, do not start
+the overnight paper soak. Fix data coverage, choose a supported 4h window, or
+document a separate acceptance-rule change before proceeding.
 
 ## Forward Paper Soak Acceptance
 
-Run the forward soak only after deterministic replay is decision-helpful.
+Run the forward soak only after deterministic replay passes the decision-loop
+pass rule above.
 
 Required evidence:
 
