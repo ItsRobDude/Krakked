@@ -676,6 +676,26 @@ class DryRunExecutionAdapter:
             order.status = "validated"
             return order
 
+        if price_for_notional is None:
+            order.status = "rejected"
+            order.last_error = "Unable to simulate fill: price unavailable"
+            order.raw_response = {
+                "result": "rejected",
+                "error": [order.last_error],
+                "dry_run": True,
+            }
+            logger.error(
+                order.last_error,
+                extra=structured_log_extra(
+                    event="order_rejected_missing_fill_price",
+                    plan_id=order.plan_id,
+                    strategy_id=order.strategy_id,
+                    pair=order.pair,
+                    local_order_id=order.local_id,
+                ),
+            )
+            return order
+
         order.kraken_order_id = order.kraken_order_id or f"dry-{order.local_id}"
         order.status = "filled"
         order.cumulative_base_filled = order.requested_base_size

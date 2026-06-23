@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from krakked.main import _run_loop_iteration
+from krakked.main import EMERGENCY_FLATTEN_MAX_DEFERRED_ATTEMPTS, _run_loop_iteration
 
 
 def test_inactive_session_does_zero_work():
@@ -171,6 +171,49 @@ def test_emergency_flatten_defers_when_account_truth_unavailable():
     assert updated_sync == last_portfolio_sync
     assert updated_cycle == last_strategy_cycle
     refresh_metrics_state.assert_called()
+
+
+def test_emergency_flatten_deferred_loop_hits_cap():
+    now = datetime(2024, 1, 1, tzinfo=timezone.utc)
+
+    portfolio = MagicMock()
+    portfolio.last_sync_ok = True
+    portfolio.last_sync_reason = None
+    portfolio.get_positions.return_value = ["dummy_pos"]
+
+    execution_service = MagicMock()
+    execution_service.get_open_orders.return_value = ["still-open"]
+
+    strategy_engine = MagicMock()
+    metrics = MagicMock()
+    refresh_metrics_state = MagicMock()
+    market_data = MagicMock()
+    session = SimpleNamespace(emergency_flatten=True)
+
+    for index in range(EMERGENCY_FLATTEN_MAX_DEFERRED_ATTEMPTS):
+        _run_loop_iteration(
+            now=now + timedelta(seconds=index),
+            strategy_interval=1,
+            portfolio_interval=1,
+            last_strategy_cycle=now - timedelta(seconds=2),
+            last_portfolio_sync=now - timedelta(seconds=2),
+            portfolio=portfolio,
+            market_data=market_data,
+            strategy_engine=strategy_engine,
+            execution_service=execution_service,
+            metrics=metrics,
+            refresh_metrics_state=refresh_metrics_state,
+            session_active=False,
+            session=session,
+        )
+
+    assert session.emergency_flatten is True
+    assert "deferred without reaching a safe close state" in getattr(
+        session, "_emergency_flatten_halted_reason"
+    )
+    strategy_engine.build_emergency_flatten_plan.assert_not_called()
+    execution_service.execute_plan.assert_not_called()
+    metrics.record_error.assert_called()
 
 
 def test_emergency_flatten_clears_on_dust_only():

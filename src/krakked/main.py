@@ -9,7 +9,7 @@ import sqlite3
 import threading
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable, List, Optional, Tuple
+from typing import Any, Callable, List, Optional, Sequence, Tuple
 
 import uvicorn
 
@@ -121,6 +121,82 @@ def _get_portfolio_drift(portfolio: PortfolioService) -> Optional[DriftStatus]:
 # of waiting the full portfolio interval, so the session recovers quickly without
 # hammering a failing/rate-limited Kraken API every loop iteration.
 DEGRADED_PORTFOLIO_SYNC_RETRY_SECONDS = 60
+EMERGENCY_FLATTEN_MAX_NO_PROGRESS_ATTEMPTS = 3
+EMERGENCY_FLATTEN_MAX_DEFERRED_ATTEMPTS = 5
+
+_EMERGENCY_FLATTEN_NO_PROGRESS_ATTR = "_emergency_flatten_no_progress_attempts"
+_EMERGENCY_FLATTEN_DEFERRED_ATTR = "_emergency_flatten_deferred_attempts"
+_EMERGENCY_FLATTEN_HALTED_ATTR = "_emergency_flatten_halted_reason"
+
+
+def _paper_mode(portfolio: PortfolioService) -> bool:
+    is_paper_mode = getattr(portfolio, "_is_paper_mode", None)
+    if not callable(is_paper_mode):
+        return False
+    try:
+        return bool(is_paper_mode())
+    except Exception:  # pragma: no cover - defensive for test doubles
+        return False
+
+
+def _ingest_paper_fills_if_needed(portfolio: PortfolioService, result: Any) -> None:
+    if not _paper_mode(portfolio):
+        return
+    ingest_filled_orders = getattr(portfolio, "ingest_filled_orders", None)
+    if callable(ingest_filled_orders):
+        ingest_filled_orders(result)
+
+
+def _position_total_abs(positions: Sequence[Any]) -> float:
+    total = 0.0
+    for position in positions:
+        try:
+            total += abs(float(getattr(position, "base_size", 0.0) or 0.0))
+        except (TypeError, ValueError):
+            continue
+    return total
+
+
+def _reset_emergency_flatten_runtime_state(session: Any) -> None:
+    if session is None:
+        return
+    setattr(session, _EMERGENCY_FLATTEN_NO_PROGRESS_ATTR, 0)
+    setattr(session, _EMERGENCY_FLATTEN_DEFERRED_ATTR, 0)
+    setattr(session, _EMERGENCY_FLATTEN_HALTED_ATTR, None)
+
+
+def _increment_emergency_flatten_attempt(session: Any, attr: str) -> int:
+    if session is None:
+        return 0
+    try:
+        current = int(getattr(session, attr, 0) or 0)
+    except (TypeError, ValueError):
+        current = 0
+    current += 1
+    setattr(session, attr, current)
+    return current
+
+
+def _set_emergency_flatten_attempt(session: Any, attr: str, value: int) -> None:
+    if session is not None:
+        setattr(session, attr, value)
+
+
+def _halt_emergency_flatten(
+    *,
+    session: Any,
+    metrics: SystemMetrics,
+    reason: str,
+    event: str,
+    **extra: Any,
+) -> None:
+    if session is not None:
+        setattr(session, _EMERGENCY_FLATTEN_HALTED_ATTR, reason)
+    metrics.record_error(reason)
+    logger.error(
+        "Emergency flatten halted pending operator intervention",
+        extra=structured_log_extra(event=event, reason=reason, **extra),
+    )
 
 
 def _run_loop_iteration(
@@ -147,6 +223,18 @@ def _run_loop_iteration(
     # 1. Emergency Flatten Priority Loop
     emergency_flatten = bool(getattr(session, "emergency_flatten", False))
     if emergency_flatten:
+        halted_reason = getattr(session, _EMERGENCY_FLATTEN_HALTED_ATTR, None)
+        if halted_reason:
+            logger.error(
+                "Emergency flatten remains halted pending operator intervention",
+                extra=structured_log_extra(
+                    event="emergency_flatten_halted",
+                    reason=str(halted_reason),
+                ),
+            )
+            refresh_metrics_state()
+            return updated_portfolio_sync, updated_strategy_cycle
+
         logger.warning(
             "Emergency flatten active; attempting to close all positions",
             extra=structured_log_extra(event="emergency_flatten_active"),
@@ -194,12 +282,14 @@ def _run_loop_iteration(
             and portfolio.last_sync_ok
             and positions
         ):
+            _set_emergency_flatten_attempt(session, _EMERGENCY_FLATTEN_DEFERRED_ATTR, 0)
             plan = strategy_engine.build_emergency_flatten_plan(positions)
 
             # If plan is empty, it means only dust/untradeable positions remain.
             # We can safely clear the emergency flag to prevent infinite looping.
             if not plan.actions:
                 try:
+                    _reset_emergency_flatten_runtime_state(session)
                     setattr(session, "emergency_flatten", False)
                     if hasattr(strategy_engine, "config") and hasattr(
                         strategy_engine.config, "session"
@@ -231,8 +321,61 @@ def _run_loop_iteration(
             try:
                 updated_strategy_cycle = now
                 metrics.record_plan(blocked_actions=0)
+                positions_before_total = _position_total_abs(positions)
                 flatten_result = execution_service.execute_plan(plan)
+                _ingest_paper_fills_if_needed(portfolio, flatten_result)
                 metrics.record_plan_execution(getattr(flatten_result, "errors", []))
+                try:
+                    positions_after = portfolio.get_positions()
+                except Exception:  # pragma: no cover
+                    positions_after = positions
+                positions_after_total = _position_total_abs(positions_after)
+                if positions_after_total < positions_before_total - 1e-12:
+                    _set_emergency_flatten_attempt(
+                        session, _EMERGENCY_FLATTEN_NO_PROGRESS_ATTR, 0
+                    )
+                    if positions_after_total <= 1e-12:
+                        _reset_emergency_flatten_runtime_state(session)
+                        setattr(session, "emergency_flatten", False)
+                        if hasattr(strategy_engine, "config") and hasattr(
+                            strategy_engine.config, "session"
+                        ):
+                            setattr(
+                                strategy_engine.config.session,
+                                "emergency_flatten",
+                                False,
+                            )
+                        dump_runtime_overrides(
+                            strategy_engine.config,
+                            session=session,
+                            sections={"session"},
+                        )
+                        logger.info(
+                            "Emergency flatten cleared after close execution",
+                            extra=structured_log_extra(
+                                event="emergency_flatten_cleared_after_execution",
+                                positions_before_total=positions_before_total,
+                                positions_after_total=positions_after_total,
+                            ),
+                        )
+                else:
+                    attempt = _increment_emergency_flatten_attempt(
+                        session, _EMERGENCY_FLATTEN_NO_PROGRESS_ATTR
+                    )
+                    if attempt >= EMERGENCY_FLATTEN_MAX_NO_PROGRESS_ATTEMPTS:
+                        _halt_emergency_flatten(
+                            session=session,
+                            metrics=metrics,
+                            reason=(
+                                "Emergency flatten made no position-reduction progress "
+                                f"after {attempt} close-order attempt(s); operator "
+                                "intervention required."
+                            ),
+                            event="emergency_flatten_no_progress_halted",
+                            attempts=attempt,
+                            positions_before_total=positions_before_total,
+                            positions_after_total=positions_after_total,
+                        )
             except Exception as exc:  # pragma: no cover
                 metrics.record_error(f"Emergency flatten execution failed: {exc}")
             finally:
@@ -240,6 +383,9 @@ def _run_loop_iteration(
             return updated_portfolio_sync, updated_strategy_cycle
         elif positions:
             # We have positions but unsafe to flatten (open orders or cancel failed)
+            attempt = _increment_emergency_flatten_attempt(
+                session, _EMERGENCY_FLATTEN_DEFERRED_ATTR
+            )
             logger.warning(
                 "Emergency flatten deferred: waiting for clear state",
                 extra=structured_log_extra(
@@ -248,13 +394,31 @@ def _run_loop_iteration(
                     open_orders=open_orders_count,
                     last_sync_ok=portfolio.last_sync_ok,
                     last_sync_reason=getattr(portfolio, "last_sync_reason", None),
+                    attempts=attempt,
                 ),
             )
+            if attempt >= EMERGENCY_FLATTEN_MAX_DEFERRED_ATTEMPTS:
+                _halt_emergency_flatten(
+                    session=session,
+                    metrics=metrics,
+                    reason=(
+                        "Emergency flatten deferred without reaching a safe close "
+                        f"state after {attempt} attempt(s); operator intervention "
+                        "required."
+                    ),
+                    event="emergency_flatten_deferred_halted",
+                    attempts=attempt,
+                    cancel_ok=cancel_ok,
+                    open_orders=open_orders_count,
+                    last_sync_ok=portfolio.last_sync_ok,
+                    last_sync_reason=getattr(portfolio, "last_sync_reason", None),
+                )
             refresh_metrics_state()
             return updated_portfolio_sync, updated_strategy_cycle
 
         if open_orders is not None and not open_orders and session is not None:
             try:
+                _reset_emergency_flatten_runtime_state(session)
                 setattr(session, "emergency_flatten", False)
                 if hasattr(strategy_engine, "config") and hasattr(
                     strategy_engine.config, "session"

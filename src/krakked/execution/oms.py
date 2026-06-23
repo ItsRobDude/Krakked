@@ -1004,15 +1004,22 @@ class ExecutionService:
 
             latest_price: Optional[float] = None
             min_notional = getattr(adapter_config, "min_order_notional_usd", 0)
-
-            # Only require latest_price when min_notional > 0 AND side=='buy' AND not risk_reducing.
-            # If risk reducing, we let it through without a price (adapter will skip the notional check).
-            if (
+            needs_non_live_market_fill_price = (
+                not adapter_config.validate_only
+                and adapter_config.mode in {"paper", "dry_run"}
+                and order.order_type == "market"
+                and order.requested_price is None
+            )
+            needs_min_notional_price = (
                 order.requested_price is None
                 and min_notional > 0
                 and order.side == "buy"
                 and not order.risk_reducing
-            ):
+            )
+
+            # Non-live market orders need a deterministic synthetic fill price.
+            # Live orders get their fill from Kraken/reconciliation instead.
+            if needs_min_notional_price or needs_non_live_market_fill_price:
                 try:
                     latest_price = self.market_data.get_latest_price(order.pair)
                 except Exception as exc:  # pragma: no cover
@@ -1038,7 +1045,8 @@ class ExecutionService:
                         result.orders.append(order)
                         continue
 
-                    # In paper/sim, attempt fallback or proceed
+                    # In paper/dry-run, attempt fallback; the adapter rejects
+                    # honestly if no usable synthetic fill price is available.
                     logger.warning(
                         "Latest price missing in non-live mode; attempting fallback",
                         extra=structured_log_extra(
@@ -1059,9 +1067,10 @@ class ExecutionService:
                         latest_price = fallback_price
                     else:
                         logger.warning(
-                            "Proceeding with missing price (paper/sim)",
+                            "Synthetic fill price unavailable in non-live mode",
                             extra=structured_log_extra(
-                                event="price_missing_allowed", pair=order.pair
+                                event="synthetic_fill_price_missing",
+                                pair=order.pair,
                             ),
                         )
 
@@ -1100,6 +1109,9 @@ class ExecutionService:
 
                 if self.store:
                     self.store.save_order(order)
+
+                if order.status == "rejected" and order.last_error:
+                    result.errors.append(order.last_error)
 
                 logger.info(
                     "Order submission result",

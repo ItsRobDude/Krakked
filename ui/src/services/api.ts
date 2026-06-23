@@ -63,6 +63,8 @@ export type RiskDecision = {
   blocked: boolean;
   block_reasons: string[];
   kill_switch_active: boolean;
+  clamped?: boolean;
+  clamp_reasons?: string[];
 };
 
 export type RiskConfig = {

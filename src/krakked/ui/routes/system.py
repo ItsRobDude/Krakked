@@ -1013,16 +1013,25 @@ def _build_decision_trace_payloads(
             blocked_action_count = len(
                 [decision for decision in actionable_decisions if decision.blocked]
             )
+            clamped_decisions = [
+                decision
+                for decision in actionable_decisions
+                if getattr(decision, "clamped", False)
+            ]
             actionable_action_count = len(actionable_decisions)
             no_op_action_count = len(no_op_decisions)
-            clamped_action_count = 0
+            clamped_action_count = len(clamped_decisions)
             blocked_reasons = [
                 reason
                 for decision in actionable_decisions
                 if decision.blocked
                 for reason in decision.block_reasons
             ]
-            clamp_reasons = []
+            clamp_reasons = [
+                reason
+                for decision in clamped_decisions
+                for reason in getattr(decision, "clamp_reasons", [])
+            ]
             no_op_reasons = [
                 f"{decision.pair}: {decision.action_type}"
                 for decision in no_op_decisions

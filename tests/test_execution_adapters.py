@@ -112,6 +112,91 @@ def test_execution_service_uses_dry_run_adapter_for_dry_run_mode(inactive_risk_s
     client.add_order.assert_not_called()
 
 
+def test_dry_run_market_sell_without_price_rejects():
+    adapter = DryRunExecutionAdapter(
+        config=ExecutionConfig(mode="paper", validate_only=False)
+    )
+    order = _local_order(
+        side="sell",
+        price=None,
+        order_type="market",
+        risk_reducing=True,
+        volume=0.5,
+    )
+
+    result_order = adapter.submit_order(order, _pair_metadata(), latest_price=None)
+
+    assert result_order.status == "rejected"
+    assert result_order.avg_fill_price is None
+    assert result_order.cumulative_base_filled == 0.0
+    assert result_order.last_error == "Unable to simulate fill: price unavailable"
+
+
+def test_dry_run_market_sell_with_latest_price_fills():
+    adapter = DryRunExecutionAdapter(
+        config=ExecutionConfig(mode="paper", validate_only=False)
+    )
+    order = _local_order(
+        side="sell",
+        price=None,
+        order_type="market",
+        risk_reducing=True,
+        volume=0.5,
+    )
+
+    result_order = adapter.submit_order(order, _pair_metadata(), latest_price=50.0)
+
+    assert result_order.status == "filled"
+    assert result_order.avg_fill_price == pytest.approx(50.0)
+    assert result_order.cumulative_base_filled == pytest.approx(0.5)
+
+
+def test_dry_run_limit_order_fills_from_requested_price():
+    adapter = DryRunExecutionAdapter(
+        config=ExecutionConfig(mode="paper", validate_only=False)
+    )
+    order = _local_order(
+        side="sell",
+        price=31.0,
+        order_type="limit",
+        risk_reducing=True,
+        volume=0.25,
+    )
+
+    result_order = adapter.submit_order(order, _pair_metadata(), latest_price=None)
+
+    assert result_order.status == "filled"
+    assert float(result_order.avg_fill_price) == pytest.approx(
+        float(result_order.raw_request["price"])
+    )
+    assert result_order.cumulative_base_filled == pytest.approx(0.25)
+
+
+def test_dry_run_risk_increasing_buy_min_notional_unchanged():
+    adapter = DryRunExecutionAdapter(
+        config=ExecutionConfig(
+            mode="paper",
+            validate_only=False,
+            min_order_notional_usd=20.0,
+        )
+    )
+    order = _local_order(
+        side="buy",
+        price=None,
+        order_type="market",
+        risk_reducing=False,
+        volume=1.0,
+    )
+
+    result_order = adapter.submit_order(order, _pair_metadata(), latest_price=None)
+
+    assert result_order.status == "rejected"
+    assert (
+        result_order.last_error
+        == "Unable to verify minimum notional: price unavailable"
+    )
+
+
 def test_execution_service_uses_kraken_adapter_for_live_mode(inactive_risk_status):
     config = ExecutionConfig(
         mode="live",
@@ -145,7 +230,12 @@ def test_execution_service_uses_kraken_adapter_for_live_mode(inactive_risk_statu
 
 
 def _local_order(
-    pair: str = "XBTUSD", side: str = "buy", price: float = 25.0, volume: float = 1.0
+    pair: str = "XBTUSD",
+    side: str = "buy",
+    price: float | None = 25.0,
+    volume: float = 1.0,
+    order_type: str = "limit",
+    risk_reducing: bool = False,
 ):
     return LocalOrder(
         local_id="local",
@@ -153,10 +243,11 @@ def _local_order(
         strategy_id="strategy",
         pair=pair,
         side=side,
-        order_type="limit",
+        order_type=order_type,
         requested_base_size=volume,
         requested_price=price,
         userref=99,
+        risk_reducing=risk_reducing,
     )
 
 

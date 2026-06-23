@@ -117,11 +117,16 @@ def _serialize_decision(record) -> RiskDecisionPayload:
     except Exception:
         raw_data = {}
 
-    block_reasons: List[str] = []
+    raw_reasons: List[str] = []
     if raw_data.get("blocked_reasons"):
-        block_reasons = [str(reason) for reason in raw_data["blocked_reasons"]]
+        raw_reasons = [str(reason) for reason in raw_data["blocked_reasons"]]
     elif record.block_reason:
-        block_reasons = [r for r in record.block_reason.split(";") if r]
+        raw_reasons = [r for r in record.block_reason.split(";") if r]
+
+    blocked = bool(record.blocked)
+    clamped = bool(raw_data.get("clamped"))
+    block_reasons = raw_reasons if blocked else []
+    clamp_reasons = raw_reasons if clamped else []
 
     decided_at = datetime.fromtimestamp(record.time, tz=timezone.utc)
 
@@ -131,9 +136,11 @@ def _serialize_decision(record) -> RiskDecisionPayload:
         strategy_id=record.strategy_name,
         pair=record.pair,
         action_type=record.action_type,
-        blocked=record.blocked,
+        blocked=blocked,
         block_reasons=block_reasons,
         kill_switch_active=record.kill_switch_active,
+        clamped=clamped,
+        clamp_reasons=clamp_reasons,
     )
 
 

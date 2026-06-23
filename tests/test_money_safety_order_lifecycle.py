@@ -19,6 +19,7 @@ from types import SimpleNamespace
 from typing import Any, Dict, cast
 from unittest.mock import MagicMock, patch
 
+import pytest
 from starlette.testclient import TestClient
 
 from krakked import cli
@@ -41,7 +42,7 @@ from krakked.execution.oms import (
     PORTFOLIO_SYNC_ORDER_BLOCKED_MESSAGE,
     ExecutionService,
 )
-from krakked.main import _run_loop_iteration
+from krakked.main import EMERGENCY_FLATTEN_MAX_NO_PROGRESS_ATTEMPTS, _run_loop_iteration
 from krakked.market_data.api import MarketDataAPI
 from krakked.market_data.models import ConnectionStatus, OHLCBar, PairMetadata
 from krakked.metrics import SystemMetrics
@@ -304,6 +305,26 @@ def _app_config(db_path: str) -> AppConfig:
             },
         ),
     )
+
+
+def _paper_config(db_path: str) -> AppConfig:
+    config = _app_config(db_path)
+    config.universe.include_pairs = ["XBTUSD", "ETHUSD"]
+    config.portfolio.valuation_pairs = {
+        "XBT": "XBTUSD",
+        "ETH": "ETHUSD",
+    }
+    config.execution = ExecutionConfig(
+        mode="paper",
+        validate_only=False,
+        allow_live_trading=False,
+        default_order_type="market",
+        min_order_notional_usd=20.0,
+        max_retries=1,
+        retry_backoff_seconds=0,
+        retry_backoff_factor=1.0,
+    )
+    return config
 
 
 def _decision_loop_config(db_path: str) -> AppConfig:
@@ -639,6 +660,86 @@ def _real_flatten_context(
     )
 
 
+def _paper_flatten_context(db_path) -> tuple[TestClient, AppContext, MagicMock]:
+    config = _paper_config(str(db_path))
+    market_data = _DecisionLoopMarketData()
+    client = FakeKrakenRESTClient(add_order_mode=ACCEPT)
+    portfolio = PortfolioService(
+        config=config,
+        market_data=cast(MarketDataAPI, market_data),
+        db_path=str(db_path),
+        rest_client=cast(KrakenRESTClient, client),
+    )
+    portfolio.sync()
+    strategy_engine = StrategyEngine(
+        config, cast(MarketDataAPI, market_data), portfolio
+    )
+    execution_service = ExecutionService(
+        store=cast(SQLitePortfolioStore, portfolio.store),
+        config=config.execution,
+        market_data=cast(MarketDataAPI, market_data),
+        risk_status_provider=_inactive_risk,
+    )
+    execution_service.adapter.client = None
+    session = SessionState(
+        active=False,
+        mode="paper",
+        loop_interval_sec=config.session.loop_interval_sec,
+        profile_name=config.session.profile_name,
+        ml_enabled=config.ml.enabled,
+        emergency_flatten=config.session.emergency_flatten,
+        account_id=config.session.account_id or "default",
+    )
+    context = AppContext(
+        config=config,
+        client=cast(KrakenRESTClient, client),
+        market_data=cast(MarketDataAPI, market_data),
+        portfolio_service=portfolio,
+        portfolio=portfolio,
+        strategy_engine=strategy_engine,
+        execution_service=execution_service,
+        metrics=SystemMetrics(),
+        session=session,
+    )
+    app = create_api(context)
+    test_client = TestClient(app)
+    test_client.context = context  # type: ignore[attr-defined]
+    return test_client, context, MagicMock(name="refresh_metrics_state")
+
+
+def _seed_paper_positions(context: AppContext) -> ExecutionPlan:
+    execution_service = cast(ExecutionService, context.execution_service)
+    portfolio = cast(PortfolioService, context.portfolio)
+    plan = ExecutionPlan(
+        plan_id="seed-paper-positions",
+        generated_at=datetime.now(UTC),
+        actions=[
+            _action(
+                pair="XBTUSD",
+                strategy_id="strat",
+                target_base_size=0.2,
+                target_notional_usd=20.0,
+                current_base_size=0.0,
+            ),
+            _action(
+                pair="ETHUSD",
+                strategy_id="strat",
+                target_base_size=0.6,
+                target_notional_usd=30.0,
+                current_base_size=0.0,
+            ),
+        ],
+        metadata={"order_type": "market"},
+    )
+    result = execution_service.execute_plan(plan)
+    assert result.success is True
+    assert all(order.status == "filled" for order in result.orders)
+    portfolio.ingest_filled_orders(result)
+    positions = portfolio.get_positions()
+    assert {position.pair for position in positions} == {"XBTUSD", "ETHUSD"}
+    return plan
+
+
 def _run_emergency_flatten_once(
     *,
     now: datetime,
@@ -719,6 +820,8 @@ def test_seeded_flatten_route_cancels_then_closes_and_resume_clears(tmp_path):
     assert close_order.side == "sell"
     assert close_order.risk_reducing is True
     assert close_order.kraken_order_id is not None
+    assert close_order.status == "open"
+    assert close_order.avg_fill_price is None
 
     persisted_results = portfolio.store.get_execution_results(limit=20)
     assert any(result.plan_id == flatten_result.plan_id for result in persisted_results)
@@ -751,6 +854,162 @@ def test_seeded_flatten_route_cancels_then_closes_and_resume_clears(tmp_path):
     assert persisted_close.status == "closed"
     assert persisted_close.cumulative_base_filled == close_order.requested_base_size
     assert client.get_private("Balance")["XXBT"] == "0.00000000"
+
+
+def test_paper_background_emergency_flatten_ingests_and_clears(tmp_path):
+    _test_client, context, refresh_metrics = _paper_flatten_context(
+        tmp_path / "paper-background-flatten.db"
+    )
+    _seed_paper_positions(context)
+    trades_before = len(context.portfolio.get_trade_history())
+    context.session.emergency_flatten = True
+    context.config.session.emergency_flatten = True
+
+    with patch("krakked.main.dump_runtime_overrides") as mock_dump_main:
+        _run_emergency_flatten_once(
+            now=datetime.now(UTC),
+            portfolio=context.portfolio,
+            market_data=context.market_data,
+            strategy_engine=context.strategy_engine,
+            execution_service=context.execution_service,
+            session=context.session,
+            refresh_metrics_state=refresh_metrics,
+        )
+
+    assert context.session.emergency_flatten is False
+    assert context.config.session.emergency_flatten is False
+    mock_dump_main.assert_called_once()
+    assert refresh_metrics.called
+
+    close_result = context.execution_service.get_recent_executions()[-1]
+    assert close_result.success is True
+    assert {order.side for order in close_result.orders} == {"sell"}
+    assert all(order.status == "filled" for order in close_result.orders)
+    assert all(order.avg_fill_price is not None for order in close_result.orders)
+    assert len(context.portfolio.get_trade_history()) == trades_before + 2
+    assert all(
+        abs(position.base_size) <= 1e-9
+        for position in context.portfolio.get_positions()
+    )
+    assert context.portfolio.balances["XBT"].total == pytest.approx(0.0)
+    assert context.portfolio.balances["ETH"].total == pytest.approx(0.0)
+    assert context.portfolio.get_snapshots(limit=1)
+
+
+def test_paper_flatten_route_ingests_filled_orders(tmp_path):
+    test_client, context, _refresh_metrics = _paper_flatten_context(
+        tmp_path / "paper-route-flatten.db"
+    )
+    _seed_paper_positions(context)
+    trades_before = len(context.portfolio.get_trade_history())
+
+    with patch("krakked.ui.routes.execution.dump_runtime_overrides") as mock_dump:
+        response = test_client.post(
+            "/api/execution/flatten_all", json={"confirmation": "FLATTEN ALL"}
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["error"] is None
+    assert context.session.emergency_flatten is True
+    mock_dump.assert_called_once()
+
+    flatten_result = context.execution_service.get_recent_executions()[-1]
+    assert flatten_result.success is True
+    assert all(order.status == "filled" for order in flatten_result.orders)
+    assert all(order.avg_fill_price is not None for order in flatten_result.orders)
+    assert len(context.portfolio.get_trade_history()) == trades_before + 2
+    assert all(
+        abs(position.base_size) <= 1e-9
+        for position in context.portfolio.get_positions()
+    )
+
+
+def test_paper_background_emergency_flatten_rejects_missing_market_price(tmp_path):
+    _test_client, context, refresh_metrics = _paper_flatten_context(
+        tmp_path / "paper-missing-price-flatten.db"
+    )
+    _seed_paper_positions(context)
+    trades_before = len(context.portfolio.get_trade_history())
+    context.market_data.get_latest_price = lambda pair: None  # type: ignore[method-assign]
+    context.session.emergency_flatten = True
+    context.config.session.emergency_flatten = True
+
+    _run_emergency_flatten_once(
+        now=datetime.now(UTC),
+        portfolio=context.portfolio,
+        market_data=context.market_data,
+        strategy_engine=context.strategy_engine,
+        execution_service=context.execution_service,
+        session=context.session,
+        refresh_metrics_state=refresh_metrics,
+    )
+
+    close_result = context.execution_service.get_recent_executions()[-1]
+    assert close_result.success is False
+    assert close_result.errors == ["Unable to simulate fill: price unavailable"] * 2
+    assert all(order.status == "rejected" for order in close_result.orders)
+    assert all(order.avg_fill_price is None for order in close_result.orders)
+    assert len(context.portfolio.get_trade_history()) == trades_before
+    assert context.session.emergency_flatten is True
+    assert getattr(context.session, "_emergency_flatten_no_progress_attempts") == 1
+    assert {position.pair for position in context.portfolio.get_positions()} == {
+        "XBTUSD",
+        "ETHUSD",
+    }
+
+
+def test_paper_background_emergency_flatten_no_progress_cap(tmp_path):
+    _test_client, context, refresh_metrics = _paper_flatten_context(
+        tmp_path / "paper-no-progress-cap.db"
+    )
+    _seed_paper_positions(context)
+    context.market_data.get_latest_price = lambda pair: None  # type: ignore[method-assign]
+    context.session.emergency_flatten = True
+    context.config.session.emergency_flatten = True
+    metrics = SystemMetrics()
+
+    for index in range(EMERGENCY_FLATTEN_MAX_NO_PROGRESS_ATTEMPTS):
+        _run_loop_iteration(
+            now=datetime.now(UTC) + timedelta(seconds=index),
+            strategy_interval=1,
+            portfolio_interval=1,
+            last_strategy_cycle=datetime.now(UTC) - timedelta(seconds=2),
+            last_portfolio_sync=datetime.now(UTC) - timedelta(seconds=2),
+            portfolio=context.portfolio,
+            market_data=context.market_data,
+            strategy_engine=context.strategy_engine,
+            execution_service=context.execution_service,
+            metrics=metrics,
+            refresh_metrics_state=refresh_metrics,
+            session_active=False,
+            session=context.session,
+        )
+
+    assert context.session.emergency_flatten is True
+    assert "no position-reduction progress" in getattr(
+        context.session, "_emergency_flatten_halted_reason"
+    )
+    recent_count = len(context.execution_service.get_recent_executions())
+
+    _run_loop_iteration(
+        now=datetime.now(UTC) + timedelta(seconds=30),
+        strategy_interval=1,
+        portfolio_interval=1,
+        last_strategy_cycle=datetime.now(UTC) - timedelta(seconds=2),
+        last_portfolio_sync=datetime.now(UTC) - timedelta(seconds=2),
+        portfolio=context.portfolio,
+        market_data=context.market_data,
+        strategy_engine=context.strategy_engine,
+        execution_service=context.execution_service,
+        metrics=metrics,
+        refresh_metrics_state=refresh_metrics,
+        session_active=False,
+        session=context.session,
+    )
+
+    assert len(context.execution_service.get_recent_executions()) == recent_count
+    assert metrics.execution_errors >= 1
 
 
 def test_seeded_flatten_route_keeps_armed_when_open_orders_remain(tmp_path):
