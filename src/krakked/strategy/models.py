@@ -64,6 +64,8 @@ class DecisionRecord:
     block_reason: Optional[str]
     kill_switch_active: bool
     raw_json: str  # full serialized StrategyDecisionBatch/Action as JSON string
+    clamped: bool = False
+    clamp_reason: Optional[str] = None
 
 
 @dataclass

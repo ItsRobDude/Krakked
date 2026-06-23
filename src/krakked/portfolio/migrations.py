@@ -129,6 +129,8 @@ def migrate_3_to_4(conn: sqlite3.Connection) -> None:
             target_position_usd REAL,
             blocked INTEGER NOT NULL,
             block_reason TEXT,
+            clamped INTEGER NOT NULL DEFAULT 0,
+            clamp_reason TEXT,
             kill_switch_active INTEGER NOT NULL,
             raw_json TEXT
         )
@@ -309,6 +311,7 @@ def run_migrations(
         12: migrate_12_to_13,
         13: migrate_13_to_14,
         14: migrate_14_to_15,
+        15: migrate_15_to_16,
     }
 
     for version in range(from_version, to_version):
@@ -1101,3 +1104,31 @@ def migrate_14_to_15(conn: sqlite3.Connection) -> None:
     """Remove ambiguous active trade-ledger review suppressions."""
 
     _cleanup_ambiguous_trade_ref_reviews(conn, migration_name="v14_to_v15")
+
+
+def migrate_15_to_16(conn: sqlite3.Connection) -> None:
+    """Persist clamped decision reasons separately from blocked reasons."""
+
+    if not _table_exists(conn, "decisions"):
+        return
+
+    cursor = conn.cursor()
+    columns = _table_columns(conn, "decisions")
+    if "clamped" not in columns:
+        cursor.execute(
+            "ALTER TABLE decisions ADD COLUMN clamped INTEGER NOT NULL DEFAULT 0"
+        )
+    if "clamp_reason" not in columns:
+        cursor.execute("ALTER TABLE decisions ADD COLUMN clamp_reason TEXT")
+
+    cursor.execute(
+        """
+        UPDATE decisions
+        SET clamped = 1,
+            clamp_reason = COALESCE(clamp_reason, block_reason),
+            block_reason = NULL
+        WHERE blocked = 0
+          AND block_reason IS NOT NULL
+          AND TRIM(block_reason) != ''
+        """
+    )

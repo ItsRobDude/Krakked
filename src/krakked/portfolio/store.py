@@ -39,7 +39,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-CURRENT_SCHEMA_VERSION = 15
+CURRENT_SCHEMA_VERSION = 16
 
 MAX_ML_TRAINING_EXAMPLES = 5000
 MIN_ML_BOOTSTRAP_EXAMPLES = 50
@@ -422,6 +422,8 @@ def ensure_portfolio_tables(conn: sqlite3.Connection) -> None:
             target_position_usd REAL,
             blocked INTEGER NOT NULL,
             block_reason TEXT,
+            clamped INTEGER NOT NULL DEFAULT 0,
+            clamp_reason TEXT,
             kill_switch_active INTEGER NOT NULL,
             raw_json TEXT
         )
@@ -1979,8 +1981,9 @@ class SQLitePortfolioStore(PortfolioStore):
                 """
                 INSERT INTO decisions (
                     time, plan_id, strategy_name, pair, action_type,
-                    target_position_usd, blocked, block_reason, kill_switch_active, raw_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    target_position_usd, blocked, block_reason, clamped,
+                    clamp_reason, kill_switch_active, raw_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
                 (
                     record.time,
@@ -1991,6 +1994,8 @@ class SQLitePortfolioStore(PortfolioStore):
                     record.target_position_usd,
                     1 if record.blocked else 0,
                     record.block_reason,
+                    1 if record.clamped else 0,
+                    record.clamp_reason,
                     1 if record.kill_switch_active else 0,
                     record.raw_json,
                 ),
@@ -2296,7 +2301,8 @@ class SQLitePortfolioStore(PortfolioStore):
 
             query = """
                 SELECT time, plan_id, strategy_name, pair, action_type, target_position_usd,
-                       blocked, block_reason, kill_switch_active, raw_json
+                       blocked, block_reason, clamped, clamp_reason,
+                       kill_switch_active, raw_json
                 FROM decisions
                 WHERE 1=1
             """
@@ -2337,8 +2343,10 @@ class SQLitePortfolioStore(PortfolioStore):
                 target_position_usd=row[5],
                 blocked=bool(row[6]),
                 block_reason=row[7],
-                kill_switch_active=bool(row[8]),
-                raw_json=row[9],
+                clamped=bool(row[8]),
+                clamp_reason=row[9],
+                kill_switch_active=bool(row[10]),
+                raw_json=row[11],
             )
             for row in rows
         ]

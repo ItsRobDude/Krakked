@@ -365,7 +365,7 @@ def test_get_risk_decisions_splits_clamp_reasons(client, risk_context):
         action_type="increase",
         target_position_usd=100.0,
         blocked=False,
-        block_reason="max_per_strategy_pct",
+        block_reason=None,
         kill_switch_active=False,
         raw_json=json.dumps(
             {
@@ -375,6 +375,8 @@ def test_get_risk_decisions_splits_clamp_reasons(client, risk_context):
                 "action_type": "increase",
             }
         ),
+        clamped=True,
+        clamp_reason="max_per_strategy_pct",
     )
 
     risk_context.portfolio.get_decisions.return_value = [decision]
