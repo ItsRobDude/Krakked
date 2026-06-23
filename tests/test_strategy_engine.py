@@ -20,6 +20,7 @@ from krakked.portfolio.sync_status import (
     LIVE_SYNC_DEGRADED_REASON,
     live_sync_stale_reason,
 )
+from krakked.strategy.allocator import StrategyWeights
 from krakked.strategy.base import Strategy
 from krakked.strategy.engine import StrategyRiskEngine
 from krakked.strategy.evaluation import StrategyEvaluationResult
@@ -580,8 +581,8 @@ def test_strategy_evaluation_heartbeat_updates_when_no_intents_generated():
     assert plan.actions == []
     state = engine.strategy_states["quiet"]
     assert state.last_evaluated_at == now
-    assert state.last_intents_at == now
-    assert state.last_intents == []
+    assert state.last_intents_at is None
+    assert state.last_intents is None
     assert state.last_evaluation_summary is not None
     assert state.last_evaluation_summary["status"] == "no_signal"
 
@@ -1281,9 +1282,101 @@ def test_strategy_evaluation_classifies_score_filtered_intents():
     assert evaluation["intents_emitted"] == 3
     assert evaluation["actions_after_scoring"] == 0
     assert evaluation["filtered_by_score"] == 3
+    assert evaluation["score_threshold"] == 0.05
+    assert evaluation["last_evaluation_summary"]["status"] == "intents_score_filtered"
+    assert evaluation["last_evaluation_summary"]["filtered_by_score"] == 3
+    assert evaluation["last_evaluation_summary"]["score_threshold"] == 0.05
     assert evaluation["filtered_position_exits"] == 1
     assert evaluation["filtered_no_position_exits"] == 1
     assert evaluation["filtered_low_score_entries"] == 1
+    summaries = evaluation["intent_summaries"]
+    assert summaries[0]["pair"] == "XBTUSD"
+    assert summaries[0]["score"] == 0.0
+    assert summaries[0]["score_threshold"] == 0.05
+    assert summaries[0]["weight_factor"] == 1.0
+    assert summaries[0]["filter_stage"] == "score_gate"
+    assert summaries[0]["filter_reason"] == "below_score_threshold"
+    state = engine.strategy_states["fake"]
+    assert state.last_intents_at is not None
+    assert state.last_intents == summaries
+
+
+def test_strategy_evaluation_reports_weight_filtered_intent_detail():
+    class WeightedDownStrategy(Strategy):
+        def warmup(self, market_data, portfolio):
+            return None
+
+        def generate_intents(self, ctx):
+            return [
+                StrategyIntent(
+                    strategy_id=self.id,
+                    pair="XBTUSD",
+                    side="long",
+                    intent_type="enter",
+                    desired_exposure_usd=100.0,
+                    confidence=1.0,
+                    timeframe=ctx.timeframe,
+                    generated_at=ctx.now,
+                )
+            ]
+
+    strat_config = StrategyConfig(
+        name="fake", type="fake", enabled=True, params={"timeframes": ["1h"]}
+    )
+    engine = _engine_for_strategy(
+        strat_config=strat_config,
+        strategy=WeightedDownStrategy(strat_config),
+    )
+    engine._compute_strategy_weights = MagicMock(  # type: ignore[method-assign]
+        return_value=StrategyWeights(per_strategy_pct={"fake": 2.0, "other": 98.0})
+    )
+
+    plan = engine.run_cycle(datetime.now(timezone.utc))
+
+    assert plan.actions == []
+    evaluation = plan.metadata["strategy_evaluation"]["fake"]
+    summary = evaluation["intent_summaries"][0]
+    assert summary["confidence"] == 1.0
+    assert summary["weight_factor"] == 0.04
+    assert summary["score"] == 0.04
+    assert summary["score_threshold"] == 0.05
+    assert summary["filter_reason"] == "below_score_threshold"
+
+
+def test_strategy_evaluation_prefers_score_filtered_over_no_signal_contexts():
+    class QuietStrategy(Strategy):
+        def warmup(self, market_data, portfolio):
+            return None
+
+        def generate_intents(self, ctx):
+            return []
+
+    strat_config = StrategyConfig(
+        name="fake", type="fake", enabled=True, params={"timeframes": ["1h"]}
+    )
+    engine = _engine_for_strategy(
+        strat_config=strat_config,
+        strategy=QuietStrategy(strat_config),
+    )
+    evaluation = engine._new_strategy_evaluation()
+    evaluation.update(
+        {
+            "contexts_evaluated": 2,
+            "fresh_contexts_evaluated": 1,
+            "deferred_no_new_bar_contexts": 1,
+            "intents_emitted": 1,
+            "actions_after_scoring": 0,
+            "filtered_by_score": 1,
+            "score_threshold": 0.05,
+        }
+    )
+
+    summary = engine._build_strategy_evaluation_summary(
+        evaluation, datetime.now(timezone.utc)
+    )
+
+    assert summary["status"] == "intents_score_filtered"
+    assert summary["message"] == "1 candidate filtered before risk checks"
 
 
 def test_strategy_evaluation_classifies_display_pair_exit_against_canonical_position():

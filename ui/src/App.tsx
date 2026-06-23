@@ -313,6 +313,20 @@ const formatStrategyLatestSignal = (
   strategy: StrategyState,
   latestIntent: NonNullable<StrategyState['last_intents']>[number] | undefined,
 ) => {
+  const summary = strategy.last_evaluation_summary;
+  const latestWasScoreFiltered = latestIntent?.filter_reason === 'below_score_threshold';
+  if (summary?.status === 'intents_score_filtered' || latestWasScoreFiltered) {
+    const filteredCount = summary?.filtered_by_score ?? strategy.last_intents?.length ?? 0;
+    const countLabel = filteredCount === 1 ? 'candidate' : 'candidates';
+    if (latestIntent) {
+      const score = typeof latestIntent.score === 'number' ? latestIntent.score.toFixed(3) : 'unknown';
+      const threshold = typeof latestIntent.score_threshold === 'number'
+        ? latestIntent.score_threshold.toFixed(3)
+        : 'threshold unknown';
+      return `Score-filtered ${latestIntent.pair}: ${score} < ${threshold}`;
+    }
+    return `${filteredCount} ${countLabel} score-filtered`;
+  }
   if (latestIntent) {
     return `${latestIntent.side} ${latestIntent.pair} (${latestIntent.timeframe})`;
   }

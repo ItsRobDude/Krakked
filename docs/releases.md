@@ -31,7 +31,13 @@ The Git tag should match the version in [`pyproject.toml`](../pyproject.toml).
 
 ## Release Checklist
 
-1. Update the version in [`pyproject.toml`](../pyproject.toml).
+Use [`deployment-preflight-checklist.md`](deployment-preflight-checklist.md)
+before tagging or deploying an operator-facing release candidate. The preflight
+records the target SHA, image tag, expected runtime provenance, profile/DB, and
+proof evidence before anything starts.
+
+1. Update the version in [`pyproject.toml`](../pyproject.toml), unless this is
+   an explicitly recorded RC/operator-validation tag.
 2. Review [`docs/upgrades.md`](upgrades.md) and add migration notes for anything operator-visible.
 3. Run the local verification suite:
    - `poetry run pytest -q`
@@ -70,6 +76,10 @@ bash scripts/unraid_image_upgrade_rollback_drill.sh \
 The drill must report `IMAGE_UPGRADE_ROLLBACK_RESULT=PASS`, `fail=0`, and
 phase summaries with `DEPLOYMENT_PROOF_RESULT=PASS`, `skip_run_once=false`, and
 `skip_restore=false`.
+
+Do not start a release proof or soak until `/api/health` reports the intended
+`build_git_sha`, image tag, expected provenance, and
+`deployment_drift_detected=false`.
 
 ## Image Naming
 

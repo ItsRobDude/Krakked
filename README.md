@@ -30,9 +30,13 @@ The repo now has a strong engineering base and has moved past the original phase
 
 See the consolidated phase contract in [`docs/contract.md`](docs/contract.md) for the full design scope across Phases 1–7. Individual phase files remain available for historical reference.
 
+See [`docs/README.md`](docs/README.md) for the documentation map.
+
 See [`docs/product-roadmap.md`](docs/product-roadmap.md) for the current product direction and post-phase milestones: Docker-first deployment, California/U.S. positioning, paper/execution reliability, strategy evidence boundaries, ML roadmap, and productization priorities.
 
 See [`docs/docker.md`](docs/docker.md) for the preferred self-hosted deployment flow.
+
+Before publishing a release candidate, deploying to Unraid, or starting a proof/soak, use [`docs/deployment-preflight-checklist.md`](docs/deployment-preflight-checklist.md) to pin the intended commit, image, runtime provenance, profile, DB, and evidence artifacts.
 
 See [`docs/onboarding.md`](docs/onboarding.md) for a beginner-friendly first-run path, [`docs/releases.md`](docs/releases.md) for the Docker/image release flow, [`docs/upgrades.md`](docs/upgrades.md) for update steps, [`docs/backup-restore.md`](docs/backup-restore.md) for backup/export/import, [`docs/unraid.md`](docs/unraid.md) for an Unraid-oriented deployment sketch, and [`docs/distribution.md`](docs/distribution.md) for the current distribution/commercial recommendation.
 

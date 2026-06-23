@@ -199,7 +199,8 @@ The next milestones are product-facing rather than architecture-facing:
      standard.
    - For future release candidates, validate first boot, persistence, upgrades,
      rollback, backups, restore, and runtime provenance using
-     [`deployment-proof.md`](./deployment-proof.md).
+     [`deployment-proof.md`](./deployment-proof.md), after completing
+     [`deployment-preflight-checklist.md`](./deployment-preflight-checklist.md).
    - Treat source-mode host checks as development sanity, not customer-ready
      proof.
 
