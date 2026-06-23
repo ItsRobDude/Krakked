@@ -87,6 +87,12 @@ trust. The running app reports `runtime_source`, image name/tag, build SHA, and
 deployment drift fields in `/api/health` and `/api/system/health`; image-mode
 proofs fail when those values do not match expectations.
 
+Before using a published image for release sign-off, proof, or soak work, run
+the repo-level
+[`deployment-preflight-checklist.md`](./deployment-preflight-checklist.md). It
+requires the intended image tag and `/api/health.build_git_sha` to match before
+the session starts.
+
 Docker health on Unraid is useful but not the final truth source. If Docker
 reports the container as unhealthy while the container is running and
 `http://<unraid-ip>:8088/api/health` returns OK, treat app HTTP health as
@@ -162,6 +168,10 @@ bash scripts/unraid_image_upgrade_rollback_drill.sh \
 
 The drill must end with `IMAGE_UPGRADE_ROLLBACK_RESULT=PASS`, `fail=0`, and
 three phase summaries whose hard checks were not skipped.
+
+If the proof is part of a longer paper soak, finish the deployment preflight
+first and record the active profile, active DB path, monitor output path, image
+tag, and build SHA in the soak report.
 
 ## Docker Compose boot persistence
 

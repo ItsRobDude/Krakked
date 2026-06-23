@@ -114,6 +114,11 @@ to run the decision-loop proof sequence in
 [`decision-loop-proof-plan.md`](./decision-loop-proof-plan.md) before starting
 the longer paper soak.
 
+Any future decision soak must also complete
+[`deployment-preflight-checklist.md`](./deployment-preflight-checklist.md)
+before the session starts, so the report records the intended image/SHA,
+runtime provenance, profile, DB path, monitor path, and replay evidence source.
+
 Claim boundary:
 
 - deterministic replay proves strategy/risk/OMS with simulated fills;
@@ -139,6 +144,11 @@ Completed evidence:
 - A short paper validation on `v0.1.1-rc.8` produced strategy intents, OMS
   dry-run fills, paper trades, portfolio positions, and useful
   deferred/no-signal strategy summaries.
+- The corrected `v0.1.1-rc.9` decision soak proved deployment/runtime
+  provenance, but did not produce a forward decision chain. `rs_rotation`
+  emitted two zero-confidence candidates that were score-filtered before risk,
+  then its 24h rebalance cadence made later bars quiet. The next operator-truth
+  cleanup is to surface score-filtered candidates and reasons plainly.
 
 Remaining proof targets:
 
@@ -151,6 +161,9 @@ Remaining proof targets:
 - Run a forward paper soak on a supported window/pair set, with real strategy
   decisions flowing through OMS, paper fills, portfolio sync, and operator
   health surfaces.
+- Before the next forward soak, make pre-risk score filtering legible in the
+  strategy/cockpit surfaces so "candidate rejected below score threshold" is
+  not mistaken for runtime silence.
 - Keep stale pairs used by enabled strategies or open positions as
   session-critical blockers. Disabled/watchlist/global stale pairs, including
   recurring `ADA/USD` noise, should remain warnings.
@@ -211,7 +224,8 @@ For strategy evidence:
 
 1. Run the deterministic decision-loop proof sequence, then a decision-useful
    paper soak on a supported window/pair set if the replay passes the
-   decision-loop rule.
+   decision-loop rule. Use the deployment preflight checklist before starting
+   the runtime soak.
 2. Clean up the remaining operator affordances from the soak: pause/resume
    wording, restart no-auto-resume wording, and profile-aware backup/export.
 3. Re-run a short paper validation only if the cleanup changes health,

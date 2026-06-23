@@ -52,6 +52,11 @@ This is now the proof standard for deployability. A source-mode proof is useful
 for development sanity, but release sign-off should use image mode plus the
 upgrade/rollback wrapper.
 
+Before running any deployment proof or soak, complete
+[`deployment-preflight-checklist.md`](./deployment-preflight-checklist.md).
+That checklist is the guardrail for target SHA, image tag, runtime provenance,
+profile/DB isolation, replay evidence, and monitor start order.
+
 ## Current-main proof runner
 
 For any current branch or release candidate, run the host-side proof runner from

@@ -501,6 +501,60 @@ describe('cockpit operator paths', () => {
     expect(screen.getAllByText(/not a profitability endorsement/i).length).toBeGreaterThan(0);
   });
 
+  test('shows score-filtered strategy candidates distinctly from no-action text', async () => {
+    await renderActiveCockpit(buildCockpit({
+      strategies: {
+        state: [
+          strategy({
+            strategy_id: 'rs_rotation',
+            label: 'Relative Strength Rotation',
+            evidence_status: 'research_stage',
+            evidence_label: 'Research stage',
+            evidence_note: 'Configured but disabled by default after replay evidence failed promotion.',
+            params: {
+              pairs: ['BTC/USD', 'ETH/USD', 'SOL/USD', 'ADA/USD'],
+              timeframe: '4h',
+            },
+            last_evaluation_summary: {
+              status: 'intents_score_filtered',
+              message: '2 candidates filtered before risk checks',
+              filtered_by_score: 2,
+              actions_after_scoring: 0,
+              score_threshold: 0.05,
+              intents_emitted: 2,
+            },
+            last_intents: [
+              {
+                pair: 'SOL/USD',
+                side: 'long',
+                intent_type: 'enter',
+                desired_exposure_usd: 250,
+                confidence: 0,
+                timeframe: '4h',
+                score: 0,
+                score_threshold: 0.05,
+                weight_factor: 1,
+                filter_stage: 'score_gate',
+                filter_reason: 'below_score_threshold',
+                relative_return: -0.01,
+              },
+            ],
+          }),
+        ],
+        performance: [],
+      },
+      activity: {
+        recent_executions: [],
+        risk_decisions: [],
+        decision_traces: [],
+      },
+    }));
+
+    expect(screen.getAllByText('Score-filtered SOL/USD: 0.000 < 0.050').length).toBeGreaterThan(0);
+    expect(screen.getByText('2 candidates filtered before risk checks')).toBeInTheDocument();
+    expect(screen.queryByText('No action chosen')).not.toBeInTheDocument();
+  });
+
   test('shows display-only EWMA market risk context', async () => {
     await renderActiveCockpit();
 

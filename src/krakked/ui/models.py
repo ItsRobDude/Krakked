@@ -254,8 +254,12 @@ class StrategyEvaluationSummaryPayload(BaseModel):
     data_stale_contexts: int = 0
     strategy_error_contexts: int = 0
     intents_emitted: int = 0
+    actions_after_scoring: int = 0
+    filtered_by_score: int = 0
+    score_threshold: Optional[float] = None
     timeframes_evaluated: List[str] = Field(default_factory=list)
     context_summaries: List[Dict[str, Any]] = Field(default_factory=list)
+    intent_summaries: List[Dict[str, Any]] = Field(default_factory=list)
     reasons: List[Dict[str, Any]] = Field(default_factory=list)
 
 

@@ -329,6 +329,16 @@ export type StrategyIntentPreview = {
   desired_exposure_usd: number | null;
   confidence: number;
   timeframe: string;
+  score?: number | null;
+  score_threshold?: number | null;
+  weight_factor?: number | null;
+  weight_hint_pct?: number | null;
+  filter_stage?: string | null;
+  filter_reason?: string | null;
+  relative_return?: number | null;
+  confidence_return_bps?: number | null;
+  target_exposure_usd?: number | null;
+  current_exposure_usd?: number | null;
 };
 
 export type StrategyParams = {
@@ -343,6 +353,7 @@ export type StrategyEvaluationStatus =
   | 'deferred_no_new_bar'
   | 'disabled'
   | 'intents_emitted'
+  | 'intents_score_filtered'
   | 'invalid_bar_timestamp'
   | 'no_data'
   | 'no_pairs'
@@ -372,8 +383,12 @@ export type StrategyState = {
     data_stale_contexts?: number;
     strategy_error_contexts?: number;
     intents_emitted?: number;
+    actions_after_scoring?: number;
+    filtered_by_score?: number;
+    score_threshold?: number | null;
     timeframes_evaluated?: string[];
     context_summaries?: Array<Record<string, unknown>>;
+    intent_summaries?: Array<Record<string, unknown>>;
     reasons?: Array<Record<string, unknown>>;
   } | null;
   pnl_summary: { realized_pnl_usd?: number; exposure_pct?: number };

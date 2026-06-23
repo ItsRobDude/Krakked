@@ -26,6 +26,10 @@ Trusting money with Krakked means:
 This is a proof plan, not a feature wish list. A feature is not considered
 money-safe because the code path exists. It is considered money-safe only after
 the repo contains a deterministic proof that the behavior binds under failure.
+Runtime proofs and paper soaks must start with
+[`deployment-preflight-checklist.md`](./deployment-preflight-checklist.md) so
+the evidence is tied to the intended image, commit, profile, DB, and monitor
+artifacts.
 
 ## Current Status Scorecard
 

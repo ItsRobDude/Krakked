@@ -146,6 +146,21 @@ Required evidence:
 The soak report must include a "scope boundary" section stating that paper mode
 did not exercise live account-truth gates or real Kraken reconciliation.
 
+## 2026-06-22 rc.9 Forward Soak Finding
+
+The corrected `v0.1.1-rc.9` forward paper soak used the intended image, commit,
+profile, and isolated DB. Runtime health, portfolio sync, drift status, and
+operator provenance were clean, but the forward decision chain was not observed:
+no risk decisions, orders, fills, trades, or positions were produced.
+
+The root cause was strategy-legibility, not deployment drift. `rs_rotation`
+emitted two raw cold-start candidates, both with zero confidence. The strategy
+engine filtered both before risk because their scores were below the score
+threshold, then the 24h rebalance cadence made later closed-bar evaluations
+quiet. This is a valid conservative no-trade outcome, but it exposed an
+operator-truth gap: runtime surfaces need to show score-filtered candidates and
+their reasons instead of collapsing them into generic no-action text.
+
 ## Deterministic Live-Gate Harness Status
 
 `tests/test_money_safety_order_lifecycle.py` includes a strategy-generated

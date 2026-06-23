@@ -842,6 +842,8 @@ class StrategyEngine:
         invalid_contexts = int(evaluation.get("invalid_bar_timestamp_contexts", 0) or 0)
         data_stale_contexts = int(evaluation.get("data_stale_contexts", 0) or 0)
         intents = int(evaluation.get("intents_emitted", 0) or 0)
+        actions_after_scoring = int(evaluation.get("actions_after_scoring", 0) or 0)
+        filtered_by_score = int(evaluation.get("filtered_by_score", 0) or 0)
         strategy_error_contexts = int(evaluation.get("strategy_error_contexts", 0) or 0)
         reasons = (
             []
@@ -858,6 +860,10 @@ class StrategyEngine:
         elif skipped_no_pairs:
             status = "no_pairs"
             message = "No eligible pairs configured for this strategy"
+        elif intents > 0 and actions_after_scoring == 0 and filtered_by_score > 0:
+            status = "intents_score_filtered"
+            label = "candidate" if filtered_by_score == 1 else "candidates"
+            message = f"{filtered_by_score} {label} filtered before risk checks"
         elif intents > 0:
             status = "intents_emitted"
             label = "intent" if intents == 1 else "intents"
@@ -899,8 +905,12 @@ class StrategyEngine:
             "data_stale_contexts": data_stale_contexts,
             "strategy_error_contexts": strategy_error_contexts,
             "intents_emitted": intents,
+            "actions_after_scoring": actions_after_scoring,
+            "filtered_by_score": filtered_by_score,
+            "score_threshold": evaluation.get("score_threshold"),
             "timeframes_evaluated": list(evaluation.get("timeframes_evaluated") or []),
             "context_summaries": list(evaluation.get("context_summaries") or [])[:5],
+            "intent_summaries": list(evaluation.get("intent_summaries") or [])[:10],
             "reasons": reasons,
         }
 
@@ -975,12 +985,13 @@ class StrategyEngine:
         intent: StrategyIntent,
         score: float,
         *,
-        min_score: float,
+        score_threshold: float,
         positions_by_strategy_pair: Optional[Dict[tuple[str, str], float]] = None,
     ) -> None:
         evaluation = evaluation_summary.setdefault(
             intent.strategy_id, StrategyEngine._new_strategy_evaluation()
         )
+        evaluation["score_threshold"] = score_threshold
         current_min = evaluation.get("min_score")
         current_max = evaluation.get("max_score")
         evaluation["min_score"] = (
@@ -989,7 +1000,7 @@ class StrategyEngine:
         evaluation["max_score"] = (
             score if current_max is None else max(float(current_max), score)
         )
-        if score < min_score:
+        if score < score_threshold:
             evaluation["filtered_by_score"] += 1
             if StrategyEngine._is_exit_intent(intent):
                 position_base = (positions_by_strategy_pair or {}).get(
@@ -1002,6 +1013,39 @@ class StrategyEngine:
             else:
                 evaluation["filtered_low_score_entries"] += 1
 
+    @staticmethod
+    def _intent_summary_metadata(intent: StrategyIntent) -> Dict[str, Any]:
+        metadata = intent.metadata or {}
+        summary: Dict[str, Any] = {}
+        for key in (
+            "relative_return",
+            "confidence_return_bps",
+            "target_exposure_usd",
+            "current_exposure_usd",
+            "weight_hint_pct",
+        ):
+            if key in metadata:
+                summary[key] = metadata[key]
+        return summary
+
+    @staticmethod
+    def _enrich_intent_summary(
+        summary: Dict[str, Any],
+        *,
+        score: float,
+        score_threshold: float,
+        weight_factor: float,
+    ) -> None:
+        summary["score"] = score
+        summary["score_threshold"] = score_threshold
+        summary["weight_factor"] = weight_factor
+        if score < score_threshold:
+            summary["filter_stage"] = "score_gate"
+            summary["filter_reason"] = "below_score_threshold"
+        else:
+            summary["filter_stage"] = "risk"
+            summary["filter_reason"] = None
+
     def _collect_intents(
         self,
         now: datetime,
@@ -1012,10 +1056,12 @@ class StrategyEngine:
         List[StrategyIntent],
         Dict[str, List[Dict[str, Any]]],
         Dict[str, Dict[str, Any]],
+        Dict[int, Dict[str, Any]],
     ]:
         """Collect intents from all active strategies across configured timeframes."""
         all_intents: List[StrategyIntent] = []
         intent_summaries: Dict[str, List[Dict[str, Any]]] = {}
+        intent_summary_refs: Dict[int, Dict[str, Any]] = {}
         evaluation_summary = {
             name: self._new_strategy_evaluation() for name in self.strategies
         }
@@ -1122,21 +1168,21 @@ class StrategyEngine:
                             )
                         summary = intent_summaries.setdefault(name, [])
                         if len(summary) < 10:
-                            summary.append(
-                                {
-                                    "pair": self.market_data.get_display_pair(
-                                        intent.pair
-                                    ),
-                                    "side": intent.side,
-                                    "intent_type": intent.intent_type,
-                                    "desired_exposure_usd": intent.desired_exposure_usd,
-                                    "confidence": intent.confidence,
-                                    "timeframe": timeframe,
-                                }
-                            )
+                            payload = {
+                                "pair": self.market_data.get_display_pair(intent.pair),
+                                "side": intent.side,
+                                "intent_type": intent.intent_type,
+                                "desired_exposure_usd": intent.desired_exposure_usd,
+                                "confidence": intent.confidence,
+                                "timeframe": timeframe,
+                                **self._intent_summary_metadata(intent),
+                            }
+                            summary.append(payload)
+                            intent_summary_refs[id(intent)] = payload
                     all_intents.extend(intents)
                     self.strategy_states[name].last_evaluated_at = now
-                    self.strategy_states[name].last_intents_at = now
+                    if intents:
+                        self.strategy_states[name].last_intents_at = now
                 except DataStaleError as exc:
                     evaluation["data_stale_contexts"] += 1
                     self._append_context_summary(
@@ -1187,7 +1233,7 @@ class StrategyEngine:
 
             self._update_strategy_evaluation_summary(name, evaluation, now)
 
-        return all_intents, intent_summaries, evaluation_summary
+        return all_intents, intent_summaries, evaluation_summary, intent_summary_refs
 
     def _score_intent(
         self,
@@ -1237,9 +1283,12 @@ class StrategyEngine:
 
         weights = self._compute_strategy_weights(regime)
         self.refresh_strategy_weight_state(weights)
-        all_intents, intent_summaries, evaluation_summary = self._collect_intents(
-            now, regime, plan_id, weights
-        )
+        (
+            all_intents,
+            intent_summaries,
+            evaluation_summary,
+            intent_summary_refs,
+        ) = self._collect_intents(now, regime, plan_id, weights)
         self.last_cycle_intents = list(all_intents)
 
         scored: List[tuple[StrategyIntent, float]] = []
@@ -1256,9 +1305,25 @@ class StrategyEngine:
                 evaluation_summary,
                 intent,
                 score,
-                min_score=MIN_SCORE,
+                score_threshold=MIN_SCORE,
                 positions_by_strategy_pair=positions_by_strategy_pair,
             )
+            summary = intent_summary_refs.get(id(intent))
+            if summary is not None:
+                weight_factor = (
+                    weights.factor_for(intent.strategy_id) if weights else 1.0
+                )
+                self._enrich_intent_summary(
+                    summary,
+                    score=score,
+                    score_threshold=MIN_SCORE,
+                    weight_factor=weight_factor,
+                )
+        for strategy_id, summaries in intent_summaries.items():
+            evaluation = evaluation_summary.setdefault(
+                strategy_id, self._new_strategy_evaluation()
+            )
+            evaluation["intent_summaries"] = summaries
         filtered_scored = [
             (intent, score) for intent, score in scored if score >= MIN_SCORE
         ]
@@ -1278,6 +1343,9 @@ class StrategyEngine:
                 strategy_id, self._new_strategy_evaluation()
             )
             evaluation["actions_after_scoring"] += count
+
+        for strategy_id, evaluation in evaluation_summary.items():
+            self._update_strategy_evaluation_summary(strategy_id, evaluation, now)
 
         # Fetch pending orders from the store to prevent double-spending in risk checks
         pending_orders = []
@@ -1339,7 +1407,8 @@ class StrategyEngine:
                 "realized_pnl_usd": per_strategy_pnl.get(strategy_id, 0.0),
                 "exposure_pct": ctx.per_strategy_exposure_pct.get(strategy_id, 0.0),
             }
-            state.last_intents = intent_summaries.get(strategy_id, [])
+            if strategy_id in intent_summaries:
+                state.last_intents = intent_summaries[strategy_id]
             state.conflict_summary = conflict_summaries.get(strategy_id, [])
 
         plan_metadata = {

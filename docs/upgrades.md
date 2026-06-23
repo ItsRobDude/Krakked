@@ -2,6 +2,11 @@
 
 Krakked should be upgraded like an appliance: back it up, change the image tag, bring the service back up, then verify health.
 
+For release-candidate upgrades, Unraid proof runs, or paper soaks, complete
+[`deployment-preflight-checklist.md`](./deployment-preflight-checklist.md)
+before changing the running host. That checklist records the target SHA, image,
+expected provenance, active profile, DB path, and evidence artifacts.
+
 ## Safe Upgrade Flow
 
 1. Export the current install before touching the image:
