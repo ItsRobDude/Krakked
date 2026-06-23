@@ -60,8 +60,11 @@ Current trust level: Level 0, research and paper only.
   execution results, trades, or ledger entries. A short 2026-06-20 paper
   validation produced decision-useful paper records, but paper mode still does
   not exercise live account-truth gates or real Kraken reconciliation. The
-  milestone remains open until the decision-loop proof/soak acceptance lane is
-  run and reported honestly.
+  2026-06-23 `v0.1.1-rc.10` forward decision soak produced the longer
+  strategy/risk/OMS/paper-trade evidence stream, but its controlled paper
+  emergency-flatten attempt exposed a runtime paper-wallet flatten defect. The
+  milestone remains open until that flatten runtime gap is fixed and the
+  validate-only/tiny-live-smoke criteria are written.
 
 Known live blockers:
 
@@ -71,6 +74,10 @@ Known live blockers:
 - crash-safe submit-intent behavior is proven for the initial AddOrder
   response-loss scenario plus seeded emergency-flatten retry/resume, but broader
   process-death and reconciliation drills remain incomplete;
+- paper emergency flatten is deterministic-test covered, but the 2026-06-23
+  forward runtime drill showed paper market flatten orders can fill without
+  reducing synthetic wallet positions, causing the emergency resume path to
+  retry until contained;
 - live Balance/TradesHistory/Ledgers unavailability, never-synced live cold
   start, stale reconciliation age, missing trade-history evidence, and material
   drift now block normal-loop/live-opening-risk paths;
@@ -676,6 +683,8 @@ Current building blocks:
 - normal paper mode uses a persistent synthetic wallet.
 - a first pinned-image paper soak report exists:
   [`soak-reports/2026-06-19-paper-soak.md`](./soak-reports/2026-06-19-paper-soak.md).
+- a forward decision-loop paper soak report exists:
+  [`soak-reports/2026-06-23-decision-soak-rc10-forward.md`](./soak-reports/2026-06-23-decision-soak-rc10-forward.md).
 
 Proof gap:
 
@@ -683,6 +692,9 @@ Proof gap:
   decision/execution-useful: strategies mostly deferred until new closed bars,
   and fresh evaluations still produced no actions, risk blocks, OMS orders,
   execution results, trades, or ledger entries;
+- the 2026-06-23 forward decision soak is decision/execution-useful for normal
+  paper limit-order fills, but its paper emergency-flatten attempt failed to
+  update the synthetic wallet after filled market close orders;
 - live validate-only has not been turned into a repeatable readiness drill;
 - tiny live smoke criteria need to be written before any smoke run.
 
@@ -720,21 +732,25 @@ Explicit non-goals:
 The initial AddOrder response-loss, submit-unknown, one coherent
 fill/restart/portfolio-sync reconciliation proof, and narrow account-truth gates
 are now green. A short pinned-image paper validation on 2026-06-20 produced the
-missing paper-session evidence: strategy intents, OMS dry-run fills, paper
-trades, portfolio positions, and useful closed-bar/no-signal diagnostics. See
-[`soak-reports/2026-06-20-paper-validation.md`](./soak-reports/2026-06-20-paper-validation.md).
+first missing paper-session evidence: strategy intents, OMS dry-run fills,
+paper trades, portfolio positions, and useful closed-bar/no-signal diagnostics.
+The longer 2026-06-23 `v0.1.1-rc.10` decision soak then produced a normal
+paper decision stream on the intended image, but its controlled paper
+emergency-flatten attempt failed to reduce synthetic wallet positions. See
+[`soak-reports/2026-06-20-paper-validation.md`](./soak-reports/2026-06-20-paper-validation.md)
+and
+[`soak-reports/2026-06-23-decision-soak-rc10-forward.md`](./soak-reports/2026-06-23-decision-soak-rc10-forward.md).
 
 Recommended next behavior slice:
 
-1. Run the decision-loop proof sequence in
-   [`decision-loop-proof-plan.md`](./decision-loop-proof-plan.md): strict 4h
-   preflight, deterministic replay with a `decision_helpful` trust note,
-   strategy-generated fake-Kraken live-config gate proof, then a forward paper
-   soak only if the deterministic checks pass.
+1. Fix the paper emergency-flatten runtime defect from the 2026-06-23 soak:
+   market flatten orders in paper mode must produce usable fill prices, write
+   paper trades, update synthetic wallet balances/positions, and clear
+   emergency intent when flat.
 2. Keep dead-man heartbeat and broader fail-closed alert proofs on the
    money-safety backlog.
 3. Re-run a short paper validation only if the next cleanup changes health,
-   readiness, or control surfaces.
+   readiness, control surfaces, or emergency flatten.
 
 That slice should not broaden into strategy promotion, ML authority, multi-pair
 simulation, or data-continuity scoreboards.
@@ -762,9 +778,10 @@ Do not prioritize another strategy scoreboard as the next money-safety task.
 Do not prioritize broad live UI polish as the next money-safety task.
 
 The stale-sync/material-drift account-truth gates and seeded emergency-flatten
-drill now have narrow deterministic proofs, and the 2026-06-20 paper validation
-proved the paper loop can produce decision-useful strategy, OMS, trade, and
-portfolio evidence. Do not start live smoke yet. Next run the
-decision-loop proof/soak acceptance sequence. Keep the claim boundary explicit:
-replay proves simulated decision flow, fake-Kraken tests prove live-gate
-behavior, and paper soak proves runtime/operator behavior.
+drill now have narrow deterministic proofs, and the 2026-06-23 forward paper
+soak proved the normal paper loop can produce decision-useful strategy, OMS,
+trade, and portfolio evidence. Do not start live smoke yet. Next fix the paper
+emergency-flatten runtime defect and repeat that controlled drill. Keep the
+claim boundary explicit: replay proves simulated decision flow, fake-Kraken
+tests prove live-gate behavior, and paper soak proves runtime/operator
+behavior.

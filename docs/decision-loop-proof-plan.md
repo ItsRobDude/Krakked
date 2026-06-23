@@ -161,6 +161,24 @@ quiet. This is a valid conservative no-trade outcome, but it exposed an
 operator-truth gap: runtime surfaces need to show score-filtered candidates and
 their reasons instead of collapsing them into generic no-action text.
 
+## 2026-06-23 rc.10 Forward Soak Finding
+
+The `v0.1.1-rc.10` forward paper soak used the intended image, commit, profile,
+and isolated DB. It passed the forward paper decision-loop proof: `trend_core`
+generated strategy actions, the risk engine clamped and blocked over-budget
+intents with legible reasons, OMS wrote filled paper orders, paper trades and
+snapshots persisted for normal limit-order fills, and the new score-filter
+diagnostics made zero-confidence candidates visible before risk.
+
+See
+[`soak-reports/2026-06-23-decision-soak-rc10-forward.md`](./soak-reports/2026-06-23-decision-soak-rc10-forward.md).
+
+The controlled paper emergency-flatten attempt after the soak failed. Filled
+paper market flatten orders had no average fill price, no corresponding paper
+trades were inserted, positions did not reduce, and the emergency resume path
+retried until the container was stopped for containment. That is the next
+runtime paper-control fix before repeating the flatten drill.
+
 ## Deterministic Live-Gate Harness Status
 
 `tests/test_money_safety_order_lifecycle.py` includes a strategy-generated

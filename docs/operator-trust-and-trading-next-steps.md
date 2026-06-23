@@ -25,6 +25,14 @@ Known current facts:
   gaps around in-progress paper sync health, Unraid Docker health, recurring
   `ADA/USD` staleness, and reused profile naming. See
   [`soak-reports/2026-06-20-paper-validation.md`](./soak-reports/2026-06-20-paper-validation.md).
+- The `v0.1.1-rc.10` forward decision soak completed on 2026-06-23. It ran on
+  the intended pinned image and isolated profile, produced strategy-generated
+  risk decisions, filled paper orders, persisted paper trades, and kept
+  score-filtered candidate diagnostics legible. The follow-up paper
+  emergency-flatten drill exposed a runtime defect: filled paper market flatten
+  orders did not reduce synthetic wallet positions, so the emergency resume path
+  retried until the container was stopped for containment. See
+  [`soak-reports/2026-06-23-decision-soak-rc10-forward.md`](./soak-reports/2026-06-23-decision-soak-rc10-forward.md).
 - Runtime provenance is visible in health payloads, so deployment drift is no
   longer invisible.
 - The EWMA market-risk signal is display-only. It is useful operator context,
@@ -147,23 +155,26 @@ Completed evidence:
 - The corrected `v0.1.1-rc.9` decision soak proved deployment/runtime
   provenance, but did not produce a forward decision chain. `rs_rotation`
   emitted two zero-confidence candidates that were score-filtered before risk,
-  then its 24h rebalance cadence made later bars quiet. The next operator-truth
-  cleanup is to surface score-filtered candidates and reasons plainly.
+  then its 24h rebalance cadence made later bars quiet. That run motivated the
+  `v0.1.1-rc.10` score-filter legibility cleanup.
+- The corrected `v0.1.1-rc.10` forward decision soak proved the paper
+  decision-loop runtime path on the intended image: `trend_core` generated
+  actions, risk clamped/blocked over-budget intents, OMS wrote filled paper
+  orders, and paper trades/snapshots persisted for normal limit-order fills.
+  `rs_rotation` and later `trend_core` score-filtered candidates with explicit
+  score, threshold, and reason fields.
 
 Remaining proof targets:
 
-- Run strict 4h preflight and deterministic replay for the dated decision-soak
-  profile; proceed only if it passes the decision-loop replay rule in
-  [`decision-loop-proof-plan.md`](./decision-loop-proof-plan.md). A `limited`
-  replay is acceptable only when the limitation is low-ratio, legible guardrail
-  blocking rather than coverage gaps, zero fills, dominant blocking, or execution
-  errors.
-- Run a forward paper soak on a supported window/pair set, with real strategy
-  decisions flowing through OMS, paper fills, portfolio sync, and operator
-  health surfaces.
-- Before the next forward soak, make pre-risk score filtering legible in the
-  strategy/cockpit surfaces so "candidate rejected below score threshold" is
-  not mistaken for runtime silence.
+- Fix paper emergency flatten in the runtime path before repeating the flatten
+  drill: paper market flatten orders must carry or derive a usable fill price,
+  write paper trades, update the synthetic wallet, reduce positions, and clear
+  emergency intent.
+- Add retry-loop containment for emergency flatten so repeated filled orders
+  with unchanged positions degrade loudly instead of submitting identical
+  closes indefinitely.
+- Separate clamped and blocked reason fields in persisted/API risk decisions so
+  a clamped action is not shown as if it were blocked.
 - Keep stale pairs used by enabled strategies or open positions as
   session-critical blockers. Disabled/watchlist/global stale pairs, including
   recurring `ADA/USD` noise, should remain warnings.
@@ -222,14 +233,15 @@ For strategy evidence:
 
 ## Recommended Order
 
-1. Run the deterministic decision-loop proof sequence, then a decision-useful
-   paper soak on a supported window/pair set if the replay passes the
-   decision-loop rule. Use the deployment preflight checklist before starting
-   the runtime soak.
-2. Clean up the remaining operator affordances from the soak: pause/resume
+1. Fix the runtime paper emergency-flatten defect exposed by the 2026-06-23
+   soak report, then repeat a controlled paper flatten against seeded or
+   forward-generated positions.
+2. Separate clamp and block diagnostics in decision persistence/API/UI so risk
+   evidence remains operator-truthful.
+3. Clean up the remaining operator affordances from the soak: pause/resume
    wording, restart no-auto-resume wording, and profile-aware backup/export.
-3. Re-run a short paper validation only if the cleanup changes health,
-   readiness, or control surfaces.
-4. Only after account-truth gates and operator drills are boring should tiny
+4. Re-run a short paper validation only if the cleanup changes health,
+   readiness, control surfaces, or emergency flatten.
+5. Only after account-truth gates and operator drills are boring should tiny
    live smoke testing be considered, with conservative caps and a written stop
    condition.
