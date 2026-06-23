@@ -1071,10 +1071,13 @@ def _trace_decision(
     blocked: bool = False,
     block_reason: str | None = None,
     clamped: bool = False,
+    clamp_reason: str | None = None,
 ) -> DecisionRecord:
     raw_payload: dict[str, object] = {}
     if block_reason:
         raw_payload["blocked_reasons"] = [block_reason]
+    elif clamp_reason:
+        raw_payload["blocked_reasons"] = [clamp_reason]
     if clamped:
         raw_payload["clamped"] = True
     raw_json = json.dumps(raw_payload)
@@ -1089,6 +1092,8 @@ def _trace_decision(
         block_reason=block_reason,
         kill_switch_active=False,
         raw_json=raw_json,
+        clamped=clamped,
+        clamp_reason=clamp_reason,
     )
 
 
@@ -1342,7 +1347,7 @@ def test_cockpit_snapshot_splits_clamp_reasons_from_persisted_decisions(
                 action_type="increase",
                 blocked=False,
                 clamped=True,
-                block_reason="Max per asset limit",
+                clamp_reason="Max per asset limit",
             )
         ],
         execution=_trace_execution(decided_at, orders=[_trace_order()]),

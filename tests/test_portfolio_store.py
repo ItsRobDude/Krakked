@@ -160,6 +160,17 @@ def test_fresh_schema_has_indexed_trade_ledger_lag_lookup(tmp_path):
     assert "idx_ledger_entries_type_refid_time" in indexes
 
 
+def test_fresh_schema_has_clamped_decision_columns(tmp_path):
+    db_path = tmp_path / "decision_clamp_columns.db"
+    SQLitePortfolioStore(str(db_path))
+
+    with sqlite3.connect(db_path) as conn:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(decisions)")}
+
+    assert "clamped" in columns
+    assert "clamp_reason" in columns
+
+
 def test_fresh_schema_has_scoped_trade_ledger_review_tables(tmp_path):
     db_path = tmp_path / "reviewed_trade_refs_fresh.db"
     SQLitePortfolioStore(str(db_path))
@@ -791,6 +802,95 @@ def test_v15_cleanup_missing_validation_tables_with_no_active_reviews_succeeds(
     assert ledger_entries_exists is not None
 
 
+def test_v15_to_v16_migration_backfills_clamped_decision_reasons(tmp_path):
+    db_path = tmp_path / "decision_clamp_migrate.db"
+    with sqlite3.connect(db_path) as conn:
+        migrations._ensure_meta_table(conn)
+        migrations._set_schema_version(conn, 15)
+        conn.execute(
+            """
+            CREATE TABLE decisions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                time INTEGER NOT NULL,
+                plan_id TEXT,
+                strategy_name TEXT,
+                pair TEXT,
+                action_type TEXT,
+                target_position_usd REAL,
+                blocked INTEGER NOT NULL,
+                block_reason TEXT,
+                kill_switch_active INTEGER NOT NULL,
+                raw_json TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO decisions (
+                time, plan_id, strategy_name, pair, action_type,
+                target_position_usd, blocked, block_reason,
+                kill_switch_active, raw_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                1700000000,
+                "PLAN-CLAMP",
+                "trend",
+                "XBTUSD",
+                "increase",
+                500.0,
+                0,
+                "Strategy trend budget exceeded (750.00 > 500.00)",
+                0,
+                "{}",
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO decisions (
+                time, plan_id, strategy_name, pair, action_type,
+                target_position_usd, blocked, block_reason,
+                kill_switch_active, raw_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                1700000001,
+                "PLAN-BLOCK",
+                "trend",
+                "XBTUSD",
+                "none",
+                0.0,
+                1,
+                "Manual Kill Switch",
+                1,
+                "{}",
+            ),
+        )
+
+        migrations.run_migrations(conn, 15, CURRENT_SCHEMA_VERSION)
+
+        rows = conn.execute(
+            """
+            SELECT plan_id, blocked, block_reason, clamped, clamp_reason
+            FROM decisions
+            ORDER BY time
+            """
+        ).fetchall()
+        version = conn.execute(
+            "SELECT value FROM meta WHERE key = 'schema_version'"
+        ).fetchone()[0]
+
+    assert version == str(CURRENT_SCHEMA_VERSION)
+    assert rows[0] == (
+        "PLAN-CLAMP",
+        0,
+        None,
+        1,
+        "Strategy trend budget exceeded (750.00 > 500.00)",
+    )
+    assert rows[1] == ("PLAN-BLOCK", 1, "Manual Kill Switch", 0, None)
+
+
 def test_unmatched_trade_ledger_ref_times_excludes_stored_trades(tmp_path):
     db_path = tmp_path / "unmatched_trade_refs.db"
     store = SQLitePortfolioStore(str(db_path))
@@ -1232,6 +1332,8 @@ def test_decision_and_execution_plan_retrieval(store):
     decisions = store.get_decisions(plan_id="PLAN-1")
     assert len(decisions) == 1
     assert decisions[0].strategy_name == "trend"
+    assert decisions[0].clamped is False
+    assert decisions[0].clamp_reason is None
 
     plan = ExecutionPlan(
         plan_id="PLAN-1",
@@ -1267,6 +1369,34 @@ def test_decision_and_execution_plan_retrieval(store):
 
     recent = store.get_execution_plans(since=1699999999, limit=1)
     assert len(recent) == 1
+
+
+def test_clamped_decision_round_trips_separately_from_block_reason(store):
+    decision = DecisionRecord(
+        time=1700000000,
+        plan_id="PLAN-CLAMP",
+        strategy_name="trend",
+        pair="XBTUSD",
+        action_type="increase",
+        target_position_usd=500.0,
+        blocked=False,
+        block_reason=None,
+        kill_switch_active=False,
+        raw_json="{}",
+        clamped=True,
+        clamp_reason="Strategy trend budget exceeded (750.00 > 500.00)",
+    )
+    store.add_decision(decision)
+
+    decisions = store.get_decisions(plan_id="PLAN-CLAMP")
+
+    assert len(decisions) == 1
+    assert decisions[0].blocked is False
+    assert decisions[0].block_reason is None
+    assert decisions[0].clamped is True
+    assert (
+        decisions[0].clamp_reason == "Strategy trend budget exceeded (750.00 > 500.00)"
+    )
 
 
 def test_save_and_load_local_order(store):

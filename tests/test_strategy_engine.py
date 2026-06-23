@@ -1851,6 +1851,37 @@ def test_actions_inherit_userref_and_persist_in_execution_plan():
     assert decision_record.strategy_name == "fake"
 
 
+def test_persist_actions_separates_strategy_budget_clamp_from_block_reason():
+    engine = StrategyRiskEngine.__new__(StrategyRiskEngine)
+    engine.portfolio = MagicMock()
+    engine.risk_engine = SimpleNamespace(_kill_switch_active=False)
+    engine.strategy_states = {}
+    now = datetime(2026, 6, 23, 12, 0, tzinfo=timezone.utc)
+    reason = "Strategy trend budget exceeded (750.00 > 500.00)"
+    action = RiskAdjustedAction(
+        pair="XBTUSD",
+        strategy_id="trend",
+        action_type="increase",
+        target_base_size=0.005,
+        target_notional_usd=500.0,
+        current_base_size=0.0,
+        reason=f"Clamped: {reason}",
+        blocked=False,
+        blocked_reasons=[reason],
+        clamped=True,
+        risk_limits_snapshot={},
+    )
+
+    engine._persist_actions("PLAN-CLAMP", now, [action])
+
+    record = engine.portfolio.record_decision.call_args[0][0]
+    assert record.plan_id == "PLAN-CLAMP"
+    assert record.blocked is False
+    assert record.block_reason is None
+    assert record.clamped is True
+    assert record.clamp_reason == reason
+
+
 def test_build_emergency_flatten_plan():
     engine = StrategyRiskEngine.__new__(StrategyRiskEngine)
     engine.market_data = MagicMock()

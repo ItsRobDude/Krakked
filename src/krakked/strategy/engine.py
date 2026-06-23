@@ -1583,7 +1583,15 @@ class StrategyEngine:
                 target_position_usd=action.target_notional_usd,
                 blocked=action.blocked,
                 block_reason=(
-                    ";".join(action.blocked_reasons) if action.blocked_reasons else None
+                    ";".join(action.blocked_reasons)
+                    if action.blocked and action.blocked_reasons
+                    else None
+                ),
+                clamped=action.clamped,
+                clamp_reason=(
+                    ";".join(action.blocked_reasons)
+                    if action.clamped and action.blocked_reasons
+                    else None
                 ),
                 kill_switch_active=self.risk_engine._kill_switch_active,
                 raw_json=json.dumps(asdict(action), default=str),

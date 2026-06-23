@@ -9,7 +9,7 @@ def test_sqlite_portfolio_store_not_abstract():
 
 
 def test_current_schema_version_is_latest():
-    assert CURRENT_SCHEMA_VERSION == 15
+    assert CURRENT_SCHEMA_VERSION == 16
 
 
 def test_run_migrations_reaches_latest_and_creates_ml_tables(tmp_path):
@@ -58,5 +58,6 @@ def test_run_migrations_reaches_latest_and_creates_ml_tables(tmp_path):
             "SELECT name FROM sqlite_master WHERE type='table' AND name='trade_ledger_ref_review_events'"
         )
         assert cursor.fetchone() is not None
+
     finally:
         conn.close()
