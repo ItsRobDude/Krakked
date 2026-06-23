@@ -33,6 +33,12 @@ Known current facts:
   orders did not reduce synthetic wallet positions, so the emergency resume path
   retried until the container was stopped for containment. See
   [`soak-reports/2026-06-23-decision-soak-rc10-forward.md`](./soak-reports/2026-06-23-decision-soak-rc10-forward.md).
+- The `v0.1.1-rc.11` controlled paper emergency-flatten confirmation completed
+  on 2026-06-23. It seeded BTC/ETH paper positions through the deployed runtime,
+  resumed with `emergency_flatten=true`, submitted priced market close orders,
+  wrote paper trades, reduced the synthetic paper wallet to USD, and cleared
+  emergency intent. See
+  [`soak-reports/2026-06-23-rc11-paper-flatten-confirmation.md`](./soak-reports/2026-06-23-rc11-paper-flatten-confirmation.md).
 - Runtime provenance is visible in health payloads, so deployment drift is no
   longer invisible.
 - The EWMA market-risk signal is display-only. It is useful operator context,
@@ -163,18 +169,16 @@ Completed evidence:
   orders, and paper trades/snapshots persisted for normal limit-order fills.
   `rs_rotation` and later `trend_core` score-filtered candidates with explicit
   score, threshold, and reason fields.
+- The corrected `v0.1.1-rc.11` controlled paper flatten confirmation proved the
+  background paper emergency-flatten runtime path after the rc10 failure:
+  market close orders were priced, paper trades were inserted, synthetic BTC/ETH
+  balances went to zero, and emergency intent cleared.
 
 Remaining proof targets:
 
-- Fix paper emergency flatten in the runtime path before repeating the flatten
-  drill: paper market flatten orders must carry or derive a usable fill price,
-  write paper trades, update the synthetic wallet, reduce positions, and clear
-  emergency intent.
-- Add retry-loop containment for emergency flatten so repeated filled orders
-  with unchanged positions degrade loudly instead of submitting identical
-  closes indefinitely.
 - Separate clamped and blocked reason fields in persisted/API risk decisions so
   a clamped action is not shown as if it were blocked.
+- Define validate-only live drill criteria before any tiny live smoke.
 - Keep stale pairs used by enabled strategies or open positions as
   session-critical blockers. Disabled/watchlist/global stale pairs, including
   recurring `ADA/USD` noise, should remain warnings.
@@ -233,11 +237,10 @@ For strategy evidence:
 
 ## Recommended Order
 
-1. Fix the runtime paper emergency-flatten defect exposed by the 2026-06-23
-   soak report, then repeat a controlled paper flatten against seeded or
-   forward-generated positions.
-2. Separate clamp and block diagnostics in decision persistence/API/UI so risk
+1. Separate clamp and block diagnostics in decision persistence/API/UI so risk
    evidence remains operator-truthful.
+2. Define validate-only live drill and tiny-live-smoke criteria before any live
+   smoke attempt.
 3. Clean up the remaining operator affordances from the soak: pause/resume
    wording, restart no-auto-resume wording, and profile-aware backup/export.
 4. Re-run a short paper validation only if the cleanup changes health,

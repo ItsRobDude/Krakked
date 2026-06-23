@@ -176,8 +176,23 @@ See
 The controlled paper emergency-flatten attempt after the soak failed. Filled
 paper market flatten orders had no average fill price, no corresponding paper
 trades were inserted, positions did not reduce, and the emergency resume path
-retried until the container was stopped for containment. That is the next
-runtime paper-control fix before repeating the flatten drill.
+retried until the container was stopped for containment. The follow-up rc.11
+confirmation below repeated that paper-control path successfully.
+
+## 2026-06-23 rc.11 Paper Flatten Confirmation
+
+The `v0.1.1-rc.11` controlled paper flatten confirmation repeated the paper
+runtime path on the intended image and isolated profile. It seeded BTC/ETH
+paper positions through the deployed runtime, armed `emergency_flatten=true`,
+recreated the container, and let the background emergency-flatten resume branch
+close positions.
+
+The confirmation passed: paper market close orders had non-null fill prices,
+paper trades were inserted, synthetic BTC/ETH wallet balances went to zero, open
+orders stayed empty, and emergency intent cleared.
+
+See
+[`soak-reports/2026-06-23-rc11-paper-flatten-confirmation.md`](./soak-reports/2026-06-23-rc11-paper-flatten-confirmation.md).
 
 ## Deterministic Live-Gate Harness Status
 

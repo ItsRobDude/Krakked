@@ -61,10 +61,12 @@ Current trust level: Level 0, research and paper only.
   validation produced decision-useful paper records, but paper mode still does
   not exercise live account-truth gates or real Kraken reconciliation. The
   2026-06-23 `v0.1.1-rc.10` forward decision soak produced the longer
-  strategy/risk/OMS/paper-trade evidence stream, but its controlled paper
-  emergency-flatten attempt exposed a runtime paper-wallet flatten defect. The
-  milestone remains open until that flatten runtime gap is fixed and the
-  validate-only/tiny-live-smoke criteria are written.
+  strategy/risk/OMS/paper-trade evidence stream and exposed a runtime
+  paper-wallet flatten defect. The 2026-06-23 `v0.1.1-rc.11` controlled paper
+  emergency-flatten confirmation proved that the background paper flatten
+  resume path now prices market closes, writes paper trades, reduces synthetic
+  wallet balances, and clears emergency intent. The milestone remains open
+  until validate-only/tiny-live-smoke criteria are written and executed.
 
 Known live blockers:
 
@@ -74,10 +76,10 @@ Known live blockers:
 - crash-safe submit-intent behavior is proven for the initial AddOrder
   response-loss scenario plus seeded emergency-flatten retry/resume, but broader
   process-death and reconciliation drills remain incomplete;
-- paper emergency flatten is deterministic-test covered, but the 2026-06-23
-  forward runtime drill showed paper market flatten orders can fill without
-  reducing synthetic wallet positions, causing the emergency resume path to
-  retry until contained;
+- paper emergency flatten is deterministic-test covered and the 2026-06-23
+  `v0.1.1-rc.11` controlled runtime drill confirmed the deployed paper
+  background resume path now reduces the synthetic wallet and clears emergency
+  intent;
 - live Balance/TradesHistory/Ledgers unavailability, never-synced live cold
   start, stale reconciliation age, missing trade-history evidence, and material
   drift now block normal-loop/live-opening-risk paths;
@@ -685,6 +687,8 @@ Current building blocks:
   [`soak-reports/2026-06-19-paper-soak.md`](./soak-reports/2026-06-19-paper-soak.md).
 - a forward decision-loop paper soak report exists:
   [`soak-reports/2026-06-23-decision-soak-rc10-forward.md`](./soak-reports/2026-06-23-decision-soak-rc10-forward.md).
+- a controlled paper emergency-flatten confirmation report exists:
+  [`soak-reports/2026-06-23-rc11-paper-flatten-confirmation.md`](./soak-reports/2026-06-23-rc11-paper-flatten-confirmation.md).
 
 Proof gap:
 
@@ -693,8 +697,9 @@ Proof gap:
   and fresh evaluations still produced no actions, risk blocks, OMS orders,
   execution results, trades, or ledger entries;
 - the 2026-06-23 forward decision soak is decision/execution-useful for normal
-  paper limit-order fills, but its paper emergency-flatten attempt failed to
-  update the synthetic wallet after filled market close orders;
+  paper limit-order fills, and the follow-up `v0.1.1-rc.11` controlled
+  flatten confirmation proved the background paper emergency path updates the
+  synthetic wallet after market close orders;
 - live validate-only has not been turned into a repeatable readiness drill;
 - tiny live smoke criteria need to be written before any smoke run.
 
@@ -736,20 +741,24 @@ first missing paper-session evidence: strategy intents, OMS dry-run fills,
 paper trades, portfolio positions, and useful closed-bar/no-signal diagnostics.
 The longer 2026-06-23 `v0.1.1-rc.10` decision soak then produced a normal
 paper decision stream on the intended image, but its controlled paper
-emergency-flatten attempt failed to reduce synthetic wallet positions. See
+emergency-flatten attempt failed to reduce synthetic wallet positions. The
+follow-up `v0.1.1-rc.11` controlled confirmation repeated the paper runtime
+flatten path successfully: priced market close orders wrote paper trades,
+reduced BTC/ETH to zero, and cleared emergency intent. See
 [`soak-reports/2026-06-20-paper-validation.md`](./soak-reports/2026-06-20-paper-validation.md)
 and
-[`soak-reports/2026-06-23-decision-soak-rc10-forward.md`](./soak-reports/2026-06-23-decision-soak-rc10-forward.md).
+[`soak-reports/2026-06-23-decision-soak-rc10-forward.md`](./soak-reports/2026-06-23-decision-soak-rc10-forward.md)
+and
+[`soak-reports/2026-06-23-rc11-paper-flatten-confirmation.md`](./soak-reports/2026-06-23-rc11-paper-flatten-confirmation.md).
 
 Recommended next behavior slice:
 
-1. Fix the paper emergency-flatten runtime defect from the 2026-06-23 soak:
-   market flatten orders in paper mode must produce usable fill prices, write
-   paper trades, update synthetic wallet balances/positions, and clear
-   emergency intent when flat.
-2. Keep dead-man heartbeat and broader fail-closed alert proofs on the
+1. Separate clamp and block diagnostics in decision persistence/API/UI so risk
+   evidence remains operator-truthful.
+2. Define validate-only live drill criteria before any tiny live smoke.
+3. Keep dead-man heartbeat and broader fail-closed alert proofs on the
    money-safety backlog.
-3. Re-run a short paper validation only if the next cleanup changes health,
+4. Re-run a short paper validation only if the next cleanup changes health,
    readiness, control surfaces, or emergency flatten.
 
 That slice should not broaden into strategy promotion, ML authority, multi-pair
@@ -780,8 +789,9 @@ Do not prioritize broad live UI polish as the next money-safety task.
 The stale-sync/material-drift account-truth gates and seeded emergency-flatten
 drill now have narrow deterministic proofs, and the 2026-06-23 forward paper
 soak proved the normal paper loop can produce decision-useful strategy, OMS,
-trade, and portfolio evidence. Do not start live smoke yet. Next fix the paper
-emergency-flatten runtime defect and repeat that controlled drill. Keep the
-claim boundary explicit: replay proves simulated decision flow, fake-Kraken
-tests prove live-gate behavior, and paper soak proves runtime/operator
-behavior.
+trade, and portfolio evidence. The 2026-06-23 `v0.1.1-rc.11` controlled drill
+then proved the paper emergency-flatten runtime path after the rc10 failure. Do
+not start live smoke yet. Next define validate-only drill and tiny-live-smoke
+criteria, while keeping the claim boundary explicit: replay proves simulated
+decision flow, fake-Kraken tests prove live-gate behavior, and paper soak proves
+runtime/operator behavior.

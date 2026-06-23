@@ -22,6 +22,10 @@ not go flat. The background emergency-flatten resume path retried repeatedly
 until the container was stopped for containment. Treat this as a paper-mode
 operator-control defect, not a live-capital proof failure.
 
+Follow-up: the `v0.1.1-rc.11` controlled paper emergency-flatten confirmation
+repeated the deployed paper runtime path successfully. See
+[`2026-06-23-rc11-paper-flatten-confirmation.md`](./2026-06-23-rc11-paper-flatten-confirmation.md).
+
 Scope boundary:
 
 - This soak proves paper runtime/operator behavior with synthetic paper fills.
@@ -286,19 +290,14 @@ unless the intent is to reproduce the retry loop. The profile still has
 
 ## Recommendations
 
-1. Fix paper emergency flatten before running another flatten drill:
-   - paper market orders need a non-null average fill price, or filled-order
-     ingestion must derive a conservative execution price from current market
-     data;
-   - successful paper flatten must write paper trades, update synthetic wallet
-     balances/positions, snapshot portfolio state, and clear emergency intent.
-2. Add retry-loop containment to emergency flatten:
-   - if repeated paper flatten attempts produce filled orders but positions do
-     not change, fail closed with a loud degraded reason instead of submitting
-     identical closes indefinitely.
-3. Separate clamped and blocked diagnostic fields in persisted/API risk
+1. Keep the `v0.1.1-rc.11` controlled paper flatten confirmation as the
+   follow-up proof that paper market close orders now carry prices, write paper
+   trades, update synthetic wallet balances/positions, and clear emergency
+   intent.
+2. Separate clamped and blocked diagnostic fields in persisted/API risk
    decisions.
-4. Keep the `v0.1.1-rc.10` forward soak as a passed paper decision-loop proof,
-   with the explicit caveat that flatten failed afterward.
-5. Do not use this profile for further automation until the emergency flag and
+3. Keep the `v0.1.1-rc.10` forward soak as a passed paper decision-loop proof,
+   with the explicit historical caveat that its flatten attempt failed and was
+   resolved by the rc.11 confirmation.
+4. Do not use this profile for further automation unless its emergency flag and
    paper positions are intentionally handled.
