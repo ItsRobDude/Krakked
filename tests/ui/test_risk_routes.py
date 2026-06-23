@@ -356,6 +356,39 @@ def test_get_risk_decisions(client, risk_context):
     risk_context.portfolio.get_decisions.assert_called_with(limit=5)
 
 
+def test_get_risk_decisions_splits_clamp_reasons(client, risk_context):
+    decision = DecisionRecord(
+        time=int(datetime.now(tz=timezone.utc).timestamp()),
+        plan_id="plan-1",
+        strategy_name="alpha",
+        pair="XBTUSD",
+        action_type="increase",
+        target_position_usd=100.0,
+        blocked=False,
+        block_reason="max_per_strategy_pct",
+        kill_switch_active=False,
+        raw_json=json.dumps(
+            {
+                "blocked": False,
+                "clamped": True,
+                "blocked_reasons": ["max_per_strategy_pct"],
+                "action_type": "increase",
+            }
+        ),
+    )
+
+    risk_context.portfolio.get_decisions.return_value = [decision]
+
+    response = client.get("/api/risk/decisions", params={"limit": 5})
+
+    assert response.status_code == 200
+    payload = response.json()["data"][0]
+    assert payload["blocked"] is False
+    assert payload["block_reasons"] == []
+    assert payload["clamped"] is True
+    assert payload["clamp_reasons"] == ["max_per_strategy_pct"]
+
+
 @pytest.mark.parametrize("ui_read_only", [False])
 def test_update_risk_config_mutates_context(
     client, risk_context, isolated_ui_config_dir: Path

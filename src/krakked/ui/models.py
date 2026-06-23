@@ -89,6 +89,8 @@ class RiskDecisionPayload(BaseModel):
     blocked: bool
     block_reasons: List[str]
     kill_switch_active: bool
+    clamped: bool = False
+    clamp_reasons: List[str] = Field(default_factory=list)
 
 
 class ConfirmationPayload(BaseModel):

@@ -1070,8 +1070,14 @@ def _trace_decision(
     action_type: str = "open",
     blocked: bool = False,
     block_reason: str | None = None,
+    clamped: bool = False,
 ) -> DecisionRecord:
-    raw_json = json.dumps({"blocked_reasons": [block_reason]}) if block_reason else "{}"
+    raw_payload: dict[str, object] = {}
+    if block_reason:
+        raw_payload["blocked_reasons"] = [block_reason]
+    if clamped:
+        raw_payload["clamped"] = True
+    raw_json = json.dumps(raw_payload)
     return DecisionRecord(
         time=int(decided_at.timestamp()),
         plan_id=plan_id,
@@ -1318,6 +1324,37 @@ def test_cockpit_snapshot_surfaces_clamped_actions(client, system_context):
     assert trace["risk_reasons"] == ["Max per asset limit"]
     assert trace["clamp_reasons"] == ["Max per asset limit"]
     assert "clamped by risk" in trace["summary"]
+    assert "Risk reason: Max per asset limit" not in trace["details"]
+    assert "Risk clamped: Max per asset limit" in trace["details"]
+
+
+def test_cockpit_snapshot_splits_clamp_reasons_from_persisted_decisions(
+    client, system_context
+):
+    decided_at = datetime(2026, 5, 2, 3, 0, tzinfo=timezone.utc)
+    _configure_trace(
+        system_context,
+        decided_at=decided_at,
+        plan=None,
+        decisions=[
+            _trace_decision(
+                decided_at,
+                action_type="increase",
+                blocked=False,
+                clamped=True,
+                block_reason="Max per asset limit",
+            )
+        ],
+        execution=_trace_execution(decided_at, orders=[_trace_order()]),
+    )
+
+    trace = _fetch_first_trace(client)
+
+    assert trace["trace_quality"] == "decisions_only"
+    assert trace["blocked_action_count"] == 0
+    assert trace["clamped_action_count"] == 1
+    assert trace["risk_reasons"] == ["Max per asset limit"]
+    assert trace["clamp_reasons"] == ["Max per asset limit"]
     assert "Risk reason: Max per asset limit" not in trace["details"]
     assert "Risk clamped: Max per asset limit" in trace["details"]
 
