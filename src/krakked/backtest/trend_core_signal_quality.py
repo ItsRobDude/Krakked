@@ -208,6 +208,56 @@ def run_trend_core_signal_quality(
             shutdown()
 
 
+def _window_summary_row(
+    *,
+    window_set: str,
+    window_id: str,
+    start: datetime,
+    end: datetime,
+    payload: Mapping[str, Any],
+    window_context: Mapping[str, Any],
+    primary_horizon: int,
+) -> dict[str, Any]:
+    """Build one window row for the window-set aggregate from a per-window report.
+
+    Strict-data readiness uses the canonical ``backtest_strict_data_details`` over
+    the full preflight, so warmup gaps (missing indicator warmup, not just the
+    evaluation window) mark a window non-evaluable instead of letting it pass.
+    """
+
+    summary = payload.get("summary") or {}
+    preflight = payload.get("preflight") or {}
+    strict_data_ready = not backtest_strict_data_details(preflight)
+    evidence_bucket = str(window_context.get("evidence_bucket") or "insufficient_data")
+    market_bucket = str(window_context.get("market_bucket") or evidence_bucket)
+    evaluable = (
+        strict_data_ready and evidence_bucket not in NON_EVALUABLE_REGIME_BUCKETS
+    )
+    primary_stats = (payload.get("overall") or {}).get(str(primary_horizon), {})
+    return {
+        "window_set": window_set,
+        "window_id": window_id,
+        "start": start.isoformat(),
+        "end": end.isoformat(),
+        "market_bucket": market_bucket,
+        "evidence_bucket": evidence_bucket,
+        "strict_data_ready": strict_data_ready,
+        "evaluable": evaluable,
+        "total_signals": int(summary.get("total_signals", 0) or 0),
+        "status": summary.get("status"),
+        "promotion_ready": bool(summary.get("promotion_ready")),
+        "baseline_controlled": bool(summary.get("baseline_controlled")),
+        "gate_reasons": list(summary.get("gate_reasons") or []),
+        "primary_horizon_bars": primary_horizon,
+        "primary_horizon_stats": copy.deepcopy(primary_stats),
+        "missing_series": list(preflight.get("missing_series") or []),
+        "partial_series": list(preflight.get("partial_series") or []),
+        "warmup_missing_series": list(preflight.get("warmup_missing_series") or []),
+        "warmup_partial_series": list(preflight.get("warmup_partial_series") or []),
+        "summary": copy.deepcopy(summary),
+    }
+
+
 def run_trend_core_signal_quality_window_sets(
     config: AppConfig,
     *,
@@ -267,43 +317,16 @@ def run_trend_core_signal_quality_window_sets(
                 warmup_days=float(warmup_days),
                 max_signal_rows=max_signal_rows,
             )
-            payload = result.to_report_dict()
-            summary = payload["summary"]
-            preflight = payload.get("preflight") or {}
-            window_context = context_by_key.get((window_set, window_id), {})
-            strict_data_ready = not (
-                preflight.get("missing_series") or preflight.get("partial_series")
-            )
-            evidence_bucket = str(
-                window_context.get("evidence_bucket") or "insufficient_data"
-            )
-            market_bucket = str(window_context.get("market_bucket") or evidence_bucket)
-            evaluable = (
-                strict_data_ready
-                and evidence_bucket not in NON_EVALUABLE_REGIME_BUCKETS
-            )
-            primary_stats = (payload.get("overall") or {}).get(str(primary_horizon), {})
             windows.append(
-                {
-                    "window_set": window_set,
-                    "window_id": window_id,
-                    "start": start.isoformat(),
-                    "end": end.isoformat(),
-                    "market_bucket": market_bucket,
-                    "evidence_bucket": evidence_bucket,
-                    "strict_data_ready": strict_data_ready,
-                    "evaluable": evaluable,
-                    "total_signals": int(summary.get("total_signals", 0) or 0),
-                    "status": summary.get("status"),
-                    "promotion_ready": bool(summary.get("promotion_ready")),
-                    "baseline_controlled": bool(summary.get("baseline_controlled")),
-                    "gate_reasons": list(summary.get("gate_reasons") or []),
-                    "primary_horizon_bars": primary_horizon,
-                    "primary_horizon_stats": copy.deepcopy(primary_stats),
-                    "missing_series": list(preflight.get("missing_series") or []),
-                    "partial_series": list(preflight.get("partial_series") or []),
-                    "summary": copy.deepcopy(summary),
-                }
+                _window_summary_row(
+                    window_set=window_set,
+                    window_id=window_id,
+                    start=start,
+                    end=end,
+                    payload=result.to_report_dict(),
+                    window_context=context_by_key.get((window_set, window_id), {}),
+                    primary_horizon=primary_horizon,
+                )
             )
 
     return build_trend_core_signal_quality_window_set_report(

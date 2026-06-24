@@ -4,9 +4,11 @@ from datetime import UTC, datetime
 
 import pytest
 
+from krakked.backtest.runner import BacktestPreflight, backtest_strict_data_details
 from krakked.backtest.trend_core_signal_quality import (
     _collect_baseline_rows,
     _forward_metrics,
+    _window_summary_row,
     build_trend_core_signal_quality_report,
     build_trend_core_signal_quality_window_set_report,
 )
@@ -473,3 +475,98 @@ def test_baseline_controlled_candidate_when_signal_beats_baseline() -> None:
     assert summary["promotion_blocked_reason"] == "needs_out_of_sample_validation"
     assert summary["signal_minus_baseline_mean_pct"] == pytest.approx(1.2)
     assert summary["gate_reasons"] == []
+
+
+def test_strict_data_details_flags_warmup_gaps_from_dict() -> None:
+    # A serialized preflight dict with only a warmup gap must still surface a
+    # strict-data detail; the window-set wrapper depends on this.
+    details = backtest_strict_data_details({"warmup_partial_series": ["BTC/USD@1h"]})
+    assert details == ["warmup partial: BTC/USD@1h"]
+
+
+def test_strict_data_details_accepts_dataclass_unchanged() -> None:
+    preflight = BacktestPreflight(warmup_missing_series=["ETH/USD@4h"])
+    assert backtest_strict_data_details(preflight) == ["warmup missing: ETH/USD@4h"]
+
+
+def _window_payload(
+    *,
+    status: str = "candidate_signal",
+    warmup_partial_series: list[str] | None = None,
+) -> dict[str, object]:
+    return {
+        "summary": {
+            "total_signals": 40,
+            "status": status,
+            "promotion_ready": False,
+            "baseline_controlled": status == "candidate_signal",
+            "gate_reasons": [],
+        },
+        "overall": {"6": {"mean_return_pct": 0.8, "sample_count": 40}},
+        "preflight": {
+            "missing_series": [],
+            "partial_series": [],
+            "warmup_missing_series": [],
+            "warmup_partial_series": list(warmup_partial_series or []),
+        },
+    }
+
+
+def _summary_row(
+    window_id: str, bucket: str, **payload_kwargs: object
+) -> dict[str, object]:
+    return _window_summary_row(
+        window_set="regime_diverse_4h",
+        window_id=window_id,
+        start=datetime(2026, 1, 1, tzinfo=UTC),
+        end=datetime(2026, 1, 31, tzinfo=UTC),
+        payload=_window_payload(**payload_kwargs),  # type: ignore[arg-type]
+        window_context={"evidence_bucket": bucket, "market_bucket": bucket},
+        primary_horizon=6,
+    )
+
+
+def test_window_summary_row_warmup_gap_is_not_evaluable() -> None:
+    # Full evaluation-window coverage but a warmup gap must mark the window
+    # non-evaluable so it cannot become a baseline-controlled candidate.
+    row = _summary_row("w1", "uptrend", warmup_partial_series=["BTC/USD@1h"])
+
+    assert row["strict_data_ready"] is False
+    assert row["evaluable"] is False
+    assert row["warmup_partial_series"] == ["BTC/USD@1h"]
+    # The per-window status is preserved verbatim; the aggregate gate handles it.
+    assert row["status"] == "candidate_signal"
+
+
+def test_window_summary_row_clean_window_is_evaluable() -> None:
+    row = _summary_row("w1", "uptrend")
+
+    assert row["strict_data_ready"] is True
+    assert row["evaluable"] is True
+    assert row["warmup_partial_series"] == []
+
+
+def test_window_set_aggregate_fails_on_warmup_only_gap() -> None:
+    # End-to-end: a non-current window with only a warmup gap must drop the
+    # aggregate to edge_not_proven, even though every evaluable window passes.
+    result = build_trend_core_signal_quality_window_set_report(
+        [
+            _summary_row("up", "uptrend", warmup_partial_series=["BTC/USD@1h"]),
+            _summary_row("down", "downtrend"),
+            _summary_row("chop", "chop_or_transition"),
+        ],
+        window_context=None,
+        window_sets=["regime_diverse_4h"],
+        pairs=["BTC/USD", "ETH/USD"],
+        timeframes=["4h"],
+        horizons=[6],
+        fee_bps=25.0,
+        fresh_bars_only=True,
+        strict_data=True,
+        warmup_days=30.0,
+    ).to_report_dict()
+
+    summary = result["summary"]
+    assert summary["status"] == "edge_not_proven"
+    assert any("strict data coverage" in reason for reason in summary["gate_reasons"])
+    assert "up" not in summary["passing_window_ids"]
