@@ -37,6 +37,8 @@ Use this map as the first stop when deciding which Krakked runbook applies.
   evidence.
 - [`regime-diverse-evidence-plan.md`](./regime-diverse-evidence-plan.md) -
   regime-diverse strategy evidence plan.
+- [`strategy-signal-reports/`](./strategy-signal-reports/) - dated one-shot
+  signal-quality verdicts.
 - [`ml-experiment-log.md`](./ml-experiment-log.md) - ML evidence and verdicts.
 - [`ml-cross-window-validation.md`](./ml-cross-window-validation.md) -
   cross-window ML validation.

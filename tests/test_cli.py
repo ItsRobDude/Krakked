@@ -2942,7 +2942,11 @@ def test_trend_core_signal_quality_subcommand_writes_report(
                     "forward_horizon_bars": [6],
                     "primary_horizon_bars": 6,
                     "fee_bps": 25.0,
+                    "one_way_all_in_cost_bps": 25.0,
+                    "round_trip_all_in_cost_bps": 50.0,
                     "round_trip_fee_hurdle_pct": 0.5,
+                    "round_trip_all_in_cost_pct": 0.5,
+                    "cost_model_note": "fee_bps is used as a one-way all-in cost proxy",
                     "fresh_bars_only": True,
                     "strict_data": True,
                     "warmup_days": 30.0,
@@ -3021,6 +3025,126 @@ def test_trend_core_signal_quality_subcommand_writes_report(
     saved = json.loads(report_path.read_text(encoding="utf-8"))
     assert output["report_type"] == "trend_core_signal_quality"
     assert saved["summary"]["status"] == "edge_not_proven"
+
+
+def test_trend_core_signal_quality_window_set_subcommand(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: Any,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    class _FakeWindowSetResult:
+        def to_report_dict(self) -> dict[str, Any]:
+            return {
+                "report_version": 1,
+                "report_type": "trend_core_signal_quality_window_set",
+                "generated_at": "2026-06-23T00:00:00+00:00",
+                "summary": {
+                    "research_only": True,
+                    "runtime_config_changed": False,
+                    "window_sets": ["tiny"],
+                    "pairs": ["BTC/USD"],
+                    "timeframes": ["4h"],
+                    "forward_horizon_bars": [6],
+                    "primary_horizon_bars": 6,
+                    "fee_bps": 25.0,
+                    "one_way_all_in_cost_bps": 25.0,
+                    "round_trip_all_in_cost_bps": 50.0,
+                    "round_trip_fee_hurdle_pct": 0.5,
+                    "round_trip_all_in_cost_pct": 0.5,
+                    "cost_model_note": "fee_bps is used as a one-way all-in cost proxy",
+                    "fresh_bars_only": True,
+                    "strict_data": True,
+                    "warmup_days": 30.0,
+                    "window_count": 1,
+                    "evaluable_window_count": 1,
+                    "passing_window_count": 1,
+                    "passing_window_ids": ["w1"],
+                    "failing_window_ids": [],
+                    "regime_bucket_counts": {"uptrend": 1},
+                    "regime_coverage_sufficient": False,
+                    "status": "edge_not_proven",
+                    "status_note": "test",
+                    "promotion_ready": False,
+                    "gate_reasons": ["regime_diverse_4h coverage is not sufficient"],
+                    "directional_ohlc_lane_verdict": (
+                        "retire_directional_ohlc_on_majors_for_now"
+                    ),
+                },
+                "windows": [
+                    {
+                        "window_set": "tiny",
+                        "window_id": "w1",
+                        "evidence_bucket": "uptrend",
+                        "status": "candidate_signal",
+                        "total_signals": 12,
+                        "primary_horizon_stats": {"mean_return_pct": 0.8},
+                    }
+                ],
+                "window_context": {},
+            }
+
+    def _fake_run_window_sets(config: Any, **kwargs: Any) -> Any:
+        captured["config"] = config
+        captured.update(kwargs)
+        return _FakeWindowSetResult()
+
+    monkeypatch.setattr(cli, "_load_backtest_config", lambda args: object())
+    monkeypatch.setattr(
+        cli,
+        "STRATEGY_ACTIVITY_WINDOW_SETS",
+        {"tiny": [("w1", "2026-01-01T00:00:00Z", "2026-01-02T00:00:00Z")]},
+    )
+    monkeypatch.setattr(
+        cli,
+        "run_trend_core_signal_quality_window_sets",
+        _fake_run_window_sets,
+    )
+
+    report_path = tmp_path / "window-set.json"
+    exit_code = cli.main(
+        [
+            "trend-core-signal-quality",
+            "--window-set",
+            "tiny",
+            "--pair",
+            "BTC/USD",
+            "--timeframe",
+            "4h",
+            "--forward-horizon-bars",
+            "6",
+            "--save-report",
+            str(report_path),
+            "--strict-data",
+            "--json",
+        ]
+    )
+
+    assert exit_code == 0
+    assert captured["window_sets"] == {
+        "tiny": [("w1", "2026-01-01T00:00:00Z", "2026-01-02T00:00:00Z")]
+    }
+    assert captured["pairs"] == ["BTC/USD"]
+    assert captured["timeframes"] == ["4h"]
+    assert captured["forward_horizon_bars"] == [6]
+    assert captured["strict_data"] is True
+    output = json.loads(capsys.readouterr().out)
+    saved = json.loads(report_path.read_text(encoding="utf-8"))
+    assert output["report_type"] == "trend_core_signal_quality_window_set"
+    assert saved["summary"]["window_sets"] == ["tiny"]
+
+
+def test_trend_core_signal_quality_requires_window_or_explicit_dates(
+    monkeypatch: pytest.MonkeyPatch, capsys: Any
+) -> None:
+    monkeypatch.setattr(cli, "_load_backtest_config", lambda args: object())
+
+    exit_code = cli.main(["trend-core-signal-quality"])
+
+    assert exit_code == 1
+    output = capsys.readouterr().out
+    assert "provide --start and --end, or at least one --window-set" in output
 
 
 def test_market_regime_research_subcommand_returns_nonzero_on_failure(

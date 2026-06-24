@@ -18,12 +18,26 @@ from krakked.strategy.regime import infer_regime
 from krakked.strategy.strategies.demo_strategy import TrendFollowingStrategy
 from krakked.utils.strings import unique_strings as _unique_strings
 
+from .evidence_windows import (
+    NON_EVALUABLE_REGIME_BUCKETS,
+    build_evidence_window_context,
+    context_by_window_key,
+    parse_evidence_datetime,
+    summarize_regime_coverage,
+)
 from .market_regime_overlay import _preflight_to_dict
 from .runner import BacktestMarketData, backtest_strict_data_details
 
 REPORT_TYPE_TREND_CORE_SIGNAL_QUALITY = "trend_core_signal_quality"
+REPORT_TYPE_TREND_CORE_SIGNAL_QUALITY_WINDOW_SET = (
+    "trend_core_signal_quality_window_set"
+)
 REPORT_VERSION = 1
 DEFAULT_FORWARD_HORIZON_BARS = (1, 3, 6)
+TREND_CORE_COST_MODEL_NOTE = (
+    "fee_bps is used as a one-way all-in cost proxy; no separate slippage model "
+    "is applied in this module."
+)
 
 
 @dataclass
@@ -55,6 +69,24 @@ class TrendCoreSignalQualityResult:
             "strongest_vs_weakest": copy.deepcopy(self.strongest_vs_weakest),
             "signals_sample": copy.deepcopy(self.signals_sample),
             "preflight": copy.deepcopy(self.preflight),
+        }
+
+
+@dataclass
+class TrendCoreSignalQualityWindowSetResult:
+    generated_at: datetime
+    summary: dict[str, Any]
+    windows: list[dict[str, Any]]
+    window_context: dict[str, Any] | None
+
+    def to_report_dict(self) -> dict[str, Any]:
+        return {
+            "report_version": REPORT_VERSION,
+            "report_type": REPORT_TYPE_TREND_CORE_SIGNAL_QUALITY_WINDOW_SET,
+            "generated_at": self.generated_at.astimezone(UTC).isoformat(),
+            "summary": copy.deepcopy(self.summary),
+            "windows": copy.deepcopy(self.windows),
+            "window_context": copy.deepcopy(self.window_context),
         }
 
 
@@ -152,6 +184,219 @@ def run_trend_core_signal_quality(
             shutdown()
 
 
+def run_trend_core_signal_quality_window_sets(
+    config: AppConfig,
+    *,
+    window_sets: Mapping[str, Sequence[tuple[str, str, str]]],
+    pairs: Sequence[str] | None = None,
+    timeframes: Sequence[str] | None = None,
+    forward_horizon_bars: Sequence[int] | None = None,
+    fee_bps: float = 25.0,
+    fresh_bars_only: bool = False,
+    strict_data: bool = False,
+    warmup_days: float = 30.0,
+    max_signal_rows: int = 50,
+) -> TrendCoreSignalQualityWindowSetResult:
+    """Run trend_core signal-quality once per evidence window and aggregate it."""
+
+    if not window_sets:
+        raise ValueError("At least one window set is required")
+    if float(fee_bps) < 0.0:
+        raise ValueError("fee_bps must be greater than or equal to 0")
+    if float(warmup_days) < 0.0:
+        raise ValueError("warmup_days must be greater than or equal to 0")
+
+    strategy_config = _trend_core_config(config)
+    selected_pairs = _trend_core_pairs(config, strategy_config, pairs)
+    selected_timeframes = timeframes or ["4h"]
+    selected_timeframes = _trend_core_timeframes(strategy_config, selected_timeframes)
+    horizons = _validate_horizons(forward_horizon_bars)
+    primary_horizon = max(horizons)
+
+    context = build_evidence_window_context(
+        config,
+        window_sets=window_sets,
+        pairs=selected_pairs,
+        timeframe=selected_timeframes[0],
+    )
+    context_by_key = context_by_window_key(context)
+
+    windows: list[dict[str, Any]] = []
+    for window_set, rows in window_sets.items():
+        for window_id, start_text, end_text in rows:
+            start = parse_evidence_datetime(start_text)
+            end = parse_evidence_datetime(end_text)
+            result = run_trend_core_signal_quality(
+                config,
+                start=start,
+                end=end,
+                pairs=selected_pairs,
+                timeframes=selected_timeframes,
+                forward_horizon_bars=horizons,
+                fee_bps=float(fee_bps),
+                fresh_bars_only=bool(fresh_bars_only),
+                strict_data=False,
+                warmup_days=float(warmup_days),
+                max_signal_rows=max_signal_rows,
+            )
+            payload = result.to_report_dict()
+            summary = payload["summary"]
+            preflight = payload.get("preflight") or {}
+            window_context = context_by_key.get((window_set, window_id), {})
+            strict_data_ready = not (
+                preflight.get("missing_series") or preflight.get("partial_series")
+            )
+            evidence_bucket = str(
+                window_context.get("evidence_bucket") or "insufficient_data"
+            )
+            market_bucket = str(window_context.get("market_bucket") or evidence_bucket)
+            evaluable = (
+                strict_data_ready
+                and evidence_bucket not in NON_EVALUABLE_REGIME_BUCKETS
+            )
+            primary_stats = (payload.get("overall") or {}).get(str(primary_horizon), {})
+            windows.append(
+                {
+                    "window_set": window_set,
+                    "window_id": window_id,
+                    "start": start.isoformat(),
+                    "end": end.isoformat(),
+                    "market_bucket": market_bucket,
+                    "evidence_bucket": evidence_bucket,
+                    "strict_data_ready": strict_data_ready,
+                    "evaluable": evaluable,
+                    "total_signals": int(summary.get("total_signals", 0) or 0),
+                    "status": summary.get("status"),
+                    "promotion_ready": bool(summary.get("promotion_ready")),
+                    "gate_reasons": list(summary.get("gate_reasons") or []),
+                    "primary_horizon_bars": primary_horizon,
+                    "primary_horizon_stats": copy.deepcopy(primary_stats),
+                    "missing_series": list(preflight.get("missing_series") or []),
+                    "partial_series": list(preflight.get("partial_series") or []),
+                    "summary": copy.deepcopy(summary),
+                }
+            )
+
+    return build_trend_core_signal_quality_window_set_report(
+        windows,
+        window_context=context,
+        window_sets=list(window_sets.keys()),
+        pairs=selected_pairs,
+        timeframes=selected_timeframes,
+        horizons=horizons,
+        fee_bps=float(fee_bps),
+        fresh_bars_only=bool(fresh_bars_only),
+        strict_data=bool(strict_data),
+        warmup_days=float(warmup_days),
+    )
+
+
+def build_trend_core_signal_quality_window_set_report(
+    windows: Sequence[Mapping[str, Any]],
+    *,
+    window_context: Mapping[str, Any] | None,
+    window_sets: Sequence[str],
+    pairs: Sequence[str],
+    timeframes: Sequence[str],
+    horizons: Sequence[int],
+    fee_bps: float,
+    fresh_bars_only: bool,
+    strict_data: bool,
+    warmup_days: float,
+) -> TrendCoreSignalQualityWindowSetResult:
+    """Build the aggregate window-set verdict from per-window summaries."""
+
+    window_rows = [copy.deepcopy(dict(window)) for window in windows]
+    horizon_values = _validate_horizons(horizons)
+    primary_horizon = max(horizon_values)
+    round_trip_cost_pct = (float(fee_bps) * 2.0) / 100.0
+
+    bucket_counts, regime_coverage_sufficient = summarize_regime_coverage(
+        window["evidence_bucket"] for window in window_rows
+    )
+    evaluable_windows = [window for window in window_rows if window["evaluable"]]
+    passing_windows = [
+        window for window in evaluable_windows if window["status"] == "candidate_signal"
+    ]
+    failing_windows = [
+        window for window in evaluable_windows if window["status"] != "candidate_signal"
+    ]
+
+    gate_reasons: list[str] = []
+    strict_data_gap = any(
+        not window["strict_data_ready"]
+        and window["evidence_bucket"] not in NON_EVALUABLE_REGIME_BUCKETS
+        for window in window_rows
+    )
+    if strict_data_gap:
+        gate_reasons.append(
+            "one or more non-current regime windows failed strict data coverage"
+        )
+    if not regime_coverage_sufficient:
+        gate_reasons.append("regime_diverse_4h coverage is not sufficient")
+    if not evaluable_windows:
+        gate_reasons.append("no evaluable regime-diverse windows")
+    if failing_windows:
+        gate_reasons.append(
+            f"{len(failing_windows)} evaluable window(s) failed signal-quality gates"
+        )
+
+    promotion_ready = (
+        bool(evaluable_windows)
+        and regime_coverage_sufficient
+        and not failing_windows
+        and not gate_reasons
+    )
+    status = "candidate_signal" if promotion_ready else "edge_not_proven"
+    status_note = (
+        "All evaluable regime-diverse windows cleared the trend_core signal-quality gates."
+        if promotion_ready
+        else "trend_core did not clear the predeclared regime-consistency gate."
+    )
+
+    summary = {
+        "research_only": True,
+        "runtime_config_changed": False,
+        "window_sets": list(window_sets),
+        "pairs": list(pairs),
+        "timeframes": list(timeframes),
+        "forward_horizon_bars": horizon_values,
+        "primary_horizon_bars": primary_horizon,
+        "fee_bps": float(fee_bps),
+        "one_way_all_in_cost_bps": float(fee_bps),
+        "round_trip_all_in_cost_bps": float(fee_bps) * 2.0,
+        "round_trip_fee_hurdle_pct": round_trip_cost_pct,
+        "round_trip_all_in_cost_pct": round_trip_cost_pct,
+        "cost_model_note": TREND_CORE_COST_MODEL_NOTE,
+        "fresh_bars_only": bool(fresh_bars_only),
+        "strict_data": bool(strict_data),
+        "warmup_days": float(warmup_days),
+        "window_count": len(window_rows),
+        "evaluable_window_count": len(evaluable_windows),
+        "passing_window_count": len(passing_windows),
+        "passing_window_ids": [window["window_id"] for window in passing_windows],
+        "failing_window_ids": [window["window_id"] for window in failing_windows],
+        "regime_bucket_counts": bucket_counts,
+        "regime_coverage_sufficient": regime_coverage_sufficient,
+        "status": status,
+        "status_note": status_note,
+        "promotion_ready": promotion_ready,
+        "gate_reasons": gate_reasons,
+        "directional_ohlc_lane_verdict": (
+            "trend_core remains research-candidate only; live approval is unchanged"
+            if promotion_ready
+            else "retire_directional_ohlc_on_majors_for_now"
+        ),
+    }
+
+    return TrendCoreSignalQualityWindowSetResult(
+        generated_at=datetime.now(UTC),
+        summary=summary,
+        windows=window_rows,
+        window_context=dict(window_context or {}),
+    )
+
+
 def build_trend_core_signal_quality_report(
     signals: Sequence[Mapping[str, Any]],
     *,
@@ -223,7 +468,11 @@ def build_trend_core_signal_quality_report(
         "forward_horizon_bars": list(horizon_values),
         "primary_horizon_bars": primary_horizon,
         "fee_bps": float(fee_bps),
+        "one_way_all_in_cost_bps": float(fee_bps),
+        "round_trip_all_in_cost_bps": float(fee_bps) * 2.0,
         "round_trip_fee_hurdle_pct": round_trip_fee_hurdle_pct,
+        "round_trip_all_in_cost_pct": round_trip_fee_hurdle_pct,
+        "cost_model_note": TREND_CORE_COST_MODEL_NOTE,
         "fresh_bars_only": bool(fresh_bars_only),
         "strict_data": bool(strict_data),
         "warmup_days": float(warmup_days),
@@ -331,16 +580,27 @@ def _signal_row(
     current_close = float(current_bar.close)
     current_bar_ts = int(current_bar.timestamp)
     forward_returns: dict[str, float | None] = {}
+    adverse_excursions: dict[str, float | None] = {}
     for horizon in horizons:
         target_ts = current_bar_ts + (frame_seconds * int(horizon))
         future_bar = market_data.get_bar_at_or_after(intent.pair, timeframe, target_ts)
         if future_bar is None or current_close <= 0.0:
             forward_returns[str(int(horizon))] = None
+            adverse_excursions[str(int(horizon))] = None
             continue
         future_close = float(future_bar.close)
         forward_returns[str(int(horizon))] = (
             (future_close - current_close) / current_close
         ) * 100.0
+        adverse_excursions[str(int(horizon))] = _long_adverse_excursion_pct(
+            market_data,
+            pair=intent.pair,
+            timeframe=timeframe,
+            start_ts=current_bar_ts,
+            horizon_bars=int(horizon),
+            frame_seconds=frame_seconds,
+            entry_price=current_close,
+        )
 
     metadata = copy.deepcopy(getattr(intent, "metadata", {}) or {})
     return {
@@ -356,6 +616,7 @@ def _signal_row(
         "regime": getattr(regime, "value", regime),
         "current_close": current_close,
         "forward_returns_pct": forward_returns,
+        "adverse_excursions_pct": adverse_excursions,
         "metadata": metadata,
     }
 
@@ -470,9 +731,13 @@ def _horizon_stats(
             "hit_rate": None,
             "fee_adjusted_hit_rate": None,
             "mean_after_fee_pct": None,
+            "mean_adverse_excursion_pct": None,
+            "median_adverse_excursion_pct": None,
+            "max_adverse_excursion_pct": None,
         }
 
     mean_return = mean(returns)
+    adverse = _adverse_excursions(rows, horizon)
     return {
         "sample_count": len(returns),
         "mean_return_pct": mean_return,
@@ -485,6 +750,9 @@ def _horizon_stats(
         )
         / len(returns),
         "mean_after_fee_pct": mean_return - round_trip_fee_hurdle_pct,
+        "mean_adverse_excursion_pct": mean(adverse) if adverse else None,
+        "median_adverse_excursion_pct": median(adverse) if adverse else None,
+        "max_adverse_excursion_pct": max(adverse) if adverse else None,
     }
 
 
@@ -500,6 +768,47 @@ def _forward_returns(rows: Sequence[Mapping[str, Any]], horizon: int) -> list[fl
             continue
         returns.append(float(value))
     return returns
+
+
+def _adverse_excursions(rows: Sequence[Mapping[str, Any]], horizon: int) -> list[float]:
+    values: list[float] = []
+    key = str(int(horizon))
+    for row in rows:
+        payload = row.get("adverse_excursions_pct") or {}
+        if not isinstance(payload, Mapping):
+            continue
+        value = payload.get(key)
+        if value is None:
+            continue
+        values.append(float(value))
+    return values
+
+
+def _long_adverse_excursion_pct(
+    market_data: BacktestMarketData,
+    *,
+    pair: str,
+    timeframe: str,
+    start_ts: int,
+    horizon_bars: int,
+    frame_seconds: int,
+    entry_price: float,
+) -> float | None:
+    if entry_price <= 0.0:
+        return None
+    lows: list[float] = []
+    for offset in range(1, int(horizon_bars) + 1):
+        bar = market_data.get_bar_at_or_after(
+            pair,
+            timeframe,
+            int(start_ts) + (int(frame_seconds) * offset),
+        )
+        if bar is None:
+            return None
+        lows.append(float(bar.low))
+    if not lows:
+        return 0.0
+    return max(0.0, ((entry_price - min(lows)) / entry_price) * 100.0)
 
 
 def _grouped_stats(
