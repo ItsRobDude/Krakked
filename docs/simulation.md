@@ -142,11 +142,18 @@ poetry run krakked trend-core-signal-quality \
 ```
 
 This is research-only. It evaluates cached `trend_core` long entry/increase
-signals against forward returns at one or more bar horizons. As of PR856, this
-command is diagnostic-only: the current heuristic is not baseline-controlled, so
-even a heuristic clear is reported as `diagnostic_candidate_unverified` with
-`promotion_ready=false` and
-`promotion_blocked_reason="baseline_control_not_implemented"`. Use
+signals against forward returns at one or more bar horizons. As of PR857 the
+harness is baseline-controlled: entries use the **next bar's open** (not the
+signal bar's own close), exits use the **exact horizon bar** (a missing bar drops
+the sample rather than stretching the horizon), and every signal is scored
+against an **unconditional all-bars baseline** over the same window, horizon, and
+entry rule. The verdict has three states: `candidate_signal` (net-positive after
+round-trip cost and beats the baseline by at least that cost), the weaker
+`diagnostic_candidate_unverified` (heuristics clear but the baseline is
+unavailable, so drift cannot be controlled), and `edge_not_proven`. Even a
+`candidate_signal` keeps `promotion_ready=false` with
+`promotion_blocked_reason="needs_out_of_sample_validation"`: baseline control is
+necessary but not sufficient for promotion, which this tool does not perform. Use
 `--fresh-bars-only` when comparing against the runtime/replay engine behavior
 that evaluates each strategy timeframe only once per new closed bar; omit it
 only when intentionally measuring the old stale-context behavior.
@@ -170,11 +177,13 @@ poetry run krakked trend-core-signal-quality \
   --save-report trend-core-signal-quality-regime-diverse.json
 ```
 
-Window-set reports require consistency across evaluable regime windows, but they
-still do not promote a signal until the baseline-controlled measurement harness
-exists. The cost field is still named `--fee-bps` on the CLI for compatibility,
-but the report labels it as a one-way all-in cost proxy and applies a round-trip
-hurdle.
+Window-set reports require baseline-controlled consistency across every evaluable
+regime window (a pre-registered N-of-N / unanimous rule, not a tunable K-of-N),
+and they still do not promote a signal: a consistent pass is a candidate for
+out-of-sample validation, not a runtime approval. The cost model combines
+`--fee-bps` and `--slippage-bps` (each one-way) into a round-trip cost of
+`2 * (fee_bps + slippage_bps)`; `--fee-bps` keeps its name for compatibility. The
+signal must beat the unconditional baseline by at least that round-trip cost.
 
 Target-source research:
 

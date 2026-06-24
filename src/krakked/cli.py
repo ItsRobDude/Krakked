@@ -2224,7 +2224,15 @@ def _add_trend_core_signal_quality_arguments(
         "--fee-bps",
         type=float,
         default=25.0,
-        help="One-way fee in basis points used for the round-trip hurdle",
+        help="One-way fee in basis points (combined with --slippage-bps into the "
+        "round-trip cost)",
+    )
+    subparser.add_argument(
+        "--slippage-bps",
+        type=float,
+        default=0.0,
+        help="One-way slippage in basis points added to --fee-bps for the "
+        "round-trip cost",
     )
     subparser.add_argument(
         "--warmup-days",
@@ -2540,6 +2548,11 @@ def _print_trend_core_signal_quality_summary(
             f"(buckets={summary['regime_bucket_counts']})"
         )
         print(
+            "Baseline-controlled: "
+            f"{summary.get('baseline_controlled')} | consistency rule: "
+            f"{summary.get('consistency_rule')}"
+        )
+        print(
             "Round-trip all-in cost: "
             f"{float(summary['round_trip_all_in_cost_bps']):.2f} bps"
         )
@@ -2577,6 +2590,13 @@ def _print_trend_core_signal_quality_summary(
     print(
         "Round-trip all-in cost: "
         f"{float(summary['round_trip_all_in_cost_bps']):.2f} bps"
+    )
+    print(
+        "Baseline-controlled: "
+        f"{summary.get('baseline_controlled')} | baseline mean "
+        f"{_format_optional_pct(summary.get('baseline_mean_return_pct'))} "
+        f"(n={summary.get('baseline_sample_count')}) | signal-baseline "
+        f"{_format_optional_pct(summary.get('signal_minus_baseline_mean_pct'))}"
     )
     if summary.get("gate_reasons"):
         print("Gate reasons:")
@@ -4319,6 +4339,7 @@ def _trend_core_signal_quality_command(args: argparse.Namespace) -> int:
                 timeframes=args.timeframe,
                 forward_horizon_bars=args.forward_horizon_bars,
                 fee_bps=float(args.fee_bps),
+                slippage_bps=float(args.slippage_bps),
                 fresh_bars_only=bool(args.fresh_bars_only),
                 strict_data=bool(args.strict_data),
                 warmup_days=float(args.warmup_days),
@@ -4337,6 +4358,7 @@ def _trend_core_signal_quality_command(args: argparse.Namespace) -> int:
                 timeframes=args.timeframe,
                 forward_horizon_bars=args.forward_horizon_bars,
                 fee_bps=float(args.fee_bps),
+                slippage_bps=float(args.slippage_bps),
                 fresh_bars_only=bool(args.fresh_bars_only),
                 strict_data=bool(args.strict_data),
                 warmup_days=float(args.warmup_days),

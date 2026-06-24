@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, cast
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Tuple, cast
 
 from krakked.config import AppConfig
 from krakked.connection.rest_client import KrakenRESTClient
@@ -1702,16 +1702,43 @@ def _resolve_backtest_warmup(
     return resolved_days, warmup_start, warmup_timeframes
 
 
-def backtest_strict_data_details(preflight: BacktestPreflight) -> List[str]:
+def _preflight_series(
+    preflight: "BacktestPreflight | Mapping[str, Any]", field_name: str
+) -> List[str]:
+    """Read a strict-data series list from a dataclass or a serialized dict.
+
+    Accepts both shapes so there is a single definition of what counts as a
+    strict-data gap. A bare string is wrapped (not iterated) to avoid silently
+    splitting it into characters.
+    """
+
+    if isinstance(preflight, Mapping):
+        value = preflight.get(field_name)
+    else:
+        value = getattr(preflight, field_name, None)
+    if not value:
+        return []
+    if isinstance(value, str):
+        return [value]
+    return [str(item) for item in value]
+
+
+def backtest_strict_data_details(
+    preflight: "BacktestPreflight | Mapping[str, Any]",
+) -> List[str]:
     details: List[str] = []
-    if preflight.missing_series:
-        details.append("missing: " + ", ".join(preflight.missing_series))
-    if preflight.partial_series:
-        details.append("partial: " + ", ".join(preflight.partial_series))
-    if preflight.warmup_missing_series:
-        details.append("warmup missing: " + ", ".join(preflight.warmup_missing_series))
-    if preflight.warmup_partial_series:
-        details.append("warmup partial: " + ", ".join(preflight.warmup_partial_series))
+    missing = _preflight_series(preflight, "missing_series")
+    if missing:
+        details.append("missing: " + ", ".join(missing))
+    partial = _preflight_series(preflight, "partial_series")
+    if partial:
+        details.append("partial: " + ", ".join(partial))
+    warmup_missing = _preflight_series(preflight, "warmup_missing_series")
+    if warmup_missing:
+        details.append("warmup missing: " + ", ".join(warmup_missing))
+    warmup_partial = _preflight_series(preflight, "warmup_partial_series")
+    if warmup_partial:
+        details.append("warmup partial: " + ", ".join(warmup_partial))
     return details
 
 

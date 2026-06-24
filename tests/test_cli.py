@@ -3003,6 +3003,8 @@ def test_trend_core_signal_quality_subcommand_writes_report(
             "6",
             "--warmup-days",
             "30",
+            "--slippage-bps",
+            "12.5",
             "--fresh-bars-only",
             "--max-signal-rows",
             "25",
@@ -3020,6 +3022,7 @@ def test_trend_core_signal_quality_subcommand_writes_report(
     assert captured["fresh_bars_only"] is True
     assert captured["strict_data"] is True
     assert captured["warmup_days"] == pytest.approx(30.0)
+    assert captured["slippage_bps"] == pytest.approx(12.5)
     assert captured["max_signal_rows"] == 25
     output = json.loads(capsys.readouterr().out)
     saved = json.loads(report_path.read_text(encoding="utf-8"))
@@ -3114,6 +3117,8 @@ def test_trend_core_signal_quality_window_set_subcommand(
             "4h",
             "--forward-horizon-bars",
             "6",
+            "--slippage-bps",
+            "12.5",
             "--save-report",
             str(report_path),
             "--strict-data",
@@ -3129,6 +3134,7 @@ def test_trend_core_signal_quality_window_set_subcommand(
     assert captured["timeframes"] == ["4h"]
     assert captured["forward_horizon_bars"] == [6]
     assert captured["strict_data"] is True
+    assert captured["slippage_bps"] == pytest.approx(12.5)
     output = json.loads(capsys.readouterr().out)
     saved = json.loads(report_path.read_text(encoding="utf-8"))
     assert output["report_type"] == "trend_core_signal_quality_window_set"

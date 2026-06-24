@@ -37,7 +37,7 @@ every measurement bias below inflates the signal, and `trend_core` failed anyway
 
 - **No unconditional baseline.** Forward returns were judged against a fixed
   round-trip fee hurdle plus a within-window trend-strength quartile delta, not
-  against an unconditional/random-entry baseline over the same bars and horizon.
+  against an unconditional all-bars baseline over the same bars and horizon.
   "Positive after fees" here cannot distinguish real timing edge from market
   drift.
 - **Same-bar-close entry.** Entries were filled at the signal bar's own close —
@@ -61,6 +61,13 @@ surfaced as `diagnostic_candidate_unverified` with `promotion_ready=false` and
 `promotion_blocked_reason="baseline_control_not_implemented"`. A
 baseline-controlled, next-bar-open measurement harness (PR857) is required before
 any future `candidate` verdict can be trusted.
+
+**Update (PR857):** that harness now exists — next-bar-open entry, exact-horizon
+exit, an unconditional all-bars baseline, and a fee + slippage round-trip cost. A
+signal can now earn `candidate_signal` only by beating the baseline by at least
+the round-trip cost (and `promotion_ready` still stays `false` pending
+out-of-sample validation). The numbers in this report predate the corrected
+harness; a re-run of `trend_core` through it (PR858) will supersede them.
 
 ## Command
 
@@ -86,10 +93,13 @@ Local JSON artifact:
 The JSON artifact is intentionally under ignored `reports/`; this dated markdown
 is the durable summary.
 
-## Cost Model
+## Original PR855 Run Cost Model
 
-The CLI option remains `--fee-bps` for compatibility. In this module it is now
-reported as a one-way all-in cost proxy:
+This describes the cost model of the **original PR855 run** that produced the
+numbers above. It had no separate slippage field: `--fee-bps` was used as a
+one-way all-in cost proxy with a round-trip hurdle. **PR857 supersedes the
+harness** with an explicit `--slippage-bps` input, so the round-trip cost is now
+`2 * (fee_bps + slippage_bps)`; the figures below are historical.
 
 - `one_way_all_in_cost_bps`: `25.0`
 - `round_trip_all_in_cost_bps`: `50.0`
@@ -97,7 +107,7 @@ reported as a one-way all-in cost proxy:
 - Backward-compatible aliases remain: `fee_bps` and
   `round_trip_fee_hurdle_pct`
 
-Cost note from the report:
+Cost note emitted by the original run:
 
 > fee_bps is used as a one-way all-in cost proxy; no separate slippage model is
 > applied in this module.
