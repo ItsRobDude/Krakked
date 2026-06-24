@@ -141,7 +141,15 @@ poetry run krakked trend-core-signal-quality \
   --save-report trend-core-signal-quality.json
 ```
 
-This is research-only. It evaluates cached `trend_core` long entry/increase signals against forward returns at one or more bar horizons and reports whether the raw signal clears a fee-aware quality gate. Use `--fresh-bars-only` when comparing against the runtime/replay engine behavior that evaluates each strategy timeframe only once per new closed bar; omit it only when intentionally measuring the old stale-context behavior.
+This is research-only. It evaluates cached `trend_core` long entry/increase
+signals against forward returns at one or more bar horizons. As of PR856, this
+command is diagnostic-only: the current heuristic is not baseline-controlled, so
+even a heuristic clear is reported as `diagnostic_candidate_unverified` with
+`promotion_ready=false` and
+`promotion_blocked_reason="baseline_control_not_implemented"`. Use
+`--fresh-bars-only` when comparing against the runtime/replay engine behavior
+that evaluates each strategy timeframe only once per new closed bar; omit it
+only when intentionally measuring the old stale-context behavior.
 
 For a one-shot regime-consistency falsification, use the shared evidence-window
 mode instead of a single recent window:
@@ -162,10 +170,11 @@ poetry run krakked trend-core-signal-quality \
   --save-report trend-core-signal-quality-regime-diverse.json
 ```
 
-Window-set reports require consistency across evaluable regime windows; they do
-not promote a signal from a positive average alone. The cost field is still
-named `--fee-bps` on the CLI for compatibility, but the report labels it as a
-one-way all-in cost proxy and applies a round-trip hurdle.
+Window-set reports require consistency across evaluable regime windows, but they
+still do not promote a signal until the baseline-controlled measurement harness
+exists. The cost field is still named `--fee-bps` on the CLI for compatibility,
+but the report labels it as a one-way all-in cost proxy and applies a round-trip
+hurdle.
 
 Target-source research:
 

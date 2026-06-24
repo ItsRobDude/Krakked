@@ -3147,12 +3147,20 @@ def test_trend_core_signal_quality_requires_window_or_explicit_dates(
     assert "provide --start and --end, or at least one --window-set" in output
 
 
-def test_market_regime_research_requires_start_and_end() -> None:
+@pytest.mark.parametrize(
+    "command_name",
+    [
+        "market-regime-research",
+        "market-regime-overlay-backtest",
+        "market-regime-exposure-research",
+    ],
+)
+def test_market_regime_commands_require_start_and_end(command_name: str) -> None:
     # PR855 dropped required=True from the shared market-regime arg helper, which
     # turned a missing --start into an uncaught AttributeError crash. The dates
     # must be required again so argparse rejects the call cleanly (SystemExit 2).
     with pytest.raises(SystemExit):
-        cli.main(["market-regime-research", "--end", "2026-05-02T00:00:00Z"])
+        cli.main([command_name, "--end", "2026-05-02T00:00:00Z"])
 
 
 def test_trend_core_signal_quality_rejects_unknown_window_set() -> None:
