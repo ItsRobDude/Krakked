@@ -366,10 +366,16 @@ def build_trend_core_signal_quality_window_set_report(
     one_way_cost_bps = float(fee_bps) + float(slippage_bps)
     round_trip_cost_pct = (one_way_cost_bps * 2.0) / 100.0
 
-    bucket_counts, regime_coverage_sufficient = summarize_regime_coverage(
+    evaluable_windows = [window for window in window_rows if window["evaluable"]]
+    # bucket_counts is a full descriptive tally of every window reported, but
+    # coverage sufficiency is judged only on windows we can actually use: a window
+    # dropped for a strict/warmup-data gap must not prop up the coverage field.
+    bucket_counts, _ = summarize_regime_coverage(
         window["evidence_bucket"] for window in window_rows
     )
-    evaluable_windows = [window for window in window_rows if window["evaluable"]]
+    _, regime_coverage_sufficient = summarize_regime_coverage(
+        window["evidence_bucket"] for window in evaluable_windows
+    )
     # A window "passes" only when it is a baseline-controlled candidate; the
     # unverified-diagnostic and edge-not-proven states do not count.
     passing_windows = [

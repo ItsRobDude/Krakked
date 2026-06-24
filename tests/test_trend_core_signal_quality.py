@@ -570,3 +570,8 @@ def test_window_set_aggregate_fails_on_warmup_only_gap() -> None:
     assert summary["status"] == "edge_not_proven"
     assert any("strict data coverage" in reason for reason in summary["gate_reasons"])
     assert "up" not in summary["passing_window_ids"]
+    # Coverage sufficiency is judged on evaluable windows only, so the gapped
+    # uptrend window cannot make it read true; the descriptive tally still counts
+    # the dropped window.
+    assert summary["regime_coverage_sufficient"] is False
+    assert summary["regime_bucket_counts"].get("uptrend") == 1
