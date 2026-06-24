@@ -20,10 +20,12 @@ from .funding_basis_feasibility import (
 from .market_regime_exposure import (
     DEFAULT_EXPOSURE_OVERLAY_MODES,
     DEFAULT_EXPOSURE_SCENARIOS,
+    DefensiveBaselineReportResult,
     MarketRegimeExposureResearchResult,
     MarketRegimeExposureScenarioParams,
     build_top2_soft_target_scale_baseline,
     evaluate_market_regime_exposure_scenarios,
+    run_defensive_baseline_report,
     run_market_regime_exposure_research,
 )
 from .market_regime_overlay import (
@@ -148,6 +150,7 @@ __all__ = [
     "EVIDENCE_WINDOWS",
     "EvidenceWindow",
     "FundingBasisFeasibilityResult",
+    "DefensiveBaselineReportResult",
     "MarketRegimeExposureResearchResult",
     "MarketRegimeExposureScenarioParams",
     "MarketRegimeOverlayBacktestResult",
@@ -213,6 +216,7 @@ __all__ = [
     "publish_latest_backtest_report",
     "publish_latest_ml_walk_forward_report",
     "run_backtest",
+    "run_defensive_baseline_report",
     "run_funding_basis_feasibility",
     "run_strategy_action_diagnostics",
     "run_trend_core_signal_quality",

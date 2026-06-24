@@ -138,3 +138,22 @@ Updated operating boundary:
 - Treat EWMA as display-only risk context, not strategy edge.
 - Shift active work to operator trust, live automation usability, normal
   session reliability, and evidence traceability.
+
+## 2026-06-24 Update: Funding/Basis Parked, Defensive Baseline First
+
+The Kraken Futures funding/basis feasibility probe proved the public data lane is
+technically reachable, but the follow-on collector was intentionally closed
+before merge. External research did not find cost-aware evidence that a
+Kraken-only funding/basis defensive overlay beats simple realized-volatility or
+momentum baselines, and the available forward-collection path would have weak
+near-term statistical power.
+
+Updated research order:
+
+- Park funding/basis as an optional future lane, not the active next build.
+- Build the defensive baseline yardstick first, using existing OHLC data.
+- Require dynamic exposure timing to beat a matched-average-exposure static
+  comparator, so lower drawdown from lower average exposure is not mistaken for
+  timing skill.
+- Revisit funding/basis only behind a written hypothesis that can beat this
+  baseline net of cost with point-in-time data.

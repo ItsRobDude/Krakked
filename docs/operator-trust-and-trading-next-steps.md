@@ -229,9 +229,12 @@ Current strategy stance:
 - ML strategies: research-only unless a future pre-registered gate passes.
 
 Directional OHLC strategies on the current four-major universe should not be
-tuned further as a primary lane. The next evidence lane should introduce new
-information, especially funding rates and perp-spot or perp-index basis, and
-evaluate defensive risk sizing rather than offensive alpha.
+tuned further as a primary lane. The funding/basis feasibility probe landed, but
+the forward collector was closed after external research found no cost-aware
+evidence that Kraken-only funding/basis defensively beats simpler baselines. The
+active research lane is now the defensive baseline yardstick: prove what simple
+realized-volatility, diversification, momentum risk-off, and target-scale rules
+can do before adding any new signal family.
 
 ## Data Lane
 
@@ -246,18 +249,15 @@ For strategy evidence:
 
 ## Recommended Order
 
-1. Run the funding/basis feasibility probe before adding storage or model code:
-   `poetry run krakked funding-basis-feasibility --pair BTC/USD --pair ETH/USD
-   --pair SOL/USD --pair ADA/USD --start 2025-12-01T00:00:00Z --end
-   2026-06-21T20:00:00Z --window-set regime_diverse_4h --timeframe 4h
-   --save-report reports/funding-basis-feasibility.json --json`. The report is
-   research-only and public-data-only.
-2. Follow the feasibility verdict explicitly: `historical_backtestable` means
-   raw storage/backfill can be scoped, `forward_collection_only` means build a
-   forward collector first, and `not_viable_from_kraken_alone` means stop or
-   evaluate another source.
-3. Design the defensive funding/basis risk experiment against EWMA and existing
-   target-scale/trend-rank baselines before writing model code.
+1. Run the defensive baseline yardstick before adding new signal infrastructure:
+   `poetry run krakked defensive-baseline-report --pair BTC/USD --pair ETH/USD
+   --pair SOL/USD --pair ADA/USD --window-set regime_diverse_4h --timeframe 4h
+   --fee-bps 25 --save-report reports/defensive-baseline.json --json`.
+2. Treat matched-average-exposure static comparators as mandatory. A dynamic
+   rule that only reduces drawdown by sitting in cash is a
+   `risk_control_tradeoff`, not evidence of timing skill.
+3. Reopen funding/basis only if a future written hypothesis explains how it can
+   beat the defensive baseline net of cost and with point-in-time data.
 4. Define validate-only live drill and tiny-live-smoke criteria before any live
    smoke attempt.
 5. Clean up remaining operator affordances only when they affect health,

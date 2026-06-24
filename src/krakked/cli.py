@@ -24,6 +24,7 @@ from krakked.backtest import (
     STRATEGY_ACTIVITY_WINDOW_SETS,
     BacktestPreflightResult,
     BacktestResult,
+    DefensiveBaselineReportResult,
     FundingBasisFeasibilityResult,
     MarketRegimeExposureScenarioParams,
     MarketRegimeOverlayParams,
@@ -49,6 +50,7 @@ from krakked.backtest import (
     publish_latest_backtest_report,
     publish_latest_ml_walk_forward_report,
     run_backtest,
+    run_defensive_baseline_report,
     run_funding_basis_feasibility,
     run_market_regime_exposure_research,
     run_market_regime_overlay_backtest,
@@ -1345,6 +1347,29 @@ def _print_market_regime_exposure_research_summary(
         print(f"Saved report: {report_path}")
 
 
+def _print_defensive_baseline_report_summary(
+    payload: dict[str, Any], report_path: str | None
+) -> None:
+    summary = payload["summary"]
+    verdict = summary.get("verdict", {})
+    primary = payload.get("primary_continuous_span", {})
+    print("Defensive baseline report completed.")
+    print(f"Primary span: {primary.get('actual_start')} -> {primary.get('actual_end')}")
+    print(
+        f"Pairs: {', '.join(summary.get('pairs', []))} | "
+        f"timeframe {summary.get('timeframe')} | "
+        f"verdict {verdict.get('status', 'unknown')}"
+    )
+    print(
+        "Matched exposure comparisons: "
+        f"{len(payload.get('matched_exposure_comparisons') or [])}"
+    )
+    for reason in verdict.get("reasons", []) or []:
+        print(f"- {reason}")
+    if report_path:
+        print(f"Saved report: {report_path}")
+
+
 def _add_market_regime_exposure_sweep_arguments(
     subparser: argparse.ArgumentParser,
 ) -> None:
@@ -1532,6 +1557,192 @@ def _add_market_regime_exposure_sweep_arguments(
         "--json",
         action="store_true",
         help="Print the sweep aggregate as JSON",
+    )
+
+
+def _add_defensive_baseline_report_arguments(
+    subparser: argparse.ArgumentParser,
+) -> None:
+    subparser.add_argument(
+        "--config",
+        help="Optional path to the base config.yaml to use",
+    )
+    subparser.add_argument(
+        "--pair",
+        action="append",
+        help="Limit to one pair; repeat to include multiple pairs",
+    )
+    subparser.add_argument(
+        "--start",
+        default="2025-12-01T00:00:00Z",
+        help="Primary continuous-span start timestamp",
+    )
+    subparser.add_argument(
+        "--end",
+        help="Primary continuous-span end timestamp; defaults to current cache tail",
+    )
+    subparser.add_argument(
+        "--window-set",
+        action="append",
+        choices=sorted(MARKET_REGIME_EXPOSURE_WINDOW_SETS),
+        default=None,
+        help="Secondary evidence window set; repeat to include multiple",
+    )
+    subparser.add_argument(
+        "--timeframe",
+        default="4h",
+        help="Cached OHLC timeframe for defensive baseline features",
+    )
+    subparser.add_argument(
+        "--benchmark-pair",
+        default="BTC/USD",
+        help="Benchmark pair used for market-state and vol-target decisions",
+    )
+    subparser.add_argument(
+        "--momentum-lookback-bars",
+        type=int,
+        default=63,
+        help="Benchmark momentum lookback bars",
+    )
+    subparser.add_argument(
+        "--basket-momentum-lookback-bars",
+        type=int,
+        default=63,
+        help="Starter-basket momentum lookback bars",
+    )
+    subparser.add_argument(
+        "--volatility-lookback-bars",
+        type=int,
+        default=63,
+        help="Benchmark realized-volatility lookback bars",
+    )
+    subparser.add_argument(
+        "--drawdown-lookback-bars",
+        type=int,
+        default=63,
+        help="Benchmark drawdown lookback bars",
+    )
+    subparser.add_argument(
+        "--neutral-allocation-multiplier",
+        type=float,
+        default=0.75,
+        help="Exposure multiplier for target_scale neutral states",
+    )
+    subparser.add_argument(
+        "--risk-off-allocation-multiplier",
+        type=float,
+        default=0.25,
+        help="Exposure multiplier for target_scale risk-off states",
+    )
+    subparser.add_argument(
+        "--neutral-benchmark-momentum-bps",
+        type=float,
+        default=150.0,
+        help="Benchmark momentum below this value marks neutral",
+    )
+    subparser.add_argument(
+        "--neutral-basket-momentum-bps",
+        type=float,
+        default=100.0,
+        help="Basket momentum below this value marks neutral",
+    )
+    subparser.add_argument(
+        "--risk-off-benchmark-momentum-bps",
+        type=float,
+        default=0.0,
+        help="Benchmark momentum below this value can mark risk-off",
+    )
+    subparser.add_argument(
+        "--risk-off-basket-momentum-bps",
+        type=float,
+        default=0.0,
+        help="Basket momentum below this value can mark risk-off",
+    )
+    subparser.add_argument(
+        "--neutral-benchmark-drawdown-pct",
+        type=float,
+        default=4.0,
+        help="Benchmark drawdown percentage that marks neutral",
+    )
+    subparser.add_argument(
+        "--risk-off-benchmark-drawdown-pct",
+        type=float,
+        default=8.0,
+        help="Benchmark drawdown percentage that marks risk-off",
+    )
+    subparser.add_argument(
+        "--neutral-volatility-pct",
+        type=float,
+        default=2.5,
+        help="Benchmark realized volatility percentage that marks neutral",
+    )
+    subparser.add_argument(
+        "--risk-off-volatility-pct",
+        type=float,
+        default=4.0,
+        help="Benchmark realized volatility percentage that marks risk-off",
+    )
+    subparser.add_argument(
+        "--allocation-pct",
+        type=float,
+        default=100.0,
+        help="Synthetic full-risk allocation percentage before defensive scaling",
+    )
+    subparser.add_argument(
+        "--rebalance-interval-bars",
+        type=int,
+        default=6,
+        help="Rebalance cadence in bars",
+    )
+    subparser.add_argument(
+        "--rebalance-delta-pct",
+        type=float,
+        default=2.5,
+        help="Minimum exposure delta as percent of equity before trading",
+    )
+    subparser.add_argument(
+        "--starting-cash-usd",
+        type=float,
+        default=10_000.0,
+        help="Synthetic starting USD wallet balance",
+    )
+    subparser.add_argument(
+        "--fee-bps",
+        type=float,
+        default=25.0,
+        help="One-way all-in cost proxy in basis points",
+    )
+    subparser.add_argument(
+        "--target-lookback-bars",
+        type=int,
+        default=63,
+        help="Bars used by dynamic target and risk-control rules",
+    )
+    subparser.add_argument(
+        "--min-momentum-bps",
+        type=float,
+        default=150.0,
+        help="Momentum threshold used by momentum risk-off",
+    )
+    subparser.add_argument(
+        "--max-target-pairs",
+        type=int,
+        default=2,
+        help="Maximum number of pairs for trend-rank target_scale",
+    )
+    subparser.add_argument(
+        "--save-report",
+        help="Optional path to write the report JSON",
+    )
+    subparser.add_argument(
+        "--strict-data",
+        action="store_true",
+        help="Fail if explicit start/end coverage is missing or partial",
+    )
+    subparser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print the report as JSON",
     )
 
 
@@ -3742,6 +3953,60 @@ def _market_regime_exposure_research_command(args: argparse.Namespace) -> int:
         print(json.dumps(payload, indent=2))
     else:
         _print_market_regime_exposure_research_summary(payload, saved_report_path)
+    return 0
+
+
+def _defensive_baseline_report_command(args: argparse.Namespace) -> int:
+    """Run the research-only defensive baseline yardstick report."""
+
+    try:
+        start = _parse_datetime_arg(args.start)
+        end = _parse_datetime_arg(args.end) if args.end else None
+    except ValueError as exc:
+        return _print_error(f"Invalid defensive baseline datetime: {exc}")
+
+    try:
+        config = _load_backtest_config(args)
+        regime_params = _market_regime_params_from_args(args)
+        scenario_params = _market_regime_exposure_scenario_params_from_args(args)
+        window_sets = None
+        if args.window_set:
+            window_sets = {
+                window_set: MARKET_REGIME_EXPOSURE_WINDOW_SETS[window_set]
+                for window_set in _unique_strings(args.window_set)
+            }
+        result: DefensiveBaselineReportResult = run_defensive_baseline_report(
+            config,
+            start=start,
+            end=end,
+            pairs=args.pair,
+            timeframe=args.timeframe,
+            window_sets=window_sets,
+            regime_params=regime_params,
+            scenario_params=scenario_params,
+            strict_data=bool(args.strict_data),
+            rebalance_delta_pct=float(args.rebalance_delta_pct),
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _print_error(f"Defensive baseline report failed: {exc}")
+
+    payload = _market_regime_exposure_payload(
+        result,
+        args,
+        generated_by="krakked defensive-baseline-report",
+    )
+
+    saved_report_path: str | None = None
+    if args.save_report:
+        try:
+            saved_report_path = _write_backtest_report(payload, args.save_report)
+        except Exception as exc:  # noqa: BLE001
+            return _print_error(f"Defensive baseline report write failed: {exc}")
+
+    if args.json:
+        print(json.dumps(payload, indent=2))
+    else:
+        _print_defensive_baseline_report_summary(payload, saved_report_path)
     return 0
 
 
@@ -6387,6 +6652,13 @@ def _build_parser() -> argparse.ArgumentParser:
     market_regime_exposure_sweep_parser.set_defaults(
         func=_market_regime_exposure_sweep_command
     )
+
+    defensive_baseline_parser = subparsers.add_parser(
+        "defensive-baseline-report",
+        help="Build the research-only defensive baseline yardstick report",
+    )
+    _add_defensive_baseline_report_arguments(defensive_baseline_parser)
+    defensive_baseline_parser.set_defaults(func=_defensive_baseline_report_command)
 
     target_source_research_parser = subparsers.add_parser(
         "target-source-research",
