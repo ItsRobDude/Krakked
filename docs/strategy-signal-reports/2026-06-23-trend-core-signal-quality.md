@@ -27,6 +27,41 @@ Decision: retire the directional-OHLC-on-majors lane for now, including
 promotion request, and no runtime strategy, allowlist, risk, execution, schema,
 or UI behavior changed.
 
+## Methodology Correction (PR856)
+
+A code review after this run found that the harness that produced these numbers
+is a **charitable, drift-uncontrolled diagnostic**, not the baseline-controlled
+falsification the framing above implies. The retirement verdict still holds —
+every measurement bias below inflates the signal, and `trend_core` failed anyway
+— but the rigor claims must be read with these corrections:
+
+- **No unconditional baseline.** Forward returns were judged against a fixed
+  round-trip fee hurdle plus a within-window trend-strength quartile delta, not
+  against an unconditional/random-entry baseline over the same bars and horizon.
+  "Positive after fees" here cannot distinguish real timing edge from market
+  drift.
+- **Same-bar-close entry.** Entries were filled at the signal bar's own close —
+  the bar the signal was computed from — not the next bar's open, biasing
+  forward returns upward by one bar of momentum.
+- **Adverse excursion was evidence-only.** Max adverse excursion was reported
+  but never gated the verdict.
+- **Strict-data was not enforced per window.** The window-set path computed and
+  tabled stats for partial windows; `--strict-data` only annotated coverage, it
+  did not abort.
+- **Consistency was N-of-N (unanimous), not a tunable K-of-N.** "K/N = 0/3" is
+  numerically true, but the implemented bar requires every evaluable window to
+  pass.
+- **Lane retirement is an inference.** Only `trend_core` was measured;
+  `majors_mean_rev` and `rs_rotation` are retired by inference (trend_core is the
+  strongest directional-OHLC candidate and prior evidence is negative), not by
+  direct measurement in this run.
+
+As of PR856 the tool can no longer emit a promotable verdict: a heuristic pass is
+surfaced as `diagnostic_candidate_unverified` with `promotion_ready=false` and
+`promotion_blocked_reason="baseline_control_not_implemented"`. A
+baseline-controlled, next-bar-open measurement harness (PR857) is required before
+any future `candidate` verdict can be trusted.
+
 ## Command
 
 ```bash

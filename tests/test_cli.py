@@ -3077,7 +3077,7 @@ def test_trend_core_signal_quality_window_set_subcommand(
                         "window_set": "tiny",
                         "window_id": "w1",
                         "evidence_bucket": "uptrend",
-                        "status": "candidate_signal",
+                        "status": "diagnostic_candidate_unverified",
                         "total_signals": 12,
                         "primary_horizon_stats": {"mean_return_pct": 0.8},
                     }
@@ -3145,6 +3145,29 @@ def test_trend_core_signal_quality_requires_window_or_explicit_dates(
     assert exit_code == 1
     output = capsys.readouterr().out
     assert "provide --start and --end, or at least one --window-set" in output
+
+
+@pytest.mark.parametrize(
+    "command_name",
+    [
+        "market-regime-research",
+        "market-regime-overlay-backtest",
+        "market-regime-exposure-research",
+    ],
+)
+def test_market_regime_commands_require_start_and_end(command_name: str) -> None:
+    # PR855 dropped required=True from the shared market-regime arg helper, which
+    # turned a missing --start into an uncaught AttributeError crash. The dates
+    # must be required again so argparse rejects the call cleanly (SystemExit 2).
+    with pytest.raises(SystemExit):
+        cli.main([command_name, "--end", "2026-05-02T00:00:00Z"])
+
+
+def test_trend_core_signal_quality_rejects_unknown_window_set() -> None:
+    # An unknown --window-set must fail at argparse with a valid-choices error,
+    # not a raw KeyError surfaced through the generic except handler.
+    with pytest.raises(SystemExit):
+        cli.main(["trend-core-signal-quality", "--window-set", "definitely-not-a-set"])
 
 
 def test_market_regime_research_subcommand_returns_nonzero_on_failure(
