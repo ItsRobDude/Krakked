@@ -13,6 +13,10 @@ from .evidence_windows import (
     build_evidence_window_context,
     evidence_window_tuples,
 )
+from .funding_basis_feasibility import (
+    FundingBasisFeasibilityResult,
+    run_funding_basis_feasibility,
+)
 from .market_regime_exposure import (
     DEFAULT_EXPOSURE_OVERLAY_MODES,
     DEFAULT_EXPOSURE_SCENARIOS,
@@ -143,6 +147,7 @@ __all__ = [
     "EVIDENCE_WINDOW_SET_TUPLES",
     "EVIDENCE_WINDOWS",
     "EvidenceWindow",
+    "FundingBasisFeasibilityResult",
     "MarketRegimeExposureResearchResult",
     "MarketRegimeExposureScenarioParams",
     "MarketRegimeOverlayBacktestResult",
@@ -208,6 +213,7 @@ __all__ = [
     "publish_latest_backtest_report",
     "publish_latest_ml_walk_forward_report",
     "run_backtest",
+    "run_funding_basis_feasibility",
     "run_strategy_action_diagnostics",
     "run_trend_core_signal_quality",
     "run_trend_core_signal_quality_window_sets",

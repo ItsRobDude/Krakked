@@ -238,3 +238,24 @@ features. `trend_core`, `majors_mean_rev`, and `rs_rotation` stay research/paper
 only as diagnostics and event generators; do not spend further cycles polishing
 directional signals from OHLC-only major-pair data unless a later predeclared
 evidence lane overturns this verdict.
+
+Start that lane with the public-data feasibility probe:
+
+```bash
+poetry run krakked funding-basis-feasibility \
+  --pair BTC/USD \
+  --pair ETH/USD \
+  --pair SOL/USD \
+  --pair ADA/USD \
+  --start 2025-12-01T00:00:00Z \
+  --end 2026-06-21T20:00:00Z \
+  --window-set regime_diverse_4h \
+  --timeframe 4h \
+  --save-report reports/funding-basis-feasibility.json \
+  --json
+```
+
+Only scope historical backfill if the report proves point-in-time historical
+usability. If publish timing is unknown, the next honest step is forward
+collection; if Kraken public data is incomplete, stop the Kraken-only lane or
+evaluate another source.
