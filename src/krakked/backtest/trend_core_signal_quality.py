@@ -35,9 +35,18 @@ REPORT_TYPE_TREND_CORE_SIGNAL_QUALITY_WINDOW_SET = (
 REPORT_VERSION = 1
 DEFAULT_FORWARD_HORIZON_BARS = (1, 3, 6)
 TREND_CORE_COST_MODEL_NOTE = (
-    "fee_bps is used as a one-way all-in cost proxy; no separate slippage model "
-    "is applied in this module."
+    "fee_bps is the one-way all-in fee proxy and slippage_bps is the one-way "
+    "slippage proxy; round-trip cost = 2 * (fee_bps + slippage_bps). Forward "
+    "returns use next-bar-open entry and exact-horizon exit (no horizon "
+    "stretching) and are scored against an unconditional all-bars baseline over "
+    "the same window, horizon, and entry rule."
 )
+# A primary-horizon distribution needs at least this many forward-return samples
+# before any heuristic verdict is trusted.
+MIN_PRIMARY_HORIZON_SAMPLES = 30
+# The unconditional baseline needs at least this many samples before it can be
+# used to control the signal for market drift.
+MIN_BASELINE_SAMPLES = 30
 
 
 @dataclass
@@ -52,6 +61,7 @@ class TrendCoreSignalQualityResult:
     strongest_vs_weakest: dict[str, Any]
     signals_sample: list[dict[str, Any]]
     preflight: dict[str, Any] | None
+    baseline: dict[str, Any] | None = None
 
     def to_report_dict(self) -> dict[str, Any]:
         return {
@@ -60,6 +70,7 @@ class TrendCoreSignalQualityResult:
             "generated_at": self.generated_at.astimezone(UTC).isoformat(),
             "summary": copy.deepcopy(self.summary),
             "overall": copy.deepcopy(self.overall),
+            "baseline": copy.deepcopy(self.baseline),
             "by_timeframe": copy.deepcopy(self.by_timeframe),
             "by_pair": copy.deepcopy(self.by_pair),
             "by_trend_strength_quartile": copy.deepcopy(
@@ -107,6 +118,7 @@ def run_trend_core_signal_quality(
     timeframes: Sequence[str] | None = None,
     forward_horizon_bars: Sequence[int] | None = None,
     fee_bps: float = 25.0,
+    slippage_bps: float = 0.0,
     fresh_bars_only: bool = False,
     strict_data: bool = False,
     warmup_days: float = 30.0,
@@ -120,6 +132,8 @@ def run_trend_core_signal_quality(
         raise ValueError("end must be after start")
     if float(fee_bps) < 0.0:
         raise ValueError("fee_bps must be greater than or equal to 0")
+    if float(slippage_bps) < 0.0:
+        raise ValueError("slippage_bps must be greater than or equal to 0")
     if float(warmup_days) < 0.0:
         raise ValueError("warmup_days must be greater than or equal to 0")
 
@@ -164,6 +178,14 @@ def run_trend_core_signal_quality(
             horizons=horizons,
             fresh_bars_only=bool(fresh_bars_only),
         )
+        baseline_rows = _collect_baseline_rows(
+            market_data,
+            start=start,
+            end=end,
+            pairs=selected_pairs,
+            timeframes=selected_timeframes,
+            horizons=horizons,
+        )
         return build_trend_core_signal_quality_report(
             signals,
             start=start,
@@ -172,6 +194,8 @@ def run_trend_core_signal_quality(
             timeframes=selected_timeframes,
             horizons=horizons,
             fee_bps=float(fee_bps),
+            slippage_bps=float(slippage_bps),
+            baseline_rows=baseline_rows,
             fresh_bars_only=bool(fresh_bars_only),
             strict_data=bool(strict_data),
             warmup_days=float(warmup_days),
@@ -192,6 +216,7 @@ def run_trend_core_signal_quality_window_sets(
     timeframes: Sequence[str] | None = None,
     forward_horizon_bars: Sequence[int] | None = None,
     fee_bps: float = 25.0,
+    slippage_bps: float = 0.0,
     fresh_bars_only: bool = False,
     strict_data: bool = False,
     warmup_days: float = 30.0,
@@ -203,6 +228,8 @@ def run_trend_core_signal_quality_window_sets(
         raise ValueError("At least one window set is required")
     if float(fee_bps) < 0.0:
         raise ValueError("fee_bps must be greater than or equal to 0")
+    if float(slippage_bps) < 0.0:
+        raise ValueError("slippage_bps must be greater than or equal to 0")
     if float(warmup_days) < 0.0:
         raise ValueError("warmup_days must be greater than or equal to 0")
 
@@ -234,6 +261,7 @@ def run_trend_core_signal_quality_window_sets(
                 timeframes=selected_timeframes,
                 forward_horizon_bars=horizons,
                 fee_bps=float(fee_bps),
+                slippage_bps=float(slippage_bps),
                 fresh_bars_only=bool(fresh_bars_only),
                 strict_data=False,
                 warmup_days=float(warmup_days),
@@ -268,6 +296,7 @@ def run_trend_core_signal_quality_window_sets(
                     "total_signals": int(summary.get("total_signals", 0) or 0),
                     "status": summary.get("status"),
                     "promotion_ready": bool(summary.get("promotion_ready")),
+                    "baseline_controlled": bool(summary.get("baseline_controlled")),
                     "gate_reasons": list(summary.get("gate_reasons") or []),
                     "primary_horizon_bars": primary_horizon,
                     "primary_horizon_stats": copy.deepcopy(primary_stats),
@@ -285,6 +314,7 @@ def run_trend_core_signal_quality_window_sets(
         timeframes=selected_timeframes,
         horizons=horizons,
         fee_bps=float(fee_bps),
+        slippage_bps=float(slippage_bps),
         fresh_bars_only=bool(fresh_bars_only),
         strict_data=bool(strict_data),
         warmup_days=float(warmup_days),
@@ -303,27 +333,27 @@ def build_trend_core_signal_quality_window_set_report(
     fresh_bars_only: bool,
     strict_data: bool,
     warmup_days: float,
+    slippage_bps: float = 0.0,
 ) -> TrendCoreSignalQualityWindowSetResult:
     """Build the aggregate window-set verdict from per-window summaries."""
 
     window_rows = [copy.deepcopy(dict(window)) for window in windows]
     horizon_values = _validate_horizons(horizons)
     primary_horizon = max(horizon_values)
-    round_trip_cost_pct = (float(fee_bps) * 2.0) / 100.0
+    one_way_cost_bps = float(fee_bps) + float(slippage_bps)
+    round_trip_cost_pct = (one_way_cost_bps * 2.0) / 100.0
 
     bucket_counts, regime_coverage_sufficient = summarize_regime_coverage(
         window["evidence_bucket"] for window in window_rows
     )
     evaluable_windows = [window for window in window_rows if window["evaluable"]]
+    # A window "passes" only when it is a baseline-controlled candidate; the
+    # unverified-diagnostic and edge-not-proven states do not count.
     passing_windows = [
-        window
-        for window in evaluable_windows
-        if window["status"] == "diagnostic_candidate_unverified"
+        window for window in evaluable_windows if window["status"] == "candidate_signal"
     ]
     failing_windows = [
-        window
-        for window in evaluable_windows
-        if window["status"] != "diagnostic_candidate_unverified"
+        window for window in evaluable_windows if window["status"] != "candidate_signal"
     ]
 
     gate_reasons: list[str] = []
@@ -345,30 +375,36 @@ def build_trend_core_signal_quality_window_set_report(
             f"{len(failing_windows)} evaluable window(s) failed signal-quality gates"
         )
 
-    # Whether every evaluable window cleared the heuristic checks. This is NOT a
-    # promotion: the per-window gate is drift-uncontrolled (no unconditional
-    # baseline), so it cannot prove edge over simply being long in the regime.
-    heuristic_consistency_met = (
+    # Pre-registered consistency rule: every evaluable regime window must be a
+    # baseline-controlled candidate (N-of-N / unanimous), not a tunable K-of-N.
+    consistency_rule = "n_of_n"
+    consistency_met = (
         bool(evaluable_windows)
         and regime_coverage_sufficient
         and not failing_windows
         and not gate_reasons
     )
-    # Safety guard (PR856): never report a promotable verdict from the heuristic
-    # gate. Forced False until a baseline-controlled gate exists (PR857).
+    baseline_controlled = bool(evaluable_windows) and all(
+        bool(window.get("baseline_controlled")) for window in evaluable_windows
+    )
+    # promotion_ready stays False even for a consistent baseline-controlled pass:
+    # out-of-sample validation is the next gate, which this tool does not perform.
     promotion_ready = False
-    status = (
-        "diagnostic_candidate_unverified"
-        if heuristic_consistency_met
-        else "edge_not_proven"
-    )
-    status_note = (
-        "All evaluable regime-diverse windows cleared the heuristic checks, but the "
-        "result is drift-uncontrolled (no unconditional baseline); it is not a "
-        "promotable candidate."
-        if heuristic_consistency_met
-        else "trend_core did not clear the heuristic regime-consistency checks."
-    )
+    status = "candidate_signal" if consistency_met else "edge_not_proven"
+    if consistency_met:
+        status_note = (
+            "Every evaluable regime-diverse window is a baseline-controlled "
+            "candidate (N-of-N). Candidate for out-of-sample validation; not yet "
+            "promotable."
+        )
+        promotion_blocked_reason = "needs_out_of_sample_validation"
+    else:
+        status_note = "trend_core did not clear the predeclared regime-consistency bar."
+        promotion_blocked_reason = (
+            "baseline_control_unavailable"
+            if not baseline_controlled
+            else "edge_not_proven"
+        )
 
     summary = {
         "research_only": True,
@@ -379,10 +415,12 @@ def build_trend_core_signal_quality_window_set_report(
         "forward_horizon_bars": horizon_values,
         "primary_horizon_bars": primary_horizon,
         "fee_bps": float(fee_bps),
-        "one_way_all_in_cost_bps": float(fee_bps),
-        "round_trip_all_in_cost_bps": float(fee_bps) * 2.0,
+        "slippage_bps": float(slippage_bps),
+        "one_way_all_in_cost_bps": one_way_cost_bps,
+        "round_trip_all_in_cost_bps": one_way_cost_bps * 2.0,
         "round_trip_fee_hurdle_pct": round_trip_cost_pct,
         "round_trip_all_in_cost_pct": round_trip_cost_pct,
+        "baseline_edge_margin_pct": round_trip_cost_pct,
         "cost_model_note": TREND_CORE_COST_MODEL_NOTE,
         "fresh_bars_only": bool(fresh_bars_only),
         "strict_data": bool(strict_data),
@@ -394,16 +432,17 @@ def build_trend_core_signal_quality_window_set_report(
         "failing_window_ids": [window["window_id"] for window in failing_windows],
         "regime_bucket_counts": bucket_counts,
         "regime_coverage_sufficient": regime_coverage_sufficient,
+        "consistency_rule": consistency_rule,
         "status": status,
         "status_note": status_note,
         "promotion_ready": promotion_ready,
-        "baseline_controlled": False,
-        "promotion_blocked_reason": "baseline_control_not_implemented",
+        "baseline_controlled": baseline_controlled,
+        "promotion_blocked_reason": promotion_blocked_reason,
         "gate_reasons": gate_reasons,
         "directional_ohlc_lane_verdict": (
-            "trend_core cleared heuristic checks but remains baseline-unverified; "
-            "not promotable"
-            if heuristic_consistency_met
+            "trend_core is a baseline-controlled candidate across the regime mix; "
+            "advance to out-of-sample validation"
+            if consistency_met
             else "retire_directional_ohlc_on_majors_for_now"
         ),
     }
@@ -428,42 +467,51 @@ def build_trend_core_signal_quality_report(
     fresh_bars_only: bool,
     strict_data: bool,
     warmup_days: float,
+    slippage_bps: float = 0.0,
+    baseline_rows: Sequence[Mapping[str, Any]] | None = None,
     max_signal_rows: int = 50,
     preflight: dict[str, Any] | None = None,
 ) -> TrendCoreSignalQualityResult:
     start = _as_utc(start)
     end = _as_utc(end)
     rows = [copy.deepcopy(dict(signal)) for signal in signals]
+    baseline_data = [copy.deepcopy(dict(row)) for row in (baseline_rows or [])]
     horizon_values = _validate_horizons(horizons)
-    round_trip_fee_hurdle_pct = (float(fee_bps) * 2.0) / 100.0
+    one_way_cost_bps = float(fee_bps) + float(slippage_bps)
+    round_trip_cost_pct = (one_way_cost_bps * 2.0) / 100.0
+    # The signal must beat the unconditional baseline by at least the round-trip
+    # cost: the selection edge over indiscriminate entry must itself exceed what
+    # it costs to trade.
+    baseline_edge_margin_pct = round_trip_cost_pct
     primary_horizon = max(horizon_values)
 
-    overall = _stats_payload(rows, horizon_values, round_trip_fee_hurdle_pct)
+    overall = _stats_payload(rows, horizon_values, round_trip_cost_pct)
+    baseline = _stats_payload(baseline_data, horizon_values, round_trip_cost_pct)
     by_timeframe = _grouped_stats(
         rows,
         group_key="timeframe",
         horizons=horizon_values,
-        round_trip_fee_hurdle_pct=round_trip_fee_hurdle_pct,
+        round_trip_cost_pct=round_trip_cost_pct,
     )
     by_pair = _grouped_stats(
         rows,
         group_key="pair",
         horizons=horizon_values,
-        round_trip_fee_hurdle_pct=round_trip_fee_hurdle_pct,
+        round_trip_cost_pct=round_trip_cost_pct,
     )
     by_strength = _quartile_stats(
         rows,
         metric_key="trend_strength_bps",
         group_key="trend_strength_quartile",
         horizons=horizon_values,
-        round_trip_fee_hurdle_pct=round_trip_fee_hurdle_pct,
+        round_trip_cost_pct=round_trip_cost_pct,
     )
     by_confidence = _quartile_stats(
         rows,
         metric_key="confidence",
         group_key="confidence_quartile",
         horizons=horizon_values,
-        round_trip_fee_hurdle_pct=round_trip_fee_hurdle_pct,
+        round_trip_cost_pct=round_trip_cost_pct,
     )
     strongest_vs_weakest = _strongest_vs_weakest(
         by_strength,
@@ -472,10 +520,13 @@ def build_trend_core_signal_quality_report(
     assessment = _assess_signal_quality(
         rows,
         overall=overall,
+        baseline=baseline,
         strongest_vs_weakest=strongest_vs_weakest,
         primary_horizon=primary_horizon,
-        round_trip_fee_hurdle_pct=round_trip_fee_hurdle_pct,
+        round_trip_cost_pct=round_trip_cost_pct,
+        baseline_edge_margin_pct=baseline_edge_margin_pct,
     )
+    baseline_primary = baseline.get(str(primary_horizon)) or {}
 
     summary = {
         "research_only": True,
@@ -487,22 +538,30 @@ def build_trend_core_signal_quality_report(
         "forward_horizon_bars": list(horizon_values),
         "primary_horizon_bars": primary_horizon,
         "fee_bps": float(fee_bps),
-        "one_way_all_in_cost_bps": float(fee_bps),
-        "round_trip_all_in_cost_bps": float(fee_bps) * 2.0,
-        "round_trip_fee_hurdle_pct": round_trip_fee_hurdle_pct,
-        "round_trip_all_in_cost_pct": round_trip_fee_hurdle_pct,
+        "slippage_bps": float(slippage_bps),
+        "one_way_all_in_cost_bps": one_way_cost_bps,
+        "round_trip_all_in_cost_bps": one_way_cost_bps * 2.0,
+        "round_trip_fee_hurdle_pct": round_trip_cost_pct,
+        "round_trip_all_in_cost_pct": round_trip_cost_pct,
+        "baseline_edge_margin_pct": baseline_edge_margin_pct,
         "cost_model_note": TREND_CORE_COST_MODEL_NOTE,
         "fresh_bars_only": bool(fresh_bars_only),
         "strict_data": bool(strict_data),
         "warmup_days": float(warmup_days),
         "total_signals": len(rows),
+        "baseline_sample_count": int(baseline_primary.get("sample_count", 0) or 0),
+        "baseline_mean_return_pct": baseline_primary.get("mean_return_pct"),
+        "signal_minus_baseline_mean_pct": assessment.get(
+            "signal_minus_baseline_mean_pct"
+        ),
         "status": assessment["status"],
         "status_note": assessment["status_note"],
-        # Safety guard (PR856): the heuristic gate is drift-uncontrolled (no
-        # unconditional baseline), so it can never report a promotable verdict.
-        "promotion_ready": False,
-        "baseline_controlled": False,
-        "promotion_blocked_reason": "baseline_control_not_implemented",
+        # promotion_ready is always False in this research tool: baseline control
+        # is necessary but not sufficient for promotion (out-of-sample validation
+        # is the next gate, which this tool does not perform).
+        "promotion_ready": bool(assessment.get("promotion_ready", False)),
+        "baseline_controlled": bool(assessment.get("baseline_controlled", False)),
+        "promotion_blocked_reason": assessment.get("promotion_blocked_reason"),
         "gate_reasons": assessment["gate_reasons"],
     }
 
@@ -510,6 +569,7 @@ def build_trend_core_signal_quality_report(
         generated_at=datetime.now(UTC),
         summary=summary,
         overall=overall,
+        baseline=baseline,
         by_timeframe=by_timeframe,
         by_pair=by_pair,
         by_trend_strength_quartile=by_strength,
@@ -589,6 +649,91 @@ def _collect_trend_core_signals(
     return signals
 
 
+def _resolve_next_bar_entry(
+    market_data: BacktestMarketData,
+    *,
+    pair: str,
+    timeframe: str,
+    signal_bar_ts: int,
+    frame_seconds: int,
+) -> tuple[int, float] | None:
+    """Resolve the next-bar-open entry for a signal fired on ``signal_bar_ts``.
+
+    Returns ``(entry_bar_ts, entry_open_price)`` for the bar immediately after the
+    signal bar, or ``None`` when that exact bar is unavailable or unpriced. Using
+    the next bar's open (rather than the signal bar's own close) removes the
+    same-bar look-ahead: a decision taken from a bar's close cannot also be filled
+    at that same close.
+    """
+
+    entry_ts = int(signal_bar_ts) + int(frame_seconds)
+    entry_bar = market_data.get_bar_at_or_after(pair, timeframe, entry_ts)
+    if entry_bar is None or int(entry_bar.timestamp) != entry_ts:
+        return None
+    entry_price = float(entry_bar.open)
+    if entry_price <= 0.0:
+        return None
+    return entry_ts, entry_price
+
+
+def _forward_metrics(
+    market_data: BacktestMarketData,
+    *,
+    pair: str,
+    timeframe: str,
+    signal_bar_ts: int,
+    horizons: Sequence[int],
+    frame_seconds: int,
+) -> tuple[float | None, dict[str, float | None], dict[str, float | None]]:
+    """Next-bar-open, exact-horizon forward returns for a single signal bar.
+
+    Shared by the conditional signal rows and the unconditional baseline so both
+    use an identical entry rule and horizon definition; the only difference is
+    which bars are sampled. Returns ``(entry_price, forward_returns,
+    adverse_excursions)`` with ``None`` entries wherever the entry bar or the
+    exact exit bar is missing (the horizon is never stretched to a later bar).
+    """
+
+    forward_returns: dict[str, float | None] = {}
+    adverse_excursions: dict[str, float | None] = {}
+    entry = _resolve_next_bar_entry(
+        market_data,
+        pair=pair,
+        timeframe=timeframe,
+        signal_bar_ts=signal_bar_ts,
+        frame_seconds=frame_seconds,
+    )
+    if entry is None:
+        for horizon in horizons:
+            forward_returns[str(int(horizon))] = None
+            adverse_excursions[str(int(horizon))] = None
+        return None, forward_returns, adverse_excursions
+
+    entry_ts, entry_price = entry
+    for horizon in horizons:
+        # Exit at the close of the bar exactly ``horizon`` bars after the signal
+        # bar. For horizon=1 that is the entry bar itself (a single-bar hold).
+        exit_ts = int(signal_bar_ts) + (int(frame_seconds) * int(horizon))
+        exit_bar = market_data.get_bar_at_or_after(pair, timeframe, exit_ts)
+        if exit_bar is None or int(exit_bar.timestamp) != exit_ts:
+            forward_returns[str(int(horizon))] = None
+            adverse_excursions[str(int(horizon))] = None
+            continue
+        forward_returns[str(int(horizon))] = (
+            (float(exit_bar.close) - entry_price) / entry_price
+        ) * 100.0
+        adverse_excursions[str(int(horizon))] = _long_adverse_excursion_pct(
+            market_data,
+            pair=pair,
+            timeframe=timeframe,
+            entry_ts=entry_ts,
+            exit_ts=exit_ts,
+            frame_seconds=frame_seconds,
+            entry_price=entry_price,
+        )
+    return entry_price, forward_returns, adverse_excursions
+
+
 def _signal_row(
     market_data: BacktestMarketData,
     *,
@@ -602,28 +747,14 @@ def _signal_row(
     frame_seconds = int(TIMEFRAME_MAP[timeframe]) * 60
     current_close = float(current_bar.close)
     current_bar_ts = int(current_bar.timestamp)
-    forward_returns: dict[str, float | None] = {}
-    adverse_excursions: dict[str, float | None] = {}
-    for horizon in horizons:
-        target_ts = current_bar_ts + (frame_seconds * int(horizon))
-        future_bar = market_data.get_bar_at_or_after(intent.pair, timeframe, target_ts)
-        if future_bar is None or current_close <= 0.0:
-            forward_returns[str(int(horizon))] = None
-            adverse_excursions[str(int(horizon))] = None
-            continue
-        future_close = float(future_bar.close)
-        forward_returns[str(int(horizon))] = (
-            (future_close - current_close) / current_close
-        ) * 100.0
-        adverse_excursions[str(int(horizon))] = _long_adverse_excursion_pct(
-            market_data,
-            pair=intent.pair,
-            timeframe=timeframe,
-            start_ts=current_bar_ts,
-            horizon_bars=int(horizon),
-            frame_seconds=frame_seconds,
-            entry_price=current_close,
-        )
+    entry_price, forward_returns, adverse_excursions = _forward_metrics(
+        market_data,
+        pair=str(intent.pair),
+        timeframe=timeframe,
+        signal_bar_ts=current_bar_ts,
+        horizons=horizons,
+        frame_seconds=frame_seconds,
+    )
 
     metadata = copy.deepcopy(getattr(intent, "metadata", {}) or {})
     return {
@@ -638,10 +769,67 @@ def _signal_row(
         "trend_strength_bps": _optional_float(metadata.get("trend_strength_bps")),
         "regime": getattr(regime, "value", regime),
         "current_close": current_close,
+        "entry_price": entry_price,
         "forward_returns_pct": forward_returns,
         "adverse_excursions_pct": adverse_excursions,
         "metadata": metadata,
     }
+
+
+def _collect_baseline_rows(
+    market_data: BacktestMarketData,
+    *,
+    start: datetime,
+    end: datetime,
+    pairs: Sequence[str],
+    timeframes: Sequence[str],
+    horizons: Sequence[int],
+) -> list[dict[str, Any]]:
+    """Unconditional all-bars baseline over the same window and entry rule.
+
+    For every bar in ``[start, end]`` for each pair/timeframe, treat it as a
+    candidate entry bar and compute the identical next-bar-open, exact-horizon
+    forward return. This is the drift control: it measures what an indiscriminate
+    long entry would have earned, so the conditional signal can be judged against
+    it rather than against a bare fee hurdle. Deterministic (every bar, no random
+    sampling) so the baseline is reproducible.
+    """
+
+    start_ts = int(start.timestamp())
+    end_ts = int(end.timestamp())
+    rows: list[dict[str, Any]] = []
+    for timeframe in timeframes:
+        if timeframe not in TIMEFRAME_MAP:
+            continue
+        frame_seconds = int(TIMEFRAME_MAP[timeframe]) * 60
+        for pair in pairs:
+            cursor = start_ts
+            while True:
+                bar = market_data.get_bar_at_or_after(pair, timeframe, cursor)
+                if bar is None:
+                    break
+                signal_bar_ts = int(bar.timestamp)
+                if signal_bar_ts > end_ts:
+                    break
+                _entry_price, forward_returns, adverse = _forward_metrics(
+                    market_data,
+                    pair=pair,
+                    timeframe=timeframe,
+                    signal_bar_ts=signal_bar_ts,
+                    horizons=horizons,
+                    frame_seconds=frame_seconds,
+                )
+                rows.append(
+                    {
+                        "pair": pair,
+                        "timeframe": timeframe,
+                        "signal_bar_timestamp": signal_bar_ts,
+                        "forward_returns_pct": forward_returns,
+                        "adverse_excursions_pct": adverse,
+                    }
+                )
+                cursor = signal_bar_ts + frame_seconds
+    return rows
 
 
 def _trend_core_config(config: AppConfig) -> StrategyConfig:
@@ -725,13 +913,13 @@ def _has_fresh_bar_at(
 def _stats_payload(
     rows: Sequence[Mapping[str, Any]],
     horizons: Sequence[int],
-    round_trip_fee_hurdle_pct: float,
+    round_trip_cost_pct: float,
 ) -> dict[str, Any]:
     return {
         str(horizon): _horizon_stats(
             rows,
             horizon=horizon,
-            round_trip_fee_hurdle_pct=round_trip_fee_hurdle_pct,
+            round_trip_cost_pct=round_trip_cost_pct,
         )
         for horizon in horizons
     }
@@ -741,41 +929,54 @@ def _horizon_stats(
     rows: Sequence[Mapping[str, Any]],
     *,
     horizon: int,
-    round_trip_fee_hurdle_pct: float,
+    round_trip_cost_pct: float,
 ) -> dict[str, Any]:
     returns = _forward_returns(rows, horizon)
     if not returns:
         return {
             "sample_count": 0,
+            "overlap_adjusted_sample_floor": 0.0,
             "mean_return_pct": None,
             "median_return_pct": None,
             "min_return_pct": None,
             "max_return_pct": None,
             "hit_rate": None,
             "fee_adjusted_hit_rate": None,
+            "net_hit_rate": None,
             "mean_after_fee_pct": None,
+            "net_mean_return_pct": None,
             "mean_adverse_excursion_pct": None,
             "median_adverse_excursion_pct": None,
             "max_adverse_excursion_pct": None,
+            "adverse_excursion_gated": False,
         }
 
     mean_return = mean(returns)
+    net_mean_return = mean_return - round_trip_cost_pct
     adverse = _adverse_excursions(rows, horizon)
     return {
         "sample_count": len(returns),
+        # Conservative lower bound on independent samples: consecutive forward
+        # windows overlap by up to ``horizon`` bars, so N/horizon is the floor.
+        "overlap_adjusted_sample_floor": round(len(returns) / max(1, int(horizon)), 2),
         "mean_return_pct": mean_return,
         "median_return_pct": median(returns),
         "min_return_pct": min(returns),
         "max_return_pct": max(returns),
         "hit_rate": sum(1 for value in returns if value > 0.0) / len(returns),
         "fee_adjusted_hit_rate": sum(
-            1 for value in returns if value >= round_trip_fee_hurdle_pct
+            1 for value in returns if value >= round_trip_cost_pct
         )
         / len(returns),
-        "mean_after_fee_pct": mean_return - round_trip_fee_hurdle_pct,
+        "net_hit_rate": sum(1 for value in returns if value > round_trip_cost_pct)
+        / len(returns),
+        "mean_after_fee_pct": net_mean_return,
+        "net_mean_return_pct": net_mean_return,
         "mean_adverse_excursion_pct": mean(adverse) if adverse else None,
         "median_adverse_excursion_pct": median(adverse) if adverse else None,
         "max_adverse_excursion_pct": max(adverse) if adverse else None,
+        # Adverse excursion is reported as evidence only; it does not gate.
+        "adverse_excursion_gated": False,
     }
 
 
@@ -812,23 +1013,27 @@ def _long_adverse_excursion_pct(
     *,
     pair: str,
     timeframe: str,
-    start_ts: int,
-    horizon_bars: int,
+    entry_ts: int,
+    exit_ts: int,
     frame_seconds: int,
     entry_price: float,
 ) -> float | None:
+    """Worst drawdown from the entry open across the held bars (entry..exit).
+
+    Evidence-only: reported in the stats but never gated. Returns ``None`` if any
+    held bar is missing, so the excursion is only reported when fully defined.
+    """
+
     if entry_price <= 0.0:
         return None
     lows: list[float] = []
-    for offset in range(1, int(horizon_bars) + 1):
-        bar = market_data.get_bar_at_or_after(
-            pair,
-            timeframe,
-            int(start_ts) + (int(frame_seconds) * offset),
-        )
-        if bar is None:
+    cursor = int(entry_ts)
+    while cursor <= int(exit_ts):
+        bar = market_data.get_bar_at_or_after(pair, timeframe, cursor)
+        if bar is None or int(bar.timestamp) != cursor:
             return None
         lows.append(float(bar.low))
+        cursor += int(frame_seconds)
     if not lows:
         return 0.0
     return max(0.0, ((entry_price - min(lows)) / entry_price) * 100.0)
@@ -839,7 +1044,7 @@ def _grouped_stats(
     *,
     group_key: str,
     horizons: Sequence[int],
-    round_trip_fee_hurdle_pct: float,
+    round_trip_cost_pct: float,
 ) -> list[dict[str, Any]]:
     groups: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
     for row in rows:
@@ -851,7 +1056,7 @@ def _grouped_stats(
             "forward_stats": _stats_payload(
                 group_rows,
                 horizons,
-                round_trip_fee_hurdle_pct,
+                round_trip_cost_pct,
             ),
         }
         for key, group_rows in sorted(groups.items())
@@ -864,7 +1069,7 @@ def _quartile_stats(
     metric_key: str,
     group_key: str,
     horizons: Sequence[int],
-    round_trip_fee_hurdle_pct: float,
+    round_trip_cost_pct: float,
 ) -> list[dict[str, Any]]:
     scored = [
         dict(row) for row in rows if _optional_float(row.get(metric_key)) is not None
@@ -896,7 +1101,7 @@ def _quartile_stats(
                 "forward_stats": _stats_payload(
                     bucket_rows,
                     horizons,
-                    round_trip_fee_hurdle_pct,
+                    round_trip_cost_pct,
                 ),
             }
         )
@@ -943,56 +1148,132 @@ def _assess_signal_quality(
     rows: Sequence[Mapping[str, Any]],
     *,
     overall: Mapping[str, Any],
+    baseline: Mapping[str, Any] | None,
     strongest_vs_weakest: Mapping[str, Any],
     primary_horizon: int,
-    round_trip_fee_hurdle_pct: float,
+    round_trip_cost_pct: float,
+    baseline_edge_margin_pct: float,
 ) -> dict[str, Any]:
-    reasons: list[str] = []
-    horizon_stats = overall.get(str(primary_horizon)) or {}
+    horizon_key = str(primary_horizon)
+    horizon_stats = overall.get(horizon_key) or {}
     sample_count = int(horizon_stats.get("sample_count", 0) or 0)
     mean_return = horizon_stats.get("mean_return_pct")
     median_return = horizon_stats.get("median_return_pct")
     hit_rate = horizon_stats.get("hit_rate")
+    net_mean_return = horizon_stats.get("net_mean_return_pct")
+    net_hit_rate = horizon_stats.get("net_hit_rate")
     strength_delta = strongest_vs_weakest.get("strongest_minus_weakest_mean_return_pct")
 
-    if not rows:
-        return {
-            "status": "no_signals",
-            "status_note": "No trend_core long entry/increase signals were produced.",
-            "promotion_ready": False,
-            "gate_reasons": ["no_signals"],
+    baseline_stats = (baseline or {}).get(horizon_key) or {}
+    baseline_mean = baseline_stats.get("mean_return_pct")
+    baseline_sample = int(baseline_stats.get("sample_count", 0) or 0)
+    baseline_controlled = (
+        baseline_mean is not None and baseline_sample >= MIN_BASELINE_SAMPLES
+    )
+    signal_minus_baseline = (
+        None
+        if mean_return is None or baseline_mean is None
+        else float(mean_return) - float(baseline_mean)
+    )
+
+    def _baseline_fields(**extra: Any) -> dict[str, Any]:
+        payload = {
+            "baseline_mean_return_pct": baseline_mean,
+            "baseline_sample_count": baseline_sample,
+            "signal_minus_baseline_mean_pct": signal_minus_baseline,
         }
-    if sample_count < 30:
+        payload.update(extra)
+        return payload
+
+    if not rows:
+        return _baseline_fields(
+            status="no_signals",
+            status_note="No trend_core long entry/increase signals were produced.",
+            promotion_ready=False,
+            baseline_controlled=False,
+            promotion_blocked_reason="no_signals",
+            gate_reasons=["no_signals"],
+        )
+
+    reasons: list[str] = []
+    if sample_count < MIN_PRIMARY_HORIZON_SAMPLES:
         reasons.append(
             f"primary horizon has only {sample_count} forward-return samples"
         )
-    if mean_return is None or float(mean_return) <= round_trip_fee_hurdle_pct:
-        reasons.append("mean forward return does not clear the round-trip fee hurdle")
+    if net_mean_return is None or float(net_mean_return) <= 0.0:
+        reasons.append(
+            "net mean forward return (after round-trip cost) is not positive"
+        )
     if median_return is None or float(median_return) <= 0.0:
         reasons.append("median forward return is not positive")
     if hit_rate is None or float(hit_rate) < 0.55:
         reasons.append("hit rate is below 55%")
+    if net_hit_rate is None or float(net_hit_rate) < 0.5:
+        reasons.append("net hit rate (after round-trip cost) is below 50%")
     if strength_delta is None or float(strength_delta) <= 0.0:
         reasons.append("stronger trend-strength bucket does not outperform weakest")
 
-    if reasons:
-        return {
-            "status": "edge_not_proven",
-            "status_note": "; ".join(reasons),
-            "promotion_ready": False,
-            "gate_reasons": reasons,
-        }
+    heuristics_passed = not reasons
 
-    return {
-        "status": "diagnostic_candidate_unverified",
-        "status_note": (
-            "Primary horizon clears the initial heuristic checks, but these are "
-            "drift-uncontrolled: no unconditional baseline comparison is applied, "
-            "so this is not a promotable candidate."
-        ),
-        "promotion_ready": False,
-        "gate_reasons": [],
-    }
+    # Baseline (drift) control is the decisive check: the signal's selection must
+    # beat indiscriminate entry by at least the configured margin, not merely
+    # clear a fee hurdle.
+    baseline_reason: str | None = None
+    if not baseline_controlled:
+        baseline_reason = (
+            "unconditional baseline has insufficient samples; cannot control for "
+            "market drift"
+        )
+    elif signal_minus_baseline is None or float(signal_minus_baseline) <= float(
+        baseline_edge_margin_pct
+    ):
+        baseline_reason = (
+            "signal mean does not beat the unconditional baseline by the required "
+            "margin"
+        )
+
+    if heuristics_passed and baseline_controlled and baseline_reason is None:
+        return _baseline_fields(
+            status="candidate_signal",
+            status_note=(
+                "Primary horizon is net-positive after round-trip cost and beats "
+                "the unconditional all-bars baseline by at least the required "
+                "margin. Baseline-controlled candidate; still requires "
+                "out-of-sample validation before any promotion."
+            ),
+            promotion_ready=False,
+            baseline_controlled=True,
+            promotion_blocked_reason="needs_out_of_sample_validation",
+            gate_reasons=[],
+        )
+
+    if heuristics_passed and not baseline_controlled:
+        return _baseline_fields(
+            status="diagnostic_candidate_unverified",
+            status_note=(
+                "Primary horizon clears the heuristic checks, but the "
+                "unconditional baseline is unavailable, so market drift cannot be "
+                "controlled and this is not a promotable candidate."
+            ),
+            promotion_ready=False,
+            baseline_controlled=False,
+            promotion_blocked_reason="baseline_control_unavailable",
+            gate_reasons=[],
+        )
+
+    all_reasons = list(reasons)
+    # Surface the baseline reason only when it is the binding constraint: if the
+    # heuristics already failed, the baseline note would be redundant noise.
+    if baseline_reason is not None and (baseline_controlled or not reasons):
+        all_reasons.append(baseline_reason)
+    return _baseline_fields(
+        status="edge_not_proven",
+        status_note="; ".join(all_reasons) if all_reasons else "edge not proven",
+        promotion_ready=False,
+        baseline_controlled=baseline_controlled,
+        promotion_blocked_reason="edge_not_proven",
+        gate_reasons=all_reasons,
+    )
 
 
 def _optional_float(value: Any) -> float | None:

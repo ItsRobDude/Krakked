@@ -62,6 +62,13 @@ surfaced as `diagnostic_candidate_unverified` with `promotion_ready=false` and
 baseline-controlled, next-bar-open measurement harness (PR857) is required before
 any future `candidate` verdict can be trusted.
 
+**Update (PR857):** that harness now exists — next-bar-open entry, exact-horizon
+exit, an unconditional all-bars baseline, and a fee + slippage round-trip cost. A
+signal can now earn `candidate_signal` only by beating the baseline by at least
+the round-trip cost (and `promotion_ready` still stays `false` pending
+out-of-sample validation). The numbers in this report predate the corrected
+harness; a re-run of `trend_core` through it (PR858) will supersede them.
+
 ## Command
 
 ```bash
