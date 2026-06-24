@@ -40,10 +40,11 @@ def _window(
     window_id: str,
     *,
     evidence_bucket: str,
-    status: str = "candidate_signal",
+    status: str = "diagnostic_candidate_unverified",
     strict_data_ready: bool = True,
     evaluable: bool = True,
 ) -> dict[str, object]:
+    cleared = status == "diagnostic_candidate_unverified"
     return {
         "window_set": "regime_diverse_4h",
         "window_id": window_id,
@@ -55,13 +56,13 @@ def _window(
         "evaluable": evaluable,
         "total_signals": 12,
         "status": status,
-        "promotion_ready": status == "candidate_signal",
-        "gate_reasons": [] if status == "candidate_signal" else ["weak forward edge"],
+        "promotion_ready": False,
+        "gate_reasons": [] if cleared else ["weak forward edge"],
         "primary_horizon_bars": 6,
         "primary_horizon_stats": {
             "sample_count": 12,
-            "mean_return_pct": 0.8 if status == "candidate_signal" else -0.2,
-            "hit_rate": 0.75 if status == "candidate_signal" else 0.25,
+            "mean_return_pct": 0.8 if cleared else -0.2,
+            "hit_rate": 0.75 if cleared else 0.25,
         },
         "missing_series": [] if strict_data_ready else ["BTC/USD@4h"],
         "partial_series": [],
@@ -99,7 +100,7 @@ def test_signal_quality_fails_when_strongest_bucket_underperforms() -> None:
     ] == pytest.approx(-0.1)
 
 
-def test_signal_quality_can_identify_candidate_signal() -> None:
+def test_signal_quality_heuristic_pass_is_unverified_not_promotable() -> None:
     signals = [
         _signal(strength=float(index), return_pct=0.7 if index < 10 else 0.9)
         for index in range(40)
@@ -118,8 +119,14 @@ def test_signal_quality_can_identify_candidate_signal() -> None:
         warmup_days=30.0,
     ).to_report_dict()
 
-    assert report["summary"]["status"] == "candidate_signal"
-    assert report["summary"]["promotion_ready"] is True
+    summary = report["summary"]
+    # The signal clears every heuristic gate, but the heuristic is
+    # drift-uncontrolled (no unconditional baseline), so it must surface as an
+    # unverified diagnostic, never a promotable candidate.
+    assert summary["status"] == "diagnostic_candidate_unverified"
+    assert summary["promotion_ready"] is False
+    assert summary["baseline_controlled"] is False
+    assert summary["promotion_blocked_reason"] == "baseline_control_not_implemented"
     assert report["overall"]["6"]["mean_after_fee_pct"] == pytest.approx(0.35)
 
 
@@ -218,7 +225,12 @@ def test_window_set_excludes_current_rolling_windows_from_gate() -> None:
     ).to_report_dict()
 
     summary = result["summary"]
-    assert summary["status"] == "candidate_signal"
+    # Even when every evaluable window clears the heuristic checks, the aggregate
+    # is an unverified diagnostic and is never promotable until baseline control.
+    assert summary["status"] == "diagnostic_candidate_unverified"
+    assert summary["promotion_ready"] is False
+    assert summary["baseline_controlled"] is False
+    assert summary["promotion_blocked_reason"] == "baseline_control_not_implemented"
     assert summary["evaluable_window_count"] == 3
     assert summary["passing_window_count"] == 3
     assert summary["failing_window_ids"] == []

@@ -316,10 +316,14 @@ def build_trend_core_signal_quality_window_set_report(
     )
     evaluable_windows = [window for window in window_rows if window["evaluable"]]
     passing_windows = [
-        window for window in evaluable_windows if window["status"] == "candidate_signal"
+        window
+        for window in evaluable_windows
+        if window["status"] == "diagnostic_candidate_unverified"
     ]
     failing_windows = [
-        window for window in evaluable_windows if window["status"] != "candidate_signal"
+        window
+        for window in evaluable_windows
+        if window["status"] != "diagnostic_candidate_unverified"
     ]
 
     gate_reasons: list[str] = []
@@ -341,17 +345,29 @@ def build_trend_core_signal_quality_window_set_report(
             f"{len(failing_windows)} evaluable window(s) failed signal-quality gates"
         )
 
-    promotion_ready = (
+    # Whether every evaluable window cleared the heuristic checks. This is NOT a
+    # promotion: the per-window gate is drift-uncontrolled (no unconditional
+    # baseline), so it cannot prove edge over simply being long in the regime.
+    heuristic_consistency_met = (
         bool(evaluable_windows)
         and regime_coverage_sufficient
         and not failing_windows
         and not gate_reasons
     )
-    status = "candidate_signal" if promotion_ready else "edge_not_proven"
+    # Safety guard (PR856): never report a promotable verdict from the heuristic
+    # gate. Forced False until a baseline-controlled gate exists (PR857).
+    promotion_ready = False
+    status = (
+        "diagnostic_candidate_unverified"
+        if heuristic_consistency_met
+        else "edge_not_proven"
+    )
     status_note = (
-        "All evaluable regime-diverse windows cleared the trend_core signal-quality gates."
-        if promotion_ready
-        else "trend_core did not clear the predeclared regime-consistency gate."
+        "All evaluable regime-diverse windows cleared the heuristic checks, but the "
+        "result is drift-uncontrolled (no unconditional baseline); it is not a "
+        "promotable candidate."
+        if heuristic_consistency_met
+        else "trend_core did not clear the heuristic regime-consistency checks."
     )
 
     summary = {
@@ -381,10 +397,13 @@ def build_trend_core_signal_quality_window_set_report(
         "status": status,
         "status_note": status_note,
         "promotion_ready": promotion_ready,
+        "baseline_controlled": False,
+        "promotion_blocked_reason": "baseline_control_not_implemented",
         "gate_reasons": gate_reasons,
         "directional_ohlc_lane_verdict": (
-            "trend_core remains research-candidate only; live approval is unchanged"
-            if promotion_ready
+            "trend_core cleared heuristic checks but remains baseline-unverified; "
+            "not promotable"
+            if heuristic_consistency_met
             else "retire_directional_ohlc_on_majors_for_now"
         ),
     }
@@ -479,7 +498,11 @@ def build_trend_core_signal_quality_report(
         "total_signals": len(rows),
         "status": assessment["status"],
         "status_note": assessment["status_note"],
-        "promotion_ready": assessment["promotion_ready"],
+        # Safety guard (PR856): the heuristic gate is drift-uncontrolled (no
+        # unconditional baseline), so it can never report a promotable verdict.
+        "promotion_ready": False,
+        "baseline_controlled": False,
+        "promotion_blocked_reason": "baseline_control_not_implemented",
         "gate_reasons": assessment["gate_reasons"],
     }
 
@@ -961,9 +984,13 @@ def _assess_signal_quality(
         }
 
     return {
-        "status": "candidate_signal",
-        "status_note": "Primary horizon clears the initial signal-quality checks.",
-        "promotion_ready": True,
+        "status": "diagnostic_candidate_unverified",
+        "status_note": (
+            "Primary horizon clears the initial heuristic checks, but these are "
+            "drift-uncontrolled: no unconditional baseline comparison is applied, "
+            "so this is not a promotable candidate."
+        ),
+        "promotion_ready": False,
         "gate_reasons": [],
     }
 

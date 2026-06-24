@@ -140,16 +140,13 @@ def _add_market_regime_research_arguments(
 ) -> None:
     subparser.add_argument(
         "--start",
+        required=True,
         help="Research window start time in ISO-8601 form",
     )
     subparser.add_argument(
         "--end",
+        required=True,
         help="Research window end time in ISO-8601 form",
-    )
-    subparser.add_argument(
-        "--window-set",
-        action="append",
-        help="Evidence window set to evaluate; repeat to include multiple sets",
     )
     subparser.add_argument(
         "--config",
@@ -2200,6 +2197,7 @@ def _add_trend_core_signal_quality_arguments(
     subparser.add_argument(
         "--window-set",
         action="append",
+        choices=sorted(STRATEGY_ACTIVITY_WINDOW_SETS),
         help="Evidence window set to evaluate; repeat to include multiple sets",
     )
     subparser.add_argument(
