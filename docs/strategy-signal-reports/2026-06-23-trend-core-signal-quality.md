@@ -6,8 +6,8 @@ Mode: research-only, cached OHLC evidence
 
 > **Re-run update (PR858, 2026-06-24):** the numbers in the original sections
 > below predate the corrected harness. Re-running the same command through the
-> baseline-controlled PR857 harness **confirms** `edge_not_proven` — and this
-> time the verdict is baseline-controlled, so it can be trusted. See
+> PR857 harness **confirms** `edge_not_proven` — now on a drift-controlled
+> (baseline-controlled) measurement rather than a charitable diagnostic. See
 > [PR858 Re-run](#pr858-re-run-2026-06-24-baseline-controlled-result) for the
 > authoritative result and decision.
 
@@ -80,9 +80,12 @@ harness; a re-run of `trend_core` through it (PR858) supersedes them — see bel
 
 Re-running the same `regime_diverse_4h` command through the corrected PR857
 harness (next-bar-open entry, exact-horizon exit, unconditional all-bars
-baseline, fee + slippage round-trip cost) **confirms the verdict** — and this
-time it is baseline-controlled, so the result can be trusted rather than read as
-a charitable diagnostic.
+baseline, fee + slippage round-trip cost) **confirms the verdict**. The evaluable
+windows are now baseline-controlled, so the verdict rests on a drift-controlled
+measurement rather than a charitable diagnostic. The aggregate *also* still fails
+on strict-data coverage — two `chop_or_transition` windows are non-evaluable, so
+regime coverage is incomplete — but that gap fails closed: it can only block a
+pass, never manufacture one.
 
 - Aggregate status: `edge_not_proven`
 - `baseline_controlled`: `true`
