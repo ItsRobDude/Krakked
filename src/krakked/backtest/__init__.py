@@ -13,6 +13,11 @@ from .evidence_windows import (
     build_evidence_window_context,
     evidence_window_tuples,
 )
+from .funding_basis_collector import (
+    DEFAULT_FUNDING_BASIS_COLLECTION_DB,
+    FundingBasisCollectionResult,
+    run_funding_basis_collection,
+)
 from .funding_basis_feasibility import (
     FundingBasisFeasibilityResult,
     run_funding_basis_feasibility,
@@ -148,6 +153,8 @@ __all__ = [
     "EVIDENCE_WINDOWS",
     "EvidenceWindow",
     "FundingBasisFeasibilityResult",
+    "DEFAULT_FUNDING_BASIS_COLLECTION_DB",
+    "FundingBasisCollectionResult",
     "MarketRegimeExposureResearchResult",
     "MarketRegimeExposureScenarioParams",
     "MarketRegimeOverlayBacktestResult",
@@ -214,6 +221,7 @@ __all__ = [
     "publish_latest_ml_walk_forward_report",
     "run_backtest",
     "run_funding_basis_feasibility",
+    "run_funding_basis_collection",
     "run_strategy_action_diagnostics",
     "run_trend_core_signal_quality",
     "run_trend_core_signal_quality_window_sets",

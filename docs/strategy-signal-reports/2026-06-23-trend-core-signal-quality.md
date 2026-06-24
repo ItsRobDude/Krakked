@@ -255,7 +255,9 @@ poetry run krakked funding-basis-feasibility \
   --json
 ```
 
-Only scope historical backfill if the report proves point-in-time historical
-usability. If publish timing is unknown, the next honest step is forward
-collection; if Kraken public data is incomplete, stop the Kraken-only lane or
-evaluate another source.
+PR859 produced the forward-collection branch: public Kraken Futures symbols are
+available for the four majors, but historical coverage and realized funding
+publish timing are not sufficient for an honest historical backtest. The next
+step is `krakked funding-basis-collect`, scheduled at funding cadence, to measure
+realized funding publish lag and prediction-vs-realized accuracy before any
+defensive overlay experiment is scoped.

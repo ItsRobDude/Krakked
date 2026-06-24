@@ -17,6 +17,7 @@ from krakked import APP_VERSION, secrets
 from krakked.backtest import (
     DEFAULT_EXPOSURE_OVERLAY_MODES,
     DEFAULT_EXPOSURE_SCENARIOS,
+    DEFAULT_FUNDING_BASIS_COLLECTION_DB,
     DEFAULT_PAIR_LOCAL_SOURCE_SCENARIOS,
     DEFAULT_STRATEGY_ACTIVITY_GROUP_IDS,
     DEFAULT_STRATEGY_EVIDENCE_GROUP_IDS,
@@ -24,6 +25,7 @@ from krakked.backtest import (
     STRATEGY_ACTIVITY_WINDOW_SETS,
     BacktestPreflightResult,
     BacktestResult,
+    FundingBasisCollectionResult,
     FundingBasisFeasibilityResult,
     MarketRegimeExposureScenarioParams,
     MarketRegimeOverlayParams,
@@ -49,6 +51,7 @@ from krakked.backtest import (
     publish_latest_backtest_report,
     publish_latest_ml_walk_forward_report,
     run_backtest,
+    run_funding_basis_collection,
     run_funding_basis_feasibility,
     run_market_regime_exposure_research,
     run_market_regime_overlay_backtest,
@@ -2313,6 +2316,44 @@ def _add_funding_basis_feasibility_arguments(
     )
 
 
+def _add_funding_basis_collect_arguments(
+    subparser: argparse.ArgumentParser,
+) -> None:
+    subparser.add_argument(
+        "--pair",
+        action="append",
+        help="Spot pair to map to Kraken Futures; repeat to include multiple pairs",
+    )
+    subparser.add_argument(
+        "--db-path",
+        default=DEFAULT_FUNDING_BASIS_COLLECTION_DB,
+        help=(
+            "Append-only research SQLite DB path "
+            f"(default: {DEFAULT_FUNDING_BASIS_COLLECTION_DB})"
+        ),
+    )
+    subparser.add_argument(
+        "--lookback-hours",
+        type=float,
+        default=48.0,
+        help="Recent funding/candle tail to normalize from public responses (default: 48)",
+    )
+    subparser.add_argument(
+        "--timeframe",
+        default="4h",
+        help="Futures chart interval to collect (default: 4h)",
+    )
+    subparser.add_argument(
+        "--save-report",
+        help="Optional JSON path for a durable funding/basis collection report",
+    )
+    subparser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print the funding/basis collection report as JSON",
+    )
+
+
 def _print_market_regime_exposure_sweep_summary(payload: dict[str, Any]) -> None:
     summary = payload["summary"]
     print("Market regime exposure sweep completed.")
@@ -2678,6 +2719,45 @@ def _print_funding_basis_feasibility_summary(
             f"contract={pair.get('selected_contract_family') or 'n/a'} "
             f"coverage={pair.get('required_coverage_complete')} "
             f"point_in_time={pair.get('required_point_in_time_safe')}"
+        )
+    if report_path:
+        print(f"Saved report: {report_path}")
+
+
+def _print_funding_basis_collection_summary(
+    payload: dict[str, Any],
+    report_path: str | None,
+) -> None:
+    summary = payload["summary"]
+    publish_lag = payload["publish_lag"]
+    prediction = payload["prediction_accuracy"]
+    print("Funding/basis collection completed.")
+    print(
+        f"Status: {summary['status']} | Batch: {summary['batch_id']} | "
+        f"DB: {payload['storage']['db_path']}"
+    )
+    print(
+        f"Pairs with selected symbols: {summary['pair_count_with_selected_symbol']}/"
+        f"{summary['selected_pair_count']} | Lookback: "
+        f"{float(summary['lookback_hours']):g}h"
+    )
+    print(
+        "Publish lag: "
+        f"{publish_lag['status']} | provable periods "
+        f"{publish_lag['provable_period_count']}/"
+        f"{publish_lag['observed_period_count']}"
+    )
+    print(
+        "Prediction accuracy: "
+        f"{prediction['status']} | samples {prediction['sample_count']} | "
+        f"MAE {prediction.get('mean_absolute_error') if prediction.get('mean_absolute_error') is not None else 'n/a'}"
+    )
+    for pair in payload.get("pairs", [])[:8]:
+        print(
+            f"- {pair['pair']}: symbol={pair.get('selected_symbol') or 'none'} "
+            f"funding={pair.get('funding_observation_count', 0)} "
+            f"prediction={pair.get('prediction_observation_count', 0)} "
+            f"basis={pair.get('basis_observation_count', 0)}"
         )
     if report_path:
         print(f"Saved report: {report_path}")
@@ -4507,6 +4587,42 @@ def _funding_basis_feasibility_command(args: argparse.Namespace) -> int:
         print(json.dumps(payload, indent=2))
     else:
         _print_funding_basis_feasibility_summary(payload, saved_report_path)
+    return 0
+
+
+def _funding_basis_collect_command(args: argparse.Namespace) -> int:
+    """Collect public Kraken Futures funding/basis observations."""
+
+    try:
+        result: FundingBasisCollectionResult = run_funding_basis_collection(
+            pairs=args.pair,
+            db_path=args.db_path,
+            lookback_hours=float(args.lookback_hours),
+            timeframe=str(args.timeframe),
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _print_error(f"Funding/basis collection failed: {exc}")
+
+    payload = result.to_report_dict()
+    payload["provenance"] = {
+        "app_version": APP_VERSION,
+        "config_path": None,
+        "generated_by": "krakked funding-basis-collect",
+    }
+
+    saved_report_path: str | None = None
+    if args.save_report:
+        try:
+            saved_report_path = _write_backtest_report(payload, args.save_report)
+        except Exception as exc:  # noqa: BLE001
+            return _print_error(f"Funding/basis collection report write failed: {exc}")
+        payload["summary"]["report_path"] = saved_report_path
+        _write_backtest_report(payload, saved_report_path)
+
+    if args.json:
+        print(json.dumps(payload, indent=2))
+    else:
+        _print_funding_basis_collection_summary(payload, saved_report_path)
     return 0
 
 
@@ -6446,6 +6562,13 @@ def _build_parser() -> argparse.ArgumentParser:
     funding_basis_feasibility_parser.set_defaults(
         func=_funding_basis_feasibility_command
     )
+
+    funding_basis_collect_parser = subparsers.add_parser(
+        "funding-basis-collect",
+        help="Collect public Kraken Futures funding and basis observations",
+    )
+    _add_funding_basis_collect_arguments(funding_basis_collect_parser)
+    funding_basis_collect_parser.set_defaults(func=_funding_basis_collect_command)
 
     ml_regime_overlay_parser = subparsers.add_parser(
         "ml-regime-overlay-research",

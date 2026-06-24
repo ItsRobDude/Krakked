@@ -3237,6 +3237,99 @@ def test_funding_basis_feasibility_subcommand_writes_report(
     assert saved["summary"]["report_path"] == str(report_path.resolve())
 
 
+def test_funding_basis_collect_subcommand_writes_report(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: Any,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    class _FakeFundingBasisCollectionResult:
+        def to_report_dict(self) -> dict[str, Any]:
+            return {
+                "report_version": 1,
+                "report_type": "funding_basis_collection",
+                "generated_at": "2026-06-24T00:00:00+00:00",
+                "summary": {
+                    "research_only": True,
+                    "runtime_config_changed": False,
+                    "status": "collecting_insufficient_history",
+                    "pairs": ["BTC/USD"],
+                    "selected_pair_count": 1,
+                    "pair_count_with_selected_symbol": 1,
+                    "timeframe": "4h",
+                    "lookback_hours": 24.0,
+                    "batch_id": "batch-1",
+                    "publish_lag_status": "collecting_insufficient_history",
+                    "prediction_accuracy_status": "collecting_insufficient_history",
+                },
+                "pairs": [
+                    {
+                        "pair": "BTC/USD",
+                        "selected_symbol": "PF_XBTUSD",
+                        "funding_observation_count": 2,
+                        "prediction_observation_count": 1,
+                        "basis_observation_count": 1,
+                    }
+                ],
+                "publish_lag": {
+                    "status": "collecting_insufficient_history",
+                    "provable_period_count": 0,
+                    "observed_period_count": 2,
+                },
+                "prediction_accuracy": {
+                    "status": "collecting_insufficient_history",
+                    "sample_count": 0,
+                    "mean_absolute_error": None,
+                },
+                "storage": {
+                    "db_path": str(tmp_path / "funding_basis.db"),
+                    "append_only": True,
+                },
+                "sources": {"kraken_futures_public_only": True},
+            }
+
+    def _fake_run_funding_basis_collection(**kwargs: Any) -> Any:
+        captured.update(kwargs)
+        return _FakeFundingBasisCollectionResult()
+
+    monkeypatch.setattr(
+        cli,
+        "run_funding_basis_collection",
+        _fake_run_funding_basis_collection,
+    )
+
+    report_path = tmp_path / "funding-basis-collect.json"
+    db_path = tmp_path / "funding-basis.db"
+    exit_code = cli.main(
+        [
+            "funding-basis-collect",
+            "--pair",
+            "BTC/USD",
+            "--db-path",
+            str(db_path),
+            "--lookback-hours",
+            "24",
+            "--timeframe",
+            "4h",
+            "--save-report",
+            str(report_path),
+            "--json",
+        ]
+    )
+
+    assert exit_code == 0
+    assert captured["pairs"] == ["BTC/USD"]
+    assert captured["db_path"] == str(db_path)
+    assert captured["lookback_hours"] == 24.0
+    assert captured["timeframe"] == "4h"
+    output = json.loads(capsys.readouterr().out)
+    saved = json.loads(report_path.read_text(encoding="utf-8"))
+    assert output["report_type"] == "funding_basis_collection"
+    assert output["provenance"]["generated_by"] == "krakked funding-basis-collect"
+    assert saved["summary"]["report_path"] == str(report_path.resolve())
+
+
 def test_trend_core_signal_quality_requires_window_or_explicit_dates(
     monkeypatch: pytest.MonkeyPatch, capsys: Any
 ) -> None:

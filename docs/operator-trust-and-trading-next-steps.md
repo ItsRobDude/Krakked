@@ -246,22 +246,25 @@ For strategy evidence:
 
 ## Recommended Order
 
-1. Run the funding/basis feasibility probe before adding storage or model code:
-   `poetry run krakked funding-basis-feasibility --pair BTC/USD --pair ETH/USD
-   --pair SOL/USD --pair ADA/USD --start 2025-12-01T00:00:00Z --end
-   2026-06-21T20:00:00Z --window-set regime_diverse_4h --timeframe 4h
-   --save-report reports/funding-basis-feasibility.json --json`. The report is
-   research-only and public-data-only.
-2. Follow the feasibility verdict explicitly: `historical_backtestable` means
-   raw storage/backfill can be scoped, `forward_collection_only` means build a
-   forward collector first, and `not_viable_from_kraken_alone` means stop or
-   evaluate another source.
-3. Design the defensive funding/basis risk experiment against EWMA and existing
+1. The funding/basis feasibility probe landed as PR859 and returned the
+   `forward_collection_only` lane: all four Kraken Futures public symbols are
+   available, but historical coverage/publish timing is not sufficient for an
+   honest historical backtest.
+2. Build and run the forward collector before model work:
+   `poetry run krakked funding-basis-collect --pair BTC/USD --pair ETH/USD
+   --pair SOL/USD --pair ADA/USD --db-path data/research/funding_basis_observations.db
+   --lookback-hours 48 --timeframe 4h --save-report reports/funding-basis-collect.json
+   --json`. Schedule it at least hourly; use a 10-15 minute cadence around
+   funding boundaries when publish-lag resolution matters.
+3. Use the collector checkpoint to prove either realized funding publish lag or
+   prediction-vs-realized accuracy before PR861. If neither is point-in-time
+   usable yet, keep collecting rather than building a backtest.
+4. Design the defensive funding/basis risk experiment against EWMA and existing
    target-scale/trend-rank baselines before writing model code.
-4. Define validate-only live drill and tiny-live-smoke criteria before any live
+5. Define validate-only live drill and tiny-live-smoke criteria before any live
    smoke attempt.
-5. Clean up remaining operator affordances only when they affect health,
+6. Clean up remaining operator affordances only when they affect health,
    readiness, control surfaces, backup/export, or emergency flatten.
-6. Only after account-truth gates, operator drills, and a new-data research lane
+7. Only after account-truth gates, operator drills, and a new-data research lane
    are boring should tiny live smoke testing be considered, with conservative
    caps and a written stop condition.
