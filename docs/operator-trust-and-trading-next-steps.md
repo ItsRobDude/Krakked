@@ -216,13 +216,22 @@ Useful strategy work now:
 
 Current strategy stance:
 
-- `trend_core`: enabled starter, research-stage/unproven.
-- `majors_mean_rev`: enabled starter, inactive/weak in replay evidence.
+- `trend_core`: enabled starter for paper diagnostics only. The one-shot
+  2026-06-23 `regime_diverse_4h` signal-quality report failed the
+  predeclared regime-consistency bar.
+- `majors_mean_rev`: enabled starter, inactive/weak in replay evidence; covered
+  by the directional-OHLC-on-majors retirement stance.
 - `rs_rotation`: disabled by default, available for research; latest strict 4h
-  probe traded in all 6 regime windows but was negative in all 6.
+  probe traded in all 6 regime windows but was negative in all 6, and is
+  covered by the directional-OHLC-on-majors retirement stance.
 - `vol_breakout`: disabled by default because its natural 15m lane lacks enough
   durable cache coverage and prior probes were sizing/cap sensitive.
 - ML strategies: research-only unless a future pre-registered gate passes.
+
+Directional OHLC strategies on the current four-major universe should not be
+tuned further as a primary lane. The next evidence lane should introduce new
+information, especially funding rates and perp-spot or perp-index basis, and
+evaluate defensive risk sizing rather than offensive alpha.
 
 ## Data Lane
 
@@ -237,14 +246,14 @@ For strategy evidence:
 
 ## Recommended Order
 
-1. Separate clamp and block diagnostics in decision persistence/API/UI so risk
-   evidence remains operator-truthful.
-2. Define validate-only live drill and tiny-live-smoke criteria before any live
+1. Scope the funding/basis feasibility PR: source, history depth, raw storage,
+   and replay/research access. Keep it research-only.
+2. Design the defensive funding/basis risk experiment against EWMA and existing
+   target-scale/trend-rank baselines before writing model code.
+3. Define validate-only live drill and tiny-live-smoke criteria before any live
    smoke attempt.
-3. Clean up the remaining operator affordances from the soak: pause/resume
-   wording, restart no-auto-resume wording, and profile-aware backup/export.
-4. Re-run a short paper validation only if the cleanup changes health,
-   readiness, control surfaces, or emergency flatten.
-5. Only after account-truth gates and operator drills are boring should tiny
-   live smoke testing be considered, with conservative caps and a written stop
-   condition.
+4. Clean up remaining operator affordances only when they affect health,
+   readiness, control surfaces, backup/export, or emergency flatten.
+5. Only after account-truth gates, operator drills, and a new-data research lane
+   are boring should tiny live smoke testing be considered, with conservative
+   caps and a written stop condition.

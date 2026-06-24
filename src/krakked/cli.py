@@ -31,6 +31,8 @@ from krakked.backtest import (
     PairLocalSourceResearchParams,
     RSRotationV2ResearchParams,
     TargetSourceResearchParams,
+    TrendCoreSignalQualityResult,
+    TrendCoreSignalQualityWindowSetResult,
     aggregate_pair_local_source_research_reports,
     aggregate_target_source_research_reports,
     backtest_strict_data_details,
@@ -59,6 +61,7 @@ from krakked.backtest import (
     run_strategy_activity_sweep,
     run_target_source_research,
     run_trend_core_signal_quality,
+    run_trend_core_signal_quality_window_sets,
     write_backtest_report,
     write_ml_walk_forward_report,
 )
@@ -137,13 +140,16 @@ def _add_market_regime_research_arguments(
 ) -> None:
     subparser.add_argument(
         "--start",
-        required=True,
         help="Research window start time in ISO-8601 form",
     )
     subparser.add_argument(
         "--end",
-        required=True,
         help="Research window end time in ISO-8601 form",
+    )
+    subparser.add_argument(
+        "--window-set",
+        action="append",
+        help="Evidence window set to evaluate; repeat to include multiple sets",
     )
     subparser.add_argument(
         "--config",
@@ -2185,13 +2191,16 @@ def _add_trend_core_signal_quality_arguments(
 ) -> None:
     subparser.add_argument(
         "--start",
-        required=True,
         help="Research window start time in ISO-8601 form",
     )
     subparser.add_argument(
         "--end",
-        required=True,
         help="Research window end time in ISO-8601 form",
+    )
+    subparser.add_argument(
+        "--window-set",
+        action="append",
+        help="Evidence window set to evaluate; repeat to include multiple sets",
     )
     subparser.add_argument(
         "--config",
@@ -2519,6 +2528,40 @@ def _print_trend_core_signal_quality_summary(
     report_path: str | None,
 ) -> None:
     summary = payload["summary"]
+    if payload.get("report_type") == "trend_core_signal_quality_window_set":
+        print("trend_core signal-quality window-set research completed.")
+        print(f"Window sets: {', '.join(summary['window_sets'])}")
+        print(
+            f"Status: {summary['status']} | Passing windows: "
+            f"{summary['passing_window_count']}/{summary['evaluable_window_count']} "
+            f"evaluable"
+        )
+        print(
+            "Regime coverage sufficient: "
+            f"{summary['regime_coverage_sufficient']} "
+            f"(buckets={summary['regime_bucket_counts']})"
+        )
+        print(
+            "Round-trip all-in cost: "
+            f"{float(summary['round_trip_all_in_cost_bps']):.2f} bps"
+        )
+        for window in payload.get("windows", [])[:8]:
+            stats = window.get("primary_horizon_stats") or {}
+            print(
+                f"- {window['window_set']} {window['window_id']} "
+                f"{window['evidence_bucket']}: {window['status']} | "
+                f"signals {window['total_signals']} | "
+                f"mean {_format_optional_pct(stats.get('mean_return_pct'))}"
+            )
+        if summary.get("gate_reasons"):
+            print("Gate reasons:")
+            for reason in summary["gate_reasons"][:5]:
+                print(f"- {reason}")
+        print(f"Lane verdict: {summary['directional_ohlc_lane_verdict']}")
+        if report_path:
+            print(f"Saved report: {report_path}")
+        return
+
     primary = str(summary["primary_horizon_bars"])
     primary_stats = (payload.get("overall") or {}).get(primary) or {}
     print("trend_core signal-quality research completed.")
@@ -2534,7 +2577,8 @@ def _print_trend_core_signal_quality_summary(
         f"hit {_format_optional_rate(primary_stats.get('hit_rate'))}"
     )
     print(
-        "Round-trip fee hurdle: " f"{float(summary['round_trip_fee_hurdle_pct']):.4f}%"
+        "Round-trip all-in cost: "
+        f"{float(summary['round_trip_all_in_cost_bps']):.2f} bps"
     )
     if summary.get("gate_reasons"):
         print("Gate reasons:")
@@ -4263,19 +4307,43 @@ def _trend_core_signal_quality_command(args: argparse.Namespace) -> int:
 
     try:
         config = _load_backtest_config(args)
-        result = run_trend_core_signal_quality(
-            config,
-            start=_parse_datetime_arg(args.start),
-            end=_parse_datetime_arg(args.end),
-            pairs=args.pair,
-            timeframes=args.timeframe,
-            forward_horizon_bars=args.forward_horizon_bars,
-            fee_bps=float(args.fee_bps),
-            fresh_bars_only=bool(args.fresh_bars_only),
-            strict_data=bool(args.strict_data),
-            warmup_days=float(args.warmup_days),
-            max_signal_rows=int(args.max_signal_rows),
-        )
+        result: TrendCoreSignalQualityResult | TrendCoreSignalQualityWindowSetResult
+        if args.window_set:
+            selected_window_sets = _unique_strings(args.window_set)
+            window_sets = {
+                window_set: STRATEGY_ACTIVITY_WINDOW_SETS[window_set]
+                for window_set in selected_window_sets
+            }
+            result = run_trend_core_signal_quality_window_sets(
+                config,
+                window_sets=window_sets,
+                pairs=args.pair,
+                timeframes=args.timeframe,
+                forward_horizon_bars=args.forward_horizon_bars,
+                fee_bps=float(args.fee_bps),
+                fresh_bars_only=bool(args.fresh_bars_only),
+                strict_data=bool(args.strict_data),
+                warmup_days=float(args.warmup_days),
+                max_signal_rows=int(args.max_signal_rows),
+            )
+        else:
+            if not args.start or not args.end:
+                raise ValueError(
+                    "provide --start and --end, or at least one --window-set"
+                )
+            result = run_trend_core_signal_quality(
+                config,
+                start=_parse_datetime_arg(args.start),
+                end=_parse_datetime_arg(args.end),
+                pairs=args.pair,
+                timeframes=args.timeframe,
+                forward_horizon_bars=args.forward_horizon_bars,
+                fee_bps=float(args.fee_bps),
+                fresh_bars_only=bool(args.fresh_bars_only),
+                strict_data=bool(args.strict_data),
+                warmup_days=float(args.warmup_days),
+                max_signal_rows=int(args.max_signal_rows),
+            )
     except Exception as exc:  # noqa: BLE001
         return _print_error(f"trend_core signal-quality research failed: {exc}")
 

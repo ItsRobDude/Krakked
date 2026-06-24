@@ -143,6 +143,30 @@ poetry run krakked trend-core-signal-quality \
 
 This is research-only. It evaluates cached `trend_core` long entry/increase signals against forward returns at one or more bar horizons and reports whether the raw signal clears a fee-aware quality gate. Use `--fresh-bars-only` when comparing against the runtime/replay engine behavior that evaluates each strategy timeframe only once per new closed bar; omit it only when intentionally measuring the old stale-context behavior.
 
+For a one-shot regime-consistency falsification, use the shared evidence-window
+mode instead of a single recent window:
+
+```bash
+poetry run krakked trend-core-signal-quality \
+  --window-set regime_diverse_4h \
+  --pair BTC/USD \
+  --pair ETH/USD \
+  --pair SOL/USD \
+  --pair ADA/USD \
+  --timeframe 4h \
+  --forward-horizon-bars 1 \
+  --forward-horizon-bars 3 \
+  --forward-horizon-bars 6 \
+  --fresh-bars-only \
+  --strict-data \
+  --save-report trend-core-signal-quality-regime-diverse.json
+```
+
+Window-set reports require consistency across evaluable regime windows; they do
+not promote a signal from a positive average alone. The cost field is still
+named `--fee-bps` on the CLI for compatibility, but the report labels it as a
+one-way all-in cost proxy and applies a round-trip hurdle.
+
 Target-source research:
 
 ```bash

@@ -124,8 +124,11 @@ from .target_source_research import (
 )
 from .trend_core_signal_quality import (
     TrendCoreSignalQualityResult,
+    TrendCoreSignalQualityWindowSetResult,
     build_trend_core_signal_quality_report,
+    build_trend_core_signal_quality_window_set_report,
     run_trend_core_signal_quality,
+    run_trend_core_signal_quality_window_sets,
 )
 
 __all__ = [
@@ -168,6 +171,7 @@ __all__ = [
     "TargetSourceResearchParams",
     "TargetSourceResearchResult",
     "TrendCoreSignalQualityResult",
+    "TrendCoreSignalQualityWindowSetResult",
     "apply_market_regime_overlay_to_plan",
     "apply_strategy_activity_override",
     "aggregate_pair_local_source_research_reports",
@@ -182,6 +186,7 @@ __all__ = [
     "build_strategy_activity_groups",
     "build_top2_soft_target_scale_baseline",
     "build_trend_core_signal_quality_report",
+    "build_trend_core_signal_quality_window_set_report",
     "classify_market_regime_snapshot",
     "DEFAULT_STRATEGY_ACTIVITY_GROUP_IDS",
     "default_rs_rotation_v2_allocation_pct",
@@ -205,6 +210,7 @@ __all__ = [
     "run_backtest",
     "run_strategy_action_diagnostics",
     "run_trend_core_signal_quality",
+    "run_trend_core_signal_quality_window_sets",
     "run_market_regime_exposure_research",
     "run_market_regime_overlay_backtest",
     "run_market_regime_research",
