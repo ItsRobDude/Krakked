@@ -3141,6 +3141,102 @@ def test_trend_core_signal_quality_window_set_subcommand(
     assert saved["summary"]["window_sets"] == ["tiny"]
 
 
+def test_funding_basis_feasibility_subcommand_writes_report(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: Any,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    class _FakeFundingBasisResult:
+        def to_report_dict(self) -> dict[str, Any]:
+            return {
+                "report_version": 1,
+                "report_type": "funding_basis_feasibility",
+                "generated_at": "2026-06-24T00:00:00+00:00",
+                "summary": {
+                    "research_only": True,
+                    "runtime_config_changed": False,
+                    "pairs": ["BTC/USD"],
+                    "start": "2026-01-01T00:00:00+00:00",
+                    "end": "2026-01-02T00:00:00+00:00",
+                    "window_sets": ["tiny"],
+                    "timeframe": "4h",
+                    "verdict": "forward_collection_only",
+                    "verdict_reason": (
+                        "complete_coverage_but_publish_timing_is_not_proven"
+                    ),
+                    "next_step": "build_forward_collector",
+                    "selected_pair_count": 1,
+                    "pair_count_with_selected_symbol": 1,
+                    "covered_window_count": 1,
+                    "window_count": 1,
+                },
+                "pairs": [
+                    {
+                        "pair": "BTC/USD",
+                        "selected_symbol": "PF_XBTUSD",
+                        "selected_contract_family": "PF",
+                        "required_coverage_complete": True,
+                        "required_point_in_time_safe": False,
+                    }
+                ],
+                "windows": [],
+                "sources": {"kraken_futures_public_only": True},
+            }
+
+    def _fake_run_funding_basis_feasibility(**kwargs: Any) -> Any:
+        captured.update(kwargs)
+        return _FakeFundingBasisResult()
+
+    monkeypatch.setattr(
+        cli,
+        "STRATEGY_ACTIVITY_WINDOW_SETS",
+        {"tiny": [("w1", "2026-01-01T00:00:00Z", "2026-01-02T00:00:00Z")]},
+    )
+    monkeypatch.setattr(
+        cli,
+        "run_funding_basis_feasibility",
+        _fake_run_funding_basis_feasibility,
+    )
+
+    report_path = tmp_path / "funding-basis.json"
+    raw_cache_dir = tmp_path / "raw"
+    exit_code = cli.main(
+        [
+            "funding-basis-feasibility",
+            "--start",
+            "2026-01-01T00:00:00Z",
+            "--end",
+            "2026-01-02T00:00:00Z",
+            "--pair",
+            "BTC/USD",
+            "--window-set",
+            "tiny",
+            "--timeframe",
+            "4h",
+            "--raw-cache-dir",
+            str(raw_cache_dir),
+            "--save-report",
+            str(report_path),
+            "--json",
+        ]
+    )
+
+    assert exit_code == 0
+    assert captured["pairs"] == ["BTC/USD"]
+    assert captured["timeframe"] == "4h"
+    assert captured["raw_cache_dir"] == str(raw_cache_dir)
+    assert captured["window_sets"] == {
+        "tiny": [("w1", "2026-01-01T00:00:00Z", "2026-01-02T00:00:00Z")]
+    }
+    output = json.loads(capsys.readouterr().out)
+    saved = json.loads(report_path.read_text(encoding="utf-8"))
+    assert output["report_type"] == "funding_basis_feasibility"
+    assert output["provenance"]["generated_by"] == "krakked funding-basis-feasibility"
+    assert saved["summary"]["report_path"] == str(report_path.resolve())
+
+
 def test_trend_core_signal_quality_requires_window_or_explicit_dates(
     monkeypatch: pytest.MonkeyPatch, capsys: Any
 ) -> None:

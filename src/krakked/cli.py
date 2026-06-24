@@ -24,6 +24,7 @@ from krakked.backtest import (
     STRATEGY_ACTIVITY_WINDOW_SETS,
     BacktestPreflightResult,
     BacktestResult,
+    FundingBasisFeasibilityResult,
     MarketRegimeExposureScenarioParams,
     MarketRegimeOverlayParams,
     MLRegimeOverlayResearchParams,
@@ -48,6 +49,7 @@ from krakked.backtest import (
     publish_latest_backtest_report,
     publish_latest_ml_walk_forward_report,
     run_backtest,
+    run_funding_basis_feasibility,
     run_market_regime_exposure_research,
     run_market_regime_overlay_backtest,
     run_market_regime_research,
@@ -2267,6 +2269,50 @@ def _add_trend_core_signal_quality_arguments(
     )
 
 
+def _add_funding_basis_feasibility_arguments(
+    subparser: argparse.ArgumentParser,
+) -> None:
+    subparser.add_argument(
+        "--start",
+        required=True,
+        help="Feasibility window start time in ISO-8601 form",
+    )
+    subparser.add_argument(
+        "--end",
+        required=True,
+        help="Feasibility window end time in ISO-8601 form",
+    )
+    subparser.add_argument(
+        "--pair",
+        action="append",
+        help="Spot pair to map to Kraken Futures; repeat to include multiple pairs",
+    )
+    subparser.add_argument(
+        "--window-set",
+        action="append",
+        choices=sorted(STRATEGY_ACTIVITY_WINDOW_SETS),
+        help="Evidence window set to check; repeat to include multiple sets",
+    )
+    subparser.add_argument(
+        "--timeframe",
+        default="4h",
+        help="Futures chart interval to probe (default: 4h)",
+    )
+    subparser.add_argument(
+        "--raw-cache-dir",
+        help="Optional gitignored directory for cached raw public Futures responses",
+    )
+    subparser.add_argument(
+        "--save-report",
+        help="Optional JSON path for a durable funding/basis feasibility report",
+    )
+    subparser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print the funding/basis feasibility report as JSON",
+    )
+
+
 def _print_market_regime_exposure_sweep_summary(payload: dict[str, Any]) -> None:
     summary = payload["summary"]
     print("Market regime exposure sweep completed.")
@@ -2607,6 +2653,32 @@ def _print_trend_core_signal_quality_summary(
             "strongest_minus_weakest_mean_return_pct"
         )
         print(f"Strongest minus weakest bucket: {_format_optional_pct(delta)}")
+    if report_path:
+        print(f"Saved report: {report_path}")
+
+
+def _print_funding_basis_feasibility_summary(
+    payload: dict[str, Any],
+    report_path: str | None,
+) -> None:
+    summary = payload["summary"]
+    print("Funding/basis feasibility probe completed.")
+    print(
+        f"Verdict: {summary['verdict']} | Reason: {summary['verdict_reason']} | "
+        f"Next: {summary['next_step']}"
+    )
+    print(
+        f"Pairs with selected symbols: {summary['pair_count_with_selected_symbol']}/"
+        f"{summary['selected_pair_count']} | Covered windows: "
+        f"{summary['covered_window_count']}/{summary['window_count']}"
+    )
+    for pair in payload.get("pairs", [])[:8]:
+        print(
+            f"- {pair['pair']}: symbol={pair.get('selected_symbol') or 'none'} "
+            f"contract={pair.get('selected_contract_family') or 'n/a'} "
+            f"coverage={pair.get('required_coverage_complete')} "
+            f"point_in_time={pair.get('required_point_in_time_safe')}"
+        )
     if report_path:
         print(f"Saved report: {report_path}")
 
@@ -4392,6 +4464,49 @@ def _trend_core_signal_quality_command(args: argparse.Namespace) -> int:
         print(json.dumps(payload, indent=2))
     else:
         _print_trend_core_signal_quality_summary(payload, saved_report_path)
+    return 0
+
+
+def _funding_basis_feasibility_command(args: argparse.Namespace) -> int:
+    """Probe public Kraken Futures funding/basis data feasibility."""
+
+    try:
+        selected_window_sets = _unique_strings(args.window_set or ["regime_diverse_4h"])
+        window_sets = {
+            window_set: STRATEGY_ACTIVITY_WINDOW_SETS[window_set]
+            for window_set in selected_window_sets
+        }
+        result: FundingBasisFeasibilityResult = run_funding_basis_feasibility(
+            pairs=args.pair,
+            start=_parse_datetime_arg(args.start),
+            end=_parse_datetime_arg(args.end),
+            window_sets=window_sets,
+            timeframe=str(args.timeframe),
+            raw_cache_dir=args.raw_cache_dir,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _print_error(f"Funding/basis feasibility probe failed: {exc}")
+
+    payload = result.to_report_dict()
+    payload["provenance"] = {
+        "app_version": APP_VERSION,
+        "config_path": None,
+        "generated_by": "krakked funding-basis-feasibility",
+    }
+
+    saved_report_path: str | None = None
+    if args.save_report:
+        try:
+            saved_report_path = _write_backtest_report(payload, args.save_report)
+        except Exception as exc:  # noqa: BLE001
+            return _print_error(f"Funding/basis feasibility write failed: {exc}")
+        payload["summary"]["report_path"] = saved_report_path
+        _write_backtest_report(payload, saved_report_path)
+
+    if args.json:
+        print(json.dumps(payload, indent=2))
+    else:
+        _print_funding_basis_feasibility_summary(payload, saved_report_path)
     return 0
 
 
@@ -6321,6 +6436,15 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_trend_core_signal_quality_arguments(trend_core_signal_quality_parser)
     trend_core_signal_quality_parser.set_defaults(
         func=_trend_core_signal_quality_command
+    )
+
+    funding_basis_feasibility_parser = subparsers.add_parser(
+        "funding-basis-feasibility",
+        help="Probe public Kraken Futures funding and basis data feasibility",
+    )
+    _add_funding_basis_feasibility_arguments(funding_basis_feasibility_parser)
+    funding_basis_feasibility_parser.set_defaults(
+        func=_funding_basis_feasibility_command
     )
 
     ml_regime_overlay_parser = subparsers.add_parser(

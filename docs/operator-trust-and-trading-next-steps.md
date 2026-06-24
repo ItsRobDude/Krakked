@@ -246,14 +246,22 @@ For strategy evidence:
 
 ## Recommended Order
 
-1. Scope the funding/basis feasibility PR: source, history depth, raw storage,
-   and replay/research access. Keep it research-only.
-2. Design the defensive funding/basis risk experiment against EWMA and existing
+1. Run the funding/basis feasibility probe before adding storage or model code:
+   `poetry run krakked funding-basis-feasibility --pair BTC/USD --pair ETH/USD
+   --pair SOL/USD --pair ADA/USD --start 2025-12-01T00:00:00Z --end
+   2026-06-21T20:00:00Z --window-set regime_diverse_4h --timeframe 4h
+   --save-report reports/funding-basis-feasibility.json --json`. The report is
+   research-only and public-data-only.
+2. Follow the feasibility verdict explicitly: `historical_backtestable` means
+   raw storage/backfill can be scoped, `forward_collection_only` means build a
+   forward collector first, and `not_viable_from_kraken_alone` means stop or
+   evaluate another source.
+3. Design the defensive funding/basis risk experiment against EWMA and existing
    target-scale/trend-rank baselines before writing model code.
-3. Define validate-only live drill and tiny-live-smoke criteria before any live
+4. Define validate-only live drill and tiny-live-smoke criteria before any live
    smoke attempt.
-4. Clean up remaining operator affordances only when they affect health,
+5. Clean up remaining operator affordances only when they affect health,
    readiness, control surfaces, backup/export, or emergency flatten.
-5. Only after account-truth gates, operator drills, and a new-data research lane
+6. Only after account-truth gates, operator drills, and a new-data research lane
    are boring should tiny live smoke testing be considered, with conservative
    caps and a written stop condition.
