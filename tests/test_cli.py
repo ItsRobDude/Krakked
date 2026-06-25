@@ -1808,6 +1808,107 @@ def test_market_regime_exposure_research_subcommand_writes_json_report(
     )
 
 
+def test_defensive_baseline_report_subcommand_writes_json_report(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: Any
+) -> None:
+    captured: dict[str, Any] = {}
+    start = datetime(2026, 5, 1, tzinfo=UTC)
+
+    class _FakeDefensiveBaselineResult:
+        def to_report_dict(self) -> dict[str, Any]:
+            return {
+                "report_version": 1,
+                "report_type": "defensive_baseline_report",
+                "generated_at": start.isoformat(),
+                "summary": {
+                    "pairs": ["BTC/USD", "ETH/USD"],
+                    "timeframe": "4h",
+                    "verdict": {"status": "not_useful", "reasons": ["fixture"]},
+                },
+                "preflight": {"status": "ready"},
+                "primary_continuous_span": {
+                    "actual_start": start.isoformat(),
+                    "actual_end": start.isoformat(),
+                },
+                "regime_window_results": [],
+                "static_exposure_frontier": [],
+                "matched_exposure_comparisons": [],
+                "lever_attribution": {},
+            }
+
+    def _fake_run_defensive_baseline_report(
+        config: Any,
+        *,
+        start: datetime,
+        end: datetime | None,
+        pairs: list[str] | None,
+        timeframe: str,
+        window_sets: dict[str, Any] | None,
+        regime_params: Any,
+        scenario_params: Any,
+        strict_data: bool,
+        rebalance_delta_pct: float,
+    ) -> _FakeDefensiveBaselineResult:
+        captured["config"] = config
+        captured["start"] = start
+        captured["end"] = end
+        captured["pairs"] = pairs
+        captured["timeframe"] = timeframe
+        captured["window_sets"] = window_sets
+        captured["regime_params"] = regime_params
+        captured["scenario_params"] = scenario_params
+        captured["strict_data"] = strict_data
+        captured["rebalance_delta_pct"] = rebalance_delta_pct
+        return _FakeDefensiveBaselineResult()
+
+    config = object()
+    monkeypatch.setattr(cli, "_load_backtest_config", lambda args: config)
+    monkeypatch.setattr(
+        cli,
+        "run_defensive_baseline_report",
+        _fake_run_defensive_baseline_report,
+    )
+
+    report_path = tmp_path / "defensive-baseline.json"
+    exit_code = cli.main(
+        [
+            "defensive-baseline-report",
+            "--start",
+            "2026-05-01T00:00:00Z",
+            "--end",
+            "2026-05-02T00:00:00Z",
+            "--pair",
+            "BTC/USD",
+            "--pair",
+            "ETH/USD",
+            "--window-set",
+            "regime_diverse_4h",
+            "--allocation-pct",
+            "75",
+            "--rebalance-delta-pct",
+            "3.5",
+            "--fee-bps",
+            "10",
+            "--save-report",
+            str(report_path),
+            "--strict-data",
+            "--json",
+        ]
+    )
+
+    assert exit_code == 0
+    assert captured["pairs"] == ["BTC/USD", "ETH/USD"]
+    assert captured["window_sets"] is not None
+    assert captured["scenario_params"].allocation_pct == 75.0
+    assert captured["scenario_params"].fee_bps == 10.0
+    assert captured["rebalance_delta_pct"] == 3.5
+    assert captured["strict_data"] is True
+    payload = json.loads(capsys.readouterr().out)
+    saved = json.loads(report_path.read_text(encoding="utf-8"))
+    assert payload["report_type"] == "defensive_baseline_report"
+    assert saved["provenance"]["generated_by"] == "krakked defensive-baseline-report"
+
+
 def test_market_regime_exposure_sweep_writes_reports_and_aggregate(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: Any
 ) -> None:

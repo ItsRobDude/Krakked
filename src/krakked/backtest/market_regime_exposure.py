@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import copy
+import math
 from collections import Counter
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
-from statistics import mean
+from statistics import mean, pstdev
 from typing import Any, Mapping, Sequence
 
 from krakked.config import AppConfig
@@ -25,7 +26,7 @@ from .market_regime_overlay import (
     apply_market_regime_overlay_to_plan,
     classify_market_regime_snapshot,
 )
-from .runner import BacktestMarketData
+from .runner import BacktestMarketData, _timeframe_seconds, backtest_strict_data_details
 
 REPORT_TYPE_EXPOSURE_RESEARCH = "market_regime_exposure_research"
 REPORT_VERSION = 1
@@ -40,6 +41,14 @@ DEFAULT_EXPOSURE_OVERLAY_MODES = ("entry_guard", "target_scale")
 SUPPORTED_EXPOSURE_SCENARIOS = frozenset(DEFAULT_EXPOSURE_SCENARIOS)
 SUPPORTED_EXPOSURE_OVERLAY_MODES = frozenset(("entry_guard", "target_scale"))
 TOP2_SOFT_TARGET_SCALE_PROFILE_ID = "top2_soft_target_scale"
+REPORT_TYPE_DEFENSIVE_BASELINE = "defensive_baseline_report"
+DEFAULT_DEFENSIVE_BASELINE_START = "2025-12-01T00:00:00Z"
+DEFAULT_DEFENSIVE_BASELINE_WINDOW_SET = "regime_diverse_4h"
+DEFAULT_DEFENSIVE_BASELINE_PAIRS = ("BTC/USD", "ETH/USD", "SOL/USD", "ADA/USD")
+DEFAULT_DEFENSIVE_BASELINE_REBALANCE_DELTA_PCT = 2.5
+DEFAULT_STATIC_EXPOSURE_FRONTIER_PCTS = tuple(
+    float(value) for value in range(0, 101, 10)
+)
 
 
 @dataclass(frozen=True)
@@ -89,6 +98,34 @@ class MarketRegimeExposureResearchResult:
             "preflight": copy.deepcopy(self.preflight),
             "runs": copy.deepcopy(self.runs),
             "comparisons": copy.deepcopy(self.comparisons),
+        }
+
+
+@dataclass
+class DefensiveBaselineReportResult:
+    generated_at: datetime
+    summary: dict[str, Any]
+    primary_continuous_span: dict[str, Any]
+    regime_window_results: list[dict[str, Any]]
+    static_exposure_frontier: list[dict[str, Any]]
+    matched_exposure_comparisons: list[dict[str, Any]]
+    lever_attribution: dict[str, Any]
+    preflight: dict[str, Any] | None = None
+
+    def to_report_dict(self) -> dict[str, Any]:
+        return {
+            "report_version": REPORT_VERSION,
+            "report_type": REPORT_TYPE_DEFENSIVE_BASELINE,
+            "generated_at": self.generated_at.astimezone(UTC).isoformat(),
+            "summary": copy.deepcopy(self.summary),
+            "preflight": copy.deepcopy(self.preflight),
+            "primary_continuous_span": copy.deepcopy(self.primary_continuous_span),
+            "regime_window_results": copy.deepcopy(self.regime_window_results),
+            "static_exposure_frontier": copy.deepcopy(self.static_exposure_frontier),
+            "matched_exposure_comparisons": copy.deepcopy(
+                self.matched_exposure_comparisons
+            ),
+            "lever_attribution": copy.deepcopy(self.lever_attribution),
         }
 
 
@@ -146,6 +183,82 @@ def run_market_regime_exposure_research(
             scenarios=scenarios,
             overlay_modes=overlay_modes,
             preflight=_preflight_to_dict(preflight),
+        )
+    finally:
+        shutdown = getattr(market_data, "shutdown", None)
+        if callable(shutdown):
+            shutdown()
+
+
+def run_defensive_baseline_report(
+    config: AppConfig,
+    *,
+    start: datetime | None = None,
+    end: datetime | None = None,
+    pairs: Sequence[str] | None = None,
+    timeframe: str = "4h",
+    window_sets: Mapping[str, Sequence[tuple[str, str, str]]] | None = None,
+    regime_params: MarketRegimeOverlayParams | None = None,
+    scenario_params: MarketRegimeExposureScenarioParams | None = None,
+    strict_data: bool = False,
+    rebalance_delta_pct: float = DEFAULT_DEFENSIVE_BASELINE_REBALANCE_DELTA_PCT,
+) -> DefensiveBaselineReportResult:
+    """Build the defensive baseline yardstick report.
+
+    The primary span is continuous-history first; optional evidence windows are
+    secondary diagnostics. All timing decisions are made from bars available
+    before the rebalance bar and applied on the rebalance bar's close through
+    the existing controlled-exposure execution helper.
+    """
+
+    params = regime_params or MarketRegimeOverlayParams(timeframe=timeframe)
+    scenario = scenario_params or MarketRegimeExposureScenarioParams(
+        allocation_pct=100.0,
+        rebalance_interval_bars=6,
+        fee_bps=25.0,
+        target_lookback_bars=63,
+        max_target_pairs=2,
+    )
+    selected_pairs = _clean_pairs(
+        list(pairs or DEFAULT_DEFENSIVE_BASELINE_PAIRS or _default_pairs(config))
+    )
+    if params.benchmark_pair not in selected_pairs:
+        selected_pairs.insert(0, params.benchmark_pair)
+
+    requested_start = _as_utc(start or _parse_utc(DEFAULT_DEFENSIVE_BASELINE_START))
+    load_end = _as_utc(end or datetime.now(UTC))
+    market_data = BacktestMarketData(
+        config,
+        pairs=selected_pairs,
+        timeframes=[timeframe],
+        start=requested_start,
+        end=load_end,
+    )
+    try:
+        preflight = market_data.get_preflight()
+        strict_details = backtest_strict_data_details(preflight)
+        if strict_data and end is not None and strict_details:
+            raise ValueError(
+                _strict_data_message("defensive baseline report", preflight)
+            )
+        market_data.set_time(load_end)
+        bars_by_pair = {
+            pair: market_data.get_ohlc(pair, timeframe, lookback=1_000_000)
+            for pair in selected_pairs
+        }
+        return evaluate_defensive_baseline_report(
+            bars_by_pair,
+            start=requested_start,
+            end=load_end,
+            pairs=selected_pairs,
+            regime_params=params,
+            scenario_params=scenario,
+            window_sets=window_sets,
+            preflight=_preflight_to_dict(preflight),
+            strict_data_requested=bool(strict_data),
+            strict_data_details=strict_details,
+            end_was_inferred=end is None,
+            rebalance_delta_pct=rebalance_delta_pct,
         )
     finally:
         shutdown = getattr(market_data, "shutdown", None)
@@ -373,6 +486,744 @@ def evaluate_market_regime_exposure_scenarios(
         runs=runs,
         comparisons=comparisons,
     )
+
+
+def evaluate_defensive_baseline_report(
+    bars_by_pair: Mapping[str, Sequence[OHLCBar]],
+    *,
+    start: datetime,
+    end: datetime,
+    pairs: Sequence[str],
+    regime_params: MarketRegimeOverlayParams,
+    scenario_params: MarketRegimeExposureScenarioParams,
+    window_sets: Mapping[str, Sequence[tuple[str, str, str]]] | None = None,
+    preflight: dict[str, Any] | None = None,
+    strict_data_requested: bool = False,
+    strict_data_details: Sequence[str] | None = None,
+    end_was_inferred: bool = False,
+    rebalance_delta_pct: float = DEFAULT_DEFENSIVE_BASELINE_REBALANCE_DELTA_PCT,
+) -> DefensiveBaselineReportResult:
+    cleaned = {pair: _sort_bars(bars) for pair, bars in bars_by_pair.items()}
+    selected_pairs = _clean_pairs(list(pairs))
+    price_maps = _price_maps(cleaned)
+    primary_timeline = _common_timeline(
+        price_maps,
+        pairs=[pair for pair in selected_pairs if pair in price_maps],
+        start=_as_utc(start),
+        end=_as_utc(end),
+    )
+    if not primary_timeline:
+        raise ValueError("No common defensive-baseline bars were available")
+
+    from .evidence_windows import EVIDENCE_WINDOW_SET_TUPLES
+
+    selected_window_sets = window_sets or {
+        DEFAULT_DEFENSIVE_BASELINE_WINDOW_SET: EVIDENCE_WINDOW_SET_TUPLES[
+            DEFAULT_DEFENSIVE_BASELINE_WINDOW_SET
+        ]
+    }
+
+    primary = _evaluate_defensive_span(
+        cleaned,
+        price_maps=price_maps,
+        timeline=primary_timeline,
+        pairs=selected_pairs,
+        regime_params=regime_params,
+        scenario_params=scenario_params,
+        span_id="primary_continuous",
+        span_label="primary_continuous",
+        rebalance_delta_pct=rebalance_delta_pct,
+    )
+
+    regime_results: list[dict[str, Any]] = []
+    for window_set, windows in selected_window_sets.items():
+        for window_id, start_text, end_text in windows:
+            window_start = _parse_utc(start_text)
+            window_end = _parse_utc(end_text)
+            window_timeline = [
+                ts
+                for ts in primary_timeline
+                if int(window_start.timestamp()) <= ts <= int(window_end.timestamp())
+            ]
+            if not window_timeline:
+                regime_results.append(
+                    {
+                        "window_set": window_set,
+                        "window_id": window_id,
+                        "start": window_start.isoformat(),
+                        "end": window_end.isoformat(),
+                        "status": "insufficient_data",
+                        "reason": "no common bars in window",
+                    }
+                )
+                continue
+            window = _evaluate_defensive_span(
+                cleaned,
+                price_maps=price_maps,
+                timeline=window_timeline,
+                pairs=selected_pairs,
+                regime_params=regime_params,
+                scenario_params=scenario_params,
+                span_id=f"{window_set}:{window_id}",
+                span_label=window_id,
+                rebalance_delta_pct=rebalance_delta_pct,
+            )
+            window["window_set"] = window_set
+            window["window_id"] = window_id
+            regime_results.append(window)
+
+    reported_strict_details = (
+        [] if end_was_inferred else list(strict_data_details or [])
+    )
+    verdict = _defensive_baseline_verdict(primary)
+    summary = {
+        "start_requested": _as_utc(start).isoformat(),
+        "end_requested": _as_utc(end).isoformat(),
+        "end_was_inferred": bool(end_was_inferred),
+        "actual_start": primary["actual_start"],
+        "actual_end": primary["actual_end"],
+        "pairs": selected_pairs,
+        "timeframe": regime_params.timeframe,
+        "strict_data_requested": bool(strict_data_requested),
+        "strict_data_ready": not bool(reported_strict_details),
+        "strict_data_details": reported_strict_details,
+        "rebalance_delta_pct": float(rebalance_delta_pct),
+        "fee_bps": float(scenario_params.fee_bps),
+        "one_way_all_in_cost_bps": float(scenario_params.fee_bps),
+        "cost_model_note": (
+            "fee_bps is used as a one-way all-in cost proxy; no separate "
+            "slippage model is applied in this module."
+        ),
+        "verdict": verdict,
+    }
+    return DefensiveBaselineReportResult(
+        generated_at=datetime.now(UTC),
+        summary=summary,
+        preflight=copy.deepcopy(preflight),
+        primary_continuous_span=primary,
+        regime_window_results=regime_results,
+        static_exposure_frontier=copy.deepcopy(primary["static_exposure_frontier"]),
+        matched_exposure_comparisons=copy.deepcopy(
+            primary["matched_exposure_comparisons"]
+        ),
+        lever_attribution=_build_lever_attribution(primary),
+    )
+
+
+def _evaluate_defensive_span(
+    bars_by_pair: Mapping[str, Sequence[OHLCBar]],
+    *,
+    price_maps: Mapping[str, Mapping[int, float]],
+    timeline: Sequence[int],
+    pairs: Sequence[str],
+    regime_params: MarketRegimeOverlayParams,
+    scenario_params: MarketRegimeExposureScenarioParams,
+    span_id: str,
+    span_label: str,
+    rebalance_delta_pct: float,
+) -> dict[str, Any]:
+    snapshots = {
+        ts: classify_market_regime_snapshot(
+            bars_by_pair,
+            timestamp=ts,
+            params=regime_params,
+        )
+        for ts in timeline
+    }
+    runs: list[dict[str, Any]] = []
+    static_frontier: list[dict[str, Any]] = []
+
+    for exposure_pct in DEFAULT_STATIC_EXPOSURE_FRONTIER_PCTS:
+        run = _simulate_defensive_run(
+            run_id=f"static_equal_weight_{exposure_pct:g}",
+            run_group="static_frontier",
+            construction_mode="equal_weight",
+            timing_mode="none",
+            target_pairs=list(pairs),
+            price_maps=price_maps,
+            timeline=timeline,
+            snapshots=snapshots,
+            scenario_params=scenario_params,
+            allocation_pct=float(exposure_pct),
+            rebalance_delta_pct=rebalance_delta_pct,
+        )
+        static_frontier.append(_defensive_run_summary_slice(run))
+        runs.append(run)
+
+    core_specs = [
+        ("btc_only", "construction", "btc_only", "none"),
+        ("equal_weight_basket", "construction", "equal_weight", "none"),
+        ("inverse_vol_weight", "construction", "inverse_vol_weight", "none"),
+        ("equal_weight_ewma_vol_target", "timing", "equal_weight", "ewma_vol_target"),
+        (
+            "inverse_vol_ewma_vol_target",
+            "combined",
+            "inverse_vol_weight",
+            "ewma_vol_target",
+        ),
+        (
+            "equal_weight_momentum_risk_off",
+            "timing",
+            "equal_weight",
+            "momentum_risk_off",
+        ),
+        (
+            "trend_rank_target_scale",
+            "combined",
+            "trend_rank_top2",
+            "target_scale",
+        ),
+    ]
+    for run_id, run_group, construction_mode, timing_mode in core_specs:
+        runs.append(
+            _simulate_defensive_run(
+                run_id=run_id,
+                run_group=run_group,
+                construction_mode=construction_mode,
+                timing_mode=timing_mode,
+                target_pairs=list(pairs),
+                price_maps=price_maps,
+                timeline=timeline,
+                snapshots=snapshots,
+                scenario_params=scenario_params,
+                allocation_pct=float(scenario_params.allocation_pct),
+                rebalance_delta_pct=rebalance_delta_pct,
+            )
+        )
+
+    matched: list[dict[str, Any]] = []
+    for run in runs:
+        if run["run_group"] not in {"timing", "combined"}:
+            continue
+        matched_allocation = max(min(float(run["avg_exposure_pct"]), 100.0), 0.0)
+        static = _simulate_defensive_run(
+            run_id=f"{run['run_id']}_matched_static",
+            run_group="matched_static",
+            construction_mode=str(run["construction_mode"]),
+            timing_mode="none",
+            target_pairs=list(pairs),
+            price_maps=price_maps,
+            timeline=timeline,
+            snapshots=snapshots,
+            scenario_params=scenario_params,
+            allocation_pct=matched_allocation,
+            rebalance_delta_pct=rebalance_delta_pct,
+        )
+        matched.append(_compare_matched_static(run, static))
+
+    return {
+        "span_id": span_id,
+        "span_label": span_label,
+        "status": "ready",
+        "actual_start": datetime.fromtimestamp(int(timeline[0]), tz=UTC).isoformat(),
+        "actual_end": datetime.fromtimestamp(int(timeline[-1]), tz=UTC).isoformat(),
+        "bar_count": len(timeline),
+        "continuity": _timeline_continuity(timeline, regime_params.timeframe),
+        "state_counts": dict(
+            sorted(Counter(snapshot.regime for snapshot in snapshots.values()).items())
+        ),
+        "runs": [_defensive_run_summary_slice(run) for run in runs],
+        "static_exposure_frontier": static_frontier,
+        "matched_exposure_comparisons": matched,
+    }
+
+
+def _simulate_defensive_run(
+    *,
+    run_id: str,
+    run_group: str,
+    construction_mode: str,
+    timing_mode: str,
+    target_pairs: Sequence[str],
+    price_maps: Mapping[str, Mapping[int, float]],
+    timeline: Sequence[int],
+    snapshots: Mapping[int, MarketRegimeSnapshot],
+    scenario_params: MarketRegimeExposureScenarioParams,
+    allocation_pct: float,
+    rebalance_delta_pct: float,
+) -> dict[str, Any]:
+    portfolio = _ScenarioPortfolio(
+        cash_usd=float(scenario_params.starting_cash_usd),
+        holdings={pair: 0.0 for pair in target_pairs},
+    )
+    equity_curve: list[float] = []
+    exposure_curve: list[float] = []
+    trades = 0
+    fees_usd = 0.0
+    rebalance_count = 0
+    skipped_rebalances = 0
+    target_selection_counts: Counter[str] = Counter()
+
+    for index, ts in enumerate(timeline):
+        prices = {pair: float(price_maps[pair][ts]) for pair in target_pairs}
+        if index % int(scenario_params.rebalance_interval_bars) == 0:
+            rebalance_count += 1
+            decision_index = index - 1
+            equity = _portfolio_equity(portfolio, prices)
+            if decision_index < 0:
+                target_weights: dict[str, float] = {}
+            else:
+                target_weights = _defensive_target_weights(
+                    construction_mode,
+                    target_pairs=target_pairs,
+                    price_maps=price_maps,
+                    timeline=timeline,
+                    index=decision_index,
+                    scenario_params=scenario_params,
+                    allocation_pct=allocation_pct,
+                )
+                multiplier = _defensive_timing_multiplier(
+                    timing_mode,
+                    price_maps=price_maps,
+                    timeline=timeline,
+                    index=decision_index,
+                    snapshots=snapshots,
+                    scenario_params=scenario_params,
+                )
+                target_weights = {
+                    pair: weight * multiplier for pair, weight in target_weights.items()
+                }
+            if not target_weights:
+                skipped_rebalances += 1
+            target_selection_counts.update(target_weights.keys())
+            plan = _target_plan(
+                scenario_id=construction_mode,
+                overlay_mode=timing_mode,
+                timestamp=ts,
+                portfolio=portfolio,
+                prices=prices,
+                target_weights=target_weights,
+                equity_usd=equity,
+                rebalance_delta_pct=rebalance_delta_pct,
+            )
+            executed = _execute_plan(
+                portfolio,
+                plan,
+                prices,
+                fee_bps=float(scenario_params.fee_bps),
+            )
+            trades += executed["trades"]
+            fees_usd += executed["fees_usd"]
+
+        equity = _portfolio_equity(portfolio, prices)
+        exposure = _portfolio_exposure(portfolio, prices)
+        equity_curve.append(equity)
+        exposure_curve.append((exposure / equity) * 100.0 if equity > 0.0 else 0.0)
+
+    return _defensive_run_payload(
+        run_id=run_id,
+        run_group=run_group,
+        construction_mode=construction_mode,
+        timing_mode=timing_mode,
+        allocation_pct=allocation_pct,
+        scenario_params=scenario_params,
+        equity_curve=equity_curve,
+        exposure_curve=exposure_curve,
+        trades=trades,
+        fees_usd=fees_usd,
+        rebalance_count=rebalance_count,
+        skipped_rebalances=skipped_rebalances,
+        target_selection_counts=target_selection_counts,
+    )
+
+
+def _defensive_target_weights(
+    construction_mode: str,
+    *,
+    target_pairs: Sequence[str],
+    price_maps: Mapping[str, Mapping[int, float]],
+    timeline: Sequence[int],
+    index: int,
+    scenario_params: MarketRegimeExposureScenarioParams,
+    allocation_pct: float,
+) -> dict[str, float]:
+    if allocation_pct <= 0.0:
+        return {}
+    if construction_mode == "btc_only":
+        benchmark = "BTC/USD" if "BTC/USD" in target_pairs else target_pairs[0]
+        return {benchmark: float(allocation_pct) / 100.0}
+    if construction_mode == "equal_weight":
+        return _equal_target_weights(target_pairs, allocation_pct=allocation_pct)
+    if construction_mode == "inverse_vol_weight":
+        vols = {
+            pair: _realized_volatility_pct(
+                price_maps.get(pair, {}),
+                timeline=timeline,
+                index=index,
+                lookback=int(scenario_params.target_lookback_bars),
+            )
+            for pair in target_pairs
+        }
+        usable = {
+            pair: vol for pair, vol in vols.items() if vol is not None and vol > 0
+        }
+        if not usable:
+            return _equal_target_weights(target_pairs, allocation_pct=allocation_pct)
+        inv = {pair: 1.0 / float(vol) for pair, vol in usable.items()}
+        total = sum(inv.values())
+        allocation = float(allocation_pct) / 100.0
+        return {pair: allocation * (value / total) for pair, value in inv.items()}
+    if construction_mode == "trend_rank_top2":
+        params = MarketRegimeExposureScenarioParams(
+            allocation_pct=float(allocation_pct),
+            rebalance_interval_bars=int(scenario_params.rebalance_interval_bars),
+            starting_cash_usd=float(scenario_params.starting_cash_usd),
+            fee_bps=float(scenario_params.fee_bps),
+            target_lookback_bars=int(scenario_params.target_lookback_bars),
+            min_momentum_bps=float(scenario_params.min_momentum_bps),
+            max_target_pairs=min(2, int(scenario_params.max_target_pairs)),
+        )
+        return _trend_rank_proxy_target_weights(
+            target_pairs,
+            price_maps=price_maps,
+            timeline=timeline,
+            index=index,
+            scenario_params=params,
+        )
+    raise ValueError(f"Unsupported defensive construction mode: {construction_mode}")
+
+
+def _defensive_timing_multiplier(
+    timing_mode: str,
+    *,
+    price_maps: Mapping[str, Mapping[int, float]],
+    timeline: Sequence[int],
+    index: int,
+    snapshots: Mapping[int, MarketRegimeSnapshot],
+    scenario_params: MarketRegimeExposureScenarioParams,
+) -> float:
+    if timing_mode == "none":
+        return 1.0
+    if timing_mode == "target_scale":
+        snapshot = snapshots.get(timeline[index])
+        return float(snapshot.allocation_multiplier) if snapshot else 1.0
+    if timing_mode == "momentum_risk_off":
+        benchmark = "BTC/USD" if "BTC/USD" in price_maps else next(iter(price_maps))
+        benchmark_momentum = _momentum_bps_at(
+            price_maps.get(benchmark, {}),
+            timeline=timeline,
+            index=index,
+            lookback=int(scenario_params.target_lookback_bars),
+            allow_partial_lookback=False,
+        )
+        basket_values = [
+            _momentum_bps_at(
+                price_maps.get(pair, {}),
+                timeline=timeline,
+                index=index,
+                lookback=int(scenario_params.target_lookback_bars),
+                allow_partial_lookback=False,
+            )
+            for pair in price_maps
+        ]
+        basket = [value for value in basket_values if value is not None]
+        basket_momentum = mean(basket) if basket else None
+        if benchmark_momentum is None or basket_momentum is None:
+            return 1.0
+        if benchmark_momentum <= 0.0 or basket_momentum <= 0.0:
+            return 0.25
+        if benchmark_momentum < float(
+            scenario_params.min_momentum_bps
+        ) or basket_momentum < float(scenario_params.min_momentum_bps):
+            return 0.75
+        return 1.0
+    if timing_mode == "ewma_vol_target":
+        benchmark = "BTC/USD" if "BTC/USD" in price_maps else next(iter(price_maps))
+        vol = _realized_volatility_pct(
+            price_maps.get(benchmark, {}),
+            timeline=timeline,
+            index=index,
+            lookback=int(scenario_params.target_lookback_bars),
+        )
+        target_vol_pct = 25.0
+        if vol is None or vol <= 0.0:
+            return 1.0
+        return max(min(target_vol_pct / float(vol), 1.0), 0.0)
+    raise ValueError(f"Unsupported defensive timing mode: {timing_mode}")
+
+
+def _realized_volatility_pct(
+    price_map: Mapping[int, float],
+    *,
+    timeline: Sequence[int],
+    index: int,
+    lookback: int,
+) -> float | None:
+    if index <= 0:
+        return None
+    start = max(1, index - int(lookback) + 1)
+    returns: list[float] = []
+    for pos in range(start, index + 1):
+        prev_price = float(price_map.get(timeline[pos - 1], 0.0) or 0.0)
+        price = float(price_map.get(timeline[pos], 0.0) or 0.0)
+        if prev_price <= 0.0 or price <= 0.0:
+            continue
+        returns.append((price - prev_price) / prev_price)
+    if len(returns) < 2:
+        return None
+    periods_per_year = _periods_per_year_from_timeline(timeline)
+    return pstdev(returns) * math.sqrt(periods_per_year) * 100.0
+
+
+def _defensive_run_payload(
+    *,
+    run_id: str,
+    run_group: str,
+    construction_mode: str,
+    timing_mode: str,
+    allocation_pct: float,
+    scenario_params: MarketRegimeExposureScenarioParams,
+    equity_curve: Sequence[float],
+    exposure_curve: Sequence[float],
+    trades: int,
+    fees_usd: float,
+    rebalance_count: int,
+    skipped_rebalances: int,
+    target_selection_counts: Counter[str],
+) -> dict[str, Any]:
+    ending_equity = float(equity_curve[-1]) if equity_curve else 0.0
+    returns = _period_returns(equity_curve)
+    recovery = _drawdown_recovery(equity_curve)
+    return {
+        "run_id": run_id,
+        "run_group": run_group,
+        "construction_mode": construction_mode,
+        "timing_mode": timing_mode,
+        "allocation_pct": float(allocation_pct),
+        "starting_cash_usd": float(scenario_params.starting_cash_usd),
+        "ending_equity_usd": ending_equity,
+        "return_pct": (
+            (
+                (ending_equity - scenario_params.starting_cash_usd)
+                / scenario_params.starting_cash_usd
+            )
+            * 100.0
+            if scenario_params.starting_cash_usd > 0
+            else 0.0
+        ),
+        "max_drawdown_pct": _max_drawdown_pct(equity_curve),
+        "downside_volatility_pct": _downside_volatility_pct(returns),
+        "expected_shortfall_pct": _expected_shortfall_pct(returns),
+        "max_recovery_bars": recovery["max_recovery_bars"],
+        "unrecovered_drawdown": recovery["unrecovered_drawdown"],
+        "trades": int(trades),
+        "fees_usd": float(fees_usd),
+        "cost_drag_pct": (
+            (float(fees_usd) / scenario_params.starting_cash_usd) * 100.0
+            if scenario_params.starting_cash_usd > 0
+            else 0.0
+        ),
+        "rebalance_count": int(rebalance_count),
+        "skipped_rebalances": int(skipped_rebalances),
+        "avg_exposure_pct": mean(exposure_curve) if exposure_curve else 0.0,
+        "max_exposure_pct": max(exposure_curve) if exposure_curve else 0.0,
+        "min_exposure_pct": min(exposure_curve) if exposure_curve else 0.0,
+        "target_selection_counts": dict(sorted(target_selection_counts.items())),
+    }
+
+
+def _defensive_run_summary_slice(run: Mapping[str, Any]) -> dict[str, Any]:
+    keys = (
+        "run_id",
+        "run_group",
+        "construction_mode",
+        "timing_mode",
+        "allocation_pct",
+        "return_pct",
+        "max_drawdown_pct",
+        "downside_volatility_pct",
+        "expected_shortfall_pct",
+        "max_recovery_bars",
+        "unrecovered_drawdown",
+        "trades",
+        "fees_usd",
+        "cost_drag_pct",
+        "rebalance_count",
+        "skipped_rebalances",
+        "avg_exposure_pct",
+        "max_exposure_pct",
+        "min_exposure_pct",
+        "target_selection_counts",
+    )
+    return {key: copy.deepcopy(run.get(key)) for key in keys}
+
+
+def _compare_matched_static(
+    dynamic: Mapping[str, Any],
+    static: Mapping[str, Any],
+) -> dict[str, Any]:
+    drawdown_delta = float(dynamic["max_drawdown_pct"]) - float(
+        static["max_drawdown_pct"]
+    )
+    return_delta = float(dynamic["return_pct"]) - float(static["return_pct"])
+    downside_delta = float(dynamic["downside_volatility_pct"]) - float(
+        static["downside_volatility_pct"]
+    )
+    static_drawdown = float(static["max_drawdown_pct"])
+    drawdown_improvement_pct = (
+        ((static_drawdown - float(dynamic["max_drawdown_pct"])) / static_drawdown)
+        * 100.0
+        if static_drawdown > 0.0
+        else 0.0
+    )
+    useful = (drawdown_improvement_pct >= 10.0 and return_delta >= -0.25) or (
+        return_delta > 0.0 and drawdown_delta <= 0.0 and downside_delta <= 0.0
+    )
+    return {
+        "run_id": dynamic["run_id"],
+        "matched_static_run_id": static["run_id"],
+        "construction_mode": dynamic["construction_mode"],
+        "timing_mode": dynamic["timing_mode"],
+        "dynamic": _defensive_run_summary_slice(dynamic),
+        "matched_static": _defensive_run_summary_slice(static),
+        "delta": {
+            "return_pct": return_delta,
+            "max_drawdown_pct": drawdown_delta,
+            "downside_volatility_pct": downside_delta,
+            "fees_usd": float(dynamic["fees_usd"]) - float(static["fees_usd"]),
+            "cost_drag_pct": float(dynamic["cost_drag_pct"])
+            - float(static["cost_drag_pct"]),
+        },
+        "drawdown_improvement_pct": drawdown_improvement_pct,
+        "matched_exposure_gate": {
+            "passed": useful,
+            "required_drawdown_improvement_pct": 10.0,
+            "max_allowed_return_degradation_pct": 0.25,
+        },
+    }
+
+
+def _defensive_baseline_verdict(span: Mapping[str, Any]) -> dict[str, Any]:
+    matched = list(span.get("matched_exposure_comparisons") or [])
+    if not matched:
+        return {
+            "status": "insufficient_data",
+            "reasons": ["no matched exposure comparisons were produced"],
+        }
+    passing = [
+        item
+        for item in matched
+        if bool(item.get("matched_exposure_gate", {}).get("passed"))
+    ]
+    if passing:
+        return {
+            "status": "baseline_useful",
+            "passing_runs": [item["run_id"] for item in passing],
+            "reasons": [
+                "at least one dynamic defensive baseline beat matched static exposure"
+            ],
+        }
+    drawdown_only = [
+        item
+        for item in matched
+        if float(item.get("drawdown_improvement_pct", 0.0) or 0.0) > 0.0
+    ]
+    if drawdown_only:
+        return {
+            "status": "risk_control_tradeoff",
+            "reasons": [
+                "some overlays reduced drawdown but did not beat matched static exposure"
+            ],
+        }
+    return {
+        "status": "not_useful",
+        "reasons": ["dynamic overlays did not improve matched static exposure"],
+    }
+
+
+def _build_lever_attribution(span: Mapping[str, Any]) -> dict[str, Any]:
+    runs = list(span.get("runs") or [])
+
+    def _best(group: str, key: str, reverse: bool) -> dict[str, Any] | None:
+        items = [run for run in runs if run.get("run_group") == group]
+        if not items:
+            return None
+        selected = sorted(
+            items,
+            key=lambda item: float(item.get(key, 0.0) or 0.0),
+            reverse=reverse,
+        )[0]
+        return _defensive_run_summary_slice(selected)
+
+    return {
+        "best_construction_by_return": _best("construction", "return_pct", True),
+        "best_construction_by_drawdown": _best(
+            "construction", "max_drawdown_pct", False
+        ),
+        "best_timing_by_return": _best("timing", "return_pct", True),
+        "best_timing_by_drawdown": _best("timing", "max_drawdown_pct", False),
+        "best_combined_by_return": _best("combined", "return_pct", True),
+        "best_combined_by_drawdown": _best("combined", "max_drawdown_pct", False),
+    }
+
+
+def _period_returns(equity_curve: Sequence[float]) -> list[float]:
+    returns: list[float] = []
+    for previous, current in zip(equity_curve, equity_curve[1:]):
+        if float(previous) <= 0.0:
+            continue
+        returns.append((float(current) - float(previous)) / float(previous))
+    return returns
+
+
+def _downside_volatility_pct(returns: Sequence[float]) -> float:
+    downside = [min(float(value), 0.0) for value in returns]
+    if len(downside) < 2:
+        return 0.0
+    return pstdev(downside) * math.sqrt(365.0 * 6.0) * 100.0
+
+
+def _expected_shortfall_pct(returns: Sequence[float]) -> float:
+    if not returns:
+        return 0.0
+    losses = sorted(float(value) * 100.0 for value in returns)
+    count = max(1, math.ceil(len(losses) * 0.05))
+    return abs(mean(losses[:count]))
+
+
+def _drawdown_recovery(equity_curve: Sequence[float]) -> dict[str, Any]:
+    peak = 0.0
+    peak_index = 0
+    max_recovery = 0
+    unrecovered = False
+    for index, equity in enumerate(equity_curve):
+        value = float(equity)
+        if value >= peak:
+            if peak > 0.0:
+                max_recovery = max(max_recovery, index - peak_index)
+            peak = value
+            peak_index = index
+            unrecovered = False
+        elif peak > 0.0:
+            unrecovered = True
+    if unrecovered:
+        max_recovery = max(max_recovery, len(equity_curve) - 1 - peak_index)
+    return {"max_recovery_bars": max_recovery, "unrecovered_drawdown": unrecovered}
+
+
+def _timeline_continuity(timeline: Sequence[int], timeframe: str) -> dict[str, Any]:
+    expected = _timeframe_seconds(timeframe)
+    gaps = 0
+    max_gap = 0
+    for previous, current in zip(timeline, timeline[1:]):
+        gap = int(current) - int(previous)
+        max_gap = max(max_gap, gap)
+        if expected > 0 and gap != expected:
+            gaps += 1
+    return {
+        "status": "continuous" if gaps == 0 else "has_gaps",
+        "gap_count": gaps,
+        "expected_interval_seconds": expected,
+        "max_observed_gap_seconds": max_gap,
+    }
+
+
+def _periods_per_year_from_timeline(timeline: Sequence[int]) -> float:
+    if len(timeline) >= 2:
+        interval = max(int(timeline[1]) - int(timeline[0]), 1)
+    else:
+        interval = _timeframe_seconds("4h")
+    return (365.0 * 24.0 * 60.0 * 60.0) / float(interval)
 
 
 def _validate_requested_values(
@@ -714,6 +1565,7 @@ def _target_plan(
     prices: Mapping[str, float],
     target_weights: Mapping[str, float],
     equity_usd: float,
+    rebalance_delta_pct: float = 0.0,
 ) -> ExecutionPlan:
     actions: list[RiskAdjustedAction] = []
     for pair in prices:
@@ -722,6 +1574,15 @@ def _target_plan(
         current_base = float(portfolio.holdings.get(pair, 0.0))
         target_notional = max(equity_usd * float(target_weight), 0.0)
         target_base = target_notional / price if price > 0.0 else 0.0
+        current_notional = max(current_base * price, 0.0)
+        delta_notional = abs(target_notional - current_notional)
+        if (
+            rebalance_delta_pct > 0.0
+            and equity_usd > 0.0
+            and (delta_notional / equity_usd) * 100.0 < float(rebalance_delta_pct)
+        ):
+            target_notional = current_notional
+            target_base = current_base
         actions.append(
             RiskAdjustedAction(
                 pair=pair,
